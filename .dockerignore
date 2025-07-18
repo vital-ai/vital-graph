@@ -1,0 +1,70 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Node.js (frontend development files)
+frontend/node_modules
+frontend/.vscode
+
+# Development files
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Documentation
+docs/
+notes/
+
+# Test files
+test/
+tests/
+test_scripts/
+*_test.py
+*_tests.py
+
+# Environment files (will be handled separately)
+.env.local
+.env.development
+.env.test
+
+# Archives and old files
+frontend-archive/
+frontend-old/
+web_assets/
+
+# Kubernetes configs
+k8s_config/
+
+# Other
+.vite/
+rdflib_sqlalchemy/

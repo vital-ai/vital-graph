@@ -1,0 +1,4 @@
+python -m vitalgraph.api.main "$@"
+
+
+

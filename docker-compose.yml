@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  vitalgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vitalgraph-app
+    ports:
+      - "${PORT:-8001}:${PORT:-8001}"
+    environment:
+      - APP_MODE=production
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - PORT=${PORT:-8001}
+      - HOST=${HOST:-0.0.0.0}
+    env_file:
+      - .env
+    volumes:
+      # Mount data directory for persistence if needed
+      - vitalgraph_data:/app/data
+    restart: unless-stopped
+
+    networks:
+      - vitalgraph_network
+
+
+volumes:
+  vitalgraph_data:
+    driver: local
+
+networks:
+  vitalgraph_network:
+    driver: bridge
