@@ -285,3 +285,6 @@ dist/
 *.sqlite
 *.sqlite3
 
+
+test_data
+

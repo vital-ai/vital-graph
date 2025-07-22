@@ -1,4 +1,1 @@
-python -m vitalgraph.api.main "$@"
-
-
-
+python -m vitalgraph.cmd.vitalgraphdb_cmd "$@"

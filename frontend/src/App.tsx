@@ -5,6 +5,11 @@ import ProtectedRoute from './components/auth/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Home from './pages/Home';
+import Spaces from './pages/Spaces';
+import SpaceDetail from './pages/SpaceDetail';
+import Users from './pages/Users';
+import UserDetail from './pages/UserDetail';
+import SPARQL from './pages/SPARQL';
 
 // Initialize theme mode
 initThemeMode();
@@ -21,6 +26,11 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<Layout />}>
               <Route path="/" element={<Home />} />
+              <Route path="/spaces" element={<Spaces />} />
+              <Route path="/users" element={<Users />} />
+              <Route path="/sparql" element={<SPARQL />} />
+              <Route path="/space/:id" element={<SpaceDetail />} />
+              <Route path="/user/:id" element={<UserDetail />} />
             </Route>
           </Route>
           

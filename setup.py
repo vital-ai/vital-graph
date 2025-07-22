@@ -15,7 +15,7 @@ with open('MANIFEST.in', 'w') as f:
 
 setup(
     name='vital-graph',
-    version='0.0.2',
+    version='0.0.3',
     author='Marc Hadfield',
     author_email='marc@vital.ai',
     description='VitalGraph',
@@ -26,12 +26,13 @@ setup(
     include_package_data=True,  # This tells setuptools to include files from MANIFEST.in
     entry_points={
         'console_scripts': [
-            'vitalgraphdb=vitalgraph.api.main:run_server',
+            'vitalgraphdb=vitalgraph.main.main:run_server',
         ],
     },
 
     license='Apache License 2.0',
     install_requires=[
+        "vital-ai-vitalsigns>=0.1.31",
         "pytidb[models]",
         "pytidb",
         "python-dotenv",
@@ -50,7 +51,8 @@ setup(
         'uvicorn',
         'Jinja2',
         'starlette',
-        'itsdangerous'
+        'itsdangerous',
+        'click-repl'
     ],
 
     classifiers=[

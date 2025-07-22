@@ -4,66 +4,65 @@ import axios from 'axios';
 import { Alert, Button, Card, Spinner, Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow, TextInput } from 'flowbite-react';
 import { HiSearch, HiEye, HiPlus } from 'react-icons/hi';
 
-interface Space {
+interface User {
   id: number;
   tenant: string;
-  space: string;
-  space_name: string;
-  space_description: string;
+  username: string;
+  email: string;
   update_time: string;
 }
 
-const Spaces: React.FC = () => {
+const Users: React.FC = () => {
   const navigate = useNavigate();
   const filterInputRef = useRef<HTMLInputElement>(null);
   const cursorPositionRef = useRef<number>(0);
-  const [spaces, setSpaces] = useState<Space[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState<boolean>(false);
 
-  // Fetch all spaces
-  const fetchSpaces = useCallback(async () => {
+  // Fetch all users
+  const fetchUsers = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/spaces');
+      const response = await axios.get('/api/users');
       // Handle both array response and wrapped response
-      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
-      setSpaces(spacesData);
+      const usersData = Array.isArray(response.data) ? response.data : response.data.users || [];
+      setUsers(usersData);
       setError(null);
     } catch (err) {
-      console.error('Error fetching spaces:', err);
-      setError('Failed to load spaces. Please try again later.');
-      setSpaces([]);
+      console.error('Error fetching users:', err);
+      setError('Failed to load users. Please try again later.');
+      setUsers([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Filter spaces by name
-  const filterSpaces = useCallback(async (nameFilter: string) => {
+  // Filter users by name
+  const filterUsers = useCallback(async (nameFilter: string) => {
     if (!nameFilter.trim()) {
-      // If filter is empty, fetch all spaces
-      await fetchSpaces();
+      // If filter is empty, fetch all users
+      await fetchUsers();
       return;
     }
 
     try {
       setFilterLoading(true);
-      const response = await axios.get(`/api/spaces/filter/${encodeURIComponent(nameFilter)}`);
+      const response = await axios.get(`/api/users/filter/${encodeURIComponent(nameFilter)}`);
       // Handle both array response and wrapped response
-      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
-      setSpaces(spacesData);
+      const usersData = Array.isArray(response.data) ? response.data : response.data.users || [];
+      setUsers(usersData);
       setError(null);
     } catch (err) {
-      console.error('Error filtering spaces:', err);
-      setError('Failed to filter spaces. Please try again later.');
-      setSpaces([]);
+      console.error('Error filtering users:', err);
+      setError('Failed to filter users. Please try again later.');
+      setUsers([]);
     } finally {
       setFilterLoading(false);
     }
-  }, [fetchSpaces]);
+  }, [fetchUsers]);
 
   // Restore focus and cursor position after renders
   useLayoutEffect(() => {
@@ -76,19 +75,19 @@ const Spaces: React.FC = () => {
   // Handle filter input change with debouncing
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      filterSpaces(filterText);
+      filterUsers(filterText);
     }, 500); // 500ms debounce
 
     return () => clearTimeout(timeoutId);
-  }, [filterText, filterSpaces]);
+  }, [filterText, filterUsers]);
 
   // Initial load
   useEffect(() => {
-    fetchSpaces();
-  }, [fetchSpaces]);
+    fetchUsers();
+  }, [fetchUsers]);
 
-  const handleDetailsClick = (space: Space) => {
-    navigate(`/space/${space.id}`);
+  const handleDetailsClick = (user: User) => {
+    navigate(`/user/${user.id}`);
   };
 
   const formatDate = (dateString: string) => {
@@ -118,14 +117,14 @@ const Spaces: React.FC = () => {
       <div className="mb-6">
         <div className="flex justify-between items-start">
           <div>
-            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Spaces</h1>
+            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Users</h1>
             <p className="text-gray-500 dark:text-gray-400">
-              View and manage your VitalGraph spaces.
+              View and manage your VitalGraph users.
             </p>
           </div>
-          <Button color="blue" onClick={() => navigate('/space/new')}>
+          <Button color="blue" onClick={() => navigate('/user/new')}>
             <HiPlus className="mr-2 h-4 w-4" />
-            Add Space
+            Add User
           </Button>
         </div>
       </div>
@@ -138,7 +137,7 @@ const Spaces: React.FC = () => {
             id="filter"
             type="text"
             icon={HiSearch}
-            placeholder="Filter spaces by name..."
+            placeholder="Filter users by username..."
             value={filterText}
             onChange={(e) => {
               cursorPositionRef.current = e.target.selectionStart || 0;
@@ -166,12 +165,12 @@ const Spaces: React.FC = () => {
         </Alert>
       )}
 
-      {/* Spaces Table */}
-      {spaces.length === 0 && !loading && !error ? (
+      {/* Users Table */}
+      {users.length === 0 && !loading && !error ? (
         <Alert color="info">
           {filterText ? 
-            `No spaces found matching "${filterText}". Try a different search term.` :
-            'No spaces found. Create your first space to get started.'
+            `No users found matching "${filterText}". Try a different search term.` :
+            'No users found. Create your first user to get started.'
           }
         </Alert>
       ) : (
@@ -181,39 +180,35 @@ const Spaces: React.FC = () => {
             <Table striped>
               <TableHead>
                 <TableHeadCell>ID</TableHeadCell>
-                <TableHeadCell>Name</TableHeadCell>
-                <TableHeadCell>Space ID</TableHeadCell>
+                <TableHeadCell>Username</TableHeadCell>
+                <TableHeadCell>Email</TableHeadCell>
                 <TableHeadCell>Tenant</TableHeadCell>
-                <TableHeadCell>Description</TableHeadCell>
                 <TableHeadCell>Last Updated</TableHeadCell>
                 <TableHeadCell>Actions</TableHeadCell>
               </TableHead>
               <TableBody className="divide-y">
-                {spaces.map((space) => (
-                  <TableRow key={space.id} className="bg-white dark:border-gray-700 dark:bg-gray-800">
+                {users.map((user) => (
+                  <TableRow key={user.id} className="bg-white dark:border-gray-700 dark:bg-gray-800">
                     <TableCell className="whitespace-nowrap font-medium text-gray-900 dark:text-white">
-                      {space.id}
+                      {user.id}
                     </TableCell>
                     <TableCell className="font-medium text-gray-900 dark:text-white">
-                      {space.space_name}
+                      {user.username}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {space.space}
+                      {user.email || 'No email'}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {space.tenant}
+                      {user.tenant}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {space.space_description || 'No description'}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
-                      {formatDate(space.update_time)}
+                      {formatDate(user.update_time)}
                     </TableCell>
                     <TableCell>
                       <Button
                         size="sm"
                         color="blue"
-                        onClick={() => handleDetailsClick(space)}
+                        onClick={() => handleDetailsClick(user)}
                       >
                         <HiEye className="mr-2 h-4 w-4" />
                         Details
@@ -227,22 +222,22 @@ const Spaces: React.FC = () => {
 
           {/* Mobile Card View */}
           <div className="md:hidden space-y-4">
-            {spaces.map((space) => (
-              <Card key={space.id} className="w-full">
+            {users.map((user) => (
+              <Card key={user.id} className="w-full">
                 <div className="space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                        {space.space_name}
+                        {user.username}
                       </h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        ID: {space.id} • Space ID: {space.space}
+                        ID: {user.id}
                       </p>
                     </div>
                     <Button
                       size="sm"
                       color="blue"
-                      onClick={() => handleDetailsClick(space)}
+                      onClick={() => handleDetailsClick(user)}
                     >
                       <HiEye className="mr-1 h-4 w-4" />
                       Details
@@ -251,21 +246,21 @@ const Spaces: React.FC = () => {
                   
                   <div className="grid grid-cols-1 gap-2 text-sm">
                     <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">Tenant:</span>
-                      <span className="ml-2 text-gray-600 dark:text-gray-400">{space.tenant}</span>
+                      <span className="font-medium text-gray-700 dark:text-gray-300">Email:</span>
+                      <span className="ml-2 text-gray-600 dark:text-gray-400">
+                        {user.email || 'No email'}
+                      </span>
                     </div>
                     
                     <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">Description:</span>
-                      <span className="ml-2 text-gray-600 dark:text-gray-400">
-                        {space.space_description || 'No description'}
-                      </span>
+                      <span className="font-medium text-gray-700 dark:text-gray-300">Tenant:</span>
+                      <span className="ml-2 text-gray-600 dark:text-gray-400">{user.tenant}</span>
                     </div>
                     
                     <div>
                       <span className="font-medium text-gray-700 dark:text-gray-300">Last Updated:</span>
                       <span className="ml-2 text-gray-600 dark:text-gray-400">
-                        {formatDate(space.update_time)}
+                        {formatDate(user.update_time)}
                       </span>
                     </div>
                   </div>
@@ -279,4 +274,4 @@ const Spaces: React.FC = () => {
   );
 };
 
-export default Spaces;
+export default Users;

@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 import logging
-from pkg_resources import get_distribution
 
+__version__ = "vital_0_0_1"
 
-__version__ = "0.0.1"
-
+_logger = logging.getLogger(__name__)
 
 class NullHandler(logging.Handler):
     """
@@ -19,6 +17,7 @@ class NullHandler(logging.Handler):
 
     def emit(self, record):
         """Emit."""
+        _logger.info(f"🚀 NullHandler.emit: FUNCTION STARTED with record={record}")
         pass
 
 
@@ -30,7 +29,7 @@ def registerplugins():
     """
     Register plugins.
 
-    If setuptools is used to install vital-graph, all the provided
+    If setuptools is used to install rdflib-sqlalchemy, all the provided
     plugins are registered through entry_points. This is strongly recommended.
 
     However, if only distutils is available, then the plugins must be
@@ -39,6 +38,7 @@ def registerplugins():
     This method will register all of the rdflib-sqlalchemy Store plugins.
 
     """
+    _logger.info(f"🚀 registerplugins: FUNCTION STARTED")
     from rdflib.store import Store
     from rdflib import plugin
 
@@ -50,8 +50,8 @@ def registerplugins():
     # Register the plugins ...
 
     plugin.register(
-        "VitalGraphSQLStore",
+        "VitalGraph",
         Store,
-        "rdflib_sqlalchemy.store",
+        "vitalgraph.store",
         "VitalGraphSQLStore",
     )

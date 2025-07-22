@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir -e .
 # Copy the application code
 COPY vitalgraph/ ./vitalgraph/
 
+# Copy database configuration files
+COPY vitalgraphdb_config/ ./vitalgraphdb_config/
+
 # Copy frontend source files
 COPY frontend/ ./frontend/
 
@@ -42,4 +45,4 @@ RUN cd frontend && npm install && npm run build
 EXPOSE 8001
 
 # Use the vitalgraphdb script as entrypoint
-CMD ["python", "-m", "vitalgraph.api.main"]
+CMD ["python", "-m", "vitalgraph.cmd.vitalgraphdb_cmd"]

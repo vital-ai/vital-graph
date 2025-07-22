@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vital-graph"
+version = "0.0.2"
+authors = [
+    {name = "Marc Hadfield", email = "marc@vital.ai"},
+]
+description = "VitalGraph"
+readme = "README.md"
+license = {text = "Apache License 2.0"}
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "vital-ai-vitalsigns>=0.1.31",
+    "pytidb[models]",
+    "pytidb",
+    "python-dotenv",
+    "rdflib>=7.0.0",
+    "six>=1.7.0",
+    "alembic>=0.8.8",
+    "SQLAlchemy[asyncio]>=2.0.23",
+    "pgvector",
+    "asyncpg",
+    "openai",
+    "psycopg[binary]",
+    "aiofiles",
+    "fastapi[standard, models]",
+    "uvicorn",
+    "Jinja2",
+    "starlette",
+    "itsdangerous",
+]
+
+[project.urls]
+Homepage = "https://github.com/vital-ai/vital-graph"
+
+[project.scripts]
+vitalgraphdb = "vitalgraph.main.main:run_server"
+
+[tool.setuptools.packages.find]
+exclude = ["test", "test_scripts", "rdflib_sqlalchemy"]
+
+[tool.setuptools.package-data]
+"*" = ["*"]
