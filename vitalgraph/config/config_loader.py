@@ -149,18 +149,37 @@ class VitalGraphConfig:
         """
         Build PostgreSQL database URL from configuration.
         
+        Supports environment variable overrides and automatic host.docker.internal resolution:
+        - VITALGRAPH_DB_HOST: Override database host
+        - VITALGRAPH_DB_PORT: Override database port
+        - VITALGRAPH_DB_NAME: Override database name
+        - VITALGRAPH_DB_USER: Override database username
+        - VITALGRAPH_DB_PASSWORD: Override database password
+        
+        Special handling:
+        - host.docker.internal is automatically resolved to localhost when running locally
+        
         Returns:
             PostgreSQL connection URL string
         """
         db_config = self.get_database_config()
         
-        host = db_config.get('host', 'localhost')
-        port = db_config.get('port', 5432)
-        database = db_config.get('database', 'vitalgraphdb')
-        username = db_config.get('username', 'vitalgraph_user')
-        password = db_config.get('password', 'vitalgraph_password')
+        # Get values from config with environment variable overrides
+        host = os.getenv('VITALGRAPH_DB_HOST', db_config.get('host', 'localhost'))
+        port = int(os.getenv('VITALGRAPH_DB_PORT', str(db_config.get('port', 5432))))
+        database = os.getenv('VITALGRAPH_DB_NAME', db_config.get('database', 'vitalgraphdb'))
+        username = os.getenv('VITALGRAPH_DB_USER', db_config.get('username', 'vitalgraph_user'))
+        password = os.getenv('VITALGRAPH_DB_PASSWORD', db_config.get('password', 'vitalgraph_password'))
         
-        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
+        # Special handling for host.docker.internal -> localhost resolution
+        # This allows the same config to work in Docker and locally
+        if host == 'host.docker.internal':
+            resolved_host = 'localhost'
+            logger.info(f"Resolved host.docker.internal -> localhost for local execution")
+        else:
+            resolved_host = host
+        
+        return f"postgresql://{username}:{password}@{resolved_host}:{port}/{database}"
     
     def get_table_prefix(self) -> str:
         """

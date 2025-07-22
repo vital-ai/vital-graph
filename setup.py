@@ -52,7 +52,8 @@ setup(
         'Jinja2',
         'starlette',
         'itsdangerous',
-        'click-repl'
+        'click-repl',
+        'tabulate'
     ],
 
     classifiers=[

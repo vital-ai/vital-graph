@@ -36,6 +36,8 @@ dependencies = [
     "Jinja2",
     "starlette",
     "itsdangerous",
+    "click-repl",
+    "tabulate",
 ]
 
 [project.urls]
