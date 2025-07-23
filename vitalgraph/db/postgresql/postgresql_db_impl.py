@@ -230,11 +230,11 @@ class PostgreSQLDbImpl:
             
             self.connected = True
             
-            # Initialize PostgreSQLSpaceImpl with connection string
-            # Convert SQLAlchemy URL to psycopg3-compatible format
-            url = self.engine.url
-            connection_string = f"postgresql://{url.username}:{url.password}@{url.host}:{url.port}/{url.database}"
-            self.space_impl = PostgreSQLSpaceImpl(connection_string=connection_string, global_prefix=self.global_prefix)
+            # Initialize PostgreSQLSpaceImpl with connection string and config
+            connection_string = f"postgresql://{self.config['username']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}"
+            use_unlogged = self.tables_config.get('use_unlogged', True)  # Default to True for performance
+            
+            self.space_impl = PostgreSQLSpaceImpl(connection_string=connection_string, global_prefix=self.global_prefix, use_unlogged=use_unlogged)
             self.logger.info(f"PostgreSQLSpaceImpl initialized with global prefix: {self.global_prefix}")
             
             # Load current state from database

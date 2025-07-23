@@ -18,6 +18,18 @@ from rdflib.plugins.sparql.sparql import Query
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 from .postgresql_utils import PostgreSQLUtils
 
+
+class GraphConstants:
+    """Constants for graph URI handling in SPARQL queries."""
+    GLOBAL_GRAPH_URI = "urn:___GLOBAL"
+    GLOBAL_GRAPH_TYPE = "U"  # URI type
+    
+    @classmethod
+    def get_global_graph_term_info(cls) -> Tuple[str, str]:
+        """Get term info tuple for global graph."""
+        return (cls.GLOBAL_GRAPH_URI, cls.GLOBAL_GRAPH_TYPE)
+
+
 class TermUUIDCache:
     """
     LRU cache for term UUID lookups to avoid repeated subqueries.
@@ -268,8 +280,8 @@ class PostgreSQLSparqlImpl:
             SQL query string
         """
         try:
-            # Create table configuration for unlogged tables (WordNet data was loaded into unlogged tables)
-            table_config = TableConfig.from_space_impl(self.space_impl, space_id, use_unlogged=True)
+            # Create table configuration for logged tables (testing logged table performance)
+            table_config = TableConfig.from_space_impl(self.space_impl, space_id)
             
             # Parse and get algebra
             prepared_query = prepareQuery(sparql_query)
@@ -413,12 +425,21 @@ class PostgreSQLSparqlImpl:
             # OrderBy wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
             return await self._translate_pattern(nested_pattern, table_config, projected_vars)
+        elif pattern_name == "Graph":  # GRAPH pattern
+            return await self._translate_graph(pattern, table_config, projected_vars)
         else:
             self.logger.warning(f"Pattern type {pattern_name} not fully implemented")
             return f"FROM {table_config.quad_table} q0", [], [], {}
     
-    async def _translate_bgp(self, bgp_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
-        """Translate Basic Graph Pattern to SQL using UUID-based quad/term schema with batch term lookup."""
+    async def _translate_bgp(self, bgp_pattern, table_config: TableConfig, projected_vars: List[Variable] = None, context_constraint: str = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate Basic Graph Pattern to SQL using UUID-based quad/term schema with batch term lookup.
+        
+        Args:
+            bgp_pattern: Basic Graph Pattern from SPARQL algebra
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            context_constraint: Optional SQL constraint for context_uuid column (for GRAPH patterns)
+        """
         triples = bgp_pattern.get('triples', [])
         
         if not triples:
@@ -555,6 +576,27 @@ class PostgreSQLSparqlImpl:
         # Combine quad JOINs first, then term JOINs
         combined_joins = quad_joins + all_joins
         
+        # Handle context constraints for GRAPH patterns
+        if context_constraint is None:
+            # No explicit GRAPH pattern - query default graph (urn:___GLOBAL)
+            global_graph_terms = [GraphConstants.get_global_graph_term_info()]
+            global_graph_mappings = await self._get_term_uuids_batch(global_graph_terms, table_config)
+            
+            global_key = GraphConstants.get_global_graph_term_info()
+            if global_key in global_graph_mappings:
+                global_uuid = global_graph_mappings[global_key]
+                # Add global graph constraint to all quad tables
+                for quad_alias in quad_aliases:
+                    all_where_conditions.append(f"{quad_alias}.context_uuid = '{global_uuid}'")
+                self.logger.debug(f"Applied default graph constraint: {global_uuid}")
+            else:
+                self.logger.warning("Global graph not found in database - queries may return unexpected results")
+        else:
+            # Explicit context constraint provided
+            for quad_alias in quad_aliases:
+                all_where_conditions.append(f"{quad_alias}.{context_constraint}")
+            self.logger.debug(f"Applied explicit context constraint: {context_constraint}")
+        
         return from_clause, all_where_conditions, combined_joins, variable_mappings
     
     def _find_shared_variables_between_triples(self, triple1, triple2):
@@ -616,6 +658,101 @@ class PostgreSQLSparqlImpl:
         """Translate OPTIONAL (LeftJoin) pattern to SQL (stub implementation)."""
         self.logger.warning("OPTIONAL pattern not fully implemented")
         return f"FROM {table_config.quad_table} q0", [], [], {}
+    
+    async def _translate_graph(self, graph_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """
+        Translate GRAPH pattern to SQL with context constraints.
+        
+        Handles:
+        - GRAPH <uri> { ... } (named graphs)
+        - GRAPH ?var { ... } (variable graphs)
+        - Default graph behavior (no GRAPH specified uses urn:___GLOBAL)
+        
+        Args:
+            graph_pattern: The GRAPH pattern from SPARQL algebra
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        self.logger.debug(f"Translating GRAPH pattern: {graph_pattern}")
+        
+        # Extract graph term and inner pattern
+        graph_term = graph_pattern.get('term')  # The graph URI or variable
+        inner_pattern = graph_pattern.get('p')   # The pattern inside GRAPH
+        
+        self.logger.debug(f"Graph term: {graph_term} (type: {type(graph_term)})")
+        self.logger.debug(f"Inner pattern: {inner_pattern}")
+        
+        if isinstance(graph_term, URIRef):
+            # Named graph - resolve URI to UUID
+            self.logger.debug(f"Processing named graph: {graph_term}")
+            graph_text, graph_type = self._get_term_info(graph_term)
+            graph_terms = [(graph_text, graph_type)]
+            graph_uuid_mappings = await self._get_term_uuids_batch(graph_terms, table_config)
+            
+            graph_key = (graph_text, graph_type)
+            if graph_key in graph_uuid_mappings:
+                context_uuid = graph_uuid_mappings[graph_key]
+                context_constraint = f"context_uuid = '{context_uuid}'"
+                self.logger.debug(f"Found graph UUID: {context_uuid}")
+                return await self._translate_pattern_with_context(inner_pattern, table_config, projected_vars, context_constraint)
+            else:
+                # Graph not found - return empty result set
+                self.logger.warning(f"Graph not found: {graph_text}")
+                # Use a condition that will never match any real UUID
+                # This ensures 0 results while maintaining valid SQL structure
+                context_constraint = f"context_uuid = '00000000-0000-0000-0000-000000000000'"
+                return await self._translate_pattern_with_context(inner_pattern, table_config, projected_vars, context_constraint)
+        
+        elif isinstance(graph_term, Variable):
+            # Variable graph - add JOIN to term table
+            self.logger.debug(f"Processing variable graph: {graph_term}")
+            return await self._translate_variable_graph(graph_term, inner_pattern, table_config, projected_vars)
+        
+        else:
+            self.logger.warning(f"Unsupported graph term type: {type(graph_term)}")
+            return await self._translate_pattern(inner_pattern, table_config, projected_vars)
+    
+    async def _translate_pattern_with_context(self, pattern, table_config: TableConfig, projected_vars: List[Variable] = None, context_constraint: str = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """
+        Translate any pattern with additional context constraint.
+        
+        Args:
+            pattern: The SPARQL pattern to translate
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            context_constraint: SQL constraint for context_uuid column
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        pattern_name = pattern.name
+        
+        if pattern_name == "BGP":
+            return await self._translate_bgp(pattern, table_config, projected_vars, context_constraint)
+        elif pattern_name == "Filter":
+            # Handle filter with context constraint
+            inner_pattern = pattern['p']
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern_with_context(inner_pattern, table_config, projected_vars, context_constraint)
+            
+            # Add filter conditions
+            filter_expr = pattern['expr']
+            filter_sql = self._translate_filter_expression(filter_expr, variable_mappings)
+            if filter_sql:
+                where_conditions.append(filter_sql)
+            
+            return from_clause, where_conditions, joins, variable_mappings
+        else:
+            # For other patterns, fall back to regular translation and add context constraint
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(pattern, table_config, projected_vars)
+            if context_constraint:
+                # Extract quad aliases from FROM clause and JOINs to apply context constraint
+                quad_aliases = self._extract_quad_aliases_from_sql(from_clause, joins)
+                for quad_alias in quad_aliases:
+                    where_conditions.append(f"{quad_alias}.{context_constraint}")
+            return from_clause, where_conditions, joins, variable_mappings
     
     async def _translate_construct_query(self, algebra, table_config: TableConfig) -> str:
         """Translate CONSTRUCT query algebra to SQL (stub implementation)."""
@@ -920,3 +1057,78 @@ class PostgreSQLSparqlImpl:
             self.logger.error(f"Error executing SQL query: {e}")
             self.logger.error(f"SQL query was: {sql_query}")
             raise
+    
+    def _extract_quad_aliases_from_sql(self, from_clause: str, joins: List[str]) -> List[str]:
+        """
+        Extract quad table aliases from FROM clause and JOINs.
+        
+        Args:
+            from_clause: SQL FROM clause
+            joins: List of JOIN clauses
+            
+        Returns:
+            List of quad table aliases
+        """
+        import re
+        quad_aliases = []
+        
+        # Extract alias from FROM clause (e.g., "FROM quad_table q0" -> "q0")
+        from_match = re.search(r'FROM\s+\S+\s+(\w+)', from_clause)
+        if from_match:
+            quad_aliases.append(from_match.group(1))
+        
+        # Extract aliases from JOINs that reference quad tables
+        for join in joins:
+            # Look for quad table JOINs (e.g., "JOIN quad_table q1 ON ...")
+            if 'quad' in join.lower():
+                join_match = re.search(r'JOIN\s+\S+\s+(\w+)\s+ON', join)
+                if join_match:
+                    alias = join_match.group(1)
+                    if alias not in quad_aliases:
+                        quad_aliases.append(alias)
+        
+        return quad_aliases
+    
+    async def _translate_variable_graph(self, graph_var: Variable, inner_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """
+        Translate variable graph pattern (GRAPH ?var { ... }).
+        
+        Args:
+            graph_var: The graph variable
+            inner_pattern: The pattern inside GRAPH
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        self.logger.debug(f"Translating variable graph pattern: {graph_var}")
+        
+        # First translate the inner pattern
+        from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(inner_pattern, table_config, projected_vars)
+        
+        # Add graph variable to projected variables if needed
+        if projected_vars is None or graph_var in projected_vars:
+            # Create JOIN to term table for graph variable
+            context_term_alias = f"g_term_{len(joins)}"
+            
+            # Extract quad aliases to add context JOINs
+            quad_aliases = self._extract_quad_aliases_from_sql(from_clause, joins)
+            
+            # Add context term JOIN for the first quad table
+            if quad_aliases:
+                first_quad_alias = quad_aliases[0]
+                joins.append(f"JOIN {table_config.term_table} {context_term_alias} ON {first_quad_alias}.context_uuid = {context_term_alias}.term_uuid")
+                
+                # For additional quad tables, ensure they have the same context
+                for i, quad_alias in enumerate(quad_aliases[1:], 1):
+                    where_conditions.append(f"{quad_alias}.context_uuid = {first_quad_alias}.context_uuid")
+            
+            # Map graph variable to term text
+            variable_mappings[graph_var] = f"{context_term_alias}.term_text"
+            self.logger.debug(f"Mapped graph variable {graph_var} to {context_term_alias}.term_text")
+        else:
+            # Graph variable not projected - no additional JOINs needed
+            self.logger.debug(f"Graph variable {graph_var} not projected - no JOINs added")
+        
+        return from_clause, where_conditions, joins, variable_mappings

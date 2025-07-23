@@ -13,6 +13,10 @@ database:
   
 tables:
   prefix: "vitalgraph1_"
+  # Control whether to use UNLOGGED tables for better performance
+  # UNLOGGED tables are 2-3x faster for bulk loading but not crash-safe
+  # Set to true for development/testing, false for production
+  use_unlogged: true
   
  
 auth:

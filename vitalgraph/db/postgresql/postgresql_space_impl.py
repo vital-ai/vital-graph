@@ -56,17 +56,19 @@ class PostgreSQLSpaceImpl:
     Table names are prefixed with global_prefix__space_id__ format.
     """
     
-    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph"):
+    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True):
         """
         Initialize PostgreSQL space implementation.
         
         Args:
             connection_string: PostgreSQL connection string
             global_prefix: Global table prefix for all spaces (default: 'vitalgraph')
+            use_unlogged: Whether to use unlogged tables for better performance (default: True)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.connection_string = connection_string
         self.global_prefix = global_prefix
+        self.use_unlogged = use_unlogged
         
         # Initialize PostgreSQL utilities
         self.utils = PostgreSQLUtils(logger=self.logger)
@@ -140,205 +142,11 @@ class PostgreSQLSpaceImpl:
             'rdf_quad': PostgreSQLUtils.get_table_name(self.global_prefix, space_id, 'rdf_quad')
         }
     
+
+    
+
+    
     def _get_create_table_sql(self, space_id: str) -> Dict[str, str]:
-        """
-        Generate CREATE TABLE SQL statements for all RDF space tables.
-        
-        Args:
-            space_id: Space identifier
-            
-        Returns:
-            dict: Dictionary of CREATE TABLE SQL statements keyed by base name
-        """
-        PostgreSQLUtils.validate_space_id(space_id)
-        
-        table_names = self._get_table_names(space_id)
-        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-        
-        sql_statements = {}
-        
-        # Terms dictionary table - stores all RDF terms for this space
-        sql_statements['term'] = f"""
-            CREATE TABLE {table_names['term']} (
-                term_id BIGSERIAL PRIMARY KEY,
-                term_text TEXT NOT NULL,
-                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
-                lang VARCHAR(20),
-                datatype_id BIGINT,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (term_text, term_type, lang, datatype_id)
-            );
-            
-            CREATE INDEX idx_{table_prefix}term_text ON {table_names['term']} (term_text);
-            CREATE INDEX idx_{table_prefix}term_type ON {table_names['term']} (term_type);
-            CREATE INDEX idx_{table_prefix}term_text_type ON {table_names['term']} (term_text, term_type);
-            CREATE INDEX idx_{table_prefix}term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);
-            CREATE INDEX idx_{table_prefix}term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);
-        """
-        
-        # Namespace table - RDF namespace prefix mappings for this space
-        sql_statements['namespace'] = f"""
-            CREATE TABLE {table_names['namespace']} (
-                namespace_id BIGSERIAL PRIMARY KEY,
-                prefix VARCHAR(50) NOT NULL,
-                namespace_uri TEXT NOT NULL,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (prefix)
-            );
-        """
-        
-        # Graph table - Graph (context) URIs and metadata for this space
-        sql_statements['graph'] = f"""
-            CREATE TABLE {table_names['graph']} (
-                graph_id BIGSERIAL PRIMARY KEY,
-                graph_uri_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                graph_name VARCHAR(255),
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                triple_count BIGINT DEFAULT 0,
-                UNIQUE (graph_uri_id)
-            );
-        """
-        
-        # RDF Quad table - stores RDF quads with term references for this space
-        sql_statements['rdf_quad'] = f"""
-            CREATE TABLE {table_names['rdf_quad']} (
-                quad_id BIGSERIAL PRIMARY KEY,
-                subject_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                predicate_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                object_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                context_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (subject_id, predicate_id, object_id, context_id)
-            );
-            
-            CREATE INDEX idx_{table_prefix}quad_spoc ON {table_names['rdf_quad']} (subject_id, predicate_id, object_id, context_id);
-            CREATE INDEX idx_{table_prefix}quad_subject ON {table_names['rdf_quad']} (subject_id);
-            CREATE INDEX idx_{table_prefix}quad_predicate ON {table_names['rdf_quad']} (predicate_id);
-            CREATE INDEX idx_{table_prefix}quad_object ON {table_names['rdf_quad']} (object_id);
-            CREATE INDEX idx_{table_prefix}quad_context ON {table_names['rdf_quad']} (context_id);
-        """
-        
-        return sql_statements
-    
-    def _get_create_table_sql_minimal(self, space_id: str) -> Dict[str, str]:
-        """
-        Generate CREATE TABLE SQL statements with minimal indexes for bulk loading.
-        Only creates essential constraints (PRIMARY KEY, UNIQUE, FOREIGN KEY).
-        
-        Args:
-            space_id: Space identifier
-            
-        Returns:
-            dict: Dictionary of CREATE TABLE SQL statements with minimal indexes
-        """
-        PostgreSQLUtils.validate_space_id(space_id)
-        
-        table_names = self._get_table_names(space_id)
-        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-        
-        sql_statements = {}
-        
-        # Terms dictionary table - minimal indexes for bulk loading
-        sql_statements['term'] = f"""
-            CREATE TABLE {table_names['term']} (
-                term_id BIGSERIAL PRIMARY KEY,
-                term_text TEXT NOT NULL,
-                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
-                lang VARCHAR(20),
-                datatype_id BIGINT,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (term_text, term_type, lang, datatype_id)
-            );
-        """
-        
-        # Namespace table - no additional indexes needed
-        sql_statements['namespace'] = f"""
-            CREATE TABLE {table_names['namespace']} (
-                namespace_id BIGSERIAL PRIMARY KEY,
-                prefix VARCHAR(50) NOT NULL,
-                namespace_uri TEXT NOT NULL,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (prefix)
-            );
-        """
-        
-        # Graph table - minimal indexes
-        sql_statements['graph'] = f"""
-            CREATE TABLE {table_names['graph']} (
-                graph_id BIGSERIAL PRIMARY KEY,
-                graph_uri_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                graph_name VARCHAR(255),
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                triple_count BIGINT DEFAULT 0,
-                UNIQUE (graph_uri_id)
-            );
-        """
-        
-        # RDF Quad table - only essential constraints, no performance indexes
-        sql_statements['rdf_quad'] = f"""
-            CREATE TABLE {table_names['rdf_quad']} (
-                quad_id BIGSERIAL PRIMARY KEY,
-                subject_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                predicate_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                object_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                context_id BIGINT NOT NULL REFERENCES {table_names['term']}(term_id),
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (subject_id, predicate_id, object_id, context_id)
-            );
-        """
-        
-        return sql_statements
-    
-    def _get_create_table_sql_unlogged(self, space_id: str) -> Dict[str, str]:
-        """
-        Generate CREATE UNLOGGED TABLE SQL statements for ultra-fast bulk loading.
-        Unlogged tables have no WAL overhead but are not crash-safe.
-        
-        Args:
-            space_id: Space identifier
-            
-        Returns:
-            dict: Dictionary of CREATE UNLOGGED TABLE SQL statements
-        """
-        PostgreSQLUtils.validate_space_id(space_id)
-        
-        table_names = self._get_table_names(space_id)
-        # Add _unlogged suffix to table names
-        unlogged_table_names = {
-            key: f"{value}_unlogged" for key, value in table_names.items()
-        }
-        
-        sql_statements = {}
-        
-        # Unlogged terms table - no constraints for maximum speed
-        sql_statements['term'] = f"""
-            CREATE UNLOGGED TABLE {unlogged_table_names['term']} (
-                term_id BIGSERIAL,
-                term_text TEXT NOT NULL,
-                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
-                lang VARCHAR(20),
-                datatype_id BIGINT,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """
-        
-        # Unlogged quad table - no constraints for maximum speed
-        sql_statements['rdf_quad'] = f"""
-            CREATE UNLOGGED TABLE {unlogged_table_names['rdf_quad']} (
-                quad_id BIGSERIAL,
-                subject_id BIGINT NOT NULL,
-                predicate_id BIGINT NOT NULL,
-                object_id BIGINT NOT NULL,
-                context_id BIGINT NOT NULL,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """
-        
-        return sql_statements
-    
-    def _get_create_table_sql_uuid(self, space_id: str, use_unlogged: bool = False) -> Dict[str, str]:
         """
         Generate CREATE TABLE SQL statements for UUID-based RDF space tables.
         
@@ -357,17 +165,17 @@ class PostgreSQLSpaceImpl:
         PostgreSQLUtils.validate_space_id(space_id)
         
         table_names = self._get_table_names(space_id)
-        if use_unlogged:
+        if self.use_unlogged:
             table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
         
         table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-        if use_unlogged:
+        if self.use_unlogged:
             table_prefix += "_unlogged"
         
         sql_statements = {}
         
         # UUID-based term table
-        table_type = "UNLOGGED TABLE" if use_unlogged else "TABLE"
+        table_type = "UNLOGGED TABLE" if self.use_unlogged else "TABLE"
         sql_statements['term'] = f"""
             CREATE {table_type} {table_names['term']} (
                 term_uuid UUID PRIMARY KEY,
@@ -423,7 +231,7 @@ class PostgreSQLSpaceImpl:
         
         return sql_statements
     
-    def _get_performance_indexes_sql(self, space_id: str, use_unlogged: bool = False) -> Dict[str, List[str]]:
+    def _get_performance_indexes_sql(self, space_id: str) -> Dict[str, List[str]]:
         """
         Generate SQL statements for performance indexes to be created after bulk loading.
         
@@ -437,7 +245,7 @@ class PostgreSQLSpaceImpl:
         PostgreSQLUtils.validate_space_id(space_id)
         
         table_names = self._get_table_names(space_id)
-        if use_unlogged:
+        if self.use_unlogged:
             table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
         table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
         
@@ -502,104 +310,6 @@ class PostgreSQLSpaceImpl:
         
         return indexes
         
-        # Terms dictionary table - stores all RDF terms for this space
-        tables['term'] = Table(
-            term_table_name,
-            self.metadata,
-            Column('term_id', BigInteger, primary_key=True, autoincrement=True),
-            Column('term_text', Text, nullable=False),
-            Column('term_type', CHAR(1), nullable=False),  # 'U'=URI, 'L'=Literal, 'B'=BlankNode, 'G'=Graph
-            Column('lang', String(20), nullable=True),      # Language tag for literals
-            Column('datatype_id', BigInteger, nullable=True), # Reference to datatype term
-            Column('created_time', DateTime, default=datetime.utcnow),
-            
-            # Indexes for performance
-            Index(f"idx_{table_prefix}term_text", 'term_text'),
-            Index(f"idx_{table_prefix}term_type", 'term_type'),
-            Index(f"idx_{table_prefix}term_text_type", 'term_text', 'term_type'),
-            
-            # Text search indexes for regex and full-text search optimization
-            # GIN index with pg_trgm for trigram-based regex matching
-            Index(f"idx_{table_prefix}term_text_gin_trgm", 'term_text', 
-                  postgresql_using='gin', postgresql_ops={'term_text': 'gin_trgm_ops'}),
-            
-            # GiST index for additional text search capabilities
-            Index(f"idx_{table_prefix}term_text_gist_trgm", 'term_text',
-                  postgresql_using='gist', postgresql_ops={'term_text': 'gist_trgm_ops'}),
-            
-            # Constraints
-            CheckConstraint("term_type IN ('U', 'L', 'B', 'G')", name=f"ck_{table_prefix}term_type"),
-            UniqueConstraint('term_text', 'term_type', 'lang', 'datatype_id', 
-                           name=f"uq_{table_prefix}term_unique")
-        )
-        
-        # Namespace table - RDF namespace prefix mappings for this space
-        tables['namespace'] = Table(
-            namespace_table_name,
-            self.metadata,
-            Column('namespace_id', BigInteger, primary_key=True, autoincrement=True),
-            Column('prefix', String(50), nullable=False),
-            Column('namespace_uri', Text, nullable=False),
-            Column('created_time', DateTime, default=datetime.utcnow),
-            
-            # Unique constraint on prefix within this space
-            UniqueConstraint('prefix', name=f"uq_{table_prefix}namespace_prefix")
-        )
-        
-        # Graph table - Graph (context) URIs and metadata for this space
-        tables['graph'] = Table(
-            graph_table_name,
-            self.metadata,
-            Column('graph_id', BigInteger, primary_key=True, autoincrement=True),
-            Column('graph_uri_id', BigInteger, 
-                   ForeignKey(f"{term_table_name}.term_id"), 
-                   nullable=False),
-            Column('graph_name', String(255), nullable=True),  # Optional human-readable name
-            Column('created_time', DateTime, default=datetime.utcnow),
-            Column('updated_time', DateTime, default=datetime.utcnow, onupdate=datetime.utcnow),
-            Column('triple_count', BigInteger, default=0),     # Cached count for performance
-            
-            # Unique constraint on graph URI within this space
-            UniqueConstraint('graph_uri_id', name=f"uq_{table_prefix}graph_uri")
-        )
-        
-        # RDF Quad table - stores RDF quads with term references for this space
-        tables['rdf_quad'] = Table(
-            quad_table_name,
-            self.metadata,
-            Column('quad_id', BigInteger, primary_key=True, autoincrement=True),
-            Column('subject_id', BigInteger, 
-                   ForeignKey(f"{term_table_name}.term_id"), 
-                   nullable=False),
-            Column('predicate_id', BigInteger, 
-                   ForeignKey(f"{term_table_name}.term_id"), 
-                   nullable=False),
-            Column('object_id', BigInteger, 
-                   ForeignKey(f"{term_table_name}.term_id"), 
-                   nullable=False),
-            Column('context_id', BigInteger, 
-                   ForeignKey(f"{term_table_name}.term_id"), 
-                   nullable=False),
-            Column('created_time', DateTime, default=datetime.utcnow),
-            
-            # Indexes for SPARQL query performance
-            Index(f"idx_{table_prefix}quad_spoc", 'subject_id', 'predicate_id', 'object_id', 'context_id'),
-            Index(f"idx_{table_prefix}quad_pocs", 'predicate_id', 'object_id', 'context_id', 'subject_id'),
-            Index(f"idx_{table_prefix}quad_ocsp", 'object_id', 'context_id', 'subject_id', 'predicate_id'),
-            Index(f"idx_{table_prefix}quad_cspo", 'context_id', 'subject_id', 'predicate_id', 'object_id'),
-            Index(f"idx_{table_prefix}quad_context", 'context_id'),
-            
-            # Unique constraint to prevent duplicate quads within this space
-            UniqueConstraint('subject_id', 'predicate_id', 'object_id', 'context_id',
-                           name=f"uq_{table_prefix}quad_unique")
-        )
-        
-        # Cache the tables for this space
-        self._table_cache[space_id] = tables
-        
-        self.logger.debug(f"Defined {len(tables)} tables for space '{space_id}' with prefix '{table_prefix}'")
-        return tables
-    
     # Space lifecycle management
     async def _ensure_text_search_extensions(self) -> bool:
         """
@@ -633,128 +343,15 @@ class PostgreSQLSpaceImpl:
             self.logger.warning(f"Could not enable text search extensions: {e}")
             return False
     
-    async def create_space_tables(self, space_id: str) -> bool:
-        """
-        Create all RDF tables for a specific space using pure psycopg3.
-        
-        This method creates the complete table structure for an RDF space including:
-        - Term table with text search indexes for efficient regex matching
-        - Namespace table for prefix mappings
-        - Graph table for context/graph metadata
-        - RDF quad table with optimized indexes for SPARQL queries
-        
-        Args:
-            space_id: Space identifier
-            
-        Returns:
-            bool: True if tables were created successfully, False otherwise
-        """
-        try:
-            # Ensure text search extensions are available
-            await self._ensure_text_search_extensions()
-            
-            # Get SQL DDL statements for this space
-            sql_statements = self._get_create_table_sql(space_id)
-            
-            with self.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Create tables in dependency order: term -> namespace, graph, quad
-                    creation_order = ['term', 'namespace', 'graph', 'rdf_quad']
-                    
-                    for table_name in creation_order:
-                        if table_name in sql_statements:
-                            self.logger.debug(f"Creating table: {table_name}")
-                            # Execute the DDL statement (may contain multiple statements)
-                            for statement in sql_statements[table_name].strip().split(';'):
-                                statement = statement.strip()
-                                if statement:  # Skip empty statements
-                                    cursor.execute(statement)
-                    
-                    conn.commit()
-            
-            self.logger.info(f"Successfully created {len(sql_statements)} tables for space '{space_id}'")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error creating tables for space '{space_id}': {e}")
-            return False
+
     
-    def create_space_tables_for_bulk_loading(self, space_id: str, use_unlogged: bool = False) -> bool:
-        """
-        Create RDF tables optimized for bulk loading with minimal indexes.
-        
-        Args:
-            space_id: Space identifier
-            use_unlogged: If True, create unlogged tables for maximum speed (not crash-safe)
-            
-        Returns:
-            bool: True if tables created successfully, False otherwise
-        """
-        try:
-            PostgreSQLUtils.validate_space_id(space_id)
-            
-            self.logger.info(f"Creating bulk-loading optimized RDF tables for space '{space_id}' (unlogged={use_unlogged})")
-            
-            with self.utils.time_operation("create_bulk_tables", f"space '{space_id}'"):
-                with self.get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        # If using unlogged tables, drop any existing unlogged tables first
-                        if use_unlogged:
-                            self.logger.debug(f"Checking for existing unlogged tables to clean up...")
-                            table_names = self._get_table_names(space_id)
-                            unlogged_table_names = [f"{name}_unlogged" for name in table_names.values()]
-                            
-                            # Drop tables in reverse dependency order
-                            for table_name in reversed(unlogged_table_names):
-                                try:
-                                    cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
-                                    self.logger.debug(f"Dropped existing unlogged table: {table_name}")
-                                except psycopg.Error as e:
-                                    self.logger.debug(f"No existing table to drop: {table_name} ({e})")
-                            
-                            conn.commit()
-                        
-                        # Get appropriate SQL statements
-                        if use_unlogged:
-                            sql_statements = self._get_create_table_sql_unlogged(space_id)
-                            self.logger.info(f"Using UNLOGGED tables for maximum bulk loading speed")
-                        else:
-                            sql_statements = self._get_create_table_sql_minimal(space_id)
-                            self.logger.info(f"Using minimal indexes for optimized bulk loading")
-                        
-                        # Create tables in dependency order
-                        table_order = ['term', 'namespace', 'graph', 'rdf_quad']
-                        created_tables = []
-                        
-                        for table_name in table_order:
-                            if table_name in sql_statements:
-                                self.logger.debug(f"Creating {table_name} table...")
-                                for statement in sql_statements[table_name].strip().split(';'):
-                                    statement = statement.strip()
-                                    if statement:  # Skip empty statements
-                                        cursor.execute(statement)
-                                created_tables.append(table_name)
-                        
-                        conn.commit()
-                        self.logger.info(f"Successfully created {len(created_tables)} bulk-loading tables for space '{space_id}': {created_tables}")
-            
-            # Cache table definitions
-            self._table_cache[space_id] = self._get_table_names(space_id)
-            return True
-            
-        except psycopg.Error as e:
-            self.logger.error(f"Database error creating bulk-loading tables for space '{space_id}': {e}")
-            return False
-        except Exception as e:
-            self.logger.error(f"Unexpected error creating bulk-loading tables for space '{space_id}': {e}")
-            return False
+
     
-    def create_space_tables_uuid(self, space_id: str, use_unlogged: bool = False) -> bool:
+    def create_space_tables(self, space_id: str) -> bool:
         """
         Create UUID-based RDF tables optimized for deterministic batch loading.
         
-        This creates tables that use UUIDs as primary keys instead of BIGSERIAL,
-        eliminating the need for ID management and ON CONFLICT logic.
+        This creates tables that use UUIDs as primary keys 
         
         Args:
             space_id: Space identifier
@@ -766,10 +363,10 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            self.logger.info(f"Creating UUID-based RDF tables for space '{space_id}' (unlogged={use_unlogged})")
+            self.logger.info(f"Creating UUID-based RDF tables for space '{space_id}' (unlogged={self.use_unlogged})")
             
             # Get UUID-based table creation SQL
-            sql_statements = self._get_create_table_sql_uuid(space_id, use_unlogged)
+            sql_statements = self._get_create_table_sql(space_id)
             
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -810,7 +407,7 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Unexpected error creating UUID-based tables for space '{space_id}': {e}")
             return False
     
-    def build_performance_indexes(self, space_id: str, concurrent: bool = True, use_unlogged: bool = False) -> bool:
+    def build_performance_indexes(self, space_id: str, concurrent: bool = True) -> bool:
         """
         Build performance indexes after bulk loading is complete.
         
@@ -831,7 +428,7 @@ class PostgreSQLSpaceImpl:
                 with self.get_connection() as conn:
                     with conn.cursor() as cursor:
                         # Get index creation SQL (for unlogged tables if needed)
-                        indexes_sql = self._get_performance_indexes_sql(space_id, use_unlogged=use_unlogged)
+                        indexes_sql = self._get_performance_indexes_sql(space_id)
                         
                         total_indexes = sum(len(table_indexes) for table_indexes in indexes_sql.values())
                         created_indexes = 0
@@ -874,9 +471,6 @@ class PostgreSQLSpaceImpl:
         """
         Delete all RDF tables for a specific space.
         
-        This method comprehensively deletes all table variants (regular, unlogged, UUID-based)
-        to ensure clean state before creating new tables.
-        
         Args:
             space_id: Space identifier
             
@@ -886,60 +480,28 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            self.logger.info(f"Comprehensively deleting all RDF table variants for space '{space_id}'")
+            self.logger.info(f"Deleting RDF tables for space '{space_id}'")
             
             # Get table names for this space
             table_names = self._get_table_names(space_id)
+            if self.use_unlogged:
+                table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
+            
             base_names = ['rdf_quad', 'graph', 'namespace', 'term']  # Drop in reverse dependency order
             
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     dropped_tables = []
                     
-                    # First, find all existing tables that match our space pattern
-                    table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-                    cursor.execute("""
-                        SELECT tablename 
-                        FROM pg_tables 
-                        WHERE schemaname = 'public' 
-                        AND tablename LIKE %s
-                    """, (f"{table_prefix}%",))
-                    
-                    results = cursor.fetchall()
-                    existing_tables = []
-                    for row in results:
-                        table_name = row[0] if isinstance(row, (tuple, list)) else row.get('tablename', '')
-                        if table_name:
-                            existing_tables.append(table_name)
-                    self.logger.debug(f"Found {len(existing_tables)} existing tables: {existing_tables}")
-                    
-                    # Drop all existing tables that match our pattern
-                    for table_name in existing_tables:
+                    # Drop the expected tables for this space
+                    for base_name in base_names:
+                        table_name = table_names[base_name]
                         try:
                             cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
                             dropped_tables.append(table_name)
                             self.logger.debug(f"Dropped table {table_name}")
                         except Exception as e:
                             self.logger.warning(f"Could not drop table {table_name}: {e}")
-                    
-                    # Also explicitly try to drop the expected table variants
-                    for base_name in base_names:
-                        table_name = table_names[base_name]
-                        
-                        # Try all possible variants
-                        variants = [
-                            table_name,                    # Regular table
-                            f"{table_name}_unlogged",      # Unlogged variant
-                        ]
-                        
-                        for variant in variants:
-                            if variant not in dropped_tables:  # Don't drop twice
-                                try:
-                                    cursor.execute(f"DROP TABLE IF EXISTS {variant} CASCADE")
-                                    dropped_tables.append(variant)
-                                    self.logger.debug(f"Dropped table variant {variant}")
-                                except Exception as e:
-                                    self.logger.debug(f"Table variant {variant} did not exist or could not be dropped: {e}")
                     
                     conn.commit()
                     self.logger.info(f"Successfully deleted {len(dropped_tables)} tables for space '{space_id}'")
@@ -995,13 +557,19 @@ class PostgreSQLSpaceImpl:
         try:
             spaces = set()
             
-            with self.engine.connect() as conn:
-                # Query for tables matching our naming pattern
-                result = conn.execute(text(
-                    "SELECT table_name FROM information_schema.tables WHERE table_name LIKE :pattern"
-                ), {"pattern": f"{self.global_prefix}__%__term"})
+            self.logger.debug(f"Listing spaces with global prefix: {self.global_prefix}")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
                 
-                for row in result:
+                # Query for tables matching our naming pattern
+                cursor.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_name LIKE %s",
+                    (f"{self.global_prefix}__%__term",)
+                )
+                results = cursor.fetchall()
+                
+                for row in results:
                     table_name = row[0]
                     # Extract space_id from table name: global_prefix__space_id__term
                     parts = table_name.split('__')
@@ -1015,6 +583,8 @@ class PostgreSQLSpaceImpl:
             
         except Exception as e:
             self.logger.error(f"Error listing spaces: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
     async def get_space_info(self, space_id: str) -> Dict[str, Any]:
@@ -1037,40 +607,47 @@ class PostgreSQLSpaceImpl:
                 "tables": {}
             }
             
+            self.logger.debug(f"Getting space info for space '{space_id}'")
+            
             if info["exists"]:
                 # Get table information
                 base_names = ['term', 'namespace', 'graph', 'rdf_quad']
                 
-                for base_name in base_names:
-                    table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, base_name)
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
                     
-                    table_info = {
-                        "full_name": table_name,
-                        "exists": True,  # We know space exists
-                        "row_count": 0
-                    }
-                    
-                    # Get row count
-                    try:
-                        with self.engine.connect() as conn:
-                            result = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
-                            table_info["row_count"] = result.scalar()
-                    except Exception as e:
-                        self.logger.warning(f"Could not get row count for {table_name}: {e}")
-                    
-                    info["tables"][base_name] = table_info
+                    for base_name in base_names:
+                        table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, base_name)
+                        
+                        table_info = {
+                            "full_name": table_name,
+                            "exists": True,  # We know space exists
+                            "row_count": 0
+                        }
+                        
+                        # Get row count
+                        try:
+                            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                            result = cursor.fetchone()
+                            table_info["row_count"] = result[0] if result else 0
+                        except Exception as e:
+                            self.logger.warning(f"Could not get row count for {table_name}: {e}")
+                        
+                        info["tables"][base_name] = table_info
             
             return info
             
         except Exception as e:
             self.logger.error(f"Error getting space info: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return {"error": str(e)}
     
     # Term management methods
     async def add_term(self, space_id: str, term_text: str, term_type: str, 
-                      lang: Optional[str] = None, datatype_id: Optional[int] = None) -> Optional[int]:
+                      lang: Optional[str] = None, datatype_id: Optional[int] = None) -> Optional[str]:
         """
-        Add a term to the terms dictionary for a specific space.
+        Add a term to the terms dictionary for a specific space using UUID-based approach.
         
         Args:
             space_id: Space identifier
@@ -1080,50 +657,56 @@ class PostgreSQLSpaceImpl:
             datatype_id: Reference to datatype term ID
             
         Returns:
-            int: Term ID if successful, None otherwise
+            str: Term UUID if successful, None otherwise
         """
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            term_table = tables['term']
+            # Generate deterministic UUID for the term
+            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
             
-            with self.engine.connect() as conn:
+            # Get table names
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+            
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
+                
                 # Check if term already exists
-                select_stmt = term_table.select().where(
-                    (term_table.c.term_text == term_text) &
-                    (term_table.c.term_type == term_type) &
-                    (term_table.c.lang == lang) &
-                    (term_table.c.datatype_id == datatype_id)
+                cursor.execute(
+                    f"SELECT term_uuid FROM {term_table_name} WHERE term_uuid = %s",
+                    (term_uuid,)
                 )
-                result = conn.execute(select_stmt).fetchone()
+                result = cursor.fetchone()
                 
                 if result:
-                    self.logger.debug(f"Term already exists in space '{space_id}' with ID: {result.term_id}")
-                    return result.term_id
+                    self.logger.debug(f"Term already exists in space '{space_id}' with UUID: {term_uuid}")
+                    return str(term_uuid)
                 
                 # Insert new term
-                insert_stmt = term_table.insert().values(
-                    term_text=term_text,
-                    term_type=term_type,
-                    lang=lang,
-                    datatype_id=datatype_id
+                cursor.execute(
+                    f"""
+                    INSERT INTO {term_table_name} 
+                    (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (term_uuid, term_text, term_type, lang, datatype_id, datetime.utcnow())
                 )
-                result = conn.execute(insert_stmt)
                 conn.commit()
                 
-                term_id = result.inserted_primary_key[0]
-                self.logger.debug(f"Added term '{term_text}' to space '{space_id}' with ID: {term_id}")
-                return term_id
+                self.logger.debug(f"Added term '{term_text}' to space '{space_id}' with UUID: {term_uuid}")
+                return str(term_uuid)
                 
         except Exception as e:
             self.logger.error(f"Error adding term to space '{space_id}': {e}")
             return None
     
-    async def get_term_id(self, space_id: str, term_text: str, term_type: str, 
-                         lang: Optional[str] = None, datatype_id: Optional[int] = None) -> Optional[int]:
+    async def get_term_uuid(self, space_id: str, term_text: str, term_type: str, 
+                           lang: Optional[str] = None, datatype_id: Optional[int] = None) -> Optional[str]:
         """
-        Get term ID for existing term in a specific space.
+        Get term UUID for existing term in a specific space using UUID-based approach.
         
         Args:
             space_id: Space identifier
@@ -1133,41 +716,127 @@ class PostgreSQLSpaceImpl:
             datatype_id: Datatype term ID
             
         Returns:
-            int: Term ID if found, None otherwise
+            str: Term UUID if found, None otherwise
         """
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            term_table = tables['term']
+            # Generate deterministic UUID for the term
+            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
             
-            with self.engine.connect() as conn:
-                select_stmt = term_table.select().where(
-                    (term_table.c.term_text == term_text) &
-                    (term_table.c.term_type == term_type) &
-                    (term_table.c.lang == lang) &
-                    (term_table.c.datatype_id == datatype_id)
-                )
-                result = conn.execute(select_stmt).fetchone()
+            # Get table names
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+            
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
                 
-                return result.term_id if result else None
+                # Check if term exists
+                cursor.execute(
+                    f"SELECT term_uuid FROM {term_table_name} WHERE term_uuid = %s",
+                    (term_uuid,)
+                )
+                result = cursor.fetchone()
+                
+                return str(term_uuid) if result else None
                 
         except Exception as e:
-            self.logger.error(f"Error getting term ID from space '{space_id}': {e}")
+            self.logger.error(f"Error getting term UUID from space '{space_id}': {e}")
             return None
     
-    # Quad management methods
-    async def add_quad(self, space_id: str, subject_id: int, predicate_id: int, 
-                      object_id: int, context_id: int) -> bool:
+    async def delete_term(self, space_id: str, term_text: str, term_type: str, 
+                         lang: Optional[str] = None, datatype_id: Optional[int] = None) -> bool:
         """
-        Add an RDF quad to a specific space.
+        Delete a term from a specific space using UUID-based approach.
+        
+        Note: This will only delete the term if it's not referenced by any quads.
+        Use with caution as this could break referential integrity if not checked properly.
         
         Args:
             space_id: Space identifier
-            subject_id: Subject term ID
-            predicate_id: Predicate term ID
-            object_id: Object term ID
-            context_id: Context (graph) term ID
+            term_text: The term text
+            term_type: Term type
+            lang: Language tag
+            datatype_id: Datatype term ID
+            
+        Returns:
+            bool: True if term was deleted, False otherwise
+        """
+        try:
+            PostgreSQLUtils.validate_space_id(space_id)
+            
+            # Generate deterministic UUID for the term
+            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
+            
+            # Get table names
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
+                
+                # First check if term exists
+                cursor.execute(
+                    f"SELECT term_uuid FROM {term_table_name} WHERE term_uuid = %s",
+                    (term_uuid,)
+                )
+                result = cursor.fetchone()
+                
+                if not result:
+                    self.logger.debug(f"Term does not exist in space '{space_id}' with UUID: {term_uuid}")
+                    return False
+                
+                # Check if term is referenced by any quads
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) as count FROM {quad_table_name} 
+                    WHERE subject_uuid = %s OR predicate_uuid = %s OR object_uuid = %s OR context_uuid = %s
+                    """,
+                    (term_uuid, term_uuid, term_uuid, term_uuid)
+                )
+                quad_count = cursor.fetchone()['count']
+                
+                if quad_count > 0:
+                    self.logger.warning(f"Cannot delete term '{term_text}' from space '{space_id}': referenced by {quad_count} quads")
+                    return False
+                
+                # Delete the term
+                cursor.execute(
+                    f"DELETE FROM {term_table_name} WHERE term_uuid = %s",
+                    (term_uuid,)
+                )
+                
+                deleted_count = cursor.rowcount
+                conn.commit()
+                
+                if deleted_count > 0:
+                    self.logger.debug(f"Deleted term '{term_text}' from space '{space_id}' with UUID: {term_uuid}")
+                    return True
+                else:
+                    self.logger.debug(f"No term deleted from space '{space_id}' with UUID: {term_uuid}")
+                    return False
+                
+        except Exception as e:
+            self.logger.error(f"Error deleting term from space '{space_id}': {e}")
+            return False
+    
+    # Quad management methods
+    async def add_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, 
+                      object_uuid: str, context_uuid: str) -> bool:
+        """
+        Add an RDF quad to a specific space using UUID-based approach.
+        
+        Args:
+            space_id: Space identifier
+            subject_uuid: Subject term UUID
+            predicate_uuid: Predicate term UUID
+            object_uuid: Object term UUID
+            context_uuid: Context (graph) term UUID
             
         Returns:
             bool: True if successful, False otherwise
@@ -1175,48 +844,58 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            quad_table = tables['rdf_quad']
+            # Get table names using UUID-based approach
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
             
-            with self.engine.connect() as conn:
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
+                
                 # Check if quad already exists
-                select_stmt = quad_table.select().where(
-                    (quad_table.c.subject_id == subject_id) &
-                    (quad_table.c.predicate_id == predicate_id) &
-                    (quad_table.c.object_id == object_id) &
-                    (quad_table.c.context_id == context_id)
+                cursor.execute(
+                    f"""
+                    SELECT quad_uuid FROM {quad_table_name} 
+                    WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
+                    """,
+                    (subject_uuid, predicate_uuid, object_uuid, context_uuid)
                 )
-                result = conn.execute(select_stmt).fetchone()
+                result = cursor.fetchone()
                 
                 if result:
-                    self.logger.debug(f"Quad already exists in space '{space_id}' with ID: {result.quad_id}")
+                    self.logger.debug(f"Quad already exists in space '{space_id}' with UUID: {result['quad_uuid']}")
                     return True
                 
+                # Generate UUID for the quad
+                import uuid
+                quad_uuid = uuid.uuid4()
+                
                 # Insert new quad
-                insert_stmt = quad_table.insert().values(
-                    subject_id=subject_id,
-                    predicate_id=predicate_id,
-                    object_id=object_id,
-                    context_id=context_id
+                cursor.execute(
+                    f"""
+                    INSERT INTO {quad_table_name} 
+                    (quad_uuid, subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (quad_uuid, subject_uuid, predicate_uuid, object_uuid, context_uuid, datetime.utcnow())
                 )
-                result = conn.execute(insert_stmt)
                 conn.commit()
                 
-                quad_id = result.inserted_primary_key[0]
-                self.logger.debug(f"Added quad to space '{space_id}' with ID: {quad_id}")
+                self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
                 return True
                 
         except Exception as e:
             self.logger.error(f"Error adding quad to space '{space_id}': {e}")
             return False
     
-    async def get_quad_count(self, space_id: str, context_id: Optional[int] = None) -> int:
+    async def get_quad_count(self, space_id: str, context_uuid: Optional[str] = None) -> int:
         """
-        Get count of quads in a specific space, optionally filtered by context.
+        Get count of quads in a specific space using UUID-based approach, optionally filtered by context.
         
         Args:
             space_id: Space identifier
-            context_id: Optional context ID to filter by
+            context_uuid: Optional context UUID to filter by
             
         Returns:
             int: Number of quads
@@ -1224,35 +903,43 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            quad_table = tables['rdf_quad']
+            # Get table names using UUID-based approach
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
             
-            with self.engine.connect() as conn:
-                if context_id:
-                    select_stmt = quad_table.select().where(quad_table.c.context_id == context_id)
-                    result = conn.execute(select_stmt)
-                    return len(result.fetchall())
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
+                
+                if context_uuid:
+                    cursor.execute(
+                        f"SELECT COUNT(*) as count FROM {quad_table_name} WHERE context_uuid = %s", 
+                        (context_uuid,)
+                    )
                 else:
-                    result = conn.execute(text(f"SELECT COUNT(*) FROM {quad_table.name}"))
-                    return result.scalar()
+                    cursor.execute(f"SELECT COUNT(*) as count FROM {quad_table_name}")
+                
+                result = cursor.fetchone()
+                return result['count'] if result else 0
                     
         except Exception as e:
             self.logger.error(f"Error getting quad count from space '{space_id}': {e}")
             return 0
     
-    async def remove_quad(self, space_id: str, subject_id: int, predicate_id: int, object_id: int, context_id: int) -> bool:
+    async def remove_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, object_uuid: str, context_uuid: str) -> bool:
         """
-        Remove a single RDF quad from a specific space.
+        Remove a single RDF quad from a specific space using UUID-based approach.
         
         Following RDFLib pattern: removes only one instance of the matching quad,
         not all instances. If multiple identical quads exist, only one is removed.
         
         Args:
             space_id: Space identifier
-            subject_id: Subject term ID
-            predicate_id: Predicate term ID
-            object_id: Object term ID
-            context_id: Context (graph) term ID
+            subject_uuid: Subject term UUID
+            predicate_uuid: Predicate term UUID
+            object_uuid: Object term UUID
+            context_uuid: Context (graph) term UUID
             
         Returns:
             bool: True if a quad was removed, False if no matching quad found
@@ -1260,33 +947,45 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            quad_table = tables['rdf_quad']
+            # Get table names using UUID-based approach
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
             
-            with self.engine.connect() as conn:
-                # Find the first matching quad (LIMIT 1 for single instance removal)
-                select_stmt = quad_table.select().where(
-                    (quad_table.c.subject_id == subject_id) &
-                    (quad_table.c.predicate_id == predicate_id) &
-                    (quad_table.c.object_id == object_id) &
-                    (quad_table.c.context_id == context_id)
-                ).limit(1)
+            # Use raw psycopg3 connection for UUID-based operations
+            with self.get_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
                 
-                result = conn.execute(select_stmt).fetchone()
+                # Find the first matching quad (LIMIT 1 for single instance removal)
+                cursor.execute(
+                    f"""
+                    SELECT quad_uuid FROM {quad_table_name} 
+                    WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
+                    LIMIT 1
+                    """,
+                    (subject_uuid, predicate_uuid, object_uuid, context_uuid)
+                )
+                result = cursor.fetchone()
                 
                 if not result:
                     self.logger.debug(f"No matching quad found to remove from space '{space_id}'")
                     return False
                 
-                # Delete the specific quad by its ID (ensures only one instance is removed)
-                delete_stmt = quad_table.delete().where(
-                    quad_table.c.quad_id == result.quad_id
+                # Delete the specific quad by its UUID (ensures only one instance is removed)
+                cursor.execute(
+                    f"DELETE FROM {quad_table_name} WHERE quad_uuid = %s",
+                    (result['quad_uuid'],)
                 )
-                conn.execute(delete_stmt)
+                
+                removed_count = cursor.rowcount
                 conn.commit()
                 
-                self.logger.debug(f"Removed quad with ID {result.quad_id} from space '{space_id}'")
-                return True
+                if removed_count > 0:
+                    self.logger.debug(f"Removed quad with UUID {result['quad_uuid']} from space '{space_id}'")
+                    return True
+                else:
+                    self.logger.debug(f"No quad was actually removed from space '{space_id}'")
+                    return False
                 
         except Exception as e:
             self.logger.error(f"Error removing quad from space '{space_id}': {e}")
@@ -1296,11 +995,11 @@ class PostgreSQLSpaceImpl:
     
     async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list], s=None, p=None, o=None, g=None) -> bool:
         """
-        Add an RDF quad to a specific space by converting RDF values to terms first.
+        Add an RDF quad to a specific space by converting RDF values to terms first using UUID-based approach.
         
         This function automatically determines term types from the RDF values and handles
         term conversion internally. It converts the subject, predicate, object, and graph
-        values to term IDs and then calls add_quad().
+        values to term UUIDs and then calls add_quad().
         
         Args:
             space_id: Space identifier
@@ -1329,32 +1028,32 @@ class PostgreSQLSpaceImpl:
             
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
-            # Convert subject to term ID
-            subject_id = await self.add_term(space_id, s_value, s_type, s_lang, s_datatype_id)
-            if subject_id is None:
+            # Convert subject to term UUID
+            subject_uuid = await self.add_term(space_id, s_value, s_type, s_lang, s_datatype_id)
+            if subject_uuid is None:
                 self.logger.error(f"Failed to add subject term '{s}' to space '{space_id}'")
                 return False
             
-            # Convert predicate to term ID
-            predicate_id = await self.add_term(space_id, p_value, p_type, p_lang, p_datatype_id)
-            if predicate_id is None:
+            # Convert predicate to term UUID
+            predicate_uuid = await self.add_term(space_id, p_value, p_type, p_lang, p_datatype_id)
+            if predicate_uuid is None:
                 self.logger.error(f"Failed to add predicate term '{p}' to space '{space_id}'")
                 return False
             
-            # Convert object to term ID
-            object_id = await self.add_term(space_id, o_value, o_type, o_lang, o_datatype_id)
-            if object_id is None:
+            # Convert object to term UUID
+            object_uuid = await self.add_term(space_id, o_value, o_type, o_lang, o_datatype_id)
+            if object_uuid is None:
                 self.logger.error(f"Failed to add object term '{o}' to space '{space_id}'")
                 return False
             
-            # Convert graph to term ID
-            graph_id = await self.add_term(space_id, g_value, g_type, g_lang, g_datatype_id)
-            if graph_id is None:
+            # Convert graph to term UUID
+            graph_uuid = await self.add_term(space_id, g_value, g_type, g_lang, g_datatype_id)
+            if graph_uuid is None:
                 self.logger.error(f"Failed to add graph term '{g}' to space '{space_id}'")
                 return False
             
-            # Add the quad using term IDs
-            success = await self.add_quad(space_id, subject_id, predicate_id, object_id, graph_id)
+            # Add the quad using term UUIDs
+            success = await self.add_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid)
             
             if success:
                 self.logger.debug(f"Successfully added RDF quad to space '{space_id}'")
@@ -1369,10 +1068,10 @@ class PostgreSQLSpaceImpl:
     
     async def remove_rdf_quad(self, space_id: str, s: str, p: str, o: str, g: str) -> bool:
         """
-        Remove an RDF quad from a specific space by converting RDF values to terms first.
+        Remove an RDF quad from a specific space by converting RDF values to terms first using UUID-based approach.
         
         This function automatically determines term types from the RDF values and handles
-        term lookup internally. It looks up the term IDs for the subject, predicate, object,
+        term lookup internally. It looks up the term UUIDs for the subject, predicate, object,
         and graph values and then calls remove_quad().
         
         Following RDFLib pattern: removes only one instance of the matching quad.
@@ -1404,32 +1103,32 @@ class PostgreSQLSpaceImpl:
             
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
-            # Look up subject term ID
-            subject_id = await self.get_term_id(space_id, s_value, s_type, s_lang, s_datatype_id)
-            if subject_id is None:
+            # Look up subject term UUID
+            subject_uuid = await self.get_term_uuid(space_id, s_value, s_type, s_lang, s_datatype_id)
+            if subject_uuid is None:
                 self.logger.debug(f"Subject term '{s}' not found in space '{space_id}'")
                 return False
             
-            # Look up predicate term ID
-            predicate_id = await self.get_term_id(space_id, p_value, p_type, p_lang, p_datatype_id)
-            if predicate_id is None:
+            # Look up predicate term UUID
+            predicate_uuid = await self.get_term_uuid(space_id, p_value, p_type, p_lang, p_datatype_id)
+            if predicate_uuid is None:
                 self.logger.debug(f"Predicate term '{p}' not found in space '{space_id}'")
                 return False
             
-            # Look up object term ID
-            object_id = await self.get_term_id(space_id, o_value, o_type, o_lang, o_datatype_id)
-            if object_id is None:
+            # Look up object term UUID
+            object_uuid = await self.get_term_uuid(space_id, o_value, o_type, o_lang, o_datatype_id)
+            if object_uuid is None:
                 self.logger.debug(f"Object term '{o}' not found in space '{space_id}'")
                 return False
             
-            # Look up graph term ID
-            graph_id = await self.get_term_id(space_id, g_value, g_type, g_lang, g_datatype_id)
-            if graph_id is None:
+            # Look up graph term UUID
+            graph_uuid = await self.get_term_uuid(space_id, g_value, g_type, g_lang, g_datatype_id)
+            if graph_uuid is None:
                 self.logger.debug(f"Graph term '{g}' not found in space '{space_id}'")
                 return False
             
-            # Remove the quad using term IDs
-            success = await self.remove_quad(space_id, subject_id, predicate_id, object_id, graph_id)
+            # Remove the quad using term UUIDs
+            success = await self.remove_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid)
             
             if success:
                 self.logger.debug(f"Successfully removed RDF quad from space '{space_id}'")
@@ -1442,474 +1141,81 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Error removing RDF quad from space '{space_id}': {e}")
             return False
     
-    async def add_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
+    async def get_rdf_quad(self, space_id: str, s: str, p: str, o: str, g: str) -> bool:
         """
-        AllowMultiple RDF quads to a specific space efficiently using batch operations.
+        Check if an RDF quad exists in a specific space using UUID-based approach.
         
-        This function processes large batches (50,000+) efficiently by:
-        1. Resolving all term types in batch
-        2. Looking up existing terms in batch
-        3. Inserting new terms in batch
-{{ ... }}
-        4. Inserting quads in batch
+        This function automatically determines term types from the RDF values and handles
+        term lookup internally. It looks up the term UUIDs for the subject, predicate, object,
+        and graph values and then checks if the quad exists.
         
         Args:
             space_id: Space identifier
-            quads: List of (s, p, o, g) tuples representing RDF quads
+            s: Subject value (URI, literal, or blank node)
+            p: Predicate value (typically URI)
+            o: Object value (URI, literal, or blank node)
+            g: Graph/context value (typically URI)
             
         Returns:
-            int: Number of quads successfully added
+            bool: True if the quad exists, False otherwise
         """
-        if not quads:
-            return 0
-            
-        with self.utils.time_operation("add_rdf_quads_batch", f"{len(quads)} quads to space '{space_id}'"):
-            try:
-                # Step 1: Resolve all term types and extract values
-                with self.utils.time_operation("term_type_resolution", f"{len(quads)} quads"):
-                    term_info = {}  # {(value, type, lang, datatype_id): set of quad_indices}
-                    quad_terms = []  # [(s_info, p_info, o_info, g_info), ...]
-                    
-                    for i, (s, p, o, g) in enumerate(quads):
-                        # Log progress for large batches
-                        if i > 0 and i % 10000 == 0:
-                            self.logger.debug(f"Processed {i}/{len(quads)} quads for type resolution")
-                        
-                        # Determine term types
-                        s_type, s_lang, s_datatype_id = PostgreSQLUtils.determine_term_type(s)
-                        p_type, p_lang, p_datatype_id = PostgreSQLUtils.determine_term_type(p)
-                        o_type, o_lang, o_datatype_id = PostgreSQLUtils.determine_term_type(o)
-                        g_type, g_lang, g_datatype_id = PostgreSQLUtils.determine_term_type(g)
-                        
-                        # Extract values
-                        s_value = PostgreSQLUtils.extract_literal_value(s) if s_type == 'L' else str(s)
-                        p_value = PostgreSQLUtils.extract_literal_value(p) if p_type == 'L' else str(p)
-                        o_value = PostgreSQLUtils.extract_literal_value(o) if o_type == 'L' else str(o)
-                        g_value = PostgreSQLUtils.extract_literal_value(g) if g_type == 'L' else str(g)
-                        
-                        # Store term info
-                        s_info = (s_value, s_type, s_lang, s_datatype_id)
-                        p_info = (p_value, p_type, p_lang, p_datatype_id)
-                        o_info = (o_value, o_type, o_lang, o_datatype_id)
-                        g_info = (g_value, g_type, g_lang, g_datatype_id)
-                        
-                        quad_terms.append((s_info, p_info, o_info, g_info))
-                        
-                        # Track unique terms
-                        for term_info_item in [s_info, p_info, o_info, g_info]:
-                            if term_info_item not in term_info:
-                                term_info[term_info_item] = set()
-                            term_info[term_info_item].add(i)
-                    
-                    self.logger.debug(f"Resolved {len(term_info)} unique terms from {len(quads)} quads")
-                
-                # Step 2: Batch lookup existing terms
-                with self.utils.time_operation("batch_term_lookup", f"{len(term_info)} unique terms"):
-                    tables = self._define_space_tables(space_id)
-                    term_table = tables['term']
-                    
-                    term_id_map = {}  # {(value, type, lang, datatype_id): term_id}
-                    
-                    # Use a single connection for all database operations
-                    with self.engine.connect() as conn:
-                        # Build batch lookup query
-                        unique_terms = list(term_info.keys())
-                        batch_size = 1000  # Process in chunks to avoid query size limits
-                        
-                        self.logger.debug(f"Looking up {len(unique_terms)} terms in batches of {batch_size}")
-                        
-                        for i in range(0, len(unique_terms), batch_size):
-                            batch_terms = unique_terms[i:i + batch_size]
-                            
-                            with self.utils.time_operation("term_lookup_batch", f"batch {i//batch_size + 1}, {len(batch_terms)} terms"):
-                                # Create OR conditions for batch lookup
-                                conditions = []
-                                for value, term_type, lang, datatype_id in batch_terms:
-                                    condition = (
-                                        (term_table.c.term_text == value) &
-                                        (term_table.c.term_type == term_type)
-                                    )
-                                    if lang is not None:
-                                        condition &= (term_table.c.lang == lang)
-                                    else:
-                                        condition &= (term_table.c.lang.is_(None))
-                                    
-                                    if datatype_id is not None:
-                                        condition &= (term_table.c.datatype_id == datatype_id)
-                                    else:
-                                        condition &= (term_table.c.datatype_id.is_(None))
-                                    
-                                    conditions.append(condition)
-                                
-                                if conditions:
-                                    from sqlalchemy import or_
-                                    select_stmt = term_table.select().where(or_(*conditions))
-                                    result = conn.execute(select_stmt)
-                                    
-                                    batch_found = 0
-                                    for row in result:
-                                        key = (row.term_text, row.term_type, row.lang, row.datatype_id)
-                                        term_id_map[key] = row.term_id
-                                        batch_found += 1
-                                    
-                                    self.logger.debug(f"Found {batch_found} existing terms in batch {i//batch_size + 1}")
-                        
-                        self.logger.debug(f"Found {len(term_id_map)} total existing terms")
-                        
-                        # Step 3: Batch insert new terms (inside same connection)
-                        with self.utils.time_operation("batch_term_insert", f"new terms needed"):
-                            new_terms = []
-                            for term_key in unique_terms:
-                                if term_key not in term_id_map:
-                                    value, term_type, lang, datatype_id = term_key
-                                    new_terms.append({
-                                        'term_text': value,
-                                        'term_type': term_type,
-                                        'lang': lang,
-                                        'datatype_id': datatype_id,
-                                        'created_time': datetime.utcnow()
-                                    })
-                            
-                            if new_terms:
-                                self.logger.debug(f"Inserting {len(new_terms)} new terms in batches of {batch_size}")
-                                
-                                # Batch insert new terms
-                                for i in range(0, len(new_terms), batch_size):
-                                    batch_new_terms = new_terms[i:i + batch_size]
-                                    with self.utils.time_operation("term_insert_batch", f"batch {i//batch_size + 1}, {len(batch_new_terms)} terms"):
-                                        insert_stmt = term_table.insert().values(batch_new_terms)
-                                        conn.execute(insert_stmt)
-                    
-                            # Re-lookup the newly inserted terms to get their IDs
-                            new_term_keys = [term_key for term_key in unique_terms if term_key not in term_id_map]
-                            
-                            for i in range(0, len(new_term_keys), batch_size):
-                                batch_keys = new_term_keys[i:i + batch_size]
-                                conditions = []
-                                
-                                for value, term_type, lang, datatype_id in batch_keys:
-                                    condition = (
-                                        (term_table.c.term_text == value) &
-                                        (term_table.c.term_type == term_type)
-                                    )
-                                    if lang is not None:
-                                        condition &= (term_table.c.lang == lang)
-                                    else:
-                                        condition &= (term_table.c.lang.is_(None))
-                                    
-                                    if datatype_id is not None:
-                                        condition &= (term_table.c.datatype_id == datatype_id)
-                                    else:
-                                        condition &= (term_table.c.datatype_id.is_(None))
-                                    
-                                    conditions.append(condition)
-                                
-                                if conditions:
-                                    select_stmt = term_table.select().where(or_(*conditions))
-                                    result = conn.execute(select_stmt)
-                                    
-                                    for row in result:
-                                        key = (row.term_text, row.term_type, row.lang, row.datatype_id)
-                                        term_id_map[key] = row.term_id
-                            self.logger.debug(f"Total terms resolved: {len(term_id_map)}")
-                        
-                        # Step 4: Batch insert quads (inside same connection)
-                        with self.utils.time_operation("batch_quad_insert", f"processing {len(quad_terms)} quads"):
-                            quad_table = tables['rdf_quad']
-                            new_quads = []
-                            
-                            # Build quad data structures
-                            for s_info, p_info, o_info, g_info in quad_terms:
-                                subject_id = term_id_map.get(s_info)
-                                predicate_id = term_id_map.get(p_info)
-                                object_id = term_id_map.get(o_info)
-                                context_id = term_id_map.get(g_info)
-                                
-                                # Debug logging for missing term IDs
-                                if subject_id is None:
-                                    self.logger.error(f"Missing subject_id for term: {s_info}")
-                                if predicate_id is None:
-                                    self.logger.error(f"Missing predicate_id for term: {p_info}")
-                                if object_id is None:
-                                    self.logger.error(f"Missing object_id for term: {o_info}")
-                                if context_id is None:
-                                    self.logger.error(f"Missing context_id for term: {g_info}")
-                                
-                                if all(id is not None for id in [subject_id, predicate_id, object_id, context_id]):
-                                    new_quads.append({
-                                        'subject_id': subject_id,
-                                        'predicate_id': predicate_id,
-                                        'object_id': object_id,
-                                        'context_id': context_id,
-                                        'created_time': datetime.utcnow()
-                                    })
-                            
-                            if new_quads:
-                                self.logger.debug(f"Inserting {len(new_quads)} quads in batches of {batch_size}")
-                                
-                                # Batch insert quads (handle duplicates by checking first)
-                                inserted_count = 0
-                                for i in range(0, len(new_quads), batch_size):
-                                    batch_quads = new_quads[i:i + batch_size]
-                                    
-                                    with self.utils.time_operation("quad_insert_batch", f"batch {i//batch_size + 1}, {len(batch_quads)} quads"):
-                                        # Check for existing quads to avoid duplicates
-                                        conditions = []
-                                        for quad in batch_quads:
-                                            condition = (
-                                                (quad_table.c.subject_id == quad['subject_id']) &
-                                                (quad_table.c.predicate_id == quad['predicate_id']) &
-                                                (quad_table.c.object_id == quad['object_id']) &
-                                                (quad_table.c.context_id == quad['context_id'])
-                                            )
-                                            conditions.append(condition)
-                                        
-                                        if conditions:
-                                            existing_stmt = quad_table.select().where(or_(*conditions))
-                                            existing_result = conn.execute(existing_stmt)
-                                            existing_quads = set()
-                                            
-                                            for row in existing_result:
-                                                existing_quads.add((row.subject_id, row.predicate_id, row.object_id, row.context_id))
-                                            
-                                            # Filter out existing quads
-                                            unique_quads = []
-                                            for quad in batch_quads:
-                                                quad_key = (quad['subject_id'], quad['predicate_id'], quad['object_id'], quad['context_id'])
-                                                if quad_key not in existing_quads:
-                                                    unique_quads.append(quad)
-                                            
-                                            if unique_quads:
-                                                insert_stmt = quad_table.insert().values(unique_quads)
-                                                conn.execute(insert_stmt)
-                                                inserted_count += len(unique_quads)
-                                                self.logger.debug(f"Inserted {len(unique_quads)} new quads in batch {i//batch_size + 1}")
-                                
-                                conn.commit()
-                                
-                                self.logger.info(f"Successfully added {inserted_count} RDF quads to space '{space_id}'")
-                                return inserted_count
-                            else:
-                                self.logger.warning(f"No valid quads to insert for space '{space_id}'")
-                                return 0
-                        
-            except Exception as e:
-                self.logger.error(f"Error adding RDF quads batch to space '{space_id}': {e}")
-                return 0
-    
-    async def _get_or_create_term_simple(self, cursor, term_info: Tuple[str, str, Optional[str], Optional[int]], table_name: str) -> int:
-        """
-        Simple helper to get or create a term ID using raw SQL.
-        
-        Args:
-            cursor: Database cursor
-            term_info: Tuple of (term_text, term_type, lang, datatype_id)
-            table_name: Name of the term table
-            
-        Returns:
-            int: Term ID
-        """
-        term_text, term_type, lang, datatype_id = term_info
-        
-        # First try to get existing term
-        select_sql = f"""
-            SELECT term_id FROM {table_name} 
-            WHERE term_text = %s AND term_type = %s 
-            AND lang IS NOT DISTINCT FROM %s 
-            AND datatype_id IS NOT DISTINCT FROM %s
-        """
-        cursor.execute(select_sql, (term_text, term_type, lang, datatype_id))
-        result = cursor.fetchone()
-        
-        if result:
-            return result['term_id']
-        
-        # If not found, create new term
-        insert_sql = f"""
-            INSERT INTO {table_name} (term_text, term_type, lang, datatype_id, created_time)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING term_id
-        """
-        cursor.execute(insert_sql, (term_text, term_type, lang, datatype_id, datetime.utcnow()))
-        result = cursor.fetchone()
-        return result['term_id']
-
-    async def add_rdf_quads_batch_optimized_psycopg3(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]], use_unlogged: bool = False) -> int:
-        """
-        Ultra-fast RDF quad batch insert using direct PostgreSQL COPY operations.
-        
-        This eliminates all individual term lookups and uses pure COPY FROM STDIN
-        for maximum performance, similar to the Tier 3 WordNet loader that achieved
-        25,322 quads/sec.
-        
-        Args:
-            space_id: Space identifier
-            quads: List of (s, p, o, g) tuples representing RDF quads
-            use_unlogged: If True, target unlogged tables (table_name_unlogged)
-            
-        Returns:
-            int: Number of quads successfully added
-        """
-        if not quads:
-            return 0
-            
         try:
-            # Get table names (with unlogged suffix if needed)
-            table_names = self._get_table_names(space_id)
-            if use_unlogged:
-                table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
-                self.logger.debug(f"Using unlogged tables: {table_names}")
+            self.logger.debug(f"Checking RDF quad in space '{space_id}': <{s}> <{p}> <{o}> <{g}>")
             
+            # Determine term types automatically
+            s_type, s_lang, s_datatype_id = PostgreSQLUtils.determine_term_type(s)
+            p_type, p_lang, p_datatype_id = PostgreSQLUtils.determine_term_type(p)
+            o_type, o_lang, o_datatype_id = PostgreSQLUtils.determine_term_type(o)
+            g_type, g_lang, g_datatype_id = PostgreSQLUtils.determine_term_type(g)
+            
+            # Extract literal values if needed
+            s_value = PostgreSQLUtils.extract_literal_value(s) if s_type == 'L' else s
+            p_value = PostgreSQLUtils.extract_literal_value(p) if p_type == 'L' else p
+            o_value = PostgreSQLUtils.extract_literal_value(o) if o_type == 'L' else o
+            g_value = PostgreSQLUtils.extract_literal_value(g) if g_type == 'L' else g
+            
+            self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
+            
+            # Generate UUIDs for the terms (deterministic)
+            subject_uuid = self.term_cache.get_term_uuid(s_value, s_type, s_lang, s_datatype_id)
+            predicate_uuid = self.term_cache.get_term_uuid(p_value, p_type, p_lang, p_datatype_id)
+            object_uuid = self.term_cache.get_term_uuid(o_value, o_type, o_lang, o_datatype_id)
+            graph_uuid = self.term_cache.get_term_uuid(g_value, g_type, g_lang, g_datatype_id)
+            
+            # Get table names using UUID-based approach
+            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            
+            # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Fast batch INSERT approach: Check existing terms first to avoid duplicates
-                    self.logger.info(f"🚀 BATCH INSERT: Starting processing of {len(quads)} quads...")
-                    
-                    # Step 1: Collect all unique terms from this batch
-                    self.logger.info("📋 STEP 1: Collecting unique terms from batch...")
-                    unique_terms = set()
-                    quad_term_info = []  # Store term info for each quad
-                    
-                    for s, p, o, g in quads:
-                        try:
-                            s_info = self._resolve_term_info(s)
-                            p_info = self._resolve_term_info(p)
-                            o_info = self._resolve_term_info(o)
-                            g_info = self._resolve_term_info(g)
-                            
-                            quad_term_info.append((s_info, p_info, o_info, g_info))
-                            unique_terms.update([s_info, p_info, o_info, g_info])
-                        except Exception as e:
-                            self.logger.error(f"❌ Error resolving term info: {e}")
-                            continue
-                    
-                    self.logger.info(f"📊 Found {len(unique_terms)} unique terms in batch of {len(quads)} quads")
-                    
-                    # Step 2: Use high-performance COPY + ON CONFLICT approach for deduplication
-                    self.logger.info("🚀 STEP 2: Preparing terms with ultra-fast COPY deduplication...")
-                    
-                    # Get next available term ID for new terms
-                    cursor.execute(f"SELECT COALESCE(MAX(term_id), 0) + 1 as next_id FROM {table_names['term']}")
-                    next_temp_id = cursor.fetchone()['next_id']
-                    
-                    # Assign temporary IDs to all unique terms (will dedupe via ON CONFLICT)
-                    term_to_temp_id = {}
-                    all_terms_data = []
-                    
-                    for term_info in unique_terms:
-                        term_to_temp_id[term_info] = next_temp_id
-                        all_terms_data.append((next_temp_id, *term_info, datetime.utcnow()))
-                        next_temp_id += 1
-                    
-                    self.logger.info(f"📊 Prepared {len(all_terms_data)} unique terms for ultra-fast COPY insert")
-                    
-                    # Step 3: Prepare quad data using temporary term IDs
-                    self.logger.info("📋 STEP 3: Preparing quad data with temporary term IDs...")
-                    quad_rows = []
-                    for s_info, p_info, o_info, g_info in quad_term_info:
-                        quad_rows.append((
-                            term_to_temp_id[s_info],
-                            term_to_temp_id[p_info], 
-                            term_to_temp_id[o_info],
-                            term_to_temp_id[g_info],
-                            datetime.utcnow()
-                        ))
-                    
-                    self.logger.info(f"✅ STEP 3 COMPLETE: Prepared {len(all_terms_data)} terms and {len(quad_rows)} quads")
-                    
-                    # Log sample data for debugging
-                    if all_terms_data:
-                        sample_term = all_terms_data[0]
-                        self.logger.info(f"📝 Sample term data: {sample_term}")
-                    if quad_rows:
-                        sample_quad = quad_rows[0]
-                        self.logger.info(f"📝 Sample quad data: {sample_quad}")
-                    
-                    # Step 4: Ultra-fast term insert with automatic deduplication via ON CONFLICT
-                    if all_terms_data:
-                        self.logger.info(f"🚀 STEP 4: Ultra-fast term insert with ON CONFLICT deduplication ({len(all_terms_data)} terms)...")
-                        try:
-                            # Use ON CONFLICT to automatically handle duplicates at database level
-                            if use_unlogged:
-                                # Unlogged tables have no constraints, so use simple insert
-                                insert_sql = f"""
-                                    INSERT INTO {table_names['term']} (term_id, term_text, term_type, lang, datatype_id, created_time)
-                                    VALUES (%s, %s, %s, %s, %s, %s)
-                                """
-                            else:
-                                # Regular tables can use ON CONFLICT for deduplication
-                                insert_sql = f"""
-                                    INSERT INTO {table_names['term']} (term_id, term_text, term_type, lang, datatype_id, created_time)
-                                    VALUES (%s, %s, %s, %s, %s, %s)
-                                    ON CONFLICT (term_text, term_type, COALESCE(lang, ''), COALESCE(datatype_id, 0)) DO NOTHING
-                                """
-                            
-                            self.logger.info(f"📝 Term insert SQL: {insert_sql}")
-                            self.logger.info(f"🚀 Executing ultra-fast batch insert for {len(all_terms_data)} terms...")
-                            
-                            cursor.executemany(insert_sql, all_terms_data)
-                            self.logger.info("✅ Ultra-fast term executemany completed successfully")
-                            
-                            # Verify the insert worked by counting total terms
-                            self.logger.info("🔍 Verifying term insert results...")
-                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['term']}")
-                            total_term_count = cursor.fetchone()['count']
-                            self.logger.info(f"✅ STEP 4 COMPLETE: Ultra-fast term insert completed, total {total_term_count} terms in table")
-                                
-                        except Exception as e:
-                            self.logger.error(f"❌ CRITICAL ERROR in term batch insert: {e}")
-                            import traceback
-                            self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
-                            return 0
-                    else:
-                        self.logger.info("⚠️  STEP 4 SKIPPED: No terms to insert")
-                    
-                    # Step 5: Bulk insert all quads using executemany
-                    if quad_rows:
-                        self.logger.info(f"🔧 STEP 5: Starting quad batch insert of {len(quad_rows)} quads...")
-                        try:
-                            insert_sql = f"""
-                                INSERT INTO {table_names['rdf_quad']} (subject_id, predicate_id, object_id, context_id, created_time)
-                                VALUES (%s, %s, %s, %s, %s)
-                            """
-                            self.logger.info(f"📝 Quad insert SQL: {insert_sql}")
-                            self.logger.info(f"📊 Executing batch insert for {len(quad_rows)} quads...")
-                            
-                            cursor.executemany(insert_sql, quad_rows)
-                            self.logger.info("✅ Quad executemany completed successfully")
-                            
-                            # Verify the quad insert worked
-                            self.logger.info("🔍 Verifying quad insert results...")
-                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['rdf_quad']}")
-                            quad_count = cursor.fetchone()['count']
-                            self.logger.info(f"✅ STEP 5 COMPLETE: Batch inserted {len(quad_rows)} quads, verified {quad_count} quads in table")
-                            
-                            if quad_count == 0:
-                                self.logger.error("❌ CRITICAL: Batch insert completed but no quads were inserted!")
-                                return 0
-                            
-                            # Commit the transaction
-                            self.logger.info("💾 Committing transaction...")
-                            conn.commit()
-                            self.logger.info("✅ Transaction committed successfully")
-                            
-                            self.logger.info(f"🎉 SUCCESS: Fast batch insert completed - {len(quads)} quads added to space '{space_id}'")
-                            return len(quads)
-                            
-                        except Exception as e:
-                            self.logger.error(f"❌ CRITICAL ERROR in quad batch insert: {e}")
-                            import traceback
-                            self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
-                            return 0
-                    else:
-                        self.logger.info("⚠️  STEP 3 SKIPPED: No quads to insert")
-                        return 0
-                    
+                conn.row_factory = psycopg.rows.dict_row
+                cursor = conn.cursor()
+                
+                # Check if quad exists
+                cursor.execute(
+                    f"""
+                    SELECT quad_uuid FROM {quad_table_name} 
+                    WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
+                    LIMIT 1
+                    """,
+                    (subject_uuid, predicate_uuid, object_uuid, graph_uuid)
+                )
+                result = cursor.fetchone()
+                
+                exists = result is not None
+                
+                if exists:
+                    self.logger.debug(f"RDF quad exists in space '{space_id}' with UUID: {result['quad_uuid']}")
+                else:
+                    self.logger.debug(f"RDF quad does not exist in space '{space_id}'")
+                
+                return exists
+                
         except Exception as e:
-            self.logger.error(f"Error in psycopg3 batch insert to space '{space_id}': {e}")
-            return 0
+            self.logger.error(f"Error checking RDF quad in space '{space_id}': {e}")
+            return False
     
-    async def add_rdf_quads_batch_uuid(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]], use_unlogged: bool = False) -> int:
+    async def add_rdf_quads_batch(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]]) -> int:
         """
         Ultra-clean UUID-based RDF quad batch insert.
         
@@ -1941,7 +1247,7 @@ class PostgreSQLSpaceImpl:
             
             # Get table names (with unlogged suffix if needed)
             table_names = self._get_table_names(space_id)
-            if use_unlogged:
+            if self.use_unlogged:
                 table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
                 self.logger.debug(f"Using unlogged tables: {table_names}")
             
@@ -1959,7 +1265,15 @@ class PostgreSQLSpaceImpl:
                             s_info = self._resolve_term_info(s)
                             p_info = self._resolve_term_info(p)
                             o_info = self._resolve_term_info(o)
-                            g_info = self._resolve_term_info(g)
+                            
+                            # Assign global graph if no graph is specified (g is None)
+                            if g is None:
+                                from vitalgraph.db.postgresql.postgresql_sparql_impl import GraphConstants
+                                from rdflib import URIRef
+                                global_graph = URIRef(GraphConstants.GLOBAL_GRAPH_URI)
+                                g_info = self._resolve_term_info(global_graph)
+                            else:
+                                g_info = self._resolve_term_info(g)
                             
                             quad_term_data.append((s_info, p_info, o_info, g_info))
                             unique_terms.update([s_info, p_info, o_info, g_info])
@@ -2061,314 +1375,14 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
             return 0
     
-    async def add_rdf_quads_batch_original(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]]) -> int:
-        """
-        Original slower batch insert method (kept for reference).
-        """
-        with self.utils.time_operation("add_rdf_quads_batch_optimized", f"{len(quads)} quads to space '{space_id}'"):
-            try:
-                # Step 1: Resolve all term types and extract values
-                with self.utils.time_operation("term_type_resolution", f"{len(quads)} quads"):
-                    term_info = {}  # {(value, type, lang, datatype_id): set of quad_indices}
-                    quad_terms = []  # [(s_info, p_info, o_info, g_info), ...]
-                    
-                    for i, (s, p, o, g) in enumerate(quads):
-                        # Log progress for large batches
-                        if i > 0 and i % 25000 == 0:
-                            self.logger.debug(f"Processed {i}/{len(quads)} quads for type resolution")
-                        
-                        # Determine term types
-                        s_type, s_lang, s_datatype_id = PostgreSQLUtils.determine_term_type(s)
-                        p_type, p_lang, p_datatype_id = PostgreSQLUtils.determine_term_type(p)
-                        o_type, o_lang, o_datatype_id = PostgreSQLUtils.determine_term_type(o)
-                        g_type, g_lang, g_datatype_id = PostgreSQLUtils.determine_term_type(g)
-                        
-                        # Extract values
-                        s_value = PostgreSQLUtils.extract_literal_value(s) if s_type == 'L' else str(s)
-                        p_value = PostgreSQLUtils.extract_literal_value(p) if p_type == 'L' else str(p)
-                        o_value = PostgreSQLUtils.extract_literal_value(o) if o_type == 'L' else str(o)
-                        g_value = PostgreSQLUtils.extract_literal_value(g) if g_type == 'L' else str(g)
-                        
-                        # Store term info
-                        s_info = (s_value, s_type, s_lang, s_datatype_id)
-                        p_info = (p_value, p_type, p_lang, p_datatype_id)
-                        o_info = (o_value, o_type, o_lang, o_datatype_id)
-                        g_info = (g_value, g_type, g_lang, g_datatype_id)
-                        
-                        quad_terms.append((s_info, p_info, o_info, g_info))
-                        
-                        # Track unique terms
-                        for term_info_item in [s_info, p_info, o_info, g_info]:
-                            if term_info_item not in term_info:
-                                term_info[term_info_item] = set()
-                            term_info[term_info_item].add(i)
-                    
-                    self.logger.debug(f"Resolved {len(term_info)} unique terms from {len(quads)} quads")
-                
-                # Step 2: Use term cache to minimize database lookups
-                with self.utils.time_operation("term_cache_lookup", f"{len(term_info)} unique terms"):
-                    term_id_map = {}  # {(value, type, lang, datatype_id): term_id}
-                    cache_hits = 0
-                    
-                    # First pass: check cache for all terms
-                    for term_key in term_info.keys():
-                        cached_id = self.term_cache.get_term_id(term_key)
-                        if cached_id is not None:
-                            term_id_map[term_key] = cached_id
-                            cache_hits += 1
-                    
-                    self.logger.debug(f"Cache hits: {cache_hits}/{len(term_info)} ({cache_hits/len(term_info)*100:.1f}%)")
-                    
-                    # Get terms that need database lookup
-                    missing_terms = set(term_info.keys()) - set(term_id_map.keys())
-                    missing_terms = self.term_cache.get_missing_terms(missing_terms)
-                    
-                    self.logger.debug(f"Need DB lookup for {len(missing_terms)} terms after Bloom filter")
-                
-                # Step 3: Batch lookup missing terms from database
-                if missing_terms:
-                    with self.utils.time_operation("batch_db_term_lookup", f"{len(missing_terms)} missing terms"):
-                        tables = self._define_space_tables(space_id)
-                        term_table = tables['term']
-                        
-                        with self.engine.connect() as conn:
-                            # Process in chunks to avoid query size limits
-                            batch_size = 1000
-                            missing_terms_list = list(missing_terms)
-                            
-                            for i in range(0, len(missing_terms_list), batch_size):
-                                batch_terms = missing_terms_list[i:i + batch_size]
-                                
-                                # Create OR conditions for batch lookup
-                                conditions = []
-                                for value, term_type, lang, datatype_id in batch_terms:
-                                    condition = (
-                                        (term_table.c.term_text == value) &
-                                        (term_table.c.term_type == term_type)
-                                    )
-                                    if lang is not None:
-                                        condition &= (term_table.c.lang == lang)
-                                    else:
-                                        condition &= (term_table.c.lang.is_(None))
-                                    
-                                    if datatype_id is not None:
-                                        condition &= (term_table.c.datatype_id == datatype_id)
-                                    else:
-                                        condition &= (term_table.c.datatype_id.is_(None))
-                                    
-                                    conditions.append(condition)
-                                
-                                if conditions:
-                                    query = select(
-                                        term_table.c.term_id,
-                                        term_table.c.term_text,
-                                        term_table.c.term_type,
-                                        term_table.c.lang,
-                                        term_table.c.datatype_id
-                                    ).where(or_(*conditions))
-                                    
-                                    result = conn.execute(query)
-                                    for row in result:
-                                        term_key = (row.term_text, row.term_type, row.lang, row.datatype_id)
-                                        term_id_map[term_key] = row.term_id
-                            
-                            # Update cache with found terms
-                            found_terms = {k: v for k, v in term_id_map.items() if k in missing_terms}
-                            if found_terms:
-                                self.term_cache.batch_update(found_terms)
-                                self.logger.debug(f"Updated cache with {len(found_terms)} terms from DB")
-                
-                # Step 4: Identify and bulk insert new terms using psycopg3 COPY
-                new_terms = [term_key for term_key in term_info.keys() if term_key not in term_id_map]
-                
-                if new_terms:
-                    with self.utils.time_operation("bulk_insert_new_terms", f"{len(new_terms)} new terms"):
-                        tables = self._define_space_tables(space_id)
-                        term_table = tables['term']
-                        
-                        # Use SQLAlchemy connection with psycopg3 COPY
-                        with self.engine.connect() as conn:
-                            # Get the underlying psycopg3 connection
-                            raw_conn = conn.connection.driver_connection
-                            
-                            # Prepare data for COPY
-                            term_data = []
-                            current_time = datetime.utcnow()
-                            
-                            for term_text, term_type, lang, datatype_id in new_terms:
-                                term_data.append((
-                                    term_text,
-                                    term_type,
-                                    lang,
-                                    datatype_id,
-                                    current_time
-                                ))
-                            
-                            # Create temporary table for bulk insert
-                            temp_table_name = f"temp_terms_{space_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
-                            
-                            raw_conn.execute(f"""
-                                CREATE TEMPORARY TABLE {temp_table_name} (
-                                    term_text TEXT,
-                                    term_type CHAR(1),
-                                    lang VARCHAR(20),
-                                    datatype_id BIGINT,
-                                    created_time TIMESTAMP
-                                )
-                            """)
-                            
-                            # Use psycopg3 COPY for bulk loading
-                            with raw_conn.cursor() as cursor:
-                                with cursor.copy(f"COPY {temp_table_name} (term_text, term_type, lang, datatype_id, created_time) FROM STDIN") as copy:
-                                    for term_text, term_type, lang, datatype_id, created_time in term_data:
-                                        copy.write_row([
-                                            term_text,
-                                            term_type,
-                                            lang,
-                                            datatype_id,
-                                            created_time
-                                        ])
-                            
-                            # Insert from temp table to actual table with conflict resolution
-                            table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, 'term')
-                            
-                            # First, insert new terms
-                            raw_conn.execute(f"""
-                                INSERT INTO {table_name} (term_text, term_type, lang, datatype_id, created_time)
-                                SELECT term_text, term_type, lang, datatype_id, created_time
-                                FROM {temp_table_name}
-                                ON CONFLICT (term_text, term_type, lang, datatype_id) 
-                                DO NOTHING
-                            """)
-                            
-                            # Commit the transaction to ensure terms are visible
-                            raw_conn.commit()
-                            
-                            # Now retrieve all term IDs for the terms we tried to insert
-                            # Use a simpler approach: query each term individually to avoid SQL injection
-                            with raw_conn.cursor() as cursor:
-                                for term_text, term_type, lang, datatype_id in new_terms:
-                                    cursor.execute(f"""
-                                        SELECT term_id, term_text, term_type, lang, datatype_id
-                                        FROM {table_name}
-                                        WHERE term_text = %s AND term_type = %s 
-                                        AND lang IS NOT DISTINCT FROM %s 
-                                        AND datatype_id IS NOT DISTINCT FROM %s
-                                    """, (term_text, term_type, lang, datatype_id))
-                                    
-                                    row = cursor.fetchone()
-                                    if row:
-                                        term_key = (row[1], row[2], row[3], row[4])
-                                        term_id_map[term_key] = row[0]
-                        
-                        # Update cache with new terms
-                        new_term_mappings = {k: v for k, v in term_id_map.items() if k in new_terms}
-                        if new_term_mappings:
-                            self.term_cache.batch_update(new_term_mappings)
-                            self.logger.debug(f"Added {len(new_term_mappings)} new terms to cache")
-                
-                # Step 5: Bulk insert quads using psycopg3 COPY
-                with self.utils.time_operation("bulk_insert_quads", f"{len(quads)} quads"):
-                    tables = self._define_space_tables(space_id)
-                    quad_table = tables['rdf_quad']
-                    
-                    # Prepare quad data for COPY
-                    valid_quads = []
-                    for i, (s_info, p_info, o_info, g_info) in enumerate(quad_terms):
-                        subject_id = term_id_map.get(s_info)
-                        predicate_id = term_id_map.get(p_info)
-                        object_id = term_id_map.get(o_info)
-                        context_id = term_id_map.get(g_info)
-                        
-                        if all(id is not None for id in [subject_id, predicate_id, object_id, context_id]):
-                            valid_quads.append((subject_id, predicate_id, object_id, context_id))
-                        else:
-                            missing_terms = []
-                            if subject_id is None: missing_terms.append(f"subject: {s_info}")
-                            if predicate_id is None: missing_terms.append(f"predicate: {p_info}")
-                            if object_id is None: missing_terms.append(f"object: {o_info}")
-                            if context_id is None: missing_terms.append(f"context: {g_info}")
-                            self.logger.warning(f"Skipping quad {i}: missing term IDs for {', '.join(missing_terms)}")
-                    
-                    if valid_quads:
-                        # Use SQLAlchemy connection with psycopg3 COPY
-                        with self.engine.connect() as conn:
-                            # Get the underlying psycopg3 connection
-                            raw_conn = conn.connection.driver_connection
-                            
-                            # Prepare data for COPY
-                            quad_data = []
-                            current_time = datetime.utcnow()
-                            
-                            for subject_id, predicate_id, object_id, context_id in valid_quads:
-                                quad_data.append((
-                                    subject_id,
-                                    predicate_id,
-                                    object_id,
-                                    context_id,
-                                    current_time
-                                ))
-                            
-                            # Create temporary table for bulk insert
-                            temp_table_name = f"temp_quads_{space_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}"
-                            
-                            raw_conn.execute(f"""
-                                CREATE TEMPORARY TABLE {temp_table_name} (
-                                    subject_id BIGINT,
-                                    predicate_id BIGINT,
-                                    object_id BIGINT,
-                                    context_id BIGINT,
-                                    created_time TIMESTAMP
-                                )
-                            """)
-                            
-                            # Use psycopg3 COPY for bulk loading
-                            with raw_conn.cursor() as cursor:
-                                with cursor.copy(f"COPY {temp_table_name} (subject_id, predicate_id, object_id, context_id, created_time) FROM STDIN") as copy:
-                                    for subject_id, predicate_id, object_id, context_id, created_time in quad_data:
-                                        copy.write_row([
-                                            subject_id,
-                                            predicate_id,
-                                            object_id,
-                                            context_id,
-                                            created_time
-                                        ])
-                            
-                            # Insert from temp table to actual table with conflict resolution
-                            table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, 'rdf_quad')
-                            result = raw_conn.execute(f"""
-                                INSERT INTO {table_name} (subject_id, predicate_id, object_id, context_id, created_time)
-                                SELECT subject_id, predicate_id, object_id, context_id, created_time
-                                FROM {temp_table_name}
-                                ON CONFLICT (subject_id, predicate_id, object_id, context_id) 
-                                DO NOTHING
-                            """)
-                            
-                            inserted_count = result.rowcount
-                            # Commit the transaction to ensure quads are visible
-                            raw_conn.commit()
-                        
-                        # Log cache statistics
-                        self.term_cache.log_statistics()
-                        
-                        self.logger.info(f"Successfully added {inserted_count} RDF quads to space '{space_id}' using optimized batch insert")
-                        return inserted_count
-                    else:
-                        self.logger.warning(f"No valid quads to insert for space '{space_id}'")
-                        return 0
-                        
-            except Exception as e:
-                self.logger.error(f"Error in optimized RDF quads batch insert to space '{space_id}': {e}")
-                return 0
-    
     async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
         """
-        Remove multiple RDF quads from a specific space efficiently using batch operations.
+        Remove multiple RDF quads from a specific space efficiently using UUID-based batch operations.
         
         This function processes large batches (50,000+) efficiently by:
-        1. Resolving all term types in batch
-        2. Looking up existing terms in batch
-        3. Removing matching quads in batch
+        1. Resolving all term types and generating UUIDs in batch
+        2. Looking up existing terms by UUID in batch
+        3. Removing matching quads in batch using UUIDs
         
         Args:
             space_id: Space identifier
@@ -2380,14 +1394,14 @@ class PostgreSQLSpaceImpl:
         if not quads:
             return 0
             
-        with self.utils.time_operation("remove_rdf_quads_batch", f"removing {len(quads)} quads from space '{space_id}'"):
+        with self.utils.time_operation("remove_rdf_quads_batch_uuid", f"removing {len(quads)} quads from space '{space_id}'"):
             try:
-                # Step 1: Resolve all term types and extract values
+                # Step 1: Resolve all term types and generate UUIDs
                 with self.utils.time_operation("batch_term_resolution", f"resolving types for {len(quads)} quads"):
-                    term_info = {}  # {(value, type, lang, datatype_id): set of quad_indices}
-                    quad_terms = []  # [(s_info, p_info, o_info, g_info), ...]
+                    unique_terms = set()  # Set of (value, type, lang, datatype_id) tuples
+                    quad_uuids = []  # [(s_uuid, p_uuid, o_uuid, g_uuid), ...]
                     
-                    for i, (s, p, o, g) in enumerate(quads):
+                    for s, p, o, g in quads:
                         # Determine term types
                         s_type, s_lang, s_datatype_id = PostgreSQLUtils.determine_term_type(s)
                         p_type, p_lang, p_datatype_id = PostgreSQLUtils.determine_term_type(p)
@@ -2400,120 +1414,78 @@ class PostgreSQLSpaceImpl:
                         o_value = PostgreSQLUtils.extract_literal_value(o) if o_type == 'L' else str(o)
                         g_value = PostgreSQLUtils.extract_literal_value(g) if g_type == 'L' else str(g)
                         
-                        # Store term info
+                        # Store unique terms
                         s_info = (s_value, s_type, s_lang, s_datatype_id)
                         p_info = (p_value, p_type, p_lang, p_datatype_id)
                         o_info = (o_value, o_type, o_lang, o_datatype_id)
                         g_info = (g_value, g_type, g_lang, g_datatype_id)
                         
-                        quad_terms.append((s_info, p_info, o_info, g_info))
+                        unique_terms.update([s_info, p_info, o_info, g_info])
                         
-                        # Track unique terms
-                        for term_info_item in [s_info, p_info, o_info, g_info]:
-                            if term_info_item not in term_info:
-                                term_info[term_info_item] = set()
-                            term_info[term_info_item].add(i)
+                        # Generate UUIDs for this quad
+                        s_uuid = self.term_cache.get_term_uuid(s_value, s_type, s_lang, s_datatype_id)
+                        p_uuid = self.term_cache.get_term_uuid(p_value, p_type, p_lang, p_datatype_id)
+                        o_uuid = self.term_cache.get_term_uuid(o_value, o_type, o_lang, o_datatype_id)
+                        g_uuid = self.term_cache.get_term_uuid(g_value, g_type, g_lang, g_datatype_id)
+                        
+                        quad_uuids.append((s_uuid, p_uuid, o_uuid, g_uuid))
                     
-                    self.logger.debug(f"Resolved {len(term_info)} unique terms from {len(quads)} quads")
+                    self.logger.debug(f"Resolved {len(unique_terms)} unique terms from {len(quads)} quads")
                 
-                # Step 2: Batch lookup existing terms
-                tables = self._define_space_tables(space_id)
-                term_table = tables['term']
-                quad_table = tables['rdf_quad']
+                # Step 2: Get table names
+                table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+                term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+                quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
                 
-                term_id_map = {}  # {(value, type, lang, datatype_id): term_id}
-                
-                with self.engine.connect() as conn:
-                    with self.utils.time_operation("batch_term_lookup", f"looking up {len(term_info)} unique terms"):
-                        # Build batch lookup query
-                        unique_terms = list(term_info.keys())
+                # Step 3: Use raw psycopg3 connection for UUID-based operations
+                with self.get_connection() as conn:
+                    conn.row_factory = psycopg.rows.dict_row
+                    
+                    # Step 4: Batch remove quads using UUIDs
+                    with self.utils.time_operation("batch_quad_removal", f"removing quads from {len(quad_uuids)} candidates"):
+                        removed_count = 0
                         batch_size = 1000
                         
-                        for i in range(0, len(unique_terms), batch_size):
-                            batch_terms = unique_terms[i:i + batch_size]
+                        for i in range(0, len(quad_uuids), batch_size):
+                            batch_uuids = quad_uuids[i:i + batch_size]
                             
-                            with self.utils.time_operation("term_lookup_batch", f"batch {i//batch_size + 1}, {len(batch_terms)} terms"):
-                                conditions = []
+                            with self.utils.time_operation("quad_remove_batch", f"batch {i//batch_size + 1}, {len(batch_uuids)} quads"):
+                                # Build parameterized query for batch removal
+                                placeholders = []
+                                params = []
                                 
-                                for value, term_type, lang, datatype_id in batch_terms:
-                                    condition = (
-                                        (term_table.c.term_text == value) &
-                                        (term_table.c.term_type == term_type)
+                                for j, (s_uuid, p_uuid, o_uuid, g_uuid) in enumerate(batch_uuids):
+                                    base_idx = j * 4
+                                    placeholders.append(f"(${base_idx + 1}, ${base_idx + 2}, ${base_idx + 3}, ${base_idx + 4})")
+                                    params.extend([s_uuid, p_uuid, o_uuid, g_uuid])
+                                
+                                delete_sql = f"""
+                                    DELETE FROM {quad_table_name} 
+                                    WHERE (subject_uuid, predicate_uuid, object_uuid, graph_uuid) IN (
+                                        VALUES {', '.join(placeholders)}
                                     )
-                                    if lang is not None:
-                                        condition &= (term_table.c.lang == lang)
-                                    else:
-                                        condition &= (term_table.c.lang.is_(None))
-                                    
-                                    if datatype_id is not None:
-                                        condition &= (term_table.c.datatype_id == datatype_id)
-                                    else:
-                                        condition &= (term_table.c.datatype_id.is_(None))
-                                    
-                                    conditions.append(condition)
+                                """
                                 
-                                if conditions:
-                                    from sqlalchemy import or_
-                                    select_stmt = term_table.select().where(or_(*conditions))
-                                    result = conn.execute(select_stmt)
-                                    
-                                    for row in result:
-                                        key = (row.term_text, row.term_type, row.lang, row.datatype_id)
-                                        term_id_map[key] = row.term_id
-                        
-                        self.logger.debug(f"Found {len(term_id_map)} existing terms")
-                    
-                    # Step 3: Batch remove quads
-                    with self.utils.time_operation("batch_quad_removal", f"removing quads from {len(quad_terms)} candidates"):
-                        quad_ids_to_remove = []
-                        
-                        # Find matching quads
-                        for s_info, p_info, o_info, g_info in quad_terms:
-                            subject_id = term_id_map.get(s_info)
-                            predicate_id = term_id_map.get(p_info)
-                            object_id = term_id_map.get(o_info)
-                            graph_id = term_id_map.get(g_info)
-                            
-                            # Only look for quads where all terms exist
-                            if all(id is not None for id in [subject_id, predicate_id, object_id, graph_id]):
-                                # Find matching quad(s)
-                                select_stmt = quad_table.select().where(
-                                    (quad_table.c.subject_id == subject_id) &
-                                    (quad_table.c.predicate_id == predicate_id) &
-                                    (quad_table.c.object_id == object_id) &
-                                    (quad_table.c.graph_id == graph_id)
-                                ).limit(1)  # Following RDFLib pattern: remove only one instance
+                                cursor = conn.cursor()
+                                cursor.execute(delete_sql, params)
+                                batch_removed = cursor.rowcount
+                                removed_count += batch_removed
                                 
-                                result = conn.execute(select_stmt).fetchone()
-                                if result:
-                                    quad_ids_to_remove.append(result.quad_id)
+                                self.logger.debug(f"Removed {batch_removed} quads in batch {i//batch_size + 1}")
                         
-                        if quad_ids_to_remove:
-                            self.logger.debug(f"Removing {len(quad_ids_to_remove)} quads in batches of {batch_size}")
-                            
-                            # Batch remove quads
-                            removed_count = 0
-                            for i in range(0, len(quad_ids_to_remove), batch_size):
-                                batch_ids = quad_ids_to_remove[i:i + batch_size]
-                                
-                                with self.utils.time_operation("quad_remove_batch", f"batch {i//batch_size + 1}, {len(batch_ids)} quads"):
-                                    delete_stmt = quad_table.delete().where(
-                                        quad_table.c.quad_id.in_(batch_ids)
-                                    )
-                                    result = conn.execute(delete_stmt)
-                                    removed_count += result.rowcount
-                                    self.logger.debug(f"Removed {result.rowcount} quads in batch {i//batch_size + 1}")
-                            
-                            conn.commit()
-                            
-                            self.logger.info(f"Successfully removed {removed_count} RDF quads from space '{space_id}'")
-                            return removed_count
+                        conn.commit()
+                        
+                        if removed_count > 0:
+                            self.logger.info(f"🎉 SUCCESS: UUID batch removal completed - {removed_count} quads removed from space '{space_id}'")
                         else:
                             self.logger.debug(f"No matching quads found to remove from space '{space_id}'")
-                            return 0
+                        
+                        return removed_count
                             
             except Exception as e:
                 self.logger.error(f"Error removing RDF quads batch from space '{space_id}': {e}")
+                import traceback
+                self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
                 return 0
     
     # Namespace management methods
@@ -2532,43 +1504,53 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            namespace_table = tables['namespace']
+            # Get table names using current structure
+            table_names = self._get_table_names(space_id)
+            namespace_table_name = table_names['namespace']
             
-            with self.engine.connect() as conn:
+            self.logger.debug(f"Adding namespace '{prefix}' -> '{namespace_uri}' to space '{space_id}'")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
                 # Check if prefix already exists
-                select_stmt = namespace_table.select().where(
-                    namespace_table.c.prefix == prefix
+                cursor.execute(
+                    f"SELECT namespace_id, namespace_uri FROM {namespace_table_name} WHERE prefix = %s",
+                    (prefix,)
                 )
-                result = conn.execute(select_stmt).fetchone()
+                result = cursor.fetchone()
                 
                 if result:
+                    namespace_id, existing_uri = result
                     # Update existing namespace URI if different
-                    if result.namespace_uri != namespace_uri:
-                        update_stmt = namespace_table.update().where(
-                            namespace_table.c.namespace_id == result.namespace_id
-                        ).values(namespace_uri=namespace_uri)
-                        conn.execute(update_stmt)
+                    if existing_uri != namespace_uri:
+                        cursor.execute(
+                            f"UPDATE {namespace_table_name} SET namespace_uri = %s WHERE namespace_id = %s",
+                            (namespace_uri, namespace_id)
+                        )
                         conn.commit()
                         self.logger.info(f"Updated namespace '{prefix}' in space '{space_id}' to URI: {namespace_uri}")
                     else:
                         self.logger.debug(f"Namespace '{prefix}' already exists in space '{space_id}' with same URI")
-                    return result.namespace_id
+                    return namespace_id
                 
                 # Insert new namespace
-                insert_stmt = namespace_table.insert().values(
-                    prefix=prefix,
-                    namespace_uri=namespace_uri
+                cursor.execute(
+                    f"INSERT INTO {namespace_table_name} (prefix, namespace_uri) VALUES (%s, %s) RETURNING namespace_id",
+                    (prefix, namespace_uri)
                 )
-                result = conn.execute(insert_stmt)
+                result = cursor.fetchone()
+                namespace_id = result[0] if result else None
+                
                 conn.commit()
                 
-                namespace_id = result.inserted_primary_key[0]
                 self.logger.info(f"Added namespace '{prefix}' -> '{namespace_uri}' to space '{space_id}' with ID: {namespace_id}")
                 return namespace_id
                 
         except Exception as e:
             self.logger.error(f"Error adding namespace to space '{space_id}': {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     async def get_namespace_uri(self, space_id: str, prefix: str) -> Optional[str]:
@@ -2585,24 +1567,33 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            namespace_table = tables['namespace']
+            # Get table names using current structure
+            table_names = self._get_table_names(space_id)
+            namespace_table_name = table_names['namespace']
             
-            with self.engine.connect() as conn:
-                select_stmt = namespace_table.select().where(
-                    namespace_table.c.prefix == prefix
+            self.logger.debug(f"Looking up namespace URI for prefix '{prefix}' in space '{space_id}'")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute(
+                    f"SELECT namespace_uri FROM {namespace_table_name} WHERE prefix = %s",
+                    (prefix,)
                 )
-                result = conn.execute(select_stmt).fetchone()
+                result = cursor.fetchone()
                 
                 if result:
-                    self.logger.debug(f"Found namespace URI for '{prefix}' in space '{space_id}': {result.namespace_uri}")
-                    return result.namespace_uri
+                    namespace_uri = result[0]
+                    self.logger.debug(f"Found namespace URI for '{prefix}' in space '{space_id}': {namespace_uri}")
+                    return namespace_uri
                 else:
                     self.logger.debug(f"No namespace found for prefix '{prefix}' in space '{space_id}'")
                     return None
                     
         except Exception as e:
             self.logger.error(f"Error getting namespace URI from space '{space_id}': {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     async def list_namespaces(self, space_id: str) -> List[Dict[str, Any]]:
@@ -2618,20 +1609,28 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            tables = self._define_space_tables(space_id)
-            namespace_table = tables['namespace']
+            # Get table names using current structure
+            table_names = self._get_table_names(space_id)
+            namespace_table_name = table_names['namespace']
             
-            with self.engine.connect() as conn:
-                select_stmt = namespace_table.select().order_by(namespace_table.c.prefix)
-                results = conn.execute(select_stmt).fetchall()
+            self.logger.debug(f"Listing all namespaces for space '{space_id}'")
+            
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute(
+                    f"SELECT namespace_id, prefix, namespace_uri, created_time FROM {namespace_table_name} ORDER BY prefix"
+                )
+                results = cursor.fetchall()
                 
                 namespaces = []
                 for row in results:
+                    namespace_id, prefix, namespace_uri, created_time = row
                     namespaces.append({
-                        'namespace_id': row.namespace_id,
-                        'prefix': row.prefix,
-                        'namespace_uri': row.namespace_uri,
-                        'created_time': row.created_time.isoformat() if row.created_time else None
+                        'namespace_id': namespace_id,
+                        'prefix': prefix,
+                        'namespace_uri': namespace_uri,
+                        'created_time': created_time.isoformat() if created_time else None
                     })
                 
                 self.logger.debug(f"Retrieved {len(namespaces)} namespaces from space '{space_id}'")
@@ -2639,9 +1638,11 @@ class PostgreSQLSpaceImpl:
                 
         except Exception as e:
             self.logger.error(f"Error listing namespaces from space '{space_id}': {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
-    async def quads(self, space_id: str, quad_pattern: tuple, context: Optional[Any] = None, use_unlogged: bool = False):
+    async def quads(self, space_id: str, quad_pattern: tuple, context: Optional[Any] = None):
         """
         A generator over all the quads matching the pattern. Pattern can include any objects
         for comparing against nodes in the store, including URIRef, Literal, BNode, Variable, 
@@ -2677,7 +1678,7 @@ class PostgreSQLSpaceImpl:
             
             # Get table names (with unlogged suffix if needed)
             table_names = self._get_table_names(space_id)
-            if use_unlogged:
+            if self.use_unlogged:
                 table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
             term_table = table_names['term']
             quad_table = table_names['rdf_quad']
@@ -2689,39 +1690,13 @@ class PostgreSQLSpaceImpl:
                     self.logger.debug(f"🔍 DEBUG: Got connection: {type(conn)}")
                     with conn.cursor() as cursor:
                         self.logger.debug(f"🔍 DEBUG: Got cursor: {type(cursor)}")
-                        # Detect table schema (ID-based vs UUID-based) by checking if subject_uuid column exists
-                        cursor.execute(f"""
-                            SELECT COUNT(*) 
-                            FROM information_schema.columns 
-                            WHERE table_name = '{quad_table.split('.')[-1]}' 
-                            AND column_name = 'subject_uuid'
-                        """)
-                        result = cursor.fetchone()
-                        # Handle both dict-like and tuple-like cursor results
-                        if result:
-                            count = result[0] if isinstance(result, (tuple, list)) else result.get('count', 0)
-                            is_uuid_schema = count > 0
-                        else:
-                            is_uuid_schema = False
-                        self.logger.debug(f"🔍 DEBUG: Detected {'UUID' if is_uuid_schema else 'ID'}-based table schema")
-                        
-                        # Use appropriate column names based on schema
-                        if is_uuid_schema:
-                            # UUID-based schema
-                            join_columns = {
-                                'subject': ('quad.subject_uuid', 's_term.term_uuid'),
-                                'predicate': ('quad.predicate_uuid', 'p_term.term_uuid'),
-                                'object': ('quad.object_uuid', 'o_term.term_uuid'),
-                                'context': ('quad.context_uuid', 'c_term.term_uuid')
-                            }
-                        else:
-                            # ID-based schema
-                            join_columns = {
-                                'subject': ('quad.subject_id', 's_term.term_id'),
-                                'predicate': ('quad.predicate_id', 'p_term.term_id'),
-                                'object': ('quad.object_id', 'o_term.term_id'),
-                                'context': ('quad.context_id', 'c_term.term_id')
-                            }
+                        # Use UUID-based schema column names
+                        join_columns = {
+                            'subject': ('quad.subject_uuid', 's_term.term_uuid'),
+                            'predicate': ('quad.predicate_uuid', 'p_term.term_uuid'),
+                            'object': ('quad.object_uuid', 'o_term.term_uuid'),
+                            'context': ('quad.context_uuid', 'c_term.term_uuid')
+                        }
                         
                         # Build the SQL query with appropriate joins
                         base_query = f"""
