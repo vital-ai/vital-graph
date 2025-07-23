@@ -7,6 +7,9 @@ from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
+# Import PostgreSQLSpaceImpl for RDF space management
+from .postgresql_space_impl import PostgreSQLSpaceImpl
+
 # Create declarative base for ORM models
 Base = declarative_base()
 
@@ -172,8 +175,15 @@ class PostgreSQLDbImpl:
         self.Space = Space
         self.User = User
         
+        # Initialize PostgreSQLSpaceImpl for RDF space management
+        # Extract global prefix from table prefix (remove trailing underscore)
+        global_prefix = self.table_prefix.rstrip('_')
+        self.space_impl = None  # Will be initialized after engine is created
+        self.global_prefix = global_prefix
+        
         self.logger.info(f"PostgreSQLDbImpl initialized with config: {self._sanitize_config_for_logging(config)}")
         self.logger.info(f"Table prefix: {self.table_prefix}")
+        self.logger.info(f"Global prefix for RDF spaces: {self.global_prefix}")
     
     def _sanitize_config_for_logging(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive information from config for logging."""
@@ -219,6 +229,13 @@ class PostgreSQLDbImpl:
                 self.logger.info(f"Database connection test successful: {result.scalar()}")
             
             self.connected = True
+            
+            # Initialize PostgreSQLSpaceImpl with connection string
+            # Convert SQLAlchemy URL to psycopg3-compatible format
+            url = self.engine.url
+            connection_string = f"postgresql://{url.username}:{url.password}@{url.host}:{url.port}/{url.database}"
+            self.space_impl = PostgreSQLSpaceImpl(connection_string=connection_string, global_prefix=self.global_prefix)
+            self.logger.info(f"PostgreSQLSpaceImpl initialized with global prefix: {self.global_prefix}")
             
             # Load current state from database
             await self._load_current_state()
@@ -301,6 +318,9 @@ class PostgreSQLDbImpl:
                 self.engine.dispose()
                 self.engine = None
             
+            # Clean up PostgreSQLSpaceImpl instance
+            self.space_impl = None
+            
             self.session_factory = None
             self.metadata = None
             self.connected = False
@@ -331,6 +351,19 @@ class PostgreSQLDbImpl:
         if success:
             self.logger.info(f"Database refresh completed - State: {self.state}")
         return success
+    
+    def get_space_impl(self) -> Optional['PostgreSQLSpaceImpl']:
+        """
+        Get the PostgreSQLSpaceImpl instance for RDF space management.
+        
+        Returns:
+            PostgreSQLSpaceImpl instance if connected, None otherwise
+        """
+        if not self.connected or self.space_impl is None:
+            self.logger.warning("PostgreSQLSpaceImpl not available - database not connected")
+            return None
+        
+        return self.space_impl
     
     def _build_database_url(self) -> URL:
         """
@@ -1260,14 +1293,36 @@ class PostgreSQLDbImpl:
     
     async def list_tables(self) -> List[str]:
         """
-        List all VitalGraphDB tables.
+        List all tables in the database.
         
         Returns:
             List of table names
         """
         self.logger.info("Listing database tables...")
-        # TODO: Implement table listing logic
-        return []
+        
+        if not self.connected:
+            self.logger.warning("Cannot list tables: not connected to database")
+            return []
+        
+        try:
+            # Query PostgreSQL information_schema to get all table names
+            query = text("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                ORDER BY table_name
+            """)
+            
+            with self.engine.connect() as conn:
+                result = conn.execute(query)
+                tables = [row[0] for row in result.fetchall()]
+                
+            self.logger.info(f"Found {len(tables)} tables in database")
+            return tables
+            
+        except Exception as e:
+            self.logger.error(f"Error listing tables: {e}")
+            return []
     
     async def list_indexes(self) -> List[Dict[str, Any]]:
         """

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
-from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.impl.vitalgraphapp_impl import VitalGraphAppImpl
 from vitalgraph.config.config_loader import get_config, ConfigurationError
 
 
@@ -51,7 +51,7 @@ def create_app() -> FastAPI:
     
     app = FastAPI(title="VitalGraph API")
     
-    vital_graph = VitalGraphImpl(app=app, config=config)
+    vital_graph = VitalGraphAppImpl(app=app, config=config)
     
     return app
 

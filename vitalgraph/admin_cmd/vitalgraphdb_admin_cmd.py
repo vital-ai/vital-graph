@@ -25,7 +25,7 @@ from tabulate import tabulate
 
 # Import VitalGraphDB components
 from vitalgraph.config.config_loader import VitalGraphConfig
-from vitalgraph.db.postgresql.postgresql_db_impl import PostgreSQLDbImpl
+from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.ops.graph_import_op import GraphImportOp
 
 
@@ -165,13 +165,16 @@ class VitalGraphDBAdminREPL:
             print("Loading VitalGraphDB configuration...")
             self.config = VitalGraphConfig(config_path)
             
-            # Get database and tables configuration
-            db_config = self.config.get_database_config()
-            tables_config = self.config.get_tables_config()
+            # Create VitalGraphImpl instance with the loaded config
+            print("Initializing VitalGraph implementation...")
+            self.vital_graph_impl = VitalGraphImpl(config=self.config)
             
-            # Create PostgreSQL database implementation
-            print("Initializing PostgreSQL database connection...")
-            self.db_impl = PostgreSQLDbImpl(db_config, tables_config)
+            # Get database implementation from VitalGraphImpl
+            self.db_impl = self.vital_graph_impl.get_db_impl()
+            
+            if self.db_impl is None:
+                print("❌ Failed to initialize database implementation")
+                return True
             
             # Connect to the database
             print("Connecting to VitalGraphDB database...")
@@ -1125,12 +1128,14 @@ Note: All commands must end with a semicolon (;)
             # Load VitalGraphDB server configuration
             self.config = VitalGraphConfig(config_path)
             
-            # Get database and tables configuration
-            db_config = self.config.get_database_config()
-            tables_config = self.config.get_tables_config()
+            # Create VitalGraphImpl instance with the loaded config
+            self.vital_graph_impl = VitalGraphImpl(config=self.config)
             
-            # Create PostgreSQL database implementation
-            self.db_impl = PostgreSQLDbImpl(db_config, tables_config)
+            # Get database implementation from VitalGraphImpl
+            self.db_impl = self.vital_graph_impl.get_db_impl()
+            
+            if self.db_impl is None:
+                return False
             
             # Connect to the database
             connected = asyncio.run(self.db_impl.connect())
