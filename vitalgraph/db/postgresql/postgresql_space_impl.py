@@ -317,7 +317,7 @@ class PostgreSQLSpaceImpl:
             CREATE UNLOGGED TABLE {unlogged_table_names['term']} (
                 term_id BIGSERIAL,
                 term_text TEXT NOT NULL,
-                term_type CHAR(1) NOT NULL,
+                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
                 lang VARCHAR(20),
                 datatype_id BIGINT,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -333,6 +333,91 @@ class PostgreSQLSpaceImpl:
                 object_id BIGINT NOT NULL,
                 context_id BIGINT NOT NULL,
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """
+        
+        return sql_statements
+    
+    def _get_create_table_sql_uuid(self, space_id: str, use_unlogged: bool = False) -> Dict[str, str]:
+        """
+        Generate CREATE TABLE SQL statements for UUID-based RDF space tables.
+        
+        This creates tables optimized for UUID-based term identification:
+        - Uses UUID primary keys instead of BIGSERIAL
+        - Eliminates foreign key constraints for better performance
+        - Optimized for deterministic UUID-based batch loading
+        
+        Args:
+            space_id: Space identifier
+            use_unlogged: If True, create unlogged tables for maximum speed
+            
+        Returns:
+            dict: Dictionary of CREATE TABLE SQL statements
+        """
+        PostgreSQLUtils.validate_space_id(space_id)
+        
+        table_names = self._get_table_names(space_id)
+        if use_unlogged:
+            table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
+        
+        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+        if use_unlogged:
+            table_prefix += "_unlogged"
+        
+        sql_statements = {}
+        
+        # UUID-based term table
+        table_type = "UNLOGGED TABLE" if use_unlogged else "TABLE"
+        sql_statements['term'] = f"""
+            CREATE {table_type} {table_names['term']} (
+                term_uuid UUID PRIMARY KEY,
+                term_text TEXT NOT NULL,
+                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
+                lang VARCHAR(20),
+                datatype_id BIGINT,
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE INDEX idx_{table_prefix}_term_text ON {table_names['term']} (term_text);
+            CREATE INDEX idx_{table_prefix}_term_type ON {table_names['term']} (term_type);
+        """
+        
+        # UUID-based quad table
+        sql_statements['rdf_quad'] = f"""
+            CREATE {table_type} {table_names['rdf_quad']} (
+                subject_uuid UUID NOT NULL,
+                predicate_uuid UUID NOT NULL,
+                object_uuid UUID NOT NULL,
+                context_uuid UUID NOT NULL,
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
+            );
+            
+            CREATE INDEX idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);
+            CREATE INDEX idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);
+            CREATE INDEX idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);
+            CREATE INDEX idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);
+        """
+        
+        # Namespace table (unchanged)
+        sql_statements['namespace'] = f"""
+            CREATE {table_type} {table_names['namespace']} (
+                namespace_id BIGSERIAL PRIMARY KEY,
+                prefix VARCHAR(50) NOT NULL UNIQUE,
+                namespace_uri TEXT NOT NULL UNIQUE,
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """
+        
+        # Graph table (unchanged)
+        sql_statements['graph'] = f"""
+            CREATE {table_type} {table_names['graph']} (
+                graph_id BIGSERIAL PRIMARY KEY,
+                graph_uri TEXT NOT NULL UNIQUE,
+                graph_name VARCHAR(255),
+                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                triple_count BIGINT DEFAULT 0
             );
         """
         
@@ -356,6 +441,33 @@ class PostgreSQLSpaceImpl:
             table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
         table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
         
+        # Detect table schema (UUID vs ID based) by checking column names
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(f"""
+                        SELECT COUNT(*) 
+                        FROM information_schema.columns 
+                        WHERE table_name = '{table_names['rdf_quad'].split('.')[-1]}' 
+                        AND column_name = 'subject_uuid'
+                    """)
+                    result = cursor.fetchone()
+                    # Handle both dict-like and tuple-like cursor results
+                    if result:
+                        count = result[0] if isinstance(result, (tuple, list)) else result.get('count', 0)
+                        is_uuid_schema = count > 0
+                    else:
+                        is_uuid_schema = False
+        except Exception as e:
+            self.logger.warning(f"Could not detect table schema, assuming ID-based: {e}")
+            is_uuid_schema = False
+        
+        # Use appropriate column names based on schema
+        if is_uuid_schema:
+            subject_col, predicate_col, object_col, context_col = 'subject_uuid', 'predicate_uuid', 'object_uuid', 'context_uuid'
+        else:
+            subject_col, predicate_col, object_col, context_col = 'subject_id', 'predicate_id', 'object_id', 'context_id'
+        
         indexes = {}
         
         # Term table performance indexes
@@ -367,14 +479,26 @@ class PostgreSQLSpaceImpl:
             f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);"
         ]
         
-        # Quad table performance indexes - SPARQL optimized
+        # Add table clustering for UUID-based tables to physically order rows by UUID
+        if is_uuid_schema:
+            # Cluster term table by UUID for better JOIN performance
+            # This physically reorders table rows by UUID, improving cache locality and reducing I/O
+            indexes['term'].append(f"CLUSTER {table_names['term']} USING {table_names['term']}_pkey;")
+        
+        # Quad table performance indexes - SPARQL optimized with appropriate column names
         indexes['rdf_quad'] = [
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_spoc ON {table_names['rdf_quad']} (subject_id, predicate_id, object_id, context_id);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_subject ON {table_names['rdf_quad']} (subject_id);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_predicate ON {table_names['rdf_quad']} (predicate_id);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_object ON {table_names['rdf_quad']} (object_id);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_context ON {table_names['rdf_quad']} (context_id);"
+            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_spoc ON {table_names['rdf_quad']} ({subject_col}, {predicate_col}, {object_col}, {context_col});",
+            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_subject ON {table_names['rdf_quad']} ({subject_col});",
+            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_predicate ON {table_names['rdf_quad']} ({predicate_col});",
+            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_object ON {table_names['rdf_quad']} ({object_col});",
+            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_context ON {table_names['rdf_quad']} ({context_col});"
         ]
+        
+        # Add clustering for quad table if UUID-based (optional optimization)
+        if is_uuid_schema:
+            # Cluster quad table by subject_uuid for subject-focused queries
+            # This can improve performance for queries that filter by subject
+            indexes['rdf_quad'].append(f"CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}quad_subject;")
         
         return indexes
         
@@ -625,6 +749,67 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Unexpected error creating bulk-loading tables for space '{space_id}': {e}")
             return False
     
+    def create_space_tables_uuid(self, space_id: str, use_unlogged: bool = False) -> bool:
+        """
+        Create UUID-based RDF tables optimized for deterministic batch loading.
+        
+        This creates tables that use UUIDs as primary keys instead of BIGSERIAL,
+        eliminating the need for ID management and ON CONFLICT logic.
+        
+        Args:
+            space_id: Space identifier
+            use_unlogged: If True, create unlogged tables for maximum speed (not crash-safe)
+            
+        Returns:
+            bool: True if tables created successfully, False otherwise
+        """
+        try:
+            PostgreSQLUtils.validate_space_id(space_id)
+            
+            self.logger.info(f"Creating UUID-based RDF tables for space '{space_id}' (unlogged={use_unlogged})")
+            
+            # Get UUID-based table creation SQL
+            sql_statements = self._get_create_table_sql_uuid(space_id, use_unlogged)
+            
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    created_tables = []
+                    
+                    # Create tables in dependency order
+                    table_order = ['term', 'rdf_quad', 'namespace', 'graph']
+                    
+                    for table_name in table_order:
+                        if table_name in sql_statements:
+                            try:
+                                self.logger.debug(f"Creating UUID-based table: {table_name}")
+                                
+                                # Execute each statement in the SQL block
+                                for statement in sql_statements[table_name].strip().split(';'):
+                                    statement = statement.strip()
+                                    if statement:  # Skip empty statements
+                                        cursor.execute(statement)
+                                
+                                created_tables.append(table_name)
+                                self.logger.debug(f"Successfully created UUID-based table: {table_name}")
+                                
+                            except Exception as e:
+                                self.logger.error(f"Error creating UUID-based table {table_name}: {e}")
+                                raise
+                    
+                    conn.commit()
+                    self.logger.info(f"Successfully created {len(created_tables)} UUID-based tables for space '{space_id}': {created_tables}")
+            
+            # Cache table definitions
+            self._table_cache[space_id] = self._get_table_names(space_id)
+            return True
+            
+        except psycopg.Error as e:
+            self.logger.error(f"Database error creating UUID-based tables for space '{space_id}': {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error creating UUID-based tables for space '{space_id}': {e}")
+            return False
+    
     def build_performance_indexes(self, space_id: str, concurrent: bool = True, use_unlogged: bool = False) -> bool:
         """
         Build performance indexes after bulk loading is complete.
@@ -684,13 +869,13 @@ class PostgreSQLSpaceImpl:
         except psycopg.Error as e:
             self.logger.error(f"Database error building indexes for space '{space_id}': {e}")
             return False
-        except Exception as e:
-            self.logger.error(f"Unexpected error building indexes for space '{space_id}': {e}")
-            return False
     
     def delete_space_tables(self, space_id: str) -> bool:
         """
         Delete all RDF tables for a specific space.
+        
+        This method comprehensively deletes all table variants (regular, unlogged, UUID-based)
+        to ensure clean state before creating new tables.
         
         Args:
             space_id: Space identifier
@@ -701,7 +886,7 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            self.logger.info(f"Deleting RDF tables for space '{space_id}'")
+            self.logger.info(f"Comprehensively deleting all RDF table variants for space '{space_id}'")
             
             # Get table names for this space
             table_names = self._get_table_names(space_id)
@@ -710,8 +895,26 @@ class PostgreSQLSpaceImpl:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     dropped_tables = []
-                    for base_name in base_names:
-                        table_name = table_names[base_name]
+                    
+                    # First, find all existing tables that match our space pattern
+                    table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+                    cursor.execute("""
+                        SELECT tablename 
+                        FROM pg_tables 
+                        WHERE schemaname = 'public' 
+                        AND tablename LIKE %s
+                    """, (f"{table_prefix}%",))
+                    
+                    results = cursor.fetchall()
+                    existing_tables = []
+                    for row in results:
+                        table_name = row[0] if isinstance(row, (tuple, list)) else row.get('tablename', '')
+                        if table_name:
+                            existing_tables.append(table_name)
+                    self.logger.debug(f"Found {len(existing_tables)} existing tables: {existing_tables}")
+                    
+                    # Drop all existing tables that match our pattern
+                    for table_name in existing_tables:
                         try:
                             cursor.execute(f"DROP TABLE IF EXISTS {table_name} CASCADE")
                             dropped_tables.append(table_name)
@@ -719,8 +922,28 @@ class PostgreSQLSpaceImpl:
                         except Exception as e:
                             self.logger.warning(f"Could not drop table {table_name}: {e}")
                     
+                    # Also explicitly try to drop the expected table variants
+                    for base_name in base_names:
+                        table_name = table_names[base_name]
+                        
+                        # Try all possible variants
+                        variants = [
+                            table_name,                    # Regular table
+                            f"{table_name}_unlogged",      # Unlogged variant
+                        ]
+                        
+                        for variant in variants:
+                            if variant not in dropped_tables:  # Don't drop twice
+                                try:
+                                    cursor.execute(f"DROP TABLE IF EXISTS {variant} CASCADE")
+                                    dropped_tables.append(variant)
+                                    self.logger.debug(f"Dropped table variant {variant}")
+                                except Exception as e:
+                                    self.logger.debug(f"Table variant {variant} did not exist or could not be dropped: {e}")
+                    
                     conn.commit()
-                    self.logger.info(f"Successfully deleted {len(dropped_tables)} tables for space '{space_id}': {dropped_tables}")
+                    self.logger.info(f"Successfully deleted {len(dropped_tables)} tables for space '{space_id}'")
+                    self.logger.debug(f"Dropped tables: {dropped_tables}")
             
             return True
             
@@ -2442,9 +2665,6 @@ class PostgreSQLSpaceImpl:
             tuple: (quad, context_iterator) where quad is (s, p, o, c) and 
                    context_iterator is a function that yields the context
         """
-        # Initialize results collection
-        all_results = []
-        
         try:
             self.logger.debug(f"🔍 DEBUG: Starting quads() method for space_id='{space_id}', pattern={quad_pattern}")
             
@@ -2469,7 +2689,41 @@ class PostgreSQLSpaceImpl:
                     self.logger.debug(f"🔍 DEBUG: Got connection: {type(conn)}")
                     with conn.cursor() as cursor:
                         self.logger.debug(f"🔍 DEBUG: Got cursor: {type(cursor)}")
-                        # Build the SQL query with joins
+                        # Detect table schema (ID-based vs UUID-based) by checking if subject_uuid column exists
+                        cursor.execute(f"""
+                            SELECT COUNT(*) 
+                            FROM information_schema.columns 
+                            WHERE table_name = '{quad_table.split('.')[-1]}' 
+                            AND column_name = 'subject_uuid'
+                        """)
+                        result = cursor.fetchone()
+                        # Handle both dict-like and tuple-like cursor results
+                        if result:
+                            count = result[0] if isinstance(result, (tuple, list)) else result.get('count', 0)
+                            is_uuid_schema = count > 0
+                        else:
+                            is_uuid_schema = False
+                        self.logger.debug(f"🔍 DEBUG: Detected {'UUID' if is_uuid_schema else 'ID'}-based table schema")
+                        
+                        # Use appropriate column names based on schema
+                        if is_uuid_schema:
+                            # UUID-based schema
+                            join_columns = {
+                                'subject': ('quad.subject_uuid', 's_term.term_uuid'),
+                                'predicate': ('quad.predicate_uuid', 'p_term.term_uuid'),
+                                'object': ('quad.object_uuid', 'o_term.term_uuid'),
+                                'context': ('quad.context_uuid', 'c_term.term_uuid')
+                            }
+                        else:
+                            # ID-based schema
+                            join_columns = {
+                                'subject': ('quad.subject_id', 's_term.term_id'),
+                                'predicate': ('quad.predicate_id', 'p_term.term_id'),
+                                'object': ('quad.object_id', 'o_term.term_id'),
+                                'context': ('quad.context_id', 'c_term.term_id')
+                            }
+                        
+                        # Build the SQL query with appropriate joins
                         base_query = f"""
                         SELECT 
                             s_term.term_text as subject_text,
@@ -2488,10 +2742,10 @@ class PostgreSQLSpaceImpl:
                             c_term.term_text as context_text,
                             c_term.term_type as context_type
                         FROM {quad_table} quad
-                        JOIN {term_table} s_term ON quad.subject_id = s_term.term_id
-                        JOIN {term_table} p_term ON quad.predicate_id = p_term.term_id
-                        JOIN {term_table} o_term ON quad.object_id = o_term.term_id
-                        JOIN {term_table} c_term ON quad.context_id = c_term.term_id
+                        JOIN {term_table} s_term ON {join_columns['subject'][0]} = {join_columns['subject'][1]}
+                        JOIN {term_table} p_term ON {join_columns['predicate'][0]} = {join_columns['predicate'][1]}
+                        JOIN {term_table} o_term ON {join_columns['object'][0]} = {join_columns['object'][1]}
+                        JOIN {term_table} c_term ON {join_columns['context'][0]} = {join_columns['context'][1]}
                         """
                     
                         # Build WHERE conditions and parameters
@@ -2587,30 +2841,23 @@ class PostgreSQLSpaceImpl:
                         self.logger.info(f"📊 Parameters: {params}")
                         self.logger.info(f"🎯 Pattern: {quad_pattern}")
                         
-                        # Execute query with timeout protection
-                        self.logger.info(f"⏰ Starting query execution...")
+                        # Use server-side cursor for true streaming performance
+                        self.logger.info(f"⏰ Starting server-side cursor setup...")
                         import time
                         start_time = time.time()
                         
+                        # Generate unique cursor name
+                        import uuid
+                        cursor_name = f"quads_cursor_{uuid.uuid4().hex[:8]}"
+                        
                         try:
-                            cursor.execute(query, params)
-                            execution_time = time.time() - start_time
-                            self.logger.info(f"✅ Query executed successfully in {execution_time:.3f}s")
-                        except Exception as e:
-                            execution_time = time.time() - start_time
-                            self.logger.error(f"❌ Query failed after {execution_time:.3f}s: {e}")
-                            raise
-                        
-                        self.logger.debug(f"🔍 DEBUG: Calling cursor.fetchall()...")
-                        results = cursor.fetchall()
-                        self.logger.debug(f"🔍 DEBUG: cursor.fetchall() completed successfully")
-                    
-                        self.logger.debug(f"🔍 DEBUG: Found {len(results)} matching quads for pattern {quad_pattern}")
-                        
-                        # Convert results back to RDFLib terms and yield
-                        self.logger.debug(f"🔍 DEBUG: Starting result processing loop...")
-                        for i, row in enumerate(results):
-                            self.logger.debug(f"🔍 DEBUG: Processing row {i}: {row}")
+                            # Declare server-side cursor
+                            declare_sql = f"DECLARE {cursor_name} CURSOR FOR {query}"
+                            self.logger.debug(f"🔍 DEBUG: Declaring cursor: {declare_sql}")
+                            cursor.execute(declare_sql, params)
+                            
+                            setup_time = time.time() - start_time
+                            self.logger.info(f"✅ Server-side cursor declared in {setup_time:.3f}s")
                             
                             # Convert database terms back to RDFLib terms
                             def db_to_rdflib_term(text, term_type, lang=None, datatype_id=None):
@@ -2626,23 +2873,58 @@ class PostgreSQLSpaceImpl:
                                 else:
                                     return URIRef(text)  # Default fallback
                             
-                            # Build the quad (psycopg3 returns named results, access by column name)
-                            self.logger.debug(f"🔍 DEBUG: Converting row to RDFLib terms...")
-                            s = db_to_rdflib_term(row['subject_text'], row['subject_type'], row['subject_lang'], row['subject_datatype_id'])  # subject
-                            p = db_to_rdflib_term(row['predicate_text'], row['predicate_type'])  # predicate
-                            o = db_to_rdflib_term(row['object_text'], row['object_type'], row['object_lang'], row['object_datatype_id'])  # object
-                            c = db_to_rdflib_term(row['context_text'], row['context_type'])  # context
+                            # Use server-side cursor paging for immediate streaming
+                            self.logger.debug(f"🔍 DEBUG: Starting server-side cursor paging...")
+                            page_size = 1000  # Fetch pages of 1000 rows
+                            total_yielded = 0
                             
-                            quad = (s, p, o, c)
-                            self.logger.debug(f"🔍 DEBUG: Created quad: {quad}")
+                            while True:
+                                # Fetch next page from server-side cursor
+                                fetch_sql = f"FETCH FORWARD {page_size} FROM {cursor_name}"
+                                cursor.execute(fetch_sql)
+                                page_results = cursor.fetchall()
+                                
+                                if not page_results:
+                                    break  # No more results
+                                
+                                self.logger.debug(f"🔍 DEBUG: Fetched page of {len(page_results)} rows from cursor")
+                                
+                                # Process and yield each row immediately
+                                for row in page_results:
+                                    total_yielded += 1
+                                    
+                                    # Build the quad (psycopg3 returns named results, access by column name)
+                                    s = db_to_rdflib_term(row['subject_text'], row['subject_type'], row['subject_lang'], row['subject_datatype_id'])
+                                    p = db_to_rdflib_term(row['predicate_text'], row['predicate_type'])
+                                    o = db_to_rdflib_term(row['object_text'], row['object_type'], row['object_lang'], row['object_datatype_id'])
+                                    c = db_to_rdflib_term(row['context_text'], row['context_type'])
+                                    
+                                    quad = (s, p, o, c)
+                                    
+                                    # Create context iterator
+                                    def context_iter():
+                                        yield c
+                                    
+                                    # Yield immediately for true streaming
+                                    yield quad, context_iter
+                                    
+                                    # Log progress for large result sets
+                                    if total_yielded % 50000 == 0:
+                                        self.logger.info(f"🔍 DEBUG: Streamed {total_yielded:,} quads so far...")
                             
-                            # Create a simple context iterator (just yields the context)
-                            def context_iterator():
-                                yield c
+                            self.logger.info(f"✅ Completed server-side cursor streaming - yielded {total_yielded:,} total quads")
                             
-                            # Collect results instead of yielding inside connection context
-                            all_results.append((quad, context_iterator))
-                            self.logger.debug(f"🔍 DEBUG: Collected quad {i}")
+                        except Exception as e:
+                            execution_time = time.time() - start_time
+                            self.logger.error(f"❌ Server-side cursor failed after {execution_time:.3f}s: {e}")
+                            raise
+                        finally:
+                            # Always close the cursor
+                            try:
+                                cursor.execute(f"CLOSE {cursor_name}")
+                                self.logger.debug(f"🔍 DEBUG: Closed server-side cursor {cursor_name}")
+                            except Exception as e:
+                                self.logger.warning(f"⚠️ Failed to close cursor {cursor_name}: {e}")
                         
         except Exception as e:
             self.logger.error(f"Error in quads query for space '{space_id}': {e}")
@@ -2652,12 +2934,6 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
             # Return empty results for error case
             return
-            
-        # Now yield all results outside the connection context to avoid lifecycle issues
-        self.logger.info(f"✅ QUADS: Collected {len(all_results)} results, now yielding outside connection context")
-        for i, (quad, context_iter_func) in enumerate(all_results):
-            self.logger.debug(f"🔍 DEBUG: Yielding quad {i+1}/{len(all_results)}")
-            yield quad, context_iter_func()
     
     def get_manager_info(self) -> Dict[str, Any]:
         """
