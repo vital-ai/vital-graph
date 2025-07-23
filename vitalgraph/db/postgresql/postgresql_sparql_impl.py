@@ -9,7 +9,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any, Iterator
-
+from functools import lru_cache
 from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.algebra import translateAlgebra
@@ -17,6 +17,114 @@ from rdflib.plugins.sparql.sparql import Query
 
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 from .postgresql_utils import PostgreSQLUtils
+
+class TermUUIDCache:
+    """
+    LRU cache for term UUID lookups to avoid repeated subqueries.
+    
+    This cache stores mappings from (term_text, term_type) tuples to term UUIDs,
+    using an LRU eviction policy when the cache reaches its maximum size.
+    """
+    
+    def __init__(self, max_size: int = 1000):
+        self.max_size = max_size
+        self.cache = {}
+        self.access_order = []
+        self.logger = logging.getLogger(f"{__name__}.TermUUIDCache")
+    
+    def get(self, term_text: str, term_type: str) -> Optional[str]:
+        """
+        Get term UUID from cache.
+        
+        Args:
+            term_text: The term text
+            term_type: The term type ('U', 'L', 'B')
+            
+        Returns:
+            Term UUID if found, None otherwise
+        """
+        key = (term_text, term_type)
+        if key in self.cache:
+            # Move to end (most recently used)
+            self.access_order.remove(key)
+            self.access_order.append(key)
+            self.logger.debug(f"Cache hit for term: {term_text} ({term_type})")
+            return self.cache[key]
+        
+        self.logger.debug(f"Cache miss for term: {term_text} ({term_type})")
+        return None
+    
+    def get_batch(self, terms: List[Tuple[str, str]]) -> Dict[Tuple[str, str], Optional[str]]:
+        """
+        Get multiple term UUIDs from cache.
+        
+        Args:
+            terms: List of (term_text, term_type) tuples
+            
+        Returns:
+            Dictionary mapping (term_text, term_type) to UUID (or None if not cached)
+        """
+        result = {}
+        cache_hits = 0
+        
+        for term_text, term_type in terms:
+            key = (term_text, term_type)
+            if key in self.cache:
+                # Move to end (most recently used)
+                self.access_order.remove(key)
+                self.access_order.append(key)
+                result[key] = self.cache[key]
+                cache_hits += 1
+            else:
+                result[key] = None
+        
+        self.logger.debug(f"Batch lookup: {cache_hits}/{len(terms)} cache hits")
+        return result
+    
+    def put(self, term_text: str, term_type: str, term_uuid: str):
+        """
+        Add term UUID to cache.
+        
+        Args:
+            term_text: The term text
+            term_type: The term type ('U', 'L', 'B')
+            term_uuid: The term UUID
+        """
+        key = (term_text, term_type)
+        
+        if key in self.cache:
+            # Update existing entry and move to end
+            self.access_order.remove(key)
+        elif len(self.cache) >= self.max_size:
+            # Evict least recently used
+            lru_key = self.access_order.pop(0)
+            del self.cache[lru_key]
+            self.logger.debug(f"Evicted LRU term: {lru_key[0]} ({lru_key[1]})")
+        
+        self.cache[key] = term_uuid
+        self.access_order.append(key)
+        self.logger.debug(f"Cached term: {term_text} ({term_type}) -> {term_uuid}")
+    
+    def put_batch(self, term_mappings: Dict[Tuple[str, str], str]):
+        """
+        Add multiple term UUIDs to cache.
+        
+        Args:
+            term_mappings: Dictionary mapping (term_text, term_type) to term_uuid
+        """
+        for (term_text, term_type), term_uuid in term_mappings.items():
+            self.put(term_text, term_type, term_uuid)
+        
+        self.logger.debug(f"Batch cached {len(term_mappings)} terms")
+    
+    def size(self) -> int:
+        """Get current cache size."""
+        return len(self.cache)
+    
+    def clear(self) -> None:
+        """Clear the cache."""
+        self.cache.clear()
+        self.access_order.clear()
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +166,7 @@ class PostgreSQLSparqlImpl:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.variable_counter = 0
         self.join_counter = 0
+        self.term_uuid_cache = TermUUIDCache(max_size=10000)  # Cache for term UUID lookups
         
     async def execute_sparql_query(self, space_id: str, sparql_query: str) -> List[Dict[str, Any]]:
         """
@@ -87,6 +196,66 @@ class PostgreSQLSparqlImpl:
             self.logger.error(f"Error executing SPARQL query: {e}")
             raise
     
+    async def _get_term_uuids_batch(self, terms: List[Tuple[str, str]], table_config: TableConfig) -> Dict[Tuple[str, str], str]:
+        """
+        Get term UUIDs for multiple terms using cache and batch database lookup.
+        
+        Args:
+            terms: List of (term_text, term_type) tuples
+            table_config: Table configuration for database queries
+            
+        Returns:
+            Dictionary mapping (term_text, term_type) to term_uuid
+        """
+        if not terms:
+            return {}
+        
+        # First, check cache for all terms
+        cached_results = self.term_uuid_cache.get_batch(terms)
+        
+        # Find terms that need database lookup
+        uncached_terms = [(term_text, term_type) for (term_text, term_type), uuid in cached_results.items() if uuid is None]
+        
+        result = {}
+        
+        # Add cached results to final result
+        for (term_text, term_type), uuid in cached_results.items():
+            if uuid is not None:
+                result[(term_text, term_type)] = uuid
+        
+        # Batch lookup uncached terms from database
+        if uncached_terms:
+            self.logger.debug(f"Batch database lookup for {len(uncached_terms)} uncached terms")
+            
+            # Build batch query for all uncached terms
+            conditions = []
+            for term_text, term_type in uncached_terms:
+                conditions.append(f"(term_text = '{term_text}' AND term_type = '{term_type}')")
+            
+            batch_query = f"""
+                SELECT term_text, term_type, term_uuid 
+                FROM {table_config.term_table} 
+                WHERE {' OR '.join(conditions)}
+            """
+            
+            # Execute batch query
+            db_results = await self._execute_sql_query(batch_query)
+            
+            # Process database results
+            db_mappings = {}
+            for row in db_results:
+                key = (row['term_text'], row['term_type'])
+                uuid = row['term_uuid']
+                result[key] = uuid
+                db_mappings[key] = uuid
+            
+            # Cache the database results
+            if db_mappings:
+                self.term_uuid_cache.put_batch(db_mappings)
+                self.logger.debug(f"Cached {len(db_mappings)} terms from database lookup")
+        
+        return result
+    
     async def _translate_sparql_to_sql(self, space_id: str, sparql_query: str) -> str:
         """
         Translate SPARQL query to SQL using RDFLib's algebra representation.
@@ -114,9 +283,9 @@ class PostgreSQLSparqlImpl:
             
             # Translate based on query type
             if algebra.name == "SelectQuery":
-                return self._translate_select_query(algebra, table_config)
+                return await self._translate_select_query(algebra, table_config)
             elif algebra.name == "ConstructQuery":
-                return self._translate_construct_query(algebra, table_config)
+                return await self._translate_construct_query(algebra, table_config)
             else:
                 raise NotImplementedError(f"Query type {algebra.name} not yet supported")
                 
@@ -124,7 +293,7 @@ class PostgreSQLSparqlImpl:
             self.logger.error(f"Error translating SPARQL query: {e}")
             raise
     
-    def _translate_select_query(self, algebra, table_config: TableConfig) -> str:
+    async def _translate_select_query(self, algebra, table_config: TableConfig) -> str:
         """Translate SELECT query algebra to SQL."""
         
         # Extract projection variables
@@ -136,7 +305,7 @@ class PostgreSQLSparqlImpl:
         limit_info = self._extract_limit_offset(pattern)
         
         # Extract and translate the main pattern
-        from_clause, where_conditions, joins, variable_mappings = self._translate_pattern(pattern, table_config, projection_vars)
+        from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(pattern, table_config, projection_vars)
         
         # Build SELECT clause with variable mappings
         select_clause = self._build_select_clause(projection_vars, variable_mappings, has_distinct)
@@ -211,7 +380,7 @@ class PostgreSQLSparqlImpl:
         distinct_keyword = "DISTINCT " if has_distinct else ""
         return f"SELECT {distinct_keyword}{', '.join(select_items)}"
     
-    def _translate_pattern(self, pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+    async def _translate_pattern(self, pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """
         Translate a SPARQL pattern to SQL components.
         
@@ -221,39 +390,59 @@ class PostgreSQLSparqlImpl:
         pattern_name = pattern.name
         
         if pattern_name == "BGP":  # Basic Graph Pattern
-            return self._translate_bgp(pattern, table_config, projected_vars)
+            return await self._translate_bgp(pattern, table_config, projected_vars)
         elif pattern_name == "Filter":
-            return self._translate_filter(pattern, table_config, projected_vars)
+            return await self._translate_filter(pattern, table_config, projected_vars)
         elif pattern_name == "Union":
-            return self._translate_union(pattern, table_config)
+            return await self._translate_union(pattern, table_config)
         elif pattern_name == "LeftJoin":  # OPTIONAL
-            return self._translate_optional(pattern, table_config)
+            return await self._translate_optional(pattern, table_config)
         elif pattern_name == "Slice":  # LIMIT/OFFSET
             # Slice wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
-            return self._translate_pattern(nested_pattern, table_config, projected_vars)
+            return await self._translate_pattern(nested_pattern, table_config, projected_vars)
         elif pattern_name == "Project":  # SELECT projection
             # Project wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
-            return self._translate_pattern(nested_pattern, table_config, projected_vars)
+            return await self._translate_pattern(nested_pattern, table_config, projected_vars)
         elif pattern_name == "Distinct":  # SELECT DISTINCT
             # Distinct wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
-            return self._translate_pattern(nested_pattern, table_config, projected_vars)
+            return await self._translate_pattern(nested_pattern, table_config, projected_vars)
         elif pattern_name == "OrderBy":  # ORDER BY
             # OrderBy wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
-            return self._translate_pattern(nested_pattern, table_config, projected_vars)
+            return await self._translate_pattern(nested_pattern, table_config, projected_vars)
         else:
             self.logger.warning(f"Pattern type {pattern_name} not fully implemented")
             return f"FROM {table_config.quad_table} q0", [], [], {}
     
-    def _translate_bgp(self, bgp_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
-        """Translate Basic Graph Pattern to SQL using UUID-based quad/term schema."""
+    async def _translate_bgp(self, bgp_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate Basic Graph Pattern to SQL using UUID-based quad/term schema with batch term lookup."""
         triples = bgp_pattern.get('triples', [])
         
         if not triples:
             return f"FROM {table_config.quad_table} q0", [], [], {}
+        
+        # First pass: collect all bound terms for batch lookup
+        bound_terms = []
+        for triple in triples:
+            subject, predicate, obj = triple
+            
+            if not isinstance(subject, Variable):
+                term_text, term_type = self._get_term_info(subject)
+                bound_terms.append((term_text, term_type))
+            
+            if not isinstance(predicate, Variable):
+                term_text, term_type = self._get_term_info(predicate)
+                bound_terms.append((term_text, term_type))
+            
+            if not isinstance(obj, Variable):
+                term_text, term_type = self._get_term_info(obj)
+                bound_terms.append((term_text, term_type))
+        
+        # Batch lookup all bound terms
+        term_uuid_mappings = await self._get_term_uuids_batch(bound_terms, table_config) if bound_terms else {}
         
         all_joins = []
         quad_joins = []  # JOINs for additional quad tables
@@ -262,7 +451,7 @@ class PostgreSQLSparqlImpl:
         term_alias_counter = 0
         quad_aliases = []
         
-        # Process each triple pattern separately with its own quad table alias
+        # Second pass: process each triple pattern with resolved UUIDs
         for triple_idx, triple in enumerate(triples):
             subject, predicate, obj = triple
             quad_alias = f"q{self.join_counter}"
@@ -278,10 +467,15 @@ class PostgreSQLSparqlImpl:
                     variable_mappings[subject] = f"{term_alias}.term_text"
                 # Variable already mapped or not projected - don't create JOIN
             else:
-                # Bound term - use subquery
+                # Bound term - use resolved UUID
                 term_text, term_type = self._get_term_info(subject)
-                subquery = f"(SELECT term_uuid FROM {table_config.term_table} WHERE term_text = '{term_text}' AND term_type = '{term_type}')"
-                all_where_conditions.append(f"{quad_alias}.subject_uuid = {subquery}")
+                term_key = (term_text, term_type)
+                if term_key in term_uuid_mappings:
+                    term_uuid = term_uuid_mappings[term_key]
+                    all_where_conditions.append(f"{quad_alias}.subject_uuid = '{term_uuid}'")
+                else:
+                    # Term not found - this will result in no matches
+                    all_where_conditions.append(f"{quad_alias}.subject_uuid = 'NOT_FOUND'")
             
             # Handle predicate
             if isinstance(predicate, Variable):
@@ -292,10 +486,15 @@ class PostgreSQLSparqlImpl:
                     variable_mappings[predicate] = f"{term_alias}.term_text"
                 # Variable already mapped or not projected - don't create JOIN
             else:
-                # Bound term - use subquery
+                # Bound term - use resolved UUID
                 term_text, term_type = self._get_term_info(predicate)
-                subquery = f"(SELECT term_uuid FROM {table_config.term_table} WHERE term_text = '{term_text}' AND term_type = '{term_type}')"
-                all_where_conditions.append(f"{quad_alias}.predicate_uuid = {subquery}")
+                term_key = (term_text, term_type)
+                if term_key in term_uuid_mappings:
+                    term_uuid = term_uuid_mappings[term_key]
+                    all_where_conditions.append(f"{quad_alias}.predicate_uuid = '{term_uuid}'")
+                else:
+                    # Term not found - this will result in no matches
+                    all_where_conditions.append(f"{quad_alias}.predicate_uuid = 'NOT_FOUND'")
             
             # Handle object
             if isinstance(obj, Variable):
@@ -306,10 +505,15 @@ class PostgreSQLSparqlImpl:
                     variable_mappings[obj] = f"{term_alias}.term_text"
                 # Variable already mapped or not projected - don't create JOIN
             else:
-                # Bound term - use subquery
+                # Bound term - use resolved UUID
                 term_text, term_type = self._get_term_info(obj)
-                subquery = f"(SELECT term_uuid FROM {table_config.term_table} WHERE term_text = '{term_text}' AND term_type = '{term_type}')"
-                all_where_conditions.append(f"{quad_alias}.object_uuid = {subquery}")
+                term_key = (term_text, term_type)
+                if term_key in term_uuid_mappings:
+                    term_uuid = term_uuid_mappings[term_key]
+                    all_where_conditions.append(f"{quad_alias}.object_uuid = '{term_uuid}'")
+                else:
+                    # Term not found - this will result in no matches
+                    all_where_conditions.append(f"{quad_alias}.object_uuid = 'NOT_FOUND'")
         
         # Build FROM clause with first quad table
         from_clause = f"FROM {table_config.quad_table} {quad_aliases[0]}"
@@ -383,11 +587,11 @@ class PostgreSQLSparqlImpl:
         
         return None
     
-    def _translate_filter(self, filter_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+    async def _translate_filter(self, filter_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """Translate FILTER pattern to SQL."""
         # Get the underlying pattern first
         inner_pattern = filter_pattern['p']
-        from_clause, where_conditions, joins, variable_mappings = self._translate_pattern(inner_pattern, table_config, projected_vars)
+        from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(inner_pattern, table_config, projected_vars)
         
         # Debug logging
         self.logger.debug(f"Filter pattern variable mappings: {variable_mappings}")
@@ -402,6 +606,21 @@ class PostgreSQLSparqlImpl:
             where_conditions.append(filter_sql)
         
         return from_clause, where_conditions, joins, variable_mappings
+    
+    async def _translate_union(self, union_pattern, table_config: TableConfig) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate UNION pattern to SQL (stub implementation)."""
+        self.logger.warning("UNION pattern not fully implemented")
+        return f"FROM {table_config.quad_table} q0", [], [], {}
+    
+    async def _translate_optional(self, optional_pattern, table_config: TableConfig) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate OPTIONAL (LeftJoin) pattern to SQL (stub implementation)."""
+        self.logger.warning("OPTIONAL pattern not fully implemented")
+        return f"FROM {table_config.quad_table} q0", [], [], {}
+    
+    async def _translate_construct_query(self, algebra, table_config: TableConfig) -> str:
+        """Translate CONSTRUCT query algebra to SQL (stub implementation)."""
+        self.logger.warning("CONSTRUCT query not fully implemented")
+        return f"SELECT * FROM {table_config.quad_table} LIMIT 0"
     
     def _translate_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
         """Translate a SPARQL filter expression to SQL."""
