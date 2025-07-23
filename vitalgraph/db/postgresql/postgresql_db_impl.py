@@ -232,7 +232,7 @@ class PostgreSQLDbImpl:
             
             # Initialize PostgreSQLSpaceImpl with connection string and config
             connection_string = f"postgresql://{self.config['username']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}"
-            use_unlogged = self.tables_config.get('use_unlogged', True)  # Default to True for performance
+            use_unlogged = self.tables_config.get('use_unlogged', False)  # Default to False for safety
             
             self.space_impl = PostgreSQLSpaceImpl(connection_string=connection_string, global_prefix=self.global_prefix, use_unlogged=use_unlogged)
             self.logger.info(f"PostgreSQLSpaceImpl initialized with global prefix: {self.global_prefix}")
