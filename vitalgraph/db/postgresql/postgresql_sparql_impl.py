@@ -355,6 +355,9 @@ class PostgreSQLSparqlImpl:
             
             self.logger.info(f"Translating SPARQL query with algebra: {algebra.name}")
             
+            # Log detailed algebra structure for debugging OPTIONAL patterns
+            self._log_algebra_structure(algebra, "ROOT", 0)
+            
             # Reset counters for each query
             self.variable_counter = 0
             self.join_counter = 0
@@ -377,6 +380,99 @@ class PostgreSQLSparqlImpl:
             self.logger.error(f"Error translating SPARQL query: {e}")
             raise
     
+    def _log_algebra_structure(self, pattern, label: str, depth: int):
+        """
+        Recursively log the structure of SPARQL algebra patterns.
+        
+        This helps understand how OPTIONAL patterns are nested and structured
+        within the overall query algebra tree.
+        
+        Args:
+            pattern: RDFLib algebra pattern object
+            label: Label for this pattern in the tree
+            depth: Current nesting depth for indentation
+        """
+        indent = "  " * depth
+        pattern_name = getattr(pattern, 'name', type(pattern).__name__)
+        
+        self.logger.info(f"{indent}📋 {label}: {pattern_name}")
+        
+        # Log key attributes for different pattern types
+        if pattern_name == "SelectQuery":
+            # SelectQuery has special structure
+            self.logger.info(f"{indent}   ├─ SelectQuery structure")
+            if hasattr(pattern, 'p') and pattern.p:
+                self._log_algebra_structure(pattern.p, "WHERE pattern", depth + 1)
+            if hasattr(pattern, 'PV') and pattern.PV:
+                vars_str = ", ".join(str(v) for v in pattern.PV)
+                self.logger.info(f"{indent}   ├─ SELECT variables: {vars_str}")
+        
+        elif hasattr(pattern, 'p1') and hasattr(pattern, 'p2'):
+            # Binary patterns like LeftJoin (OPTIONAL), Union, Join
+            self.logger.info(f"{indent}   ├─ Binary pattern with p1 and p2")
+            if hasattr(pattern, 'p1'):
+                self._log_algebra_structure(pattern.p1, "p1 (LEFT)", depth + 1)
+            if hasattr(pattern, 'p2'):
+                self._log_algebra_structure(pattern.p2, "p2 (RIGHT)", depth + 1)
+        
+        elif hasattr(pattern, 'p'):
+            # Unary patterns like Project, Slice, Graph, Extend
+            self.logger.info(f"{indent}   ├─ Unary pattern with p")
+            if pattern.p:
+                self._log_algebra_structure(pattern.p, "p (INNER)", depth + 1)
+        
+        elif hasattr(pattern, 'triples'):
+            # Basic Graph Pattern (BGP)
+            triple_count = len(pattern.triples) if pattern.triples else 0
+            self.logger.info(f"{indent}   ├─ BGP with {triple_count} triples")
+            if pattern.triples and triple_count <= 5:  # Log details for small BGPs
+                for i, triple in enumerate(pattern.triples):
+                    s, p, o = triple
+                    self.logger.info(f"{indent}     {i+1}. {s} {p} {o}")
+        
+        # Log additional attributes for specific pattern types
+        if pattern_name == "LeftJoin":
+            self.logger.info(f"{indent}   🔗 OPTIONAL PATTERN DETECTED!")
+            if hasattr(pattern, 'expr') and pattern.expr:
+                self.logger.info(f"{indent}   ├─ Has filter expression: {pattern.expr}")
+        
+        elif pattern_name == "Project":
+            if hasattr(pattern, 'PV') and pattern.PV:
+                vars_str = ", ".join(str(v) for v in pattern.PV)
+                self.logger.info(f"{indent}   ├─ Projects variables: {vars_str}")
+            # Project patterns have a 'p' attribute pointing to the inner pattern
+            if hasattr(pattern, 'p') and pattern.p:
+                self.logger.info(f"{indent}   ├─ Project inner pattern:")
+                self._log_algebra_structure(pattern.p, "INNER", depth + 1)
+        
+        elif pattern_name == "Graph":
+            if hasattr(pattern, 'term'):
+                self.logger.info(f"{indent}   ├─ Graph context: {pattern.term}")
+        
+        elif pattern_name == "Filter":
+            if hasattr(pattern, 'expr'):
+                self.logger.info(f"{indent}   ├─ Filter expression: {pattern.expr}")
+        
+        elif pattern_name == "Extend":
+            if hasattr(pattern, 'var') and hasattr(pattern, 'expr'):
+                self.logger.info(f"{indent}   ├─ BIND {pattern.var} := {pattern.expr}")
+        
+        elif pattern_name == "Union":
+            self.logger.info(f"{indent}   🔀 UNION PATTERN")
+        
+        elif pattern_name == "Join":
+            self.logger.info(f"{indent}   ⚡ JOIN PATTERN")
+        
+        # Log any other interesting attributes
+        if hasattr(pattern, 'modifier') and pattern.modifier:
+            self.logger.info(f"{indent}   ├─ Modifier: {pattern.modifier}")
+        
+        if hasattr(pattern, 'length') and pattern.length is not None:
+            self.logger.info(f"{indent}   ├─ Length/Limit: {pattern.length}")
+        
+        if hasattr(pattern, 'start') and pattern.start is not None:
+            self.logger.info(f"{indent}   ├─ Start/Offset: {pattern.start}")
+    
     async def _translate_select_query(self, algebra, table_config: TableConfig) -> str:
         """Translate SELECT query algebra to SQL."""
         
@@ -391,8 +487,8 @@ class PostgreSQLSparqlImpl:
         # Extract and translate the main pattern
         from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(pattern, table_config, projection_vars)
         
-        # Build SELECT clause with variable mappings
-        select_clause = self._build_select_clause(projection_vars, variable_mappings, has_distinct)
+        # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
+        select_clause, group_by_clause, having_clause = self._build_select_clause(projection_vars, variable_mappings, has_distinct)
         
         # Build complete SQL query
         sql_parts = [select_clause]
@@ -409,6 +505,14 @@ class PostgreSQLSparqlImpl:
             sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
         elif where_conditions and is_union_derived:
             self.logger.debug(f"Skipping {len(where_conditions)} WHERE conditions for UNION-derived table")
+        
+        # Add GROUP BY clause if present
+        if group_by_clause:
+            sql_parts.append(group_by_clause)
+        
+        # CRITICAL: Add HAVING clause AFTER GROUP BY (this is the fix for HAVING clause support)
+        if having_clause:
+            sql_parts.append(having_clause)
         
         # Add LIMIT and OFFSET if present
         if limit_info['offset'] is not None:
@@ -450,11 +554,18 @@ class PostgreSQLSparqlImpl:
         
         return result
     
-    def _build_select_clause(self, projection_vars: List[Variable], variable_mappings: Dict[Variable, str], has_distinct: bool = False) -> str:
-        """Build SQL SELECT clause from SPARQL projection variables."""
+    def _build_select_clause(self, projection_vars: List[Variable], variable_mappings: Dict[Variable, str], has_distinct: bool = False) -> Tuple[str, str, str]:
+        """Build SQL SELECT clause, GROUP BY clause, and HAVING clause from SPARQL projection variables.
+        
+        Returns:
+            Tuple of (select_clause, group_by_clause, having_clause)
+        """
+        self.logger.debug(f"Building SELECT clause with projection_vars: {projection_vars}")
+        self.logger.debug(f"Building SELECT clause with variable_mappings: {variable_mappings}")
+        
         if not projection_vars:
             distinct_keyword = "DISTINCT " if has_distinct else ""
-            return f"SELECT {distinct_keyword}*"
+            return f"SELECT {distinct_keyword}*", "", ""
         
         select_items = []
         for var in projection_vars:
@@ -468,7 +579,31 @@ class PostgreSQLSparqlImpl:
                 select_items.append(f"'UNMAPPED_VAR_{var_name}' AS {var_name}")
             
         distinct_keyword = "DISTINCT " if has_distinct else ""
-        return f"SELECT {distinct_keyword}{', '.join(select_items)}"
+        select_clause = f"SELECT {distinct_keyword}{', '.join(select_items)}"
+        
+        # Build GROUP BY clause if GROUP BY variables are present
+        group_by_clause = ""
+        group_by_vars = variable_mappings.get('__GROUP_BY_VARS__')
+        if group_by_vars:
+            group_by_items = []
+            for group_var in group_by_vars:
+                if group_var in variable_mappings:
+                    group_by_items.append(variable_mappings[group_var])
+                else:
+                    self.logger.warning(f"GROUP BY variable {group_var} not found in mappings")
+            
+            if group_by_items:
+                group_by_clause = f"GROUP BY {', '.join(group_by_items)}"
+                self.logger.debug(f"Built GROUP BY clause: {group_by_clause}")
+        
+        # Build HAVING clause if HAVING conditions are present
+        having_clause = ""
+        having_conditions = variable_mappings.get('__HAVING_CONDITIONS__')
+        if having_conditions:
+            having_clause = f"HAVING {' AND '.join(having_conditions)}"
+            self.logger.debug(f"Built HAVING clause: {having_clause}")
+        
+        return select_clause, group_by_clause, having_clause
     
     async def _translate_pattern(self, pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """
@@ -486,7 +621,7 @@ class PostgreSQLSparqlImpl:
         elif pattern_name == "Union":
             return await self._translate_union(pattern, table_config, projected_vars)
         elif pattern_name == "LeftJoin":  # OPTIONAL
-            return await self._translate_optional(pattern, table_config)
+            return await self._translate_optional(pattern, table_config, projected_vars)
         elif pattern_name == "Slice":  # LIMIT/OFFSET
             # Slice wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
@@ -511,6 +646,10 @@ class PostgreSQLSparqlImpl:
             return await self._translate_subquery(pattern, table_config, projected_vars)
         elif pattern_name == "Join":  # JOIN patterns
             return await self._translate_join(pattern, table_config, projected_vars)
+        elif pattern_name == "AggregateJoin":  # Aggregate functions
+            return await self._translate_aggregate_join(pattern, table_config, projected_vars)
+        elif pattern_name == "Group":  # GROUP BY patterns
+            return await self._translate_group(pattern, table_config, projected_vars)
         else:
             self.logger.warning(f"Pattern type {pattern_name} not fully implemented")
             return f"FROM {table_config.quad_table} q0", [], [], {}
@@ -585,7 +724,9 @@ class PostgreSQLSparqlImpl:
                 bound_terms.append((term_text, term_type))
         
         # Batch lookup all bound terms
+        self.logger.debug(f"🔍 BGP collecting bound terms: {bound_terms}")
         term_uuid_mappings = await self._get_term_uuids_batch(bound_terms, table_config) if bound_terms else {}
+        self.logger.debug(f"🔍 BGP term UUID mappings: {term_uuid_mappings}")
         
         all_joins = []
         quad_joins = []  # JOINs for additional quad tables
@@ -598,6 +739,7 @@ class PostgreSQLSparqlImpl:
             subject, predicate, obj = triple
             quad_alias = alias_gen.next_quad_alias()
             quad_aliases.append(quad_alias)
+            self.logger.debug(f"🔍 Processing triple #{triple_idx}: ({subject}, {predicate}, {obj})")
             
             # Handle subject
             if isinstance(subject, Variable):
@@ -613,37 +755,44 @@ class PostgreSQLSparqlImpl:
                 if term_key in term_uuid_mappings:
                     term_uuid = term_uuid_mappings[term_key]
                     all_where_conditions.append(f"{quad_alias}.subject_uuid = '{term_uuid}'")
+                else:
+                    # Term not found - this will result in no matches
+                    self.logger.error(f"🚨 TERM LOOKUP FAILED for subject: {term_text} (type: {term_type}) - adding 1=0 condition")
+                    self.logger.error(f"Available term mappings: {list(term_uuid_mappings.keys())[:10]}...")
+                    all_where_conditions.append("1=0")  # Condition that never matches
+            
+            # Handle predicate
+            if isinstance(predicate, Variable):
+                if predicate not in variable_mappings and (projected_vars is None or predicate in projected_vars):
+                    term_alias = alias_gen.next_term_alias("predicate")
+                    all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.predicate_uuid = {term_alias}.term_uuid")
+                    variable_mappings[predicate] = f"{term_alias}.term_text"
+                # Variable already mapped or not projected - don't create JOIN
+            else:
+                # Bound term - use resolved UUID
+                term_text, term_type = self._get_term_info(predicate)
+                term_key = (term_text, term_type)
                 if term_key in term_uuid_mappings:
                     term_uuid = term_uuid_mappings[term_key]
                     all_where_conditions.append(f"{quad_alias}.predicate_uuid = '{term_uuid}'")
                 else:
                     # Term not found - this will result in no matches
+                    self.logger.error(f"🚨 TERM LOOKUP FAILED for predicate: {term_text} (type: {term_type}) - adding 1=0 condition")
+                    self.logger.error(f"🔍 BIND+OPTIONAL DEBUG: Searched for predicate key: {term_key}")
+                    self.logger.error(f"🔍 BIND+OPTIONAL DEBUG: Available term mappings ({len(term_uuid_mappings)}): {list(term_uuid_mappings.keys())}")
+                    self.logger.error(f"🔍 BIND+OPTIONAL DEBUG: All bound terms collected: {bound_terms}")
                     all_where_conditions.append("1=0")  # Condition that never matches
-        
-        # Handle predicate
-        if isinstance(predicate, Variable):
-            if predicate not in variable_mappings and (projected_vars is None or predicate in projected_vars):
-                term_alias = alias_gen.next_term_alias("predicate")
-                all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.predicate_uuid = {term_alias}.term_uuid")
-                variable_mappings[predicate] = f"{term_alias}.term_text"
-            # Variable already mapped or not projected - don't create JOIN
-        else:
-            # Bound term - use resolved UUID
-            term_text, term_type = self._get_term_info(predicate)
-            term_key = (term_text, term_type)
-            if term_key in term_uuid_mappings:
-                term_uuid = term_uuid_mappings[term_key]
-                all_where_conditions.append(f"{quad_alias}.predicate_uuid = '{term_uuid}'")
-            else:
-                # Term not found - this will result in no matches
-                all_where_conditions.append("1=0")  # Condition that never matches
-        
-        # Handle object
-        if isinstance(obj, Variable):
-            if obj not in variable_mappings and (projected_vars is None or obj in projected_vars):
-                term_alias = alias_gen.next_term_alias("object")
-                all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.object_uuid = {term_alias}.term_uuid")
-                variable_mappings[obj] = f"{term_alias}.term_text"
+            
+            # Handle object
+            if isinstance(obj, Variable):
+                self.logger.debug(f"🔍 Processing object variable {obj}: already_mapped={obj in variable_mappings}, projected={projected_vars is None or obj in projected_vars}")
+                if obj not in variable_mappings and (projected_vars is None or obj in projected_vars):
+                    term_alias = alias_gen.next_term_alias("object")
+                    all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.object_uuid = {term_alias}.term_uuid")
+                    variable_mappings[obj] = f"{term_alias}.term_text"
+                    self.logger.debug(f"✅ Created mapping for {obj}: {variable_mappings[obj]}")
+                else:
+                    self.logger.debug(f"⏭️ Skipping mapping for {obj}: already_mapped={obj in variable_mappings}, projected={projected_vars is None or obj in projected_vars}")
                 # Variable already mapped or not projected - don't create JOIN
             else:
                 # Bound term - use resolved UUID
@@ -750,7 +899,11 @@ class PostgreSQLSparqlImpl:
         return None
     
     async def _translate_filter(self, filter_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
-        """Translate FILTER pattern to SQL."""
+        """Translate FILTER pattern to SQL.
+        
+        CRITICAL: Detects HAVING clauses (filters on aggregate expressions) and stores them
+        separately from WHERE conditions for proper SQL generation.
+        """
         # Get the underlying pattern first
         inner_pattern = filter_pattern['p']
         from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(inner_pattern, table_config, projected_vars)
@@ -765,9 +918,45 @@ class PostgreSQLSparqlImpl:
         self.logger.debug(f"Filter SQL result: {filter_sql}")
         
         if filter_sql:
-            where_conditions.append(filter_sql)
+            # CRITICAL FIX: Detect if this is a HAVING clause (filter on aggregate expressions)
+            # HAVING clauses reference aggregate result variables like __agg_1__, __agg_2__, etc.
+            is_having_clause = self._is_having_clause(filter_sql, variable_mappings)
+            
+            if is_having_clause:
+                # This is a HAVING clause - store it separately for SQL generation after GROUP BY
+                having_conditions = variable_mappings.get('__HAVING_CONDITIONS__', [])
+                having_conditions.append(filter_sql)
+                variable_mappings['__HAVING_CONDITIONS__'] = having_conditions
+                self.logger.debug(f"Added HAVING condition: {filter_sql}")
+            else:
+                # Regular WHERE condition
+                where_conditions.append(filter_sql)
+                self.logger.debug(f"Added WHERE condition: {filter_sql}")
         
         return from_clause, where_conditions, joins, variable_mappings
+    
+    def _is_having_clause(self, filter_sql: str, variable_mappings: Dict) -> bool:
+        """Detect if a filter condition should be a HAVING clause instead of WHERE.
+        
+        HAVING clauses contain aggregate functions or reference aggregate result variables.
+        Aggregate result variables are internal variables like __agg_1__, __agg_2__, etc.
+        """
+        # Check if the filter SQL contains aggregate functions directly
+        aggregate_functions = ['COUNT(', 'SUM(', 'AVG(', 'MIN(', 'MAX(']
+        if any(func in filter_sql for func in aggregate_functions):
+            self.logger.debug(f"Filter contains aggregate function: {filter_sql}")
+            return True
+        
+        # Check if the filter references aggregate result variables (__agg_1__, __agg_2__, etc.)
+        # These variables are mapped to aggregate SQL expressions in variable_mappings
+        for var, mapping in variable_mappings.items():
+            if isinstance(var, Variable) and str(var).startswith('__agg_'):
+                # This is an aggregate result variable - check if it's referenced in the filter
+                if mapping in filter_sql:
+                    self.logger.debug(f"Filter references aggregate variable {var}: {filter_sql}")
+                    return True
+        
+        return False
     
     async def _translate_union(self, union_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """
@@ -1034,10 +1223,190 @@ class PostgreSQLSparqlImpl:
         
         return combined_from, combined_where, combined_joins, combined_vars
     
-    async def _translate_optional(self, optional_pattern, table_config: TableConfig) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
-        """Translate OPTIONAL (LeftJoin) pattern to SQL (stub implementation)."""
-        self.logger.warning("OPTIONAL pattern not fully implemented")
-        return f"FROM {table_config.quad_table} q0", [], [], {}
+    async def _translate_optional(self, optional_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """
+        Translate OPTIONAL (LeftJoin) pattern to SQL LEFT JOIN operations.
+        
+        OPTIONAL patterns have two operands (p1 and p2) where p1 is required
+        and p2 is optional. This translates to a LEFT JOIN where:
+        1. p1 (required) forms the main query
+        2. p2 (optional) is LEFT JOINed to p1
+        3. Variables from p2 can be NULL if no match is found
+        
+        Args:
+            optional_pattern: OPTIONAL pattern from SPARQL algebra with p1 and p2 operands
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        try:
+            self.logger.info(f"🔗 TRANSLATING OPTIONAL PATTERN with projected vars: {projected_vars}")
+            
+            # Extract required and optional operands
+            required_operand = optional_pattern.p1  # Required part (LEFT side of LEFT JOIN)
+            optional_operand = optional_pattern.p2  # Optional part (RIGHT side of LEFT JOIN)
+            
+            self.logger.info(f"📌 Required operand: {getattr(required_operand, 'name', type(required_operand).__name__)}")
+            self.logger.info(f"📌 Optional operand: {getattr(optional_operand, 'name', type(optional_operand).__name__)}")
+            
+            # Create independent alias generators for each operand to avoid conflicts
+            # This follows the same pattern as _translate_join
+            req_alias_gen = self.alias_generator.create_child_generator("req")
+            opt_alias_gen = self.alias_generator.create_child_generator("opt")
+            
+            self.logger.debug(f"Created child alias generators: req_alias_gen, opt_alias_gen")
+            
+            # Translate required part (main query) with its own alias generator
+            self.logger.debug("Translating required part of OPTIONAL")
+            req_from, req_where, req_joins, req_vars = await self._translate_pattern_with_alias_gen(
+                required_operand, table_config, projected_vars, req_alias_gen
+            )
+            
+            # Translate optional part with its own alias generator to prevent conflicts
+            self.logger.debug("Translating optional part of OPTIONAL")
+            opt_from, opt_where, opt_joins, opt_vars = await self._translate_pattern_with_alias_gen(
+                optional_operand, table_config, projected_vars, opt_alias_gen
+            )
+            
+            # Determine all variables
+            all_variables = set(req_vars.keys()) | set(opt_vars.keys())
+            if projected_vars:
+                all_variables = set(projected_vars) & all_variables
+            
+            self.logger.debug(f"All variables in OPTIONAL: {[str(v) for v in all_variables]}")
+            
+            # Build LEFT JOIN SQL
+            # Start with required part as the main FROM clause
+            main_from = req_from
+            main_joins = req_joins.copy() if req_joins else []
+            main_where = req_where.copy() if req_where else []
+            
+            # CRITICAL FIX: Ensure all referenced table aliases are properly declared
+            # The issue is that LEFT JOINs reference quad table aliases that don't exist
+            # We need to extract all referenced aliases from both WHERE conditions AND JOIN conditions
+            
+            all_where_conditions = main_where + (opt_where if opt_where else [])
+            all_join_conditions = main_joins.copy()
+            
+            # Add optional JOINs to the analysis (they haven't been processed yet)
+            if opt_joins:
+                all_join_conditions.extend(opt_joins)
+            
+            # Find all quad table aliases referenced anywhere in the SQL
+            referenced_quad_aliases = set()
+            
+            # Extract from WHERE conditions
+            for condition in all_where_conditions:
+                quad_matches = re.findall(r'\b(\w*q\d+)\.[a-z_]+', condition)
+                referenced_quad_aliases.update(quad_matches)
+            
+            # Extract from JOIN ON conditions
+            for join in all_join_conditions:
+                quad_matches = re.findall(r'\b(\w*q\d+)\.[a-z_]+', join)
+                referenced_quad_aliases.update(quad_matches)
+            
+            self.logger.debug(f"All referenced quad aliases: {referenced_quad_aliases}")
+            
+            # Get quad aliases already declared in required FROM and JOINs
+            declared_aliases = set()
+            
+            # Extract from required FROM clause
+            req_from_match = re.search(r'FROM\s+\S+\s+(\w+)', main_from)
+            if req_from_match:
+                declared_aliases.add(req_from_match.group(1))
+            
+            # Extract from required JOINs (only the ones already in main_joins)
+            for join in main_joins:
+                join_match = re.search(r'JOIN\s+\S+\s+(\w+)', join)
+                if join_match:
+                    declared_aliases.add(join_match.group(1))
+            
+            self.logger.debug(f"Already declared aliases: {declared_aliases}")
+            
+            # Find aliases that will be added by optional JOINs processing
+            aliases_from_opt_joins = set()
+            if opt_joins:
+                for join in opt_joins:
+                    join_match = re.search(r'JOIN\s+\S+\s+(\w+)', join)
+                    if join_match:
+                        aliases_from_opt_joins.add(join_match.group(1))
+            
+            self.logger.debug(f"Aliases that will be added by optional JOINs: {aliases_from_opt_joins}")
+            
+            # Find missing quad aliases that need to be declared (excluding ones handled by opt_joins)
+            missing_aliases = referenced_quad_aliases - declared_aliases - aliases_from_opt_joins
+            self.logger.debug(f"Missing quad aliases that need declaration: {missing_aliases}")
+            
+            # Add LEFT JOINs for missing quad table aliases with proper ON clauses
+            quad_table = table_config.quad_table
+            
+            # Find a quad alias from the required part to connect to (for JOIN ON conditions)
+            connection_alias = None
+            req_from_match = re.search(r'FROM\s+\S+\s+(\w+)', main_from)
+            if req_from_match:
+                connection_alias = req_from_match.group(1)
+            
+            self.logger.debug(f"Using connection alias: {connection_alias}")
+            
+            # Add LEFT JOINs for missing quad aliases, connecting through subject_uuid
+            for alias in missing_aliases:
+                if connection_alias:
+                    main_joins.append(f"LEFT JOIN {quad_table} {alias} ON {connection_alias}.subject_uuid = {alias}.subject_uuid")
+                    self.logger.debug(f"Added LEFT JOIN for missing quad alias: {alias} connected to {connection_alias}")
+                else:
+                    # Fallback: add without ON clause (will likely cause error but better than missing table)
+                    main_joins.append(f"LEFT JOIN {quad_table} {alias}")
+                    self.logger.warning(f"Added LEFT JOIN for missing quad alias: {alias} WITHOUT ON clause - may cause SQL error")
+            
+            # Convert all optional JOINs to LEFT JOINs
+            if opt_joins:
+                for join in opt_joins:
+                    # Convert regular JOINs to LEFT JOINs for optional part
+                    if join.strip().startswith('JOIN'):
+                        left_join = join.replace('JOIN', 'LEFT JOIN', 1)
+                        main_joins.append(left_join)
+                    elif join.strip().startswith('LEFT JOIN'):
+                        # Already a LEFT JOIN, add as-is
+                        main_joins.append(join)
+                    else:
+                        # Other types of joins, add as-is
+                        main_joins.append(join)
+            
+            # Handle optional WHERE conditions
+            # For OPTIONAL patterns, WHERE conditions from the optional part
+            # should remain as WHERE conditions (not moved to JOIN ON clauses)
+            # because they filter the optional results, not the join condition
+            if opt_where:
+                main_where.extend(opt_where)
+            
+            # Combine variable mappings (optional variables can be NULL)
+            self.logger.debug(f"Required variables mapping: {req_vars}")
+            self.logger.debug(f"Optional variables mapping: {opt_vars}")
+            
+            combined_vars = req_vars.copy()
+            combined_vars.update(opt_vars)
+            
+            self.logger.debug(f"Combined variables mapping: {combined_vars}")
+            self.logger.info(f"✅ OPTIONAL translation completed with {len(combined_vars)} variables")
+            
+            # Debug logging for returned SQL components
+            self.logger.debug(f"OPTIONAL returning FROM: '{main_from}'")
+            self.logger.debug(f"OPTIONAL returning WHERE: {main_where}")
+            self.logger.debug(f"OPTIONAL returning JOINs: {main_joins}")
+            self.logger.debug(f"OPTIONAL returning variables: {list(combined_vars.keys())}")
+            
+            return main_from, main_where, main_joins, combined_vars
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error translating OPTIONAL pattern: {str(e)}")
+            self.logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return fallback result
+            return f"FROM {table_config.quad_table} q0", [], [], {}
     
     async def _translate_extend(self, extend_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """Translate Extend pattern (BIND statements) to SQL.
@@ -1047,8 +1416,8 @@ class PostgreSQLSparqlImpl:
         - var: The variable being bound
         - expr: The expression to compute
         
-        For now, we'll translate the nested pattern and add a placeholder for the BIND variable.
-        Full BIND expression evaluation would require complex SQL expression translation.
+        CRITICAL FIX: Ensure BIND expressions can access variables from OPTIONAL patterns
+        by properly propagating variable mappings from nested patterns.
         """
         try:
             self.logger.debug(f"Translating Extend pattern (BIND statement)")
@@ -1056,34 +1425,258 @@ class PostgreSQLSparqlImpl:
             # Get the nested pattern (the WHERE clause before BIND)
             nested_pattern = extend_pattern.p
             
-            # Translate the nested pattern first
-            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
-                nested_pattern, table_config, projected_vars
-            )
-            
-            # Get the BIND variable and expression
+            # Get the BIND variable and expression first to understand what variables we need
             bind_var = extend_pattern.var
             bind_expr = extend_pattern.expr
             
             self.logger.debug(f"BIND variable: {bind_var}")
             self.logger.debug(f"BIND expression: {bind_expr} (type: {type(bind_expr)})")
             
+            # CRITICAL FIX for BIND+OPTIONAL bug: Ensure projected_vars includes ALL variables
+            # referenced in the BIND expression, not just the BIND variable itself
+            extended_projected_vars = list(projected_vars) if projected_vars else []
+            
+            # Add the BIND variable if not already included
+            if bind_var not in extended_projected_vars:
+                extended_projected_vars.append(bind_var)
+            
+            # CRITICAL: Extract all variables referenced in the BIND expression
+            # This ensures OPTIONAL variables used in BIND expressions are properly mapped
+            bind_expr_vars = self._extract_variables_from_expression(bind_expr)
+            for var in bind_expr_vars:
+                if var not in extended_projected_vars:
+                    extended_projected_vars.append(var)
+                    self.logger.debug(f"Added BIND expression variable {var} to projected_vars")
+            
+            # Translate the nested pattern first with extended projection
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
+                nested_pattern, table_config, extended_projected_vars
+            )
+            
+            # Debug: Log all available variable mappings before BIND translation
+            self.logger.debug(f"Variable mappings available for BIND {bind_var}: {list(variable_mappings.keys())}")
+            self.logger.debug(f"Full variable mappings: {variable_mappings}")
+            
             # Translate the BIND expression to SQL
             try:
                 sql_expression = self._translate_bind_expression(bind_expr, variable_mappings)
+                
+                # CRITICAL FIX: Ensure the BIND variable mapping is properly set
+                # If the BIND expression references OPTIONAL variables that weren't found,
+                # we need to handle this gracefully
+                if 'UNMAPPED_' in sql_expression:
+                    self.logger.warning(f"BIND expression contains unmapped variables: {sql_expression}")
+                    self.logger.warning(f"Available variable mappings: {list(variable_mappings.keys())}")
+                    # Still set the mapping but log the issue
+                
                 variable_mappings[bind_var] = sql_expression
                 self.logger.debug(f"Successfully translated BIND expression for {bind_var}: {sql_expression}")
+                
             except Exception as expr_error:
                 self.logger.warning(f"Failed to translate BIND expression for {bind_var}: {expr_error}")
+                self.logger.warning(f"Available mappings were: {list(variable_mappings.keys())}")
                 # Fall back to placeholder to avoid query failure
                 variable_mappings[bind_var] = f"'BIND_FAILED_{bind_var}'"
-            
+                
             return from_clause, where_conditions, joins, variable_mappings
             
         except Exception as e:
             self.logger.error(f"Error translating Extend pattern: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             # Fall back to basic pattern to avoid complete failure
             return f"FROM {table_config.quad_table} q0", [], [], {}
+
+    async def _translate_aggregate_join(self, agg_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate AggregateJoin pattern (aggregate functions) to SQL.
+        
+        AggregateJoin patterns have:
+        - A: Array of aggregate functions (Aggregate_Count_, Aggregate_Sum_, etc.)
+        - p: The nested pattern (usually Group)
+        """
+        try:
+            self.logger.debug(f"Translating AggregateJoin pattern")
+            
+            # Get the nested pattern (usually Group)
+            nested_pattern = agg_pattern.p
+            
+            # Get the aggregate functions
+            aggregates = agg_pattern.A
+            self.logger.debug(f"Found {len(aggregates)} aggregate functions: {[agg.name for agg in aggregates]}")
+            
+            # CRITICAL FIX: Extract all aggregate input variables and ensure they're included in projected_vars
+            # This ensures that variables like ?age, ?price, ?name get proper SQL column mappings from BGP
+            aggregate_input_vars = set()
+            for agg in aggregates:
+                if hasattr(agg, 'vars') and agg.vars:
+                    aggregate_input_vars.add(agg.vars)
+            
+            # Combine original projected_vars with aggregate input variables
+            extended_projected_vars = list(projected_vars) if projected_vars else []
+            for var in aggregate_input_vars:
+                if var not in extended_projected_vars:
+                    extended_projected_vars.append(var)
+                    self.logger.debug(f"Added aggregate input variable {var} to projected_vars")
+            
+            self.logger.debug(f"Extended projected_vars for aggregates: {extended_projected_vars}")
+            
+            # Translate the nested pattern with extended projected variables
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
+                nested_pattern, table_config, extended_projected_vars
+            )
+            
+            self.logger.debug(f"AggregateJoin variable mappings from nested pattern: {variable_mappings}")
+            self.logger.debug(f"AggregateJoin projected_vars: {projected_vars}")
+            
+            # Process each aggregate function
+            for agg in aggregates:
+                agg_name = agg.name
+                agg_var = agg.vars  # Input variable (e.g., ?person)
+                result_var = agg.res  # Result variable (e.g., __agg_1__)
+                
+                self.logger.debug(f"Processing aggregate {agg_name}: {agg_var} -> {result_var}")
+                
+                # Translate aggregate function to SQL
+                # Handle both "Aggregate_Count_" and "Aggregate_Count" formats
+                if agg_name in ["Aggregate_Count_", "Aggregate_Count"]:
+                    if hasattr(agg, 'distinct') and agg.distinct:
+                        # COUNT(DISTINCT ?var)
+                        if agg_var in variable_mappings:
+                            sql_expr = f"COUNT(DISTINCT {variable_mappings[agg_var]})"
+                        else:
+                            # COUNT(DISTINCT *) is invalid SQL - use a specific column instead
+                            # For now, fall back to regular COUNT(*) since we don't know the table alias
+                            # This is a limitation that could be improved with better context
+                            sql_expr = "COUNT(*)"
+                            self.logger.warning(f"COUNT(DISTINCT) without mapped variable - using COUNT(*) as fallback")
+                    else:
+                        # COUNT(?var) or COUNT(*)
+                        if agg_var in variable_mappings:
+                            sql_expr = f"COUNT({variable_mappings[agg_var]})"
+                        else:
+                            sql_expr = "COUNT(*)"
+                            
+                elif agg_name in ["Aggregate_Sum_", "Aggregate_Sum"]:
+                    if agg_var in variable_mappings:
+                        sql_expr = f"SUM(CAST({variable_mappings[agg_var]} AS DECIMAL))"
+                    else:
+                        sql_expr = f"'UNMAPPED_SUM_{agg_var}'"
+                        
+                elif agg_name in ["Aggregate_Avg_", "Aggregate_Avg"]:
+                    if agg_var in variable_mappings:
+                        sql_expr = f"AVG(CAST({variable_mappings[agg_var]} AS DECIMAL))"
+                    else:
+                        sql_expr = f"'UNMAPPED_AVG_{agg_var}'"
+                        
+                elif agg_name in ["Aggregate_Min_", "Aggregate_Min"]:
+                    if agg_var in variable_mappings:
+                        sql_expr = f"MIN({variable_mappings[agg_var]})"
+                    else:
+                        sql_expr = f"'UNMAPPED_MIN_{agg_var}'"
+                        
+                elif agg_name in ["Aggregate_Max_", "Aggregate_Max"]:
+                    if agg_var in variable_mappings:
+                        sql_expr = f"MAX({variable_mappings[agg_var]})"
+                    else:
+                        sql_expr = f"'UNMAPPED_MAX_{agg_var}'"
+                        
+                elif agg_name in ["Aggregate_Sample_", "Aggregate_Sample"]:
+                    # Sample is used for GROUP BY non-aggregated variables
+                    if agg_var in variable_mappings:
+                        sql_expr = variable_mappings[agg_var]
+                    else:
+                        sql_expr = f"'UNMAPPED_SAMPLE_{agg_var}'"
+                        
+                else:
+                    self.logger.warning(f"Unknown aggregate function: {agg_name}")
+                    sql_expr = f"'UNKNOWN_AGG_{agg_name}'"
+                
+                # Map the result variable to the SQL expression
+                variable_mappings[result_var] = sql_expr
+                self.logger.debug(f"Mapped {result_var} -> {sql_expr}")
+            
+            return from_clause, where_conditions, joins, variable_mappings
+            
+        except Exception as e:
+            self.logger.error(f"Error translating AggregateJoin pattern: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return f"FROM {table_config.quad_table} q0", [], [], {}
+
+    async def _translate_group(self, group_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate Group pattern (GROUP BY) to SQL.
+        
+        Group patterns have:
+        - p: The nested pattern to translate
+        - expr: The grouping expression (list of variables for GROUP BY)
+        """
+        try:
+            self.logger.debug(f"Translating Group pattern")
+            
+            # Get the nested pattern
+            nested_pattern = group_pattern.p
+            
+            # Get the grouping expression
+            group_expr = getattr(group_pattern, 'expr', None)
+            if group_expr:
+                self.logger.debug(f"GROUP BY variables: {group_expr}")
+            else:
+                self.logger.debug("No GROUP BY variables (aggregate without grouping)")
+            
+            # Translate the nested pattern
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
+                nested_pattern, table_config, projected_vars
+            )
+            
+            # Store GROUP BY information in variable_mappings for later use
+            # We'll use this in _build_select_clause to add GROUP BY clause
+            if group_expr:
+                # Store the GROUP BY variables for later SQL generation
+                variable_mappings['__GROUP_BY_VARS__'] = group_expr
+                self.logger.debug(f"Stored GROUP BY variables: {group_expr}")
+            
+            return from_clause, where_conditions, joins, variable_mappings
+            
+        except Exception as e:
+            self.logger.error(f"Error translating Group pattern: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return f"FROM {table_config.quad_table} q0", [], [], {}
+
+    def _extract_variables_from_expression(self, expr):
+        """Extract all variables referenced in a SPARQL expression.
+        
+        This is critical for BIND+OPTIONAL bug fix - ensures that all variables
+        used in BIND expressions are included in projected_vars so they get
+        proper mappings from OPTIONAL patterns.
+        """
+        from rdflib.term import Variable
+        variables = set()
+        
+        try:
+            if isinstance(expr, Variable):
+                variables.add(expr)
+            elif hasattr(expr, '_vars') and expr._vars:
+                # Expression has _vars attribute (common in rdflib expressions)
+                variables.update(expr._vars)
+            elif hasattr(expr, 'args') and expr.args:
+                # Recursively extract from arguments
+                for arg in expr.args:
+                    variables.update(self._extract_variables_from_expression(arg))
+            elif hasattr(expr, '__dict__'):
+                # Check all attributes for variables
+                for attr_name, attr_value in expr.__dict__.items():
+                    if isinstance(attr_value, Variable):
+                        variables.add(attr_value)
+                    elif hasattr(attr_value, '_vars') and attr_value._vars:
+                        variables.update(attr_value._vars)
+                        
+            self.logger.debug(f"Extracted variables from expression {expr}: {[str(v) for v in variables]}")
+            return list(variables)
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to extract variables from expression {expr}: {e}")
+            return []
     
     def _extract_bind_args(self, bind_expr) -> list:
         """Extract arguments from a BIND expression in a robust way.
@@ -1303,13 +1896,445 @@ class PostgreSQLSparqlImpl:
                 arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
                 return f"LOWER({arg})"
                 
-            elif expr_name in ['RelationalExpression', 'ConditionalAndExpression', 'ConditionalOrExpression']:
-                # Handle comparison and logical operations
+            elif expr_name == 'Builtin_BOUND':
+                # BOUND(?var) -> Check if variable is not NULL
+                # This is critical for OPTIONAL patterns
+                try:
+                    # Handle different argument structures from RDFLib
+                    var_arg = None
+                    if hasattr(bind_expr, 'arg'):
+                        if isinstance(bind_expr.arg, list) and len(bind_expr.arg) > 0:
+                            var_arg = bind_expr.arg[0]
+                        elif bind_expr.arg is not None:
+                            var_arg = bind_expr.arg
+                    
+                    if var_arg is not None and isinstance(var_arg, Variable):
+                        var_name = str(var_arg)
+                        if var_arg in variable_mappings:
+                            mapping = variable_mappings[var_arg]
+                            # Extract column reference (remove AS clause if present)
+                            if ' AS ' in mapping:
+                                column_ref = mapping.split(' AS ')[0]
+                            else:
+                                column_ref = mapping
+                            return f"({column_ref} IS NOT NULL)"
+                        else:
+                            self.logger.warning(f"BOUND: Variable {var_name} not found in mappings")
+                            return "FALSE"  # Unbound variable is false
+                    else:
+                        self.logger.warning(f"BOUND: Expected Variable, got {type(var_arg)} with value {var_arg}")
+                        return "TRUE"  # Non-variable expressions are always "bound"
+                except Exception as e:
+                    self.logger.error(f"Error processing BOUND function: {e}")
+                    return "FALSE"
+                    
+            elif expr_name == 'Builtin_COALESCE':
+                # COALESCE(expr1, expr2, ...) -> COALESCE(expr1, expr2, ...)
+                # Return first non-NULL value
+                if hasattr(bind_expr, 'arg') and bind_expr.arg:
+                    args = bind_expr.arg if isinstance(bind_expr.arg, list) else [bind_expr.arg]
+                    translated_args = [self._translate_bind_arg(arg, variable_mappings) for arg in args]
+                    return f"COALESCE({', '.join(translated_args)})"
+                else:
+                    self.logger.warning("COALESCE: Missing arguments")
+                    return "NULL"
+                    
+            elif expr_name in ['Builtin_URI', 'Builtin_IRI']:
+                # URI(string) / IRI(string) -> Create URI from string
+                # For SQL purposes, we'll just return the string value
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return arg  # Return the string as-is for SQL
+                else:
+                    self.logger.warning(f"{expr_name}: Missing argument")
+                    return "''"
+                    
+            elif expr_name == 'Builtin_STRUUID':
+                # STRUUID() -> Generate UUID string
+                # PostgreSQL has uuid_generate_v4() but requires extension
+                # For compatibility, we'll use a simple approach
+                return "CONCAT('uuid-', EXTRACT(EPOCH FROM NOW())::text, '-', RANDOM()::text)"
+                
+            elif expr_name == 'Builtin_UUID':
+                # UUID() -> Generate UUID (as URI)
+                # Similar to STRUUID but as URI
+                return "CONCAT('urn:uuid:', EXTRACT(EPOCH FROM NOW())::text, '-', RANDOM()::text)"
+                
+            elif expr_name == 'Builtin_ENCODE_FOR_URI':
+                # ENCODE_FOR_URI(string) -> URL encode string
+                # PostgreSQL doesn't have built-in URL encoding, so we'll do basic replacement
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    # Basic URL encoding for common characters
+                    return f"REPLACE(REPLACE(REPLACE({arg}, ' ', '%20'), '&', '%26'), '?', '%3F')"
+                else:
+                    self.logger.warning("ENCODE_FOR_URI: Missing argument")
+                    return "''"
+                    
+            elif expr_name == 'ConditionalOrExpression':
+                # Handle logical OR expressions like BOUND(?email) || BOUND(?phone)
+                try:
+                    if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other'):
+                        left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
+                        right = self._translate_bind_expression(bind_expr.other, variable_mappings)
+                        return f"({left} OR {right})"
+                    else:
+                        self.logger.warning(f"ConditionalOrExpression missing expr/other: {bind_expr}")
+                        return "FALSE"
+                except Exception as e:
+                    self.logger.error(f"Error translating ConditionalOrExpression: {e}")
+                    return "FALSE"
+                    
+            elif expr_name == 'ConditionalAndExpression':
+                # Handle logical AND expressions like BOUND(?email) && BOUND(?phone)
+                try:
+                    if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other'):
+                        left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
+                        right = self._translate_bind_expression(bind_expr.other, variable_mappings)
+                        return f"({left} AND {right})"
+                    else:
+                        self.logger.warning(f"ConditionalAndExpression missing expr/other: {bind_expr}")
+                        return "FALSE"
+                except Exception as e:
+                    self.logger.error(f"Error translating ConditionalAndExpression: {e}")
+                    return "FALSE"
+                    
+            elif expr_name == 'RelationalExpression':
+                # Handle comparison operations
                 return self._translate_bind_comparison(bind_expr, variable_mappings)
                 
+            elif expr_name == 'AdditiveExpression':
+                # Handle addition and subtraction expressions like ?x + ?y or ?x - ?y
+                try:
+                    if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
+                        left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
+                        right = self._translate_bind_expression(bind_expr.other, variable_mappings)
+                        op = str(bind_expr.op)
+                        
+                        # Map SPARQL operators to SQL operators
+                        if op == '+':
+                            return f"({left} + {right})"
+                        elif op == '-':
+                            return f"({left} - {right})"
+                        else:
+                            self.logger.warning(f"Unknown additive operator: {op}")
+                            return "NULL"
+                    else:
+                        self.logger.warning(f"AdditiveExpression missing required attributes: {bind_expr}")
+                        return "NULL"
+                except Exception as e:
+                    self.logger.error(f"Error translating AdditiveExpression: {e}")
+                    return "NULL"
+                    
+            elif expr_name == 'MultiplicativeExpression':
+                # Handle multiplication and division expressions like ?x * ?y or ?x / ?y
+                try:
+                    if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
+                        left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
+                        right = self._translate_bind_expression(bind_expr.other, variable_mappings)
+                        op = str(bind_expr.op)
+                        
+                        # Map SPARQL operators to SQL operators
+                        if op == '*':
+                            return f"({left} * {right})"
+                        elif op == '/':
+                            # Use NULLIF to avoid division by zero
+                            return f"({left} / NULLIF({right}, 0))"
+                        else:
+                            self.logger.warning(f"Unknown multiplicative operator: {op}")
+                            return "NULL"
+                    else:
+                        self.logger.warning(f"MultiplicativeExpression missing required attributes: {bind_expr}")
+                        return "NULL"
+                except Exception as e:
+                    self.logger.error(f"Error translating MultiplicativeExpression: {e}")
+                    return "NULL"
+                
+            # Numeric Functions
+            elif expr_name == 'Builtin_ABS':
+                # ABS(numeric) -> ABS(numeric)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"ABS({arg})"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_CEIL':
+                # CEIL(numeric) -> CEIL(numeric)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"CEIL({arg})"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_FLOOR':
+                # FLOOR(numeric) -> FLOOR(numeric)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"FLOOR({arg})"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_ROUND':
+                # ROUND(numeric) -> ROUND(numeric)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"ROUND({arg})"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_RAND':
+                # RAND() -> RANDOM()
+                return "RANDOM()"
+                
+            # String Functions
+            elif expr_name == 'Builtin_REPLACE':
+                # REPLACE(string, pattern, replacement) -> REPLACE(string, pattern, replacement)
+                try:
+                    if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 3:
+                        string_arg = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                        pattern_arg = self._translate_bind_arg(bind_expr.arg[1], variable_mappings)
+                        replacement_arg = self._translate_bind_arg(bind_expr.arg[2], variable_mappings)
+                        return f"REPLACE({string_arg}, {pattern_arg}, {replacement_arg})"
+                    else:
+                        self.logger.warning("REPLACE: Missing required arguments")
+                        return "NULL"
+                except Exception as e:
+                    self.logger.error(f"Error translating REPLACE: {e}")
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_STRBEFORE':
+                # STRBEFORE(string, substring) -> SUBSTRING(string, 1, POSITION(substring IN string) - 1)
+                try:
+                    if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 2:
+                        string_arg = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                        substring_arg = self._translate_bind_arg(bind_expr.arg[1], variable_mappings)
+                        return f"CASE WHEN POSITION({substring_arg} IN {string_arg}) > 0 THEN SUBSTRING({string_arg}, 1, POSITION({substring_arg} IN {string_arg}) - 1) ELSE '' END"
+                    else:
+                        return "NULL"
+                except Exception as e:
+                    self.logger.error(f"Error translating STRBEFORE: {e}")
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_STRAFTER':
+                # STRAFTER(string, substring) -> SUBSTRING(string, POSITION(substring IN string) + LENGTH(substring))
+                try:
+                    if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 2:
+                        string_arg = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                        substring_arg = self._translate_bind_arg(bind_expr.arg[1], variable_mappings)
+                        return f"CASE WHEN POSITION({substring_arg} IN {string_arg}) > 0 THEN SUBSTRING({string_arg}, POSITION({substring_arg} IN {string_arg}) + LENGTH({substring_arg})) ELSE '' END"
+                    else:
+                        return "NULL"
+                except Exception as e:
+                    self.logger.error(f"Error translating STRAFTER: {e}")
+                    return "NULL"
+                    
+            # Type Checking Functions
+            elif expr_name == 'Builtin_isURI':
+                # isURI(?var) -> Check if value looks like a URI
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    # Simple heuristic: check if it starts with http:// or https:// or contains ://
+                    return f"({arg} LIKE 'http://%' OR {arg} LIKE 'https://%' OR {arg} LIKE '%://%')"
+                else:
+                    return "FALSE"
+                    
+            elif expr_name == 'Builtin_isLITERAL':
+                # isLITERAL(?var) -> Check if value is a literal (not a URI)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    # Inverse of isURI - not a URI pattern
+                    return f"NOT ({arg} LIKE 'http://%' OR {arg} LIKE 'https://%' OR {arg} LIKE '%://%')"
+                else:
+                    return "TRUE"
+                    
+            elif expr_name == 'Builtin_isNUMERIC':
+                # isNUMERIC(?var) -> Check if value is numeric
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    # PostgreSQL regex to check if string is numeric
+                    return f"({arg} ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
+                else:
+                    return "FALSE"
+                    
+            # Date/Time Functions
+            elif expr_name == 'Builtin_NOW':
+                # NOW() -> NOW()
+                return "NOW()"
+                
+            elif expr_name == 'Builtin_YEAR':
+                # YEAR(datetime) -> EXTRACT(YEAR FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(YEAR FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_MONTH':
+                # MONTH(datetime) -> EXTRACT(MONTH FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(MONTH FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_DAY':
+                # DAY(datetime) -> EXTRACT(DAY FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(DAY FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_HOURS':
+                # HOURS(datetime) -> EXTRACT(HOUR FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(HOUR FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_MINUTES':
+                # MINUTES(datetime) -> EXTRACT(MINUTE FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(MINUTE FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_SECONDS':
+                # SECONDS(datetime) -> EXTRACT(SECOND FROM datetime)
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"EXTRACT(SECOND FROM {arg}::timestamp)"
+                else:
+                    return "NULL"
+                    
+            # Additional Hash Functions
+            elif expr_name == 'Builtin_SHA256':
+                # SHA256(string) -> Use digest extension if available, otherwise return placeholder
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    # PostgreSQL digest function (requires pgcrypto extension)
+                    return f"ENCODE(DIGEST({arg}::text, 'sha256'), 'hex')"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_SHA384':
+                # SHA384(string) -> Use digest extension if available
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"ENCODE(DIGEST({arg}::text, 'sha384'), 'hex')"
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_SHA512':
+                # SHA512(string) -> Use digest extension if available
+                if hasattr(bind_expr, 'arg'):
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"ENCODE(DIGEST({arg}::text, 'sha512'), 'hex')"
+                else:
+                    return "NULL"
+                    
+            # Language and Datatype Functions
+            elif expr_name == 'Builtin_LANG':
+                # LANG(literal) -> Extract language tag from literal
+                if hasattr(bind_expr, 'arg'):
+                    # Handle both single argument and list of arguments
+                    if isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 1:
+                        arg_sql = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                    else:
+                        # Single argument (most common case)
+                        arg_sql = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    
+                    # For variables, get the language tag from the term table
+                    if '.term_text' in arg_sql:
+                        # Replace term_text with lang to get the language tag
+                        lang_sql = arg_sql.replace('.term_text', '.lang')
+                        # Return the language tag directly (NULL if no language tag)
+                        # This allows proper GROUP BY functionality - PostgreSQL can group by NULL
+                        return lang_sql
+                    else:
+                        # For literal values, return empty string
+                        return "''"
+                else:
+                    return "''"
+                
+            elif expr_name == 'Builtin_LANGMATCHES':
+                # LANGMATCHES(lang, pattern) -> Check if language matches pattern
+                # Simplified implementation
+                try:
+                    if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 2:
+                        lang_arg = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                        pattern_arg = self._translate_bind_arg(bind_expr.arg[1], variable_mappings)
+                        return f"({lang_arg} ILIKE {pattern_arg})"
+                    else:
+                        return "FALSE"
+                except Exception as e:
+                    self.logger.error(f"Error translating LANGMATCHES: {e}")
+                    return "FALSE"
+                    
+            elif expr_name == 'Builtin_DATATYPE':
+                # DATATYPE(literal) -> Return datatype URI
+                if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 1:
+                    arg_sql = self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                    
+                    # For variables, get the datatype URI from the term table
+                    if '.term_text' in arg_sql:
+                        # Extract the table alias from the arg_sql
+                        table_alias = arg_sql.split('.')[0]
+                        
+                        # Create a subquery to resolve the datatype_id to the actual datatype URI
+                        datatype_sql = f"""(
+                            CASE 
+                                WHEN {table_alias}.datatype_id IS NOT NULL THEN (
+                                    SELECT dt.term_text 
+                                    FROM {self.table_config.term_table} dt 
+                                    WHERE dt.term_uuid = {table_alias}.datatype_id
+                                )
+                                WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                                WHEN {table_alias}.term_type = 'U' THEN NULL
+                                WHEN {table_alias}.term_type = 'B' THEN NULL
+                                ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                            END
+                        )"""
+                        return datatype_sql
+                    else:
+                        # For literal values, return xsd:string as default
+                        return "'http://www.w3.org/2001/XMLSchema#string'"
+                else:
+                    return "'http://www.w3.org/2001/XMLSchema#string'"
+                
+            elif expr_name == 'Builtin_STRDT':
+                # STRDT(string, datatype) -> Create typed literal
+                # For SQL purposes, just return the string value
+                if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 1:
+                    return self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_STRLANG':
+                # STRLANG(string, lang) -> Create language-tagged literal
+                # For SQL purposes, just return the string value
+                if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list) and len(bind_expr.arg) >= 1:
+                    return self._translate_bind_arg(bind_expr.arg[0], variable_mappings)
+                else:
+                    return "NULL"
+                    
+            elif expr_name == 'Builtin_BNODE':
+                # BNODE() or BNODE(string) -> Generate blank node identifier
+                if hasattr(bind_expr, 'arg') and bind_expr.arg:
+                    # BNODE with argument - use argument as seed
+                    arg = self._translate_bind_arg(bind_expr.arg, variable_mappings)
+                    return f"CONCAT('_:b', MD5({arg}::text))"
+                else:
+                    # BNODE without argument - generate random blank node
+                    return "CONCAT('_:b', EXTRACT(EPOCH FROM NOW())::text, '-', RANDOM()::text)"
+                    
             else:
                 self.logger.warning(f"Unsupported BIND expression type: {expr_name}")
-                return f"'UNSUPPORTED_{expr_name}'"
+                # Return a safe default value instead of a string that might cause SQL errors
+                return "NULL"  # NULL is safe in most SQL contexts
                 
         elif isinstance(bind_expr, Variable):
             # Direct variable reference
@@ -1319,9 +2344,14 @@ class PostgreSQLSparqlImpl:
             # Direct literal or URI
             return self._translate_bind_arg(bind_expr, variable_mappings)
             
+        elif isinstance(bind_expr, list):
+            # Handle list expressions that might contain built-in functions
+            self.logger.debug(f"List expression in _translate_bind_expression: {bind_expr}")
+            return self._translate_bind_arg(bind_expr, variable_mappings)
+            
         else:
-            self.logger.warning(f"Unknown BIND expression type: {type(bind_expr)}")
-            return f"'UNKNOWN_EXPR_{type(bind_expr).__name__}'"
+            self.logger.warning(f"Unknown BIND expression type: {type(bind_expr)} with value: {bind_expr}")
+            return "NULL"  # Return NULL instead of string that might cause SQL errors
     
     def _translate_bind_arg(self, arg, variable_mappings: Dict) -> str:
         """Translate a single argument in a BIND expression.
@@ -1342,10 +2372,18 @@ class PostgreSQLSparqlImpl:
             if arg in variable_mappings:
                 # Get the SQL column reference for this variable
                 mapping = variable_mappings[arg]
-                # Extract just the column reference (remove AS clause if present)
-                if ' AS ' in mapping:
-                    return mapping.split(' AS ')[0]
-                return mapping
+                
+                # CRITICAL FIX: Aggregate result variables (like __agg_1__) contain complete SQL expressions
+                # that should NOT be split on ' AS ' since they may contain CAST(...AS...) expressions
+                if var_name.startswith('__agg_'):
+                    # This is an aggregate result variable - return the complete SQL expression
+                    self.logger.debug(f"Returning aggregate expression for {var_name}: {mapping}")
+                    return mapping
+                else:
+                    # Regular variable - extract just the column reference (remove AS clause if present)
+                    if ' AS ' in mapping:
+                        return mapping.split(' AS ')[0]
+                    return mapping
             else:
                 self.logger.warning(f"Variable {var_name} not found in mappings")
                 return f"'UNMAPPED_{var_name}'"
@@ -1382,10 +2420,50 @@ class PostgreSQLSparqlImpl:
                 # It's a string literal, escape it
                 escaped_value = arg.replace("'", "''")
                 return f"'{escaped_value}'"
+                
+        elif isinstance(arg, list):
+            # Handle list arguments (can occur in complex expressions)
+            self.logger.debug(f"List argument in BIND: {arg} (length: {len(arg)})")
+            if len(arg) == 1:
+                # Single element list - unwrap and translate
+                return self._translate_bind_arg(arg[0], variable_mappings)
+            elif len(arg) > 1:
+                # Multiple elements - check if this is a built-in function call
+                first_elem = arg[0]
+                if isinstance(first_elem, str) and first_elem.startswith('Builtin_'):
+                    # This is a built-in function call wrapped in a list
+                    # Create a CompValue-like structure to handle it
+                    self.logger.debug(f"Detected built-in function in list: {first_elem}")
+                    try:
+                        # Create a mock CompValue structure
+                        class MockCompValue:
+                            def __init__(self, name, args):
+                                self.name = name
+                                # For BOUND function, the argument is typically the second element
+                                if name == 'Builtin_BOUND' and len(args) > 1:
+                                    self.arg = args[1]  # Variable argument for BOUND
+                                else:
+                                    self.args = args[1:] if len(args) > 1 else []
+                        
+                        mock_comp = MockCompValue(first_elem, arg)
+                        return self._translate_bind_expression(mock_comp, variable_mappings)
+                    except Exception as e:
+                        self.logger.error(f"Error handling built-in function in list: {e}")
+                        return "NULL"
+                else:
+                    # Multiple elements, not a function - translate first element
+                    return self._translate_bind_arg(arg[0], variable_mappings)
+            else:
+                return "NULL"  # Empty list becomes NULL
+                
+        elif arg is None:
+            # Handle None values explicitly
+            self.logger.warning("None argument in BIND expression")
+            return "NULL"
             
         else:
-            self.logger.warning(f"Unknown argument type in BIND: {type(arg)}")
-            return f"'UNKNOWN_ARG_{type(arg).__name__}'"
+            self.logger.warning(f"Unknown argument type in BIND: {type(arg)} with value: {arg}")
+            return "NULL"  # Return NULL instead of string that might cause SQL errors
     
     def _translate_bind_comparison(self, comp_expr, variable_mappings: Dict) -> str:
         """Translate comparison expressions in BIND statements.
@@ -1398,11 +2476,29 @@ class PostgreSQLSparqlImpl:
             SQL comparison expression
         """
         try:
+            self.logger.debug(f"Translating comparison expression: {comp_expr} (type: {type(comp_expr)})")
+            
             # Handle different comparison types
             if hasattr(comp_expr, 'op'):
                 op = comp_expr.op
-                left = self._translate_bind_arg(comp_expr.expr, variable_mappings)
-                right = self._translate_bind_arg(comp_expr.other, variable_mappings)
+                self.logger.debug(f"Comparison operator: {op}")
+                
+                # Get left and right operands
+                left_expr = getattr(comp_expr, 'expr', None)
+                right_expr = getattr(comp_expr, 'other', None)
+                
+                if left_expr is None or right_expr is None:
+                    self.logger.warning(f"Missing operands in comparison: left={left_expr}, right={right_expr}")
+                    return "FALSE"
+                
+                left = self._translate_bind_arg(left_expr, variable_mappings)
+                right = self._translate_bind_arg(right_expr, variable_mappings)
+                
+                # Ensure we don't have None values
+                if left is None:
+                    left = "NULL"
+                if right is None:
+                    right = "NULL"
                 
                 # Map SPARQL operators to SQL
                 op_mapping = {
@@ -1417,15 +2513,20 @@ class PostgreSQLSparqlImpl:
                 }
                 
                 sql_op = op_mapping.get(op, op)
-                return f"({left} {sql_op} {right})"
+                result = f"({left} {sql_op} {right})"
+                self.logger.debug(f"Translated comparison to: {result}")
+                return result
                 
             else:
-                self.logger.warning(f"Unsupported comparison expression: {comp_expr}")
-                return "'UNSUPPORTED_COMPARISON'"
+                self.logger.warning(f"Unsupported comparison expression (no op): {comp_expr}")
+                # Try to handle as a direct expression
+                return self._translate_bind_arg(comp_expr, variable_mappings)
                 
         except Exception as e:
             self.logger.error(f"Error translating comparison: {e}")
-            return "'COMPARISON_ERROR'"
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return "FALSE"
     
     async def _translate_graph(self, graph_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """
@@ -1815,6 +2916,7 @@ class PostgreSQLSparqlImpl:
             return "1=1"  # No-op condition
         
         expr_name = expr.name
+        self.logger.debug(f"Processing filter expression: {expr_name}")
         
         if expr_name == "RelationalExpression":
             return self._translate_relational_expression(expr, variable_mappings)
@@ -1834,6 +2936,25 @@ class PostgreSQLSparqlImpl:
             return await self._translate_exists_expression(expr, variable_mappings, is_not_exists=False)
         elif expr_name == "Builtin_NOTEXISTS":
             return await self._translate_exists_expression(expr, variable_mappings, is_not_exists=True)
+        elif expr_name == "Builtin_LANG":
+            return self._translate_lang_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_DATATYPE":
+            return self._translate_datatype_filter_expression(expr, variable_mappings)
+        elif expr_name in ["Builtin_URI", "Builtin_IRI"]:
+            return self._translate_uri_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_BNODE":
+            return self._translate_bnode_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_isURI":
+            return self._translate_isuri_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_isLITERAL":
+            return self._translate_isliteral_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_isNUMERIC":
+            return self._translate_isnumeric_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_BOUND":
+            return self._translate_bound_filter_expression(expr, variable_mappings)
+        elif expr_name == "Builtin_sameTerm":
+            return self._translate_sameterm_filter_expression(expr, variable_mappings)
+        # NOTE: IN() is handled as RelationalExpression with op='IN', not as a builtin function
         else:
             self.logger.warning(f"Filter expression {expr_name} not implemented")
             return "1=1"  # No-op condition
@@ -1910,10 +3031,30 @@ class PostgreSQLSparqlImpl:
             return "1=1"  # Fallback condition
     
     def _translate_relational_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
-        """Translate relational expressions like ?x > 100."""
+        """Translate relational expressions like ?x > 100 and IN expressions."""
         operator = expr['op']
         left = expr['expr']
         right = expr['other']
+        
+        # Handle IN operator specially
+        if operator == 'IN':
+            left_sql = self._translate_expression_operand(left, variable_mappings)
+            
+            # Handle the list of values for IN
+            if hasattr(right, '__iter__') and not isinstance(right, str):
+                # right is a list of values
+                values = []
+                for value in right:
+                    value_sql = self._translate_expression_operand(value, variable_mappings)
+                    values.append(value_sql)
+                if values:
+                    return f"({left_sql} IN ({', '.join(values)}))"
+                else:
+                    return "FALSE"  # Empty IN list is always false
+            else:
+                # Single value case (shouldn't happen with IN but handle gracefully)
+                right_sql = self._translate_expression_operand(right, variable_mappings)
+                return f"({left_sql} = {right_sql})"
         
         # Determine if this is a numeric comparison
         numeric_operators = {'<', '<=', '>', '>='}
@@ -2021,21 +3162,174 @@ class PostgreSQLSparqlImpl:
                     return f"SUBSTRING({arg_sql} FROM {start_sql} FOR {length_sql})"
                 else:
                     return f"SUBSTRING({arg_sql} FROM {start_sql})"
-        
+        elif func_name == 'Builtin_LANG':
+            # LANG(literal) -> Extract language tag from literal
+            if hasattr(func_expr, 'arg'):
+                arg_sql = self._translate_expression_operand(func_expr.arg, variable_mappings)
+                # For now, return empty string as placeholder - needs proper implementation
+                # TODO: Implement proper language tag extraction from database
+                return "''"
+            return "''"
+        elif func_name == 'Builtin_DATATYPE':
+            # DATATYPE(literal) -> Return datatype URI
+            if hasattr(func_expr, 'arg'):
+                arg_sql = self._translate_expression_operand(func_expr.arg, variable_mappings)
+                # For now, return xsd:string as placeholder - needs proper implementation
+                # TODO: Implement proper datatype extraction from database
+                return "'http://www.w3.org/2001/XMLSchema#string'"
+            return "'http://www.w3.org/2001/XMLSchema#string'"
+        elif func_name == 'Builtin_URI' or func_name == 'Builtin_IRI':
+            # URI()/IRI() -> Create URI from string
+            if hasattr(func_expr, 'arg'):
+                arg_sql = self._translate_expression_operand(func_expr.arg, variable_mappings)
+                # URI/IRI just returns the string value for SQL purposes
+                return arg_sql
+            return "NULL"
+        elif func_name == 'Builtin_STR':
+            # STR(?var) -> Convert RDF term to string representation
+            if hasattr(func_expr, 'arg'):
+                arg_sql = self._translate_expression_operand(func_expr.arg, variable_mappings)
+                # STR() returns the string representation of any RDF term
+                # For literals, it returns the literal value; for URIs, it returns the URI string
+                return arg_sql
+            elif hasattr(func_expr, 'expr'):
+                arg_sql = self._translate_expression_operand(func_expr.expr, variable_mappings)
+                return arg_sql
+            return "NULL"
+        elif func_name == 'Builtin_BNODE':
+            # BNODE() -> Generate blank node identifier
+            if hasattr(func_expr, 'arg') and func_expr.arg:
+                # BNODE with argument - use argument as seed
+                arg_sql = self._translate_expression_operand(func_expr.arg, variable_mappings)
+                return f"CONCAT('_:b', MD5({arg_sql}::text))"
+            else:
+                # BNODE without argument - generate random blank node
+                return "CONCAT('_:b', EXTRACT(EPOCH FROM NOW())::text, '-', RANDOM()::text)"
+        elif func_name == 'Builtin_CONCAT':
+            # CONCAT(str1, str2, ...) -> Concatenate multiple strings
+            if hasattr(func_expr, 'expr') and hasattr(func_expr.expr, '__iter__'):
+                # Multiple arguments as a list
+                args = []
+                for arg in func_expr.expr:
+                    arg_sql = self._translate_expression_operand(arg, variable_mappings)
+                    args.append(arg_sql)
+                return f"CONCAT({', '.join(args)})"
+            elif hasattr(func_expr, 'arg1') and hasattr(func_expr, 'arg2'):
+                # Two arguments (most common case)
+                arg1_sql = self._translate_expression_operand(func_expr.arg1, variable_mappings)
+                arg2_sql = self._translate_expression_operand(func_expr.arg2, variable_mappings)
+                # Check for additional arguments
+                args = [arg1_sql, arg2_sql]
+                if hasattr(func_expr, 'arg3'):
+                    arg3_sql = self._translate_expression_operand(func_expr.arg3, variable_mappings)
+                    args.append(arg3_sql)
+                if hasattr(func_expr, 'arg4'):
+                    arg4_sql = self._translate_expression_operand(func_expr.arg4, variable_mappings)
+                    args.append(arg4_sql)
+                return f"CONCAT({', '.join(args)})"
+            elif hasattr(func_expr, 'args'):
+                # Arguments as a list attribute
+                args = []
+                for arg in func_expr.args:
+                    arg_sql = self._translate_expression_operand(arg, variable_mappings)
+                    args.append(arg_sql)
+                return f"CONCAT({', '.join(args)})"
+            else:
+                # Fallback - try to find any argument attributes
+                args = []
+                for attr_name in dir(func_expr):
+                    if attr_name.startswith('arg') and not attr_name.startswith('_'):
+                        arg_value = getattr(func_expr, attr_name)
+                        if arg_value is not None:
+                            arg_sql = self._translate_expression_operand(arg_value, variable_mappings)
+                            args.append(arg_sql)
+                if args:
+                    return f"CONCAT({', '.join(args)})"
+                else:
+                    return "''"
+        elif func_name == 'sameTerm':
+            # sameTerm(term1, term2) -> Test if two RDF terms are identical
+            if hasattr(func_expr, 'arg1') and hasattr(func_expr, 'arg2'):
+                arg1_sql = self._translate_expression_operand(func_expr.arg1, variable_mappings)
+                arg2_sql = self._translate_expression_operand(func_expr.arg2, variable_mappings)
+                # In SPARQL, sameTerm tests for exact equality of RDF terms
+                return f"({arg1_sql} = {arg2_sql})"
+            elif hasattr(func_expr, 'args') and len(func_expr.args) >= 2:
+                arg1_sql = self._translate_expression_operand(func_expr.args[0], variable_mappings)
+                arg2_sql = self._translate_expression_operand(func_expr.args[1], variable_mappings)
+                return f"({arg1_sql} = {arg2_sql})"
+            return "FALSE"
+        elif func_name == 'IN':
+            # IN(expr, value1, value2, ...) -> Test if expr is in list of values
+            if hasattr(func_expr, 'expr') and hasattr(func_expr, 'list'):
+                # Standard format: expr and list of values
+                expr_sql = self._translate_expression_operand(func_expr.expr, variable_mappings)
+                if hasattr(func_expr.list, '__iter__'):
+                    values = []
+                    for value in func_expr.list:
+                        value_sql = self._translate_expression_operand(value, variable_mappings)
+                        values.append(value_sql)
+                    if values:
+                        return f"({expr_sql} IN ({', '.join(values)}))"
+                return "FALSE"
+            elif hasattr(func_expr, 'args') and len(func_expr.args) >= 2:
+                # Alternative format: first arg is expr, rest are values
+                expr_sql = self._translate_expression_operand(func_expr.args[0], variable_mappings)
+                values = []
+                for value in func_expr.args[1:]:
+                    value_sql = self._translate_expression_operand(value, variable_mappings)
+                    values.append(value_sql)
+                if values:
+                    return f"({expr_sql} IN ({', '.join(values)}))"
+                return "FALSE"
+            return "FALSE"
+    
         # Fallback for unknown functions
         self.logger.warning(f"Unknown SPARQL function: {func_name}")
         return "NULL"
     
     def _translate_regex_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
-        """Translate REGEX() function to PostgreSQL regex operator."""
+        """Translate REGEX() function to PostgreSQL regex operator with error handling."""
         text_expr = expr['text']
         pattern_expr = expr['pattern']
         
         text_sql = self._translate_expression_operand(text_expr, variable_mappings)
         pattern_sql = self._translate_expression_operand(pattern_expr, variable_mappings)
         
-        # Use PostgreSQL regex operator
-        return f"{text_sql} ~ {pattern_sql}"
+        # Check if pattern is a literal string that we can validate
+        if hasattr(pattern_expr, 'toPython') and hasattr(pattern_expr, 'datatype'):
+            try:
+                # Extract literal pattern value
+                pattern_value = str(pattern_expr.toPython())
+                if not self._validate_regex_pattern(pattern_value):
+                    self.logger.warning(f"Invalid regex pattern detected: {pattern_value}")
+                    return "FALSE"  # Return FALSE for invalid patterns
+            except Exception as e:
+                self.logger.debug(f"Could not validate regex pattern: {e}")
+        
+        # For valid patterns or variable patterns, use a safer approach
+        # Use PostgreSQL's position() function as fallback for problematic patterns
+        return f"""(
+            CASE 
+                WHEN {pattern_sql} IS NULL OR {pattern_sql} = '' THEN FALSE
+                WHEN {text_sql} IS NULL THEN FALSE
+                ELSE (
+                    COALESCE(
+                        (SELECT {text_sql} ~ {pattern_sql}),
+                        FALSE
+                    )
+                )
+            END
+        )"""
+    
+    def _validate_regex_pattern(self, pattern: str) -> bool:
+        """Validate a regex pattern to prevent SQL errors."""
+        import re
+        try:
+            re.compile(pattern)
+            return True
+        except re.error:
+            return False
     
     def _translate_contains_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
         """Translate CONTAINS() function to SQL LIKE."""
@@ -2119,11 +3413,7 @@ class PostgreSQLSparqlImpl:
         return self._translate_pattern(inner_pattern, table_config)
     
 
-    def _translate_optional(self, pattern, table_config: TableConfig) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
-        """Translate OPTIONAL (LeftJoin) pattern - placeholder implementation."""
-        # TODO: Implement OPTIONAL pattern translation
-        self.logger.warning("OPTIONAL pattern not yet implemented")
-        return f"FROM {table_config.quad_table} q0", [], [], {}
+
     
     async def _execute_sql_query(self, sql_query: str) -> List[Dict[str, Any]]:
         """Execute SQL query and return results."""
@@ -2234,3 +3524,153 @@ class PostgreSQLSparqlImpl:
             self.logger.debug(f"Graph variable {graph_var} not projected - no JOINs added")
         
         return from_clause, where_conditions, joins, variable_mappings
+    
+    def _translate_lang_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate LANG() function in filter expressions."""
+        # Extract the argument (should be a variable or literal)
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            
+            # For variables, we need to get the language tag from the term table
+            # The arg_sql should reference a term table column like 'o_term_1.term_text'
+            # We need to convert this to get the lang column
+            if '.term_text' in arg_sql:
+                # Replace term_text with lang to get the language tag
+                lang_sql = arg_sql.replace('.term_text', '.lang')
+                # Return the language tag directly (NULL if no language tag)
+                # This allows proper GROUP BY functionality - PostgreSQL can group by NULL
+                return lang_sql
+            else:
+                # For literal values in the query, we can't determine language at SQL level
+                # Return empty string as literals in SPARQL queries don't have language info
+                return "''"
+        return "''"
+    
+    def _translate_datatype_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate DATATYPE() function in filter expressions."""
+        # Extract the argument (should be a variable or literal)
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            
+            # For variables, we need to get the datatype URI from the term table
+            # The arg_sql should reference a term table column like 'o_term_1.term_text'
+            # We need to resolve the datatype_id to get the actual datatype URI
+            if '.term_text' in arg_sql:
+                # Extract the table alias from the arg_sql (e.g., 'o_term_1' from 'o_term_1.term_text')
+                table_alias = arg_sql.split('.')[0]
+                
+                # Create a subquery to resolve the datatype_id to the actual datatype URI
+                # If datatype_id is NULL, default to xsd:string for literals, or appropriate type for URIs/BNodes
+                datatype_sql = f"""(
+                    CASE 
+                        WHEN {table_alias}.datatype_id IS NOT NULL THEN (
+                            SELECT dt.term_text 
+                            FROM {self.table_config.term_table} dt 
+                            WHERE dt.term_uuid = {table_alias}.datatype_id
+                        )
+                        WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                        WHEN {table_alias}.term_type = 'U' THEN NULL
+                        WHEN {table_alias}.term_type = 'B' THEN NULL
+                        ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                    END
+                )"""
+                return datatype_sql
+            else:
+                # For literal values in the query, return xsd:string as default
+                return "'http://www.w3.org/2001/XMLSchema#string'"
+        return "'http://www.w3.org/2001/XMLSchema#string'"
+    
+    def _translate_uri_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate URI()/IRI() function in filter expressions."""
+        # Extract the argument (should be a string expression)
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            # URI/IRI just returns the string value for SQL purposes
+            return arg_sql
+        return "NULL"
+    
+    def _translate_bnode_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate BNODE() function in filter expressions.
+        
+        Note: When BNODE() is used in a filter context, it should check if a value is a blank node,
+        not generate new blank nodes. For blank node generation, use BNODE() in BIND expressions.
+        """
+        # Check if the value is a blank node (term_type = 'B')
+        if hasattr(expr, 'arg') and expr.arg:
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            
+            # For variables, check the term_type in the database
+            if '.term_text' in arg_sql:
+                # Replace term_text with term_type and check for 'B' (Blank Node)
+                term_type_sql = arg_sql.replace('.term_text', '.term_type')
+                return f"({term_type_sql} = 'B')"
+            else:
+                # For non-variable values, check if they start with '_:'
+                return f"({arg_sql}::text LIKE '_:%')"
+        else:
+            # BNODE without argument in filter context - this is unusual but handle gracefully
+            # Return FALSE since we can't check a blank node without specifying what to check
+            return "FALSE"
+    
+    def _translate_isuri_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate isURI() function in filter expressions."""
+        # Check if the value is a URI (term_type = 'U')
+        if hasattr(expr, 'arg'):
+            # This is complex - would need to check term_type in database
+            # For now, return a placeholder
+            return "TRUE"  # Placeholder
+        return "FALSE"
+    
+    def _translate_isliteral_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate isLITERAL() function in filter expressions."""
+        # Check if the value is a literal (term_type = 'L')
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            
+            # For variables, we need to check the term_type in the database
+            # The arg_sql should reference a term table column like 'o_term_1.term_text'
+            # We need to convert this to check the term_type column
+            if '.term_text' in arg_sql:
+                # Replace term_text with term_type and check for 'L' (Literal)
+                term_type_sql = arg_sql.replace('.term_text', '.term_type')
+                return f"({term_type_sql} = 'L')"
+            else:
+                # For literal values, they are always literals
+                return "TRUE"
+        return "FALSE"
+    
+    def _translate_isnumeric_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate isNUMERIC() function in filter expressions."""
+        # Check if the value is numeric
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            # Use PostgreSQL's numeric check
+            return f"({arg_sql} ~ '^[+-]?([0-9]*[.])?[0-9]+$')"
+        return "FALSE"
+    
+    def _translate_bound_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate BOUND() function in filter expressions."""
+        # Check if variable is bound (not NULL)
+        if hasattr(expr, 'arg'):
+            arg_sql = self._translate_expression_operand(expr.arg, variable_mappings)
+            return f"({arg_sql} IS NOT NULL)"
+        return "FALSE"
+
+    def _translate_sameterm_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate sameTerm() function in filter expressions."""
+        # Test if two RDF terms are identical
+        if hasattr(expr, 'arg1') and hasattr(expr, 'arg2'):
+            arg1_sql = self._translate_expression_operand(expr.arg1, variable_mappings)
+            arg2_sql = self._translate_expression_operand(expr.arg2, variable_mappings)
+            return f"({arg1_sql} = {arg2_sql})"
+        elif hasattr(expr, 'args') and len(expr.args) >= 2:
+            arg1_sql = self._translate_expression_operand(expr.args[0], variable_mappings)
+            arg2_sql = self._translate_expression_operand(expr.args[1], variable_mappings)
+            return f"({arg1_sql} = {arg2_sql})"
+        return "FALSE"
+
+    def _translate_in_filter_expression(self, expr, variable_mappings: Dict[Variable, str]) -> str:
+        """Translate IN() function in filter expressions."""
+        # NOTE: IN() is NOT handled here - it's parsed as RelationalExpression with op='IN'
+        # See _translate_filter_expression for RelationalExpression handling
+        pass

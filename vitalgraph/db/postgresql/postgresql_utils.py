@@ -121,6 +121,8 @@ class PostgreSQLUtils:
                 - language: Language tag for literals (e.g., 'en', 'fr') or None
                 - datatype_id: Datatype term ID for typed literals or None
         """
+
+            
         # Handle RDFLib term objects
         if isinstance(value, URIRef):
             return ('U', None, None)
@@ -132,9 +134,16 @@ class PostgreSQLUtils:
             if hasattr(value, 'language'):
                 language = str(value.language) if value.language else None
                 datatype_id = None  # TODO: Handle datatype term ID lookup
+                
+                # DEBUG: Log language tag extraction for debugging
+                if str(value) in ['John Smith', 'Jean Dupont', 'Juan García', 'Johann Schmidt']:
+                    print(f"DEBUG: Processing literal '{value}' - has language attr: {hasattr(value, 'language')}, language: {repr(value.language)}, extracted: {repr(language)}")
+                
                 return ('L', language, datatype_id)
             else:
                 # Fallback for objects that pass isinstance but don't have language attribute
+                if str(value) in ['John Smith', 'Jean Dupont', 'Juan García', 'Johann Schmidt']:
+                    print(f"DEBUG: Processing literal '{value}' - NO language attribute")
                 return ('L', None, None)
         
         # Handle native Python types - convert to appropriate RDFLib terms

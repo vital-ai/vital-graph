@@ -114,6 +114,9 @@ class PostgreSQLSpaceImpl:
             lang = term.language if term.language else None
             # For now, we'll set datatype_id to None and handle datatypes later
             datatype_id = None
+            
+
+            
             return (str(term), 'L', lang, datatype_id)
         elif isinstance(term, BNode):
             return (str(term), 'B', None, None)
@@ -197,14 +200,15 @@ class PostgreSQLSpaceImpl:
                 predicate_uuid UUID NOT NULL,
                 object_uuid UUID NOT NULL,
                 context_uuid UUID NOT NULL,
+                quad_uuid UUID NOT NULL DEFAULT gen_random_uuid(),
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
+                PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
             );
             
-            CREATE INDEX idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);
             CREATE INDEX idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);
             CREATE INDEX idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);
             CREATE INDEX idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);
+            CREATE INDEX idx_{table_prefix}_quad_uuid ON {table_names['rdf_quad']} (quad_uuid);
         """
         
         # Namespace table (unchanged)
@@ -529,22 +533,22 @@ class PostgreSQLSpaceImpl:
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            # Check if at least the term table exists for this space
+            # Check if at least the term table exists for this space by trying to query it
             term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, 'term')
             
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)",
-                        (term_table_name,)
-                    )
-                    exists = cursor.fetchone()[0]
+                    # Try to query the table directly - if it doesn't exist, this will raise an exception
+                    cursor.execute(f"SELECT 1 FROM {term_table_name} LIMIT 1")
+                    # If we get here, the table exists
+                    exists = True
             
             self.logger.debug(f"Space '{space_id}' exists: {exists}")
             return exists
             
         except Exception as e:
-            self.logger.error(f"Error checking space existence: {e}")
+            # If we get an exception (likely "relation does not exist"), the space doesn't exist
+            self.logger.debug(f"Space '{space_id}' does not exist: {e}")
             return False
     
     async def list_spaces(self) -> List[str]:
@@ -663,11 +667,15 @@ class PostgreSQLSpaceImpl:
             PostgreSQLUtils.validate_space_id(space_id)
             
             # Generate deterministic UUID for the term
-            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
+            term_key = (term_text, term_type, lang, datatype_id)
+            # Generate deterministic UUID
+            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+            composite_key = f"{term_text}|{term_type}|{lang or ''}|{datatype_id or 0}"
+            term_uuid = uuid.uuid5(RDF_NAMESPACE, composite_key)
             
             # Get table names
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+            term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "term")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
@@ -722,11 +730,15 @@ class PostgreSQLSpaceImpl:
             PostgreSQLUtils.validate_space_id(space_id)
             
             # Generate deterministic UUID for the term
-            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
+            term_key = (term_text, term_type, lang, datatype_id)
+            # Generate deterministic UUID
+            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+            composite_key = f"{term_text}|{term_type}|{lang or ''}|{datatype_id or 0}"
+            term_uuid = uuid.uuid5(RDF_NAMESPACE, composite_key)
             
             # Get table names
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
+            term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "term")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
@@ -768,12 +780,16 @@ class PostgreSQLSpaceImpl:
             PostgreSQLUtils.validate_space_id(space_id)
             
             # Generate deterministic UUID for the term
-            term_uuid = self.term_cache.get_term_uuid(term_text, term_type, lang, datatype_id)
+            term_key = (term_text, term_type, lang, datatype_id)
+            # Generate deterministic UUID
+            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+            composite_key = f"{term_text}|{term_type}|{lang or ''}|{datatype_id or 0}"
+            term_uuid = uuid.uuid5(RDF_NAMESPACE, composite_key)
             
             # Get table names
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
-            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "term")
+            quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
@@ -846,40 +862,25 @@ class PostgreSQLSpaceImpl:
             
             # Get table names using UUID-based approach
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
-                # Check if quad already exists
-                cursor.execute(
-                    f"""
-                    SELECT quad_uuid FROM {quad_table_name} 
-                    WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
-                    """,
-                    (subject_uuid, predicate_uuid, object_uuid, context_uuid)
-                )
-                result = cursor.fetchone()
-                
-                if result:
-                    self.logger.debug(f"Quad already exists in space '{space_id}' with UUID: {result['quad_uuid']}")
-                    return True
-                
-                # Generate UUID for the quad
-                import uuid
-                quad_uuid = uuid.uuid4()
-                
-                # Insert new quad
+                # Insert quad (duplicates allowed, quad_uuid auto-generated)
                 cursor.execute(
                     f"""
                     INSERT INTO {quad_table_name} 
-                    (quad_uuid, subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING quad_uuid
                     """,
-                    (quad_uuid, subject_uuid, predicate_uuid, object_uuid, context_uuid, datetime.utcnow())
+                    (subject_uuid, predicate_uuid, object_uuid, context_uuid, datetime.utcnow())
                 )
+                result = cursor.fetchone()
+                quad_uuid = result['quad_uuid']
                 conn.commit()
                 
                 self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
@@ -899,14 +900,21 @@ class PostgreSQLSpaceImpl:
             
         Returns:
             int: Number of quads
+            
+        Raises:
+            Exception: If the space does not exist
         """
+        PostgreSQLUtils.validate_space_id(space_id)
+        
+        # Check if space exists first - this will throw if it doesn't
+        space_exists = await self.space_exists(space_id)
+        if not space_exists:
+            raise ValueError(f"Space '{space_id}' does not exist")
+        
+        # Get table names using UUID-based approach
+        quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
+        
         try:
-            PostgreSQLUtils.validate_space_id(space_id)
-            
-            # Get table names using UUID-based approach
-            table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
-            
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
                 conn.row_factory = psycopg.rows.dict_row
@@ -925,7 +933,54 @@ class PostgreSQLSpaceImpl:
                     
         except Exception as e:
             self.logger.error(f"Error getting quad count from space '{space_id}': {e}")
-            return 0
+            raise  # Re-raise the exception instead of returning 0
+    
+    async def get_rdf_quad_count(self, space_id: str, graph_uri: Optional[str] = None) -> int:
+        """
+        Get count of RDF quads in a specific space, optionally filtered by graph URI (context).
+        
+        This is a high-level RDF API that accepts graph URIs and converts them to UUIDs
+        internally for compatibility with the UUID-based get_quad_count method.
+        
+        Args:
+            space_id: Space identifier
+            graph_uri: Optional graph URI to filter by (e.g., 'http://vital.ai/graph/test')
+            
+        Returns:
+            int: Number of quads
+            
+        Raises:
+            Exception: If the space does not exist
+        """
+        try:
+            self.logger.debug(f"Getting RDF quad count from space '{space_id}' with graph URI: {graph_uri}")
+            
+            # If no graph URI specified, get total count
+            if graph_uri is None:
+                return await self.get_quad_count(space_id)
+            
+            # Convert graph URI to UUID
+            from rdflib import URIRef
+            graph_ref = URIRef(graph_uri)
+            
+            # Determine term type and generate UUID
+            g_type, g_lang, g_datatype_id = PostgreSQLUtils.determine_term_type(graph_ref)
+            g_value = PostgreSQLUtils.extract_literal_value(graph_ref) if g_type == 'L' else graph_ref
+            
+            # Look up the graph UUID in the term table
+            graph_uuid = await self.get_term_uuid(space_id, str(g_value), g_type, g_lang, g_datatype_id)
+            
+            if graph_uuid is None:
+                # Graph URI doesn't exist in this space, so count is 0
+                self.logger.debug(f"Graph URI '{graph_uri}' not found in space '{space_id}', returning count 0")
+                return 0
+            
+            # Use the UUID-based method
+            return await self.get_quad_count(space_id, graph_uuid)
+            
+        except Exception as e:
+            self.logger.error(f"Error getting RDF quad count from space '{space_id}' with graph '{graph_uri}': {e}")
+            raise
     
     async def remove_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, object_uuid: str, context_uuid: str) -> bool:
         """
@@ -949,39 +1004,32 @@ class PostgreSQLSpaceImpl:
             
             # Get table names using UUID-based approach
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
-                # Find the first matching quad (LIMIT 1 for single instance removal)
+                # Delete exactly one instance using ctid (handles duplicates properly)
                 cursor.execute(
                     f"""
-                    SELECT quad_uuid FROM {quad_table_name} 
-                    WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
-                    LIMIT 1
+                    DELETE FROM {quad_table_name} 
+                    WHERE ctid IN (
+                        SELECT ctid FROM {quad_table_name}
+                        WHERE subject_uuid = %s AND predicate_uuid = %s 
+                              AND object_uuid = %s AND context_uuid = %s
+                        LIMIT 1
+                    )
                     """,
                     (subject_uuid, predicate_uuid, object_uuid, context_uuid)
-                )
-                result = cursor.fetchone()
-                
-                if not result:
-                    self.logger.debug(f"No matching quad found to remove from space '{space_id}'")
-                    return False
-                
-                # Delete the specific quad by its UUID (ensures only one instance is removed)
-                cursor.execute(
-                    f"DELETE FROM {quad_table_name} WHERE quad_uuid = %s",
-                    (result['quad_uuid'],)
                 )
                 
                 removed_count = cursor.rowcount
                 conn.commit()
                 
                 if removed_count > 0:
-                    self.logger.debug(f"Removed quad with UUID {result['quad_uuid']} from space '{space_id}'")
+                    self.logger.debug(f"Removed one quad instance from space '{space_id}'")
                     return True
                 else:
                     self.logger.debug(f"No quad was actually removed from space '{space_id}'")
@@ -993,7 +1041,7 @@ class PostgreSQLSpaceImpl:
     
 
     
-    async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list], s=None, p=None, o=None, g=None) -> bool:
+    async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list]) -> bool:
         """
         Add an RDF quad to a specific space by converting RDF values to terms first using UUID-based approach.
         
@@ -1003,15 +1051,14 @@ class PostgreSQLSpaceImpl:
         
         Args:
             space_id: Space identifier
-            s: Subject value (URI, literal, or blank node)
-            p: Predicate value (typically URI)
-            o: Object value (URI, literal, or blank node)
-            g: Graph/context value (typically URI)
+            quad: Tuple of (subject, predicate, object, graph) RDF values
             
         Returns:
             bool: True if successful, False otherwise
         """
         try:
+            # Unpack the quad tuple
+            s, p, o, g = quad
             self.logger.debug(f"Adding RDF quad to space '{space_id}': <{s}> <{p}> <{o}> <{g}>")
             
             # Determine term types automatically
@@ -1103,29 +1150,17 @@ class PostgreSQLSpaceImpl:
             
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
-            # Look up subject term UUID
-            subject_uuid = await self.get_term_uuid(space_id, s_value, s_type, s_lang, s_datatype_id)
-            if subject_uuid is None:
-                self.logger.debug(f"Subject term '{s}' not found in space '{space_id}'")
-                return False
+            # Generate deterministic UUIDs for the terms
+            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+            s_composite = f"{s_value}|{s_type}|{s_lang or ''}|{s_datatype_id or 0}"
+            p_composite = f"{p_value}|{p_type}|{p_lang or ''}|{p_datatype_id or 0}"
+            o_composite = f"{o_value}|{o_type}|{o_lang or ''}|{o_datatype_id or 0}"
+            g_composite = f"{g_value}|{g_type}|{g_lang or ''}|{g_datatype_id or 0}"
             
-            # Look up predicate term UUID
-            predicate_uuid = await self.get_term_uuid(space_id, p_value, p_type, p_lang, p_datatype_id)
-            if predicate_uuid is None:
-                self.logger.debug(f"Predicate term '{p}' not found in space '{space_id}'")
-                return False
-            
-            # Look up object term UUID
-            object_uuid = await self.get_term_uuid(space_id, o_value, o_type, o_lang, o_datatype_id)
-            if object_uuid is None:
-                self.logger.debug(f"Object term '{o}' not found in space '{space_id}'")
-                return False
-            
-            # Look up graph term UUID
-            graph_uuid = await self.get_term_uuid(space_id, g_value, g_type, g_lang, g_datatype_id)
-            if graph_uuid is None:
-                self.logger.debug(f"Graph term '{g}' not found in space '{space_id}'")
-                return False
+            subject_uuid = uuid.uuid5(RDF_NAMESPACE, s_composite)
+            predicate_uuid = uuid.uuid5(RDF_NAMESPACE, p_composite)
+            object_uuid = uuid.uuid5(RDF_NAMESPACE, o_composite)
+            graph_uuid = uuid.uuid5(RDF_NAMESPACE, g_composite)
             
             # Remove the quad using term UUIDs
             success = await self.remove_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid)
@@ -1177,14 +1212,26 @@ class PostgreSQLSpaceImpl:
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
             # Generate UUIDs for the terms (deterministic)
-            subject_uuid = self.term_cache.get_term_uuid(s_value, s_type, s_lang, s_datatype_id)
-            predicate_uuid = self.term_cache.get_term_uuid(p_value, p_type, p_lang, p_datatype_id)
-            object_uuid = self.term_cache.get_term_uuid(o_value, o_type, o_lang, o_datatype_id)
-            graph_uuid = self.term_cache.get_term_uuid(g_value, g_type, g_lang, g_datatype_id)
+            s_key = (s_value, s_type, s_lang, s_datatype_id)
+            p_key = (p_value, p_type, p_lang, p_datatype_id)
+            o_key = (o_value, o_type, o_lang, o_datatype_id)
+            g_key = (g_value, g_type, g_lang, g_datatype_id)
+            
+            # Generate deterministic UUIDs
+            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+            s_composite = f"{s_value}|{s_type}|{s_lang or ''}|{s_datatype_id or 0}"
+            p_composite = f"{p_value}|{p_type}|{p_lang or ''}|{p_datatype_id or 0}"
+            o_composite = f"{o_value}|{o_type}|{o_lang or ''}|{o_datatype_id or 0}"
+            g_composite = f"{g_value}|{g_type}|{g_lang or ''}|{g_datatype_id or 0}"
+            
+            subject_uuid = uuid.uuid5(RDF_NAMESPACE, s_composite)
+            predicate_uuid = uuid.uuid5(RDF_NAMESPACE, p_composite)
+            object_uuid = uuid.uuid5(RDF_NAMESPACE, o_composite)
+            graph_uuid = uuid.uuid5(RDF_NAMESPACE, g_composite)
             
             # Get table names using UUID-based approach
             table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-            quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+            quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
             
             # Use raw psycopg3 connection for UUID-based operations
             with self.get_connection() as conn:
@@ -1423,10 +1470,22 @@ class PostgreSQLSpaceImpl:
                         unique_terms.update([s_info, p_info, o_info, g_info])
                         
                         # Generate UUIDs for this quad
-                        s_uuid = self.term_cache.get_term_uuid(s_value, s_type, s_lang, s_datatype_id)
-                        p_uuid = self.term_cache.get_term_uuid(p_value, p_type, p_lang, p_datatype_id)
-                        o_uuid = self.term_cache.get_term_uuid(o_value, o_type, o_lang, o_datatype_id)
-                        g_uuid = self.term_cache.get_term_uuid(g_value, g_type, g_lang, g_datatype_id)
+                        s_key = (s_value, s_type, s_lang, s_datatype_id)
+                        p_key = (p_value, p_type, p_lang, p_datatype_id)
+                        o_key = (o_value, o_type, o_lang, o_datatype_id)
+                        g_key = (g_value, g_type, g_lang, g_datatype_id)
+                        
+                        # Generate deterministic UUIDs
+                        RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+                        s_composite = f"{s_value}|{s_type}|{s_lang or ''}|{s_datatype_id or 0}"
+                        p_composite = f"{p_value}|{p_type}|{p_lang or ''}|{p_datatype_id or 0}"
+                        o_composite = f"{o_value}|{o_type}|{o_lang or ''}|{o_datatype_id or 0}"
+                        g_composite = f"{g_value}|{g_type}|{g_lang or ''}|{g_datatype_id or 0}"
+                        
+                        s_uuid = uuid.uuid5(RDF_NAMESPACE, s_composite)
+                        p_uuid = uuid.uuid5(RDF_NAMESPACE, p_composite)
+                        o_uuid = uuid.uuid5(RDF_NAMESPACE, o_composite)
+                        g_uuid = uuid.uuid5(RDF_NAMESPACE, g_composite)
                         
                         quad_uuids.append((s_uuid, p_uuid, o_uuid, g_uuid))
                     
@@ -1434,8 +1493,8 @@ class PostgreSQLSpaceImpl:
                 
                 # Step 2: Get table names
                 table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-                term_table_name = PostgreSQLUtils.get_table_name(table_prefix, "term")
-                quad_table_name = PostgreSQLUtils.get_table_name(table_prefix, "rdf_quad")
+                term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "term")
+                quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
                 
                 # Step 3: Use raw psycopg3 connection for UUID-based operations
                 with self.get_connection() as conn:
@@ -1450,25 +1509,29 @@ class PostgreSQLSpaceImpl:
                             batch_uuids = quad_uuids[i:i + batch_size]
                             
                             with self.utils.time_operation("quad_remove_batch", f"batch {i//batch_size + 1}, {len(batch_uuids)} quads"):
-                                # Build parameterized query for batch removal
-                                placeholders = []
-                                params = []
-                                
-                                for j, (s_uuid, p_uuid, o_uuid, g_uuid) in enumerate(batch_uuids):
-                                    base_idx = j * 4
-                                    placeholders.append(f"(${base_idx + 1}, ${base_idx + 2}, ${base_idx + 3}, ${base_idx + 4})")
-                                    params.extend([s_uuid, p_uuid, o_uuid, g_uuid])
-                                
-                                delete_sql = f"""
-                                    DELETE FROM {quad_table_name} 
-                                    WHERE (subject_uuid, predicate_uuid, object_uuid, graph_uuid) IN (
-                                        VALUES {', '.join(placeholders)}
-                                    )
-                                """
+                                # Handle duplicate quads by counting instances and deleting exact number
+                                from collections import Counter
+                                quad_counts = Counter(batch_uuids)
                                 
                                 cursor = conn.cursor()
-                                cursor.execute(delete_sql, params)
-                                batch_removed = cursor.rowcount
+                                batch_removed = 0
+                                
+                                for (s_uuid, p_uuid, o_uuid, g_uuid), count in quad_counts.items():
+                                    # Delete exactly 'count' instances of this quad using ctid
+                                    delete_sql = f"""
+                                        DELETE FROM {quad_table_name} 
+                                        WHERE ctid IN (
+                                            SELECT ctid FROM {quad_table_name}
+                                            WHERE subject_uuid = %s AND predicate_uuid = %s 
+                                                  AND object_uuid = %s AND context_uuid = %s
+                                            LIMIT %s
+                                        )
+                                    """
+                                    
+                                    cursor.execute(delete_sql, [s_uuid, p_uuid, o_uuid, g_uuid, count])
+                                    quad_removed = cursor.rowcount
+                                    batch_removed += quad_removed
+                                
                                 removed_count += batch_removed
                                 
                                 self.logger.debug(f"Removed {batch_removed} quads in batch {i//batch_size + 1}")
