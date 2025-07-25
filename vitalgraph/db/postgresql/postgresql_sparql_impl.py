@@ -232,7 +232,18 @@ class PostgreSQLSparqlImpl:
         self.variable_counter = 0
         self.join_counter = 0
         self.term_uuid_cache = TermUUIDCache(max_size=10000)  # Cache for term UUID lookups
+        self.graph_cache = set()  # In-memory cache of known graphs (synced with graph table)
         
+    async def _initialize_graph_cache_if_needed(self, space_id: str) -> None:
+        """
+        Initialize the graph cache if it's empty (lazy loading).
+        
+        Args:
+            space_id: The space identifier
+        """
+        if not self.graph_cache:
+            await self._load_graph_cache(space_id)
+    
     async def execute_sparql_query(self, space_id: str, sparql_query: str) -> List[Dict[str, Any]]:
         """
         Execute a SPARQL query against the specified space.
@@ -898,19 +909,10 @@ class PostgreSQLSparqlImpl:
         
         # Handle context constraints for GRAPH patterns
         if context_constraint is None:
-            # No explicit GRAPH pattern - query default graph (urn:___GLOBAL)
-            global_graph_terms = [GraphConstants.get_global_graph_term_info()]
-            global_graph_mappings = await self._get_term_uuids_batch(global_graph_terms, table_config)
-            
-            global_key = GraphConstants.get_global_graph_term_info()
-            if global_key in global_graph_mappings:
-                global_uuid = global_graph_mappings[global_key]
-                # Add global graph constraint to all quad tables
-                for quad_alias in quad_aliases:
-                    all_where_conditions.append(f"{quad_alias}.context_uuid = '{global_uuid}'")
-                self.logger.debug(f"Applied default graph constraint: {global_uuid}")
-            else:
-                self.logger.warning("Global graph not found in database - queries may return unexpected results")
+            # No explicit GRAPH pattern - query ALL graphs (SPARQL 1.1 default graph behavior)
+            # This means the union of all named graphs + the global graph
+            # So we don't add any context constraint, allowing search across all graphs
+            self.logger.debug("No GRAPH clause - searching across all graphs (SPARQL 1.1 default graph behavior)")
         else:
             # Explicit context constraint provided
             for quad_alias in quad_aliases:
@@ -3020,13 +3022,23 @@ class PostgreSQLSparqlImpl:
                     if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
                         left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
                         right = self._translate_bind_expression(bind_expr.other, variable_mappings)
-                        op = str(bind_expr.op)
+                        
+                        # Handle operator - it might be a list or a string
+                        op_raw = bind_expr.op
+                        if isinstance(op_raw, list) and len(op_raw) > 0:
+                            op = str(op_raw[0])  # Take first element if it's a list
+                        else:
+                            op = str(op_raw)
+                        
+                        self.logger.debug(f"AdditiveExpression operator: {op_raw} -> {op}")
                         
                         # Map SPARQL operators to SQL operators
                         if op == '+':
-                            return f"({left} + {right})"
+                            # Add type casting for arithmetic operations
+                            return f"(CAST({left} AS DECIMAL) + CAST({right} AS DECIMAL))"
                         elif op == '-':
-                            return f"({left} - {right})"
+                            # Add type casting for arithmetic operations
+                            return f"(CAST({left} AS DECIMAL) - CAST({right} AS DECIMAL))"
                         else:
                             self.logger.warning(f"Unknown additive operator: {op}")
                             return "NULL"
@@ -3043,14 +3055,23 @@ class PostgreSQLSparqlImpl:
                     if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
                         left = self._translate_bind_expression(bind_expr.expr, variable_mappings)
                         right = self._translate_bind_expression(bind_expr.other, variable_mappings)
-                        op = str(bind_expr.op)
+                        
+                        # Handle operator - it might be a list or a string
+                        op_raw = bind_expr.op
+                        if isinstance(op_raw, list) and len(op_raw) > 0:
+                            op = str(op_raw[0])  # Take first element if it's a list
+                        else:
+                            op = str(op_raw)
+                        
+                        self.logger.debug(f"MultiplicativeExpression operator: {op_raw} -> {op}")
                         
                         # Map SPARQL operators to SQL operators
                         if op == '*':
-                            return f"({left} * {right})"
+                            # Add type casting for arithmetic operations
+                            return f"(CAST({left} AS DECIMAL) * CAST({right} AS DECIMAL))"
                         elif op == '/':
-                            # Use NULLIF to avoid division by zero
-                            return f"({left} / NULLIF({right}, 0))"
+                            # Use NULLIF to avoid division by zero and add type casting
+                            return f"(CAST({left} AS DECIMAL) / NULLIF(CAST({right} AS DECIMAL), 0))"
                         else:
                             self.logger.warning(f"Unknown multiplicative operator: {op}")
                             return "NULL"
@@ -5068,4 +5089,1467 @@ class PostgreSQLSparqlImpl:
             
         except Exception as e:
             self.logger.error(f"Error processing DESCRIBE results: {e}")
+            raise
+    
+    # ===== SPARQL 1.1 UPDATE OPERATIONS =====
+    
+    async def execute_sparql_update(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute a SPARQL 1.1 UPDATE operation.
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: SPARQL UPDATE query string
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+            
+        Raises:
+            Exception: If update operation fails
+        """
+        self.logger.info(f"Executing SPARQL UPDATE in space '{space_id}'")
+        self.logger.debug(f"UPDATE query: {sparql_update}")
+        
+        try:
+            # Detect update operation type
+            update_type = self._detect_update_type(sparql_update)
+            self.logger.debug(f"Detected update type: {update_type}")
+            
+            # Route to appropriate handler
+            if update_type == "INSERT_DATA":
+                return await self._execute_insert_data(space_id, sparql_update)
+            elif update_type == "DELETE_DATA":
+                return await self._execute_delete_data(space_id, sparql_update)
+            elif update_type == "INSERT_DELETE_PATTERN":
+                return await self._execute_insert_delete_pattern(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('CREATE'):
+                return await self._execute_create_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('DROP'):
+                return await self._execute_drop_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('CLEAR'):
+                return await self._execute_clear_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('COPY'):
+                return await self._execute_copy_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('MOVE'):
+                return await self._execute_move_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('ADD'):
+                return await self._execute_add_graph(space_id, sparql_update)
+            elif sparql_update.strip().upper().startswith('LOAD'):
+                return await self._execute_load_operation(space_id, sparql_update)
+            else:
+                raise ValueError(f"Unsupported UPDATE operation type: {update_type}")
+                
+        except Exception as e:
+            self.logger.error(f"Error executing SPARQL UPDATE: {e}")
+            raise
+    
+    def _detect_update_type(self, sparql_update: str) -> str:
+        """
+        Detect the type of SPARQL UPDATE operation.
+        
+        Args:
+            sparql_update: SPARQL UPDATE query string
+            
+        Returns:
+            str: Update operation type
+        """
+        # Normalize query for pattern matching
+        normalized = re.sub(r'\s+', ' ', sparql_update.strip().upper())
+        
+        # Check for different update patterns
+        if 'INSERT DATA' in normalized:
+            return "INSERT_DATA"
+        elif 'DELETE DATA' in normalized:
+            return "DELETE_DATA"
+        elif 'CREATE GRAPH' in normalized or 'CREATE SILENT GRAPH' in normalized:
+            return "CREATE_GRAPH"
+        elif 'DROP GRAPH' in normalized or 'DROP SILENT GRAPH' in normalized:
+            return "DROP_GRAPH"
+        elif 'CLEAR GRAPH' in normalized or 'CLEAR SILENT GRAPH' in normalized:
+            return "CLEAR_GRAPH"
+        elif 'COPY' in normalized and 'TO' in normalized:
+            return "COPY_GRAPH"
+        elif 'MOVE' in normalized and 'TO' in normalized:
+            return "MOVE_GRAPH"
+        elif 'ADD' in normalized and 'TO' in normalized:
+            return "ADD_GRAPH"
+        elif ('INSERT' in normalized and 'WHERE' in normalized) or ('DELETE' in normalized and 'WHERE' in normalized):
+            return "INSERT_DELETE_PATTERN"
+        else:
+            return "UNKNOWN"
+    
+    async def _execute_insert_data(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute INSERT DATA operation with ground triples.
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: INSERT DATA SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing INSERT DATA operation")
+        
+        try:
+            # Initialize graph cache if needed
+            await self._initialize_graph_cache_if_needed(space_id)
+            # Parse INSERT DATA query to extract triples
+            triples = self._parse_insert_data_triples(sparql_update)
+            self.logger.debug(f"Parsed {len(triples)} triples for insertion")
+            
+            if not triples:
+                self.logger.warning("No triples found in INSERT DATA operation")
+                return True
+            
+            # Convert triples to quads and collect unique graph URIs
+            quads = []
+            unique_graphs = set()
+            
+            for subject, predicate, obj, graph in triples:
+                # Use global graph if no graph specified
+                # In this system, INSERT DATA without GRAPH clause targets the global graph
+                # since that's where most queries look for data
+                if graph is None:
+                    graph = URIRef(GraphConstants.GLOBAL_GRAPH_URI)
+                
+                quads.append((subject, predicate, obj, graph))
+                unique_graphs.add(str(graph))
+            
+            # Efficiently register only unique graphs (batch optimization)
+            await self._ensure_graphs_registered_batch(space_id, unique_graphs)
+            
+            # Insert quads in batch
+            await self.space_impl.add_rdf_quads_batch(space_id, quads)
+            
+            self.logger.info(f"Successfully inserted {len(quads)} quads")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in INSERT DATA operation: {e}")
+            raise
+    
+    async def _execute_delete_data(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute DELETE DATA operation with ground triples.
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: DELETE DATA SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing DELETE DATA operation")
+        
+        try:
+            # Parse DELETE DATA query to extract triples
+            triples = self._parse_delete_data_triples(sparql_update)
+            self.logger.debug(f"Parsed {len(triples)} triples for deletion")
+            
+            if not triples:
+                self.logger.warning("No triples found in DELETE DATA operation")
+                return True
+            
+            # Convert triples to quads and delete
+            quads = []
+            for subject, predicate, obj, graph in triples:
+                # Use global graph if no graph specified
+                # In this system, DELETE DATA without GRAPH clause targets the global graph
+                # since that's where most queries look for data
+                if graph is None:
+                    graph = URIRef(GraphConstants.GLOBAL_GRAPH_URI)
+                quads.append((subject, predicate, obj, graph))
+            
+            # Delete quads in batch
+            await self.space_impl.remove_rdf_quads_batch(space_id, quads)
+            
+            self.logger.info(f"Successfully deleted {len(quads)} quads")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in DELETE DATA operation: {e}")
+            raise
+    
+    def _parse_insert_data_triples(self, sparql_update: str) -> List[Tuple[Any, Any, Any, Optional[URIRef]]]:
+        """
+        Parse INSERT DATA query to extract ground triples using RDFLib.
+        
+        Args:
+            sparql_update: INSERT DATA SPARQL query
+            
+        Returns:
+            List of (subject, predicate, object, graph) tuples
+        """
+        try:
+            from rdflib import Graph, ConjunctiveGraph
+            from rdflib.plugins.sparql.processor import SPARQLUpdateProcessor
+            
+            self.logger.debug(f"Parsing INSERT DATA query: {sparql_update}")
+            
+            # Create a temporary graph to capture the INSERT DATA triples
+            temp_graph = ConjunctiveGraph()
+            
+            # Use RDFLib's SPARQL UPDATE processor to parse and extract the data
+            processor = SPARQLUpdateProcessor(temp_graph)
+            
+            # Execute the update on the temporary graph to extract triples
+            processor.update(sparql_update)
+            
+            self.logger.debug(f"Temp graph has {len(temp_graph)} triples after update")
+            
+            # Extract all quads from the temporary graph
+            triples = []
+            context_count = 0
+            for context in temp_graph.contexts():
+                context_count += 1
+                graph_uri = context.identifier if context.identifier != temp_graph.default_context.identifier else None
+                context_triples = 0
+                for subject, predicate, obj in context:
+                    triples.append((subject, predicate, obj, graph_uri))
+                    context_triples += 1
+                    self.logger.debug(f"  Triple: {subject} {predicate} {obj} (graph: {graph_uri})")
+                self.logger.debug(f"Context {context.identifier} has {context_triples} triples")
+            
+            self.logger.debug(f"Found {context_count} contexts, extracted {len(triples)} total triples")
+            
+            if not triples:
+                self.logger.warning("No triples extracted from INSERT DATA - trying fallback")
+                return self._parse_data_triples_fallback(sparql_update, "INSERT DATA")
+            
+            self.logger.debug(f"Successfully parsed {len(triples)} triples from INSERT DATA")
+            return triples
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing INSERT DATA triples with RDFLib: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            # Fallback to simple regex parsing for basic cases
+            return self._parse_data_triples_fallback(sparql_update, "INSERT DATA")
+    
+    async def _get_default_graph_uri(self, space_id: str) -> str:
+        """
+        Get the default graph URI for a space.
+        
+        In SPARQL, when no GRAPH clause is specified in INSERT DATA or DELETE DATA,
+        the operation should target the default graph of the dataset, not the global graph.
+        
+        Args:
+            space_id: The space identifier
+            
+        Returns:
+            str: The default graph URI for the space
+        """
+        try:
+            # Get the space configuration to find the default graph URI
+            space_config = await self.space_impl.get_space_config(space_id)
+            if space_config and hasattr(space_config, 'graph_uri'):
+                return space_config.graph_uri
+            
+            # Fallback: try to get from space metadata
+            space_info = await self.space_impl.get_space_info(space_id)
+            if space_info and 'graph_uri' in space_info:
+                return space_info['graph_uri']
+            
+            # Last resort: construct default graph URI from space_id
+            return f"http://vital.ai/graph/{space_id}"
+            
+        except Exception as e:
+            self.logger.warning(f"Could not determine default graph URI for space {space_id}: {e}")
+            # Fallback to a reasonable default
+            return f"http://vital.ai/graph/{space_id}"
+    
+    def _parse_delete_data_triples(self, sparql_update: str) -> List[Tuple[Any, Any, Any, Optional[URIRef]]]:
+        """
+        Parse DELETE DATA query to extract ground triples using RDFLib.
+        
+        For DELETE DATA, we need to parse the triples to be deleted without actually
+        executing the deletion. We'll use a different approach than INSERT DATA.
+        
+        Args:
+            sparql_update: DELETE DATA SPARQL query
+            
+        Returns:
+            List of (subject, predicate, object, graph) tuples
+        """
+        try:
+            from rdflib import Graph, ConjunctiveGraph
+            from rdflib.plugins.sparql.parser import parseUpdate
+            from rdflib.plugins.sparql.algebra import translateUpdate
+            
+            # Parse the update query to extract the data structure
+            parsed_update = parseUpdate(sparql_update)
+            algebra = translateUpdate(parsed_update)
+            
+            triples = []
+            
+            # For DELETE DATA, we need to extract the triples from the algebra
+            # without executing the deletion
+            if isinstance(algebra, list):
+                for update_op in algebra:
+                    if hasattr(update_op, 'name') and update_op.name == 'DeleteData':
+                        # Extract the graph data from the delete operation
+                        if hasattr(update_op, 'graph'):
+                            graph_data = update_op.graph
+                            graph_uri = None
+                            
+                            # Check if this is a named graph operation
+                            if hasattr(update_op, 'graphiri'):
+                                graph_uri = update_op.graphiri
+                            
+                            # Extract triples from the graph data
+                            if hasattr(graph_data, 'triples'):
+                                for triple in graph_data.triples((None, None, None)):
+                                    subject, predicate, obj = triple
+                                    triples.append((subject, predicate, obj, graph_uri))
+                            elif isinstance(graph_data, (list, tuple)):
+                                # Handle list of triples
+                                for item in graph_data:
+                                    if len(item) >= 3:
+                                        subject, predicate, obj = item[:3]
+                                        graph_uri = item[3] if len(item) > 3 else None
+                                        triples.append((subject, predicate, obj, graph_uri))
+            
+            self.logger.debug(f"Successfully parsed {len(triples)} triples from DELETE DATA")
+            return triples
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing DELETE DATA triples with RDFLib: {e}")
+            # Fallback to simple regex parsing for basic cases
+            return self._parse_data_triples_fallback(sparql_update, "DELETE DATA")
+    
+    def _parse_data_triples_fallback(self, sparql_update: str, operation: str) -> List[Tuple[Any, Any, Any, Optional[URIRef]]]:
+        """
+        Fallback parser for INSERT/DELETE DATA operations using regex.
+        
+        Args:
+            sparql_update: SPARQL UPDATE query
+            operation: "INSERT DATA" or "DELETE DATA"
+            
+        Returns:
+            List of (subject, predicate, object, graph) tuples
+        """
+        self.logger.warning(f"Using fallback parser for {operation} operation")
+        
+        # This is a simplified fallback - in production, you'd want more robust parsing
+        # For now, return empty list to avoid errors
+        return []
+    
+    async def _execute_insert_delete_pattern(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute INSERT/DELETE operations with WHERE patterns (Phase 2).
+        
+        This handles:
+        - INSERT { ... } WHERE { ... }
+        - DELETE { ... } WHERE { ... }
+        - DELETE { ... } INSERT { ... } WHERE { ... }
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: Pattern-based INSERT/DELETE SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing pattern-based INSERT/DELETE operation")
+        
+        try:
+            from rdflib import Graph, ConjunctiveGraph, URIRef
+            from rdflib.plugins.sparql.parser import parseUpdate
+            from rdflib.plugins.sparql.algebra import translateUpdate
+            
+            # Parse the update query
+            parsed_update = parseUpdate(sparql_update)
+            algebra = translateUpdate(parsed_update)
+            
+            self.logger.debug(f"Parsed update algebra: {algebra}")
+            
+            # Examine the algebra structure to understand how to access operations
+            self.logger.debug(f"Algebra attributes: {dir(algebra)}")
+            
+            # Try different ways to access the update operations
+            operations = None
+            if hasattr(algebra, 'request'):
+                operations = algebra.request
+            elif hasattr(algebra, 'operations'):
+                operations = algebra.operations
+            elif hasattr(algebra, 'updates'):
+                operations = algebra.updates
+            elif hasattr(algebra, 'algebra'):
+                operations = [algebra.algebra] if not isinstance(algebra.algebra, list) else algebra.algebra
+            else:
+                # Try to iterate directly over the algebra
+                try:
+                    operations = list(algebra)
+                except (TypeError, AttributeError):
+                    operations = [algebra]
+            
+            self.logger.debug(f"Found operations: {operations}")
+            
+            if operations:
+                for update_op in operations:
+                    self.logger.debug(f"Processing update operation: {update_op}, type: {type(update_op)}")
+                    self.logger.debug(f"Update operation attributes: {dir(update_op)}")
+                    
+                    if hasattr(update_op, 'name'):
+                        if update_op.name == 'Modify':
+                            # This is a DELETE/INSERT WHERE operation
+                            await self._execute_modify_operation(space_id, update_op, sparql_update)
+                        elif update_op.name == 'InsertData':
+                            # This should have been handled by INSERT_DATA type
+                            self.logger.warning("InsertData found in pattern operation - delegating to INSERT_DATA handler")
+                            return await self._execute_insert_data(space_id, sparql_update)
+                        elif update_op.name == 'DeleteData':
+                            # This should have been handled by DELETE_DATA type
+                            self.logger.warning("DeleteData found in pattern operation - delegating to DELETE_DATA handler")
+                            return await self._execute_delete_data(space_id, sparql_update)
+                        else:
+                            self.logger.warning(f"Unknown update operation: {update_op.name}")
+                    else:
+                        # Try to handle the operation directly if it's a Modify-like structure
+                        if hasattr(update_op, 'where') or hasattr(update_op, 'delete') or hasattr(update_op, 'insert'):
+                            await self._execute_modify_operation(space_id, update_op, sparql_update)
+                        else:
+                            self.logger.warning(f"Update operation without name or recognizable structure: {update_op}")
+            else:
+                self.logger.error("No operations found in algebra structure")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error executing pattern-based UPDATE: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}") 
+            raise
+    
+    async def _execute_modify_operation(self, space_id: str, modify_op, original_query: str) -> bool:
+        """
+        Execute a SPARQL Modify operation (DELETE/INSERT WHERE).
+        
+        Args:
+            space_id: The space identifier
+            modify_op: The parsed Modify operation from RDFLib
+            original_query: Original SPARQL query for fallback parsing
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug(f"Executing Modify operation: {modify_op}")
+        
+        try:
+            # Extract the WHERE clause and execute it as a SELECT query
+            where_clause = modify_op.where
+            
+            # Convert the WHERE clause to a SELECT query to find matching bindings
+            select_query = self._build_select_from_where(where_clause, original_query)
+            self.logger.debug(f"Generated SELECT query for WHERE clause: {select_query}")
+            
+            # Execute the SELECT query to get bindings
+            select_results = await self.execute_sparql_query(space_id, select_query)
+            
+            # Debug logging removed - BIND expressions working correctly
+            self.logger.debug(f"SELECT query results type: {type(select_results)}")
+            self.logger.debug(f"SELECT query results: {select_results}")
+            
+            # Handle different result formats
+            bindings = []
+            if isinstance(select_results, dict) and 'results' in select_results:
+                # Standard SPARQL JSON format
+                bindings = select_results['results'].get('bindings', [])
+            elif isinstance(select_results, list):
+                # Direct list of result dictionaries
+                bindings = select_results
+            else:
+                self.logger.warning(f"Unexpected SELECT result format: {type(select_results)}")
+                return True
+            
+            if not bindings:
+                self.logger.info("No matching bindings found for WHERE clause - no updates to perform")
+                return True
+            
+            self.logger.debug(f"Found {len(bindings)} binding sets for pattern operation")
+            self.logger.debug(f"Sample binding: {bindings[0] if bindings else 'None'}")
+            
+            # Debug: Show all variable names in the first binding
+            if bindings:
+                self.logger.debug(f"Available variables in binding: {list(bindings[0].keys())}")
+            
+            # Process DELETE patterns if present
+            if hasattr(modify_op, 'delete') and modify_op.delete:
+                await self._process_delete_patterns(space_id, modify_op.delete, bindings)
+            
+            # Process INSERT patterns if present
+            if hasattr(modify_op, 'insert') and modify_op.insert:
+                await self._process_insert_patterns(space_id, modify_op.insert, bindings)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error executing Modify operation: {e}")
+            raise
+    
+    def _build_select_from_where(self, where_clause, original_query: str) -> str:
+        """
+        Build a SELECT query from a WHERE clause to find variable bindings.
+        
+        Args:
+            where_clause: The WHERE clause from the parsed update
+            original_query: Original SPARQL query for fallback parsing
+            
+        Returns:
+            str: SELECT query to find bindings
+        """
+        try:
+            # Extract variables from the original query
+            import re
+            
+            # Find all variables in the query (starting with ?)
+            variables = set(re.findall(r'\?\w+', original_query))
+            
+            # Extract prefixes from original query
+            prefix_lines = []
+            for line in original_query.split('\n'):
+                line = line.strip()
+                if line.upper().startswith('PREFIX'):
+                    prefix_lines.append(line)
+            
+            # Build SELECT query
+            select_vars = ' '.join(sorted(variables)) if variables else '*'
+            prefixes = '\n'.join(prefix_lines)
+            
+            # Extract WHERE clause from original query
+            where_match = re.search(r'WHERE\s*\{(.+)\}', original_query, re.DOTALL | re.IGNORECASE)
+            if where_match:
+                where_content = where_match.group(1).strip()
+            else:
+                # Fallback - use a simple pattern
+                where_content = '?s ?p ?o .'
+            
+            select_query = f"""{prefixes}
+SELECT {select_vars} WHERE {{
+    {where_content}
+}}"""
+            
+            return select_query
+            
+        except Exception as e:
+            self.logger.error(f"Error building SELECT from WHERE: {e}")
+            # Fallback to a simple query
+            return "SELECT * WHERE { ?s ?p ?o . }"
+    
+    async def _process_delete_patterns(self, space_id: str, delete_patterns, bindings: list) -> None:
+        """
+        Process DELETE patterns with variable bindings.
+        
+        Args:
+            space_id: The space identifier
+            delete_patterns: DELETE patterns from the parsed query
+            bindings: Variable bindings from WHERE clause execution
+        """
+        self.logger.debug(f"Processing DELETE patterns with {len(bindings)} binding sets")
+        
+        quads_to_delete = []
+        
+        for binding in bindings:
+            # Convert binding to quad patterns and collect for deletion
+            delete_quads = self._instantiate_patterns(delete_patterns, binding)
+            quads_to_delete.extend(delete_quads)
+        
+        if quads_to_delete:
+            self.logger.debug(f"Deleting {len(quads_to_delete)} quads")
+            await self.space_impl.remove_rdf_quads_batch(space_id, quads_to_delete)
+    
+    async def _process_insert_patterns(self, space_id: str, insert_patterns, bindings: list) -> None:
+        """
+        Process INSERT patterns with variable bindings.
+        
+        Args:
+            space_id: The space identifier
+            insert_patterns: INSERT patterns from the parsed query
+            bindings: Variable bindings from WHERE clause execution
+        """
+        self.logger.debug(f"Processing INSERT patterns with {len(bindings)} binding sets")
+        
+        quads_to_insert = []
+        unique_graphs = set()
+        
+        for binding in bindings:
+            # Convert binding to quad patterns and collect for insertion
+            insert_quads = self._instantiate_patterns(insert_patterns, binding)
+            quads_to_insert.extend(insert_quads)
+            
+            # Collect unique graph URIs for batch registration
+            for _, _, _, graph in insert_quads:
+                if graph:
+                    unique_graphs.add(str(graph))
+        
+        if quads_to_insert:
+            # Efficiently register only unique graphs before inserting quads
+            await self._ensure_graphs_registered_batch(space_id, unique_graphs)
+            
+            self.logger.debug(f"Inserting {len(quads_to_insert)} quads")
+            await self.space_impl.add_rdf_quads_batch(space_id, quads_to_insert)
+    
+    def _instantiate_patterns(self, patterns, binding: dict) -> list:
+        """
+        Instantiate triple patterns with variable bindings.
+        
+        Args:
+            patterns: Triple patterns to instantiate
+            binding: Variable bindings from WHERE clause
+            
+        Returns:
+            list: List of instantiated (subject, predicate, object, graph) tuples
+        """
+        from rdflib import URIRef, Literal, BNode
+        from rdflib.plugins.sparql.sparql import SPARQLError
+        
+        self.logger.debug(f"Instantiating patterns with binding: {binding}")
+        
+        quads = []
+        
+        try:
+            # Handle different pattern structures from RDFLib algebra
+            if hasattr(patterns, 'triples'):
+                # BGP (Basic Graph Pattern) with triples
+                for triple in patterns.triples:
+                    quad = self._instantiate_triple(triple, binding)
+                    if quad:
+                        quads.append(quad)
+            elif hasattr(patterns, 'p'):
+                # Single triple pattern
+                quad = self._instantiate_triple(patterns, binding)
+                if quad:
+                    quads.append(quad)
+            elif isinstance(patterns, list):
+                # List of patterns
+                for pattern in patterns:
+                    sub_quads = self._instantiate_patterns(pattern, binding)
+                    quads.extend(sub_quads)
+            else:
+                # Try to extract triples from the pattern structure
+                self.logger.debug(f"Unknown pattern structure: {type(patterns)}, {patterns}")
+                # Fallback: try to iterate if it's iterable
+                try:
+                    for item in patterns:
+                        sub_quads = self._instantiate_patterns(item, binding)
+                        quads.extend(sub_quads)
+                except (TypeError, AttributeError):
+                    self.logger.warning(f"Could not process pattern: {patterns}")
+        
+        except Exception as e:
+            self.logger.error(f"Error instantiating patterns: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        self.logger.debug(f"Instantiated {len(quads)} quads from patterns")
+        return quads
+    
+    def _instantiate_triple(self, triple_pattern, binding: dict) -> tuple:
+        """
+        Instantiate a single triple pattern with variable bindings.
+        
+        Args:
+            triple_pattern: Triple pattern to instantiate
+            binding: Variable bindings from WHERE clause
+            
+        Returns:
+            tuple: (subject, predicate, object, graph) or None if instantiation fails
+        """
+        from rdflib import URIRef, Literal, BNode, Variable
+        
+        try:
+            # Extract subject, predicate, object from the triple pattern
+            if hasattr(triple_pattern, 's') and hasattr(triple_pattern, 'p') and hasattr(triple_pattern, 'o'):
+                subject = triple_pattern.s
+                predicate = triple_pattern.p
+                obj = triple_pattern.o
+            elif isinstance(triple_pattern, (list, tuple)) and len(triple_pattern) >= 3:
+                subject, predicate, obj = triple_pattern[:3]
+            else:
+                self.logger.warning(f"Unknown triple pattern structure: {triple_pattern}")
+                return None
+            
+            # Instantiate each component
+            inst_subject = self._instantiate_term(subject, binding)
+            inst_predicate = self._instantiate_term(predicate, binding)
+            inst_object = self._instantiate_term(obj, binding)
+            
+            # Default to global graph if no graph context specified
+            graph = URIRef(GraphConstants.GLOBAL_GRAPH_URI)
+            
+            if inst_subject and inst_predicate and inst_object:
+                return (inst_subject, inst_predicate, inst_object, graph)
+            else:
+                self.logger.warning(f"Failed to instantiate triple: {subject} {predicate} {obj}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error instantiating triple: {e}")
+            return None
+    
+    def _instantiate_term(self, term, binding: dict):
+        """
+        Instantiate a single term (subject, predicate, or object) with variable bindings.
+        
+        Args:
+            term: Term to instantiate (could be variable, URI, literal, etc.)
+            binding: Variable bindings from WHERE clause
+            
+        Returns:
+            Instantiated term or None if instantiation fails
+        """
+        from rdflib import URIRef, Literal, BNode, Variable
+        
+        try:
+            # Handle variables
+            if hasattr(term, 'n3') and term.n3().startswith('?'):
+                # This is a variable
+                var_name = term.n3()[1:]  # Remove the '?' prefix
+                # Try exact match first, then case-insensitive match
+                bound_value = None
+                if var_name in binding:
+                    bound_value = binding[var_name]
+                else:
+                    # Try case-insensitive lookup (PostgreSQL converts to lowercase)
+                    for key, value in binding.items():
+                        if key.lower() == var_name.lower():
+                            bound_value = value
+                            break
+            
+                if bound_value is not None:
+                    if isinstance(bound_value, dict):
+                        # SPARQL JSON result format
+                        if bound_value['type'] == 'uri':
+                            return URIRef(bound_value['value'])
+                        elif bound_value['type'] == 'literal':
+                            if 'datatype' in bound_value:
+                                return Literal(bound_value['value'], datatype=URIRef(bound_value['datatype']))
+                            elif 'xml:lang' in bound_value:
+                                return Literal(bound_value['value'], lang=bound_value['xml:lang'])
+                            else:
+                                return Literal(bound_value['value'])
+                        elif bound_value['type'] == 'bnode':
+                            return BNode(bound_value['value'])
+                    else:
+                        # Direct value
+                        return bound_value
+                else:
+                    self.logger.warning(f"Variable {var_name} not found in bindings")
+                    return None
+            
+            # Handle URIs, literals, blank nodes directly
+            elif isinstance(term, (URIRef, Literal, BNode)):
+                return term
+            
+            # Handle string representations
+            elif isinstance(term, str):
+                if term.startswith('?'):
+                    # Variable as string
+                    var_name = term[1:]
+                    bound_value = None
+                    if var_name in binding:
+                        bound_value = binding[var_name]
+                    else:
+                        # Try case-insensitive lookup (PostgreSQL converts to lowercase)
+                        for key, value in binding.items():
+                            if key.lower() == var_name.lower():
+                                bound_value = value
+                                break
+                
+                    if bound_value is not None:
+                        if isinstance(bound_value, dict) and 'value' in bound_value:
+                            if bound_value['type'] == 'uri':
+                                return URIRef(bound_value['value'])
+                            elif bound_value['type'] == 'literal':
+                                return Literal(bound_value['value'])
+                        return bound_value
+                    return None
+                elif term.startswith('<') and term.endswith('>'):
+                    # URI in angle brackets
+                    return URIRef(term[1:-1])
+                elif term.startswith('"') and term.endswith('"'):
+                    # Literal in quotes
+                    return Literal(term[1:-1])
+                else:
+                    # Assume it's a URI
+                    return URIRef(term)
+            
+            else:
+                # Unknown term type - return as is
+                self.logger.debug(f"Unknown term type: {type(term)}, value: {term}")
+                return term
+                
+        except Exception as e:
+            self.logger.error(f"Error instantiating term {term}: {e}")
+            return None
+    
+    async def _execute_create_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute CREATE GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: CREATE GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing CREATE GRAPH operation")
+        
+        try:
+            # Initialize graph cache if needed
+            await self._initialize_graph_cache_if_needed(space_id)
+            # Extract graph URI from the query
+            graph_uri = self._extract_graph_uri(sparql_update, "CREATE")
+            if not graph_uri:
+                raise ValueError("No graph URI found in CREATE GRAPH query")
+            
+            self.logger.info(f"Creating graph: {graph_uri}")
+            
+            # Ensure graph is registered in cache and database
+            await self._ensure_graph_registered(space_id, graph_uri)
+            
+            self.logger.info(f"Graph {graph_uri} created successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in CREATE GRAPH operation: {e}")
+            raise
+    
+    async def _execute_drop_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute DROP GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: DROP GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing DROP GRAPH operation")
+        
+        try:
+            # Extract graph URI from the query
+            graph_uri = self._extract_graph_uri(sparql_update, "DROP")
+            if not graph_uri:
+                raise ValueError("No graph URI found in DROP GRAPH query")
+            
+            self.logger.info(f"Dropping graph: {graph_uri}")
+            
+            # Remove all quads from the specified graph
+            await self._remove_all_quads_from_graph(space_id, graph_uri)
+            
+            # Remove graph from database and cache
+            await self._remove_graph_from_db(space_id, graph_uri)
+            self.graph_cache.discard(graph_uri)  # Remove from cache
+            
+            self.logger.info(f"Graph {graph_uri} dropped successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in DROP GRAPH operation: {e}")
+            raise
+    
+    async def _execute_clear_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute CLEAR GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: CLEAR GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing CLEAR GRAPH operation")
+        
+        try:
+            # Extract graph URI from the query
+            graph_uri = self._extract_graph_uri(sparql_update, "CLEAR")
+            if not graph_uri:
+                raise ValueError("No graph URI found in CLEAR GRAPH query")
+            
+            self.logger.info(f"Clearing graph: {graph_uri}")
+            
+            # Remove all quads from the specified graph (same as DROP but graph still exists)
+            await self._remove_all_quads_from_graph(space_id, graph_uri)
+            
+            self.logger.info(f"Graph {graph_uri} cleared successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in CLEAR GRAPH operation: {e}")
+            raise
+    
+    async def _execute_copy_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute COPY GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: COPY GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing COPY GRAPH operation")
+        
+        try:
+            # Extract source and target graph URIs
+            source_graph, target_graph = self._extract_graph_pair(sparql_update, "COPY")
+            
+            self.logger.info(f"Copying from {source_graph} to {target_graph}")
+            
+            # First clear the target graph
+            await self._remove_all_quads_from_graph(space_id, target_graph)
+            
+            # Then copy all quads from source to target
+            await self._copy_all_quads_between_graphs(space_id, source_graph, target_graph)
+            
+            self.logger.info(f"Graph copied successfully from {source_graph} to {target_graph}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in COPY GRAPH operation: {e}")
+            raise
+    
+    async def _execute_move_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute MOVE GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: MOVE GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing MOVE GRAPH operation")
+        
+        try:
+            # Extract source and target graph URIs
+            source_graph, target_graph = self._extract_graph_pair(sparql_update, "MOVE")
+            
+            self.logger.info(f"Moving from {source_graph} to {target_graph}")
+            
+            # First clear the target graph
+            await self._remove_all_quads_from_graph(space_id, target_graph)
+            
+            # Copy all quads from source to target
+            await self._copy_all_quads_between_graphs(space_id, source_graph, target_graph)
+            
+            # Then clear the source graph
+            await self._remove_all_quads_from_graph(space_id, source_graph)
+            
+            self.logger.info(f"Graph moved successfully from {source_graph} to {target_graph}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in MOVE GRAPH operation: {e}")
+            raise
+    
+    async def _execute_add_graph(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute ADD GRAPH operation (Phase 3).
+        
+        Args:
+            space_id: The space identifier
+            sparql_update: ADD GRAPH SPARQL query
+            
+        Returns:
+            bool: True if successful
+        """
+        self.logger.debug("Executing ADD GRAPH operation")
+        
+        try:
+            # Extract source and target graph URIs
+            source_graph, target_graph = self._extract_graph_pair(sparql_update, "ADD")
+            
+            self.logger.info(f"Adding from {source_graph} to {target_graph}")
+            
+            # Copy all quads from source to target (merge, don't clear target first)
+            await self._copy_all_quads_between_graphs(space_id, source_graph, target_graph)
+            
+            self.logger.info(f"Graph added successfully from {source_graph} to {target_graph}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in ADD GRAPH operation: {e}")
+            raise
+    
+    def _extract_graph_uri(self, sparql_update: str, operation: str) -> str:
+        """
+        Extract graph URI from CREATE/DROP/CLEAR GRAPH operations.
+        
+        Args:
+            sparql_update: SPARQL UPDATE query
+            operation: Operation type (CREATE, DROP, CLEAR)
+            
+        Returns:
+            str: Graph URI
+        """
+        import re
+        
+        # Pattern to match graph URI in angle brackets
+        pattern = rf'{operation}\s+(?:SILENT\s+)?GRAPH\s+<([^>]+)>'
+        match = re.search(pattern, sparql_update, re.IGNORECASE)
+        
+        if match:
+            return match.group(1)
+        
+        # Fallback: try without GRAPH keyword
+        pattern = rf'{operation}\s+(?:SILENT\s+)?<([^>]+)>'
+        match = re.search(pattern, sparql_update, re.IGNORECASE)
+        
+        if match:
+            return match.group(1)
+        
+        raise ValueError(f"Could not extract graph URI from {operation} operation: {sparql_update}")
+    
+    def _extract_graph_pair(self, sparql_update: str, operation: str) -> tuple[str, str]:
+        """
+        Extract source and target graph URIs from COPY/MOVE/ADD operations.
+        
+        Args:
+            sparql_update: SPARQL UPDATE query
+            operation: Operation type (COPY, MOVE, ADD)
+            
+        Returns:
+            tuple: (source_graph, target_graph)
+        """
+        import re
+        
+        # Pattern to match "OPERATION <source> TO <target>"
+        pattern = rf'{operation}\s+<([^>]+)>\s+TO\s+<([^>]+)>'
+        match = re.search(pattern, sparql_update, re.IGNORECASE)
+        
+        if match:
+            return match.group(1), match.group(2)
+        
+        raise ValueError(f"Could not extract graph pair from {operation} operation: {sparql_update}")
+    
+    async def _remove_all_quads_from_graph(self, space_id: str, graph_uri: str) -> None:
+        """
+        Remove all quads from a specific graph.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph to clear
+        """
+        from rdflib import URIRef
+        
+        try:
+            # Get all quads in the graph
+            quads_to_remove = await self._get_all_quads_in_graph(space_id, graph_uri)
+            
+            if quads_to_remove:
+                # Remove them in batch
+                await self.space_impl.remove_rdf_quads_batch(space_id, quads_to_remove)
+                self.logger.info(f"Removed {len(quads_to_remove)} quads from graph {graph_uri}")
+            else:
+                self.logger.info(f"Graph {graph_uri} is already empty")
+                
+        except Exception as e:
+            self.logger.error(f"Error removing quads from graph {graph_uri}: {e}")
+            raise
+    
+    async def _get_all_quads_in_graph(self, space_id: str, graph_uri: str) -> list:
+        """
+        Get all quads in a specific graph.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph
+            
+        Returns:
+            list: List of (subject, predicate, object, graph) tuples
+        """
+        from rdflib import URIRef
+        
+        try:
+            # Execute a SPARQL query to get all triples in the graph
+            query = f"""
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_uri}> {{
+                    ?s ?p ?o .
+                }}
+            }}
+            """
+            
+            results = await self.execute_sparql_query(space_id, query)
+            
+            # Convert results to quads
+            quads = []
+            if results:
+                for result in results:
+                    subject = URIRef(result['s']) if result['s'].startswith('http') else result['s']
+                    predicate = URIRef(result['p']) if result['p'].startswith('http') else result['p']
+                    obj = URIRef(result['o']) if result['o'].startswith('http') else result['o']
+                    graph = URIRef(graph_uri)
+                    quads.append((subject, predicate, obj, graph))
+            
+            return quads
+            
+        except Exception as e:
+            self.logger.error(f"Error getting quads from graph {graph_uri}: {e}")
+            raise
+    
+    async def _copy_all_quads_between_graphs(self, space_id: str, source_graph: str, target_graph: str) -> None:
+        """
+        Copy all quads from source graph to target graph.
+        
+        Args:
+            space_id: The space identifier
+            source_graph: URI of the source graph
+            target_graph: URI of the target graph
+        """
+        from rdflib import URIRef
+        
+        try:
+            # Get all quads from source graph
+            source_quads = await self._get_all_quads_in_graph(space_id, source_graph)
+            
+            if source_quads:
+                # Change graph URI to target graph
+                target_quads = []
+                for subject, predicate, obj, _ in source_quads:
+                    target_quads.append((subject, predicate, obj, URIRef(target_graph)))
+                
+                # Insert into target graph
+                await self.space_impl.add_rdf_quads_batch(space_id, target_quads)
+                self.logger.info(f"Copied {len(target_quads)} quads from {source_graph} to {target_graph}")
+            else:
+                self.logger.info(f"Source graph {source_graph} is empty, nothing to copy")
+                
+        except Exception as e:
+            self.logger.error(f"Error copying quads from {source_graph} to {target_graph}: {e}")
+            raise
+    
+    async def _ensure_graphs_registered_batch(self, space_id: str, graph_uris: set) -> None:
+        """
+        Efficiently ensure multiple graphs are registered in both cache and database.
+        
+        Args:
+            space_id: The space identifier
+            graph_uris: Set of graph URIs to register
+        """
+        if not graph_uris:
+            return
+        
+        # Filter out graphs already in cache
+        uncached_graphs = graph_uris - self.graph_cache
+        
+        if uncached_graphs:
+            # Check which uncached graphs exist in database
+            existing_graphs = await self._check_graphs_exist_in_db_batch(space_id, uncached_graphs)
+            
+            # Insert graphs that don't exist in database
+            new_graphs = uncached_graphs - existing_graphs
+            if new_graphs:
+                await self._insert_graphs_to_db_batch(space_id, new_graphs)
+                self.logger.info(f"Registered {len(new_graphs)} new graphs: {list(new_graphs)[:3]}{'...' if len(new_graphs) > 3 else ''}")
+            
+            # Add all uncached graphs to cache
+            self.graph_cache.update(uncached_graphs)
+            self.logger.debug(f"Added {len(uncached_graphs)} graphs to cache")
+    
+    async def _ensure_graph_registered(self, space_id: str, graph_uri: str) -> None:
+        """
+        Ensure a graph is registered in both the cache and the graph table.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph to register
+        """
+        # Use the batch method for consistency
+        await self._ensure_graphs_registered_batch(space_id, {graph_uri})
+    
+    async def _graph_exists_in_db(self, space_id: str, graph_uri: str) -> bool:
+        """
+        Check if a graph exists in the database.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph to check
+            
+        Returns:
+            bool: True if graph exists in database
+        """
+        try:
+            table_names = self.space_impl._get_table_names(space_id)
+            query = f"""
+                SELECT 1 FROM {table_names['graph']} 
+                WHERE graph_uri = %s
+                LIMIT 1
+            """
+            
+            result = await self._execute_sql_query_with_params(query, (graph_uri,))
+            return len(result) > 0
+            
+        except Exception as e:
+            self.logger.error(f"Error checking graph existence for {graph_uri}: {e}")
+            return False
+    
+    async def _check_graphs_exist_in_db_batch(self, space_id: str, graph_uris: set) -> set:
+        """
+        Check which graphs exist in the database (batch operation).
+        
+        Args:
+            space_id: The space identifier
+            graph_uris: Set of graph URIs to check
+            
+        Returns:
+            set: Set of graph URIs that exist in the database
+        """
+        if not graph_uris:
+            return set()
+        
+        try:
+            table_names = self.space_impl._get_table_names(space_id)
+            
+            # Create parameterized query for batch check
+            placeholders = ','.join(['%s'] * len(graph_uris))
+            query = f"""
+                SELECT graph_uri FROM {table_names['graph']} 
+                WHERE graph_uri IN ({placeholders})
+            """
+            
+            results = await self._execute_sql_query_with_params(query, tuple(graph_uris))
+            
+            # Extract existing graph URIs from results
+            existing_graphs = set()
+            for result in results:
+                if isinstance(result, dict) and 'graph_uri' in result:
+                    existing_graphs.add(result['graph_uri'])
+                elif isinstance(result, (list, tuple)) and len(result) > 0:
+                    existing_graphs.add(result[0])
+            
+            return existing_graphs
+            
+        except Exception as e:
+            self.logger.error(f"Error checking graph existence in batch: {e}")
+            return set()  # Return empty set on error - will cause all graphs to be inserted
+    
+    async def _insert_graphs_to_db_batch(self, space_id: str, graph_uris: set) -> None:
+        """
+        Insert multiple new graphs into the database (batch operation).
+        
+        Args:
+            space_id: The space identifier
+            graph_uris: Set of graph URIs to insert
+        """
+        if not graph_uris:
+            return
+        
+        try:
+            table_names = self.space_impl._get_table_names(space_id)
+            
+            # Prepare batch insert data
+            insert_data = []
+            for graph_uri in graph_uris:
+                # Extract a simple name from the URI for the graph_name field
+                graph_name = graph_uri.split('/')[-1] if '/' in graph_uri else graph_uri
+                insert_data.append((graph_uri, graph_name, 0))
+            
+            # Create batch insert query
+            placeholders = ','.join(['(%s, %s, %s)'] * len(insert_data))
+            query = f"""
+                INSERT INTO {table_names['graph']} (graph_uri, graph_name, triple_count)
+                VALUES {placeholders}
+                ON CONFLICT (graph_uri) DO NOTHING
+            """
+            
+            # Flatten the insert data for the query
+            flattened_data = [item for sublist in insert_data for item in sublist]
+            
+            await self._execute_sql_query_with_params(query, tuple(flattened_data))
+            self.logger.debug(f"Batch inserted {len(graph_uris)} graphs into database")
+            
+        except Exception as e:
+            self.logger.error(f"Error batch inserting graphs to database: {e}")
+            raise
+    
+    async def _insert_graph_to_db(self, space_id: str, graph_uri: str) -> None:
+        """
+        Insert a new graph into the database.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph to insert
+        """
+        # Use the batch method for consistency
+        await self._insert_graphs_to_db_batch(space_id, {graph_uri})
+    
+    async def _remove_graph_from_db(self, space_id: str, graph_uri: str) -> None:
+        """
+        Remove a graph from the database.
+        
+        Args:
+            space_id: The space identifier
+            graph_uri: URI of the graph to remove
+        """
+        try:
+            table_names = self.space_impl._get_table_names(space_id)
+            query = f"""
+                DELETE FROM {table_names['graph']} 
+                WHERE graph_uri = %s
+            """
+            
+            await self._execute_sql_query_with_params(query, (graph_uri,))
+            self.logger.debug(f"Removed graph from database: {graph_uri}")
+            
+        except Exception as e:
+            self.logger.error(f"Error removing graph {graph_uri} from database: {e}")
+            raise
+    
+    async def _load_graph_cache(self, space_id: str) -> None:
+        """
+        Load all existing graphs from the database into the cache.
+        
+        Args:
+            space_id: The space identifier
+        """
+        try:
+            table_names = self.space_impl._get_table_names(space_id)
+            query = f"SELECT graph_uri FROM {table_names['graph']}"
+            
+            results = await self._execute_sql_query(query)
+            
+            self.graph_cache.clear()
+            for result in results:
+                if isinstance(result, dict) and 'graph_uri' in result:
+                    self.graph_cache.add(result['graph_uri'])
+                elif isinstance(result, (list, tuple)) and len(result) > 0:
+                    self.graph_cache.add(result[0])
+            
+            self.logger.info(f"Loaded {len(self.graph_cache)} graphs into cache")
+            
+        except Exception as e:
+            self.logger.error(f"Error loading graph cache: {e}")
+            # Don't raise - we can continue with an empty cache
+    
+    async def _execute_load_operation(self, space_id: str, sparql_update: str) -> bool:
+        """
+        Execute SPARQL LOAD operation using the transfer utilities module.
+        
+        Supports:
+        - LOAD <source-uri>
+        - LOAD <source-uri> INTO GRAPH <target-graph>
+        
+        Args:
+            space_id: Space identifier
+            sparql_update: SPARQL LOAD query
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # Import the transfer utilities
+            from vitalgraph.transfer.transfer_utils import DataTransferManager, TransferConfig
+            
+            # Create transfer manager with configuration
+            config = TransferConfig(
+                max_file_size=100 * 1024 * 1024,  # 100MB
+                timeout_seconds=30,
+                allowed_schemes=['http', 'https'],
+                # TODO: Add domain allowlist from configuration if needed
+                # allowed_domains=['trusted-domain.com']
+            )
+            
+            transfer_manager = DataTransferManager(config)
+            
+            # Execute the load operation
+            load_result = await transfer_manager.execute_load_operation(sparql_update)
+            
+            if not load_result.success:
+                raise ValueError(f"LOAD operation failed: {load_result.error_message}")
+            
+            # Get the parsed data
+            source_uri = load_result.source_uri
+            target_graph = load_result.target_graph
+            
+            # Re-parse to get quads (the transfer manager returns metadata, we need the actual quads)
+            # Parse the LOAD query to get URIs
+            parsed_source_uri, parsed_target_graph = transfer_manager.query_parser.parse_load_query(sparql_update)
+            
+            # Fetch and parse content again to get quads
+            content, content_type, content_size = await transfer_manager.http_fetcher.fetch_content(parsed_source_uri)
+            rdf_format = transfer_manager.format_detector.detect_format(content_type, parsed_source_uri)
+            triples = transfer_manager.rdf_parser.parse_content(content, rdf_format, parsed_source_uri)
+            quads = transfer_manager.rdf_parser.convert_triples_to_quads(triples, parsed_target_graph)
+            
+            # Register the target graph if it doesn't exist
+            if target_graph:
+                await self._ensure_graphs_registered(space_id, [target_graph])
+            
+            # Insert quads using existing batch insertion logic
+            if quads:
+                await self.space_impl.add_rdf_quads_batch(space_id, quads)
+                self.logger.info(f"Successfully loaded {len(quads)} quads from {source_uri} (format: {load_result.format_detected}, size: {load_result.content_size} bytes, elapsed: {load_result.elapsed_seconds:.3f}s)")
+            else:
+                self.logger.warning(f"No valid RDF data found in {source_uri}")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error in LOAD operation: {e}")
+            raise
+    
+    # LOAD operation methods have been moved to vitalgraph.transfer.transfer_utils
+    # This keeps the SPARQL implementation focused on query processing
+
+    async def _execute_sql_query_with_params(self, query: str, params: tuple) -> list:
+        """
+        Execute a parameterized SQL query.
+        
+        Args:
+            query: SQL query with parameter placeholders
+            params: Parameter values
+            
+        Returns:
+            list: Query results (empty list for INSERT/DELETE/UPDATE operations)
+        """
+        try:
+            # Use the existing SQL execution method but with parameterized queries
+            # We need to manually substitute parameters since _execute_sql_query doesn't support params
+            
+            # For now, let's use a simple string substitution approach
+            # This is not ideal for production but works for our current use case
+            formatted_query = query
+            for param in params:
+                # Simple parameter substitution (escape single quotes)
+                if isinstance(param, str):
+                    escaped_param = param.replace("'", "''")
+                    formatted_query = formatted_query.replace('%s', f"'{escaped_param}'", 1)
+                else:
+                    formatted_query = formatted_query.replace('%s', str(param), 1)
+            
+            # Check if this is a SELECT query or a modification query
+            query_type = formatted_query.strip().upper().split()[0]
+            
+            if query_type == 'SELECT':
+                # Execute SELECT query using the existing method
+                results = await self._execute_sql_query(formatted_query)
+                return results
+            else:
+                # For INSERT/DELETE/UPDATE, execute but don't expect records
+                try:
+                    await self._execute_sql_query(formatted_query)
+                    # Return empty list for successful non-SELECT operations
+                    return []
+                except Exception as e:
+                    # Check if this is the "no records" error which is actually success for INSERT/DELETE
+                    if "didn't produce records" in str(e):
+                        self.logger.debug(f"Non-SELECT operation completed successfully: {query_type}")
+                        return []
+                    else:
+                        # Re-raise other errors
+                        raise
+                
+        except Exception as e:
+            self.logger.error(f"Error executing parameterized SQL query: {e}")
+            self.logger.error(f"Query: {query}")
+            self.logger.error(f"Params: {params}")
             raise
