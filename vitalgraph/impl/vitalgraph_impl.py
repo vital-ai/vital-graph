@@ -21,8 +21,8 @@ class VitalGraphImpl:
             try:
                 db_config = self.config.get_database_config()
                 tables_config = self.config.get_tables_config()
-                self.db_impl = PostgreSQLDbImpl(db_config, tables_config)
-                print(f"✅ Initialized database implementation successfully")
+                self.db_impl = PostgreSQLDbImpl(db_config, tables_config, config_loader=self.config)
+                print(f"✅ Initialized database implementation successfully with RDF connection pool support")
             except Exception as e:
                 print(f"Warning: Could not initialize database: {e}")
                 self.db_impl = None

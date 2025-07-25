@@ -29,7 +29,7 @@ dependencies = [
     "pgvector",
     "asyncpg",
     "openai",
-    "psycopg[binary]",
+    "psycopg[binary,pool]",
     "aiofiles",
     "fastapi[standard, models]",
     "uvicorn",

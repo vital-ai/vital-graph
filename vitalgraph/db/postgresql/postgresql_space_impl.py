@@ -6,6 +6,7 @@ import io
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Tuple, AsyncGenerator, Set
+from contextlib import asynccontextmanager
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
@@ -56,29 +57,23 @@ class PostgreSQLSpaceImpl:
     Table names are prefixed with global_prefix__space_id__ format.
     """
     
-    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True):
+    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None):
         """
-        Initialize PostgreSQL space implementation.
+        Initialize PostgreSQL space implementation with shared or dedicated psycopg3 ConnectionPool.
         
         Args:
             connection_string: PostgreSQL connection string
-            global_prefix: Global table prefix for all spaces (default: 'vitalgraph')
-            use_unlogged: Whether to use unlogged tables for better performance (default: True)
+            global_prefix: Global prefix for table names
+            use_unlogged: Whether to use unlogged tables for better performance
+            pool_config: Optional connection pool configuration
+            shared_pool: Optional shared psycopg3 ConnectionPool instance
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.connection_string = connection_string
         self.global_prefix = global_prefix
         self.use_unlogged = use_unlogged
-        
-        # Initialize PostgreSQL utilities
-        self.utils = PostgreSQLUtils(logger=self.logger)
-        
-        # Initialize term cache for performance optimization
-        self.term_cache = PostgreSQLTermCache(
-            cache_size=100000,  # Cache up to 100K terms
-            bloom_capacity=1000000,  # Expect up to 1M unique terms
-            bloom_error_rate=0.1  # 10% false positive rate
-        )
+        self.rdf_pool = None
+        self.shared_pool = shared_pool
         
         # Validate global prefix using utils
         PostgreSQLUtils.validate_global_prefix(global_prefix)
@@ -86,17 +81,159 @@ class PostgreSQLSpaceImpl:
         # Cache of table definitions by space_id
         self._table_cache = {}
         
-        self.logger.info(f"Initializing PostgreSQLSpaceImpl with global prefix '{global_prefix}'")
+        # Use shared pool if provided, otherwise create dedicated pool
+        if shared_pool:
+            self.logger.info(f"Using shared psycopg3 ConnectionPool for RDF operations (shared with SQLAlchemy)")
+            # Test the shared pool
+            try:
+                with shared_pool.connection() as test_conn:
+                    cursor = test_conn.cursor()
+                    cursor.execute('SELECT 1')
+                    result = cursor.fetchone()
+                    self.logger.info(f"Shared ConnectionPool test successful: {result}")
+            except Exception as e:
+                self.logger.warning(f"Shared pool test failed: {e}")
+        elif pool_config:
+            try:
+                from psycopg_pool import ConnectionPool
+                
+                self.logger.info(f"Creating dedicated psycopg3 ConnectionPool for RDF operations with config: {pool_config}")
+                
+                self.rdf_pool = ConnectionPool(
+                    conninfo=connection_string,
+                    min_size=pool_config.get('min_size', 2),
+                    max_size=pool_config.get('max_size', 10),
+                    max_idle=pool_config.get('max_idle', 300),
+                    timeout=pool_config.get('timeout', 30),
+                    open=True
+                )
+                
+                # Test the pool
+                with self.rdf_pool.connection() as test_conn:
+                    cursor = test_conn.cursor()
+                    cursor.execute('SELECT 1')
+                    result = cursor.fetchone()
+                    self.logger.info(f"RDF ConnectionPool test successful: {result}")
+                
+                self.logger.info(f"Using dedicated psycopg3 ConnectionPool for RDF operations")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to create RDF ConnectionPool, falling back to direct connections: {e}")
+                self.rdf_pool = None
+        else:
+            self.logger.info(f"No pool config provided, using direct connections for RDF operations")
+        
+        pool_type = 'shared' if shared_pool else ('dedicated' if self.rdf_pool else 'direct')
+        self.logger.info(f"Initializing PostgreSQLSpaceImpl with global prefix '{global_prefix}' and {pool_type} connections")
+    
+    def close(self):
+        """
+        Close the RDF connection pool and clean up resources.
+        """
+        if self.rdf_pool:
+            try:
+                self.logger.info("Closing dedicated RDF psycopg3 ConnectionPool")
+                self.rdf_pool.close()
+                self.rdf_pool = None
+                self.logger.info("Successfully closed RDF ConnectionPool")
+            except Exception as e:
+                self.logger.warning(f"Error closing RDF ConnectionPool: {e}")
+    
+    def __del__(self):
+        """
+        Destructor to ensure pool is closed when object is garbage collected.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass  # Ignore errors during cleanup
+    
+
     
     def get_connection(self):
         """
-        Get a new psycopg3 database connection.
+        Get a database connection. 
+        
+        WARNING: This method is deprecated for pooled connections.
+        Use get_db_connection() context manager instead to ensure proper connection lifecycle.
         
         Returns:
-            psycopg.Connection: Database connection with dict row factory
+            psycopg.Connection: Database connection (direct connection only)
         """
-        conn = psycopg.connect(self.connection_string, row_factory=dict_row)
-        return conn
+        # Always use direct connections for get_connection() to avoid leaks
+        # Pooled connections should use the context manager
+        try:
+            self.logger.debug("Creating direct connection (get_connection method)")
+            conn = psycopg.connect(self.connection_string, row_factory=dict_row)
+            self.logger.debug("Successfully created direct connection")
+            return conn
+        except Exception as e:
+            self.logger.error(f"Failed to create direct connection: {e}")
+            raise
+    
+    def return_connection(self, conn) -> None:
+        """
+        Return a connection to the shared psycopg3 pool or close it if direct connection.
+        
+        Args:
+            conn: Database connection to return
+        """
+        if self.shared_pool and conn:
+            # Return connection to shared psycopg3 pool
+            try:
+                self.shared_pool.putconn(conn)
+                self.logger.debug("Returned connection to shared psycopg3 pool")
+            except Exception as e:
+                self.logger.warning(f"Failed to return connection to pool, closing directly: {e}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        elif conn:
+            # Close direct connection (fallback case)
+            try:
+                conn.close()
+                self.logger.debug("Closed direct connection")
+            except Exception as e:
+                self.logger.warning(f"Error closing connection: {e}")
+    
+    @asynccontextmanager
+    async def get_db_connection(self):
+        """
+        Async context manager for automatic connection management using shared or dedicated psycopg3 pool.
+        
+        Usage:
+            async with self.get_db_connection() as conn:
+                # Use connection
+                cursor = conn.cursor()
+                # ... database operations
+        """
+        if self.shared_pool:
+            # Use shared psycopg3 ConnectionPool (shared with SQLAlchemy)
+            with self.shared_pool.connection() as conn:
+                self.logger.debug("Got connection from shared psycopg3 pool via context manager")
+                yield conn
+                self.logger.debug("Connection automatically returned to shared pool")
+        elif self.rdf_pool:
+            # Use dedicated RDF psycopg3 ConnectionPool
+            with self.rdf_pool.connection() as conn:
+                self.logger.debug("Got connection from dedicated RDF psycopg3 pool via context manager")
+                yield conn
+                self.logger.debug("Connection automatically returned to RDF pool")
+        else:
+            # Fallback to direct connections
+            conn = None
+            try:
+                self.logger.debug("Creating direct connection for RDF operation (fallback)")
+                conn = psycopg.connect(self.connection_string, row_factory=dict_row)
+                yield conn
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                        self.logger.debug("Closed direct connection")
+                    except Exception as e:
+                        self.logger.warning(f"Error closing connection: {e}")
     
     def _resolve_term_info(self, term: Identifier) -> Tuple[str, str, Optional[str], Optional[int]]:
         """
@@ -1973,6 +2110,76 @@ class PostgreSQLSpaceImpl:
             # Return empty results for error case
             return
     
+    def get_pool_stats(self) -> dict:
+        """
+        Get connection pool statistics for shared or dedicated RDF psycopg3 ConnectionPool.
+        
+        Returns:
+            dict: Pool statistics including size, available connections, etc.
+        """
+        if self.shared_pool:
+            try:
+                # Get shared psycopg3 ConnectionPool statistics
+                return {
+                    'pool_enabled': True,
+                    'pool_type': 'shared_psycopg3',
+                    'min_size': self.shared_pool.min_size,
+                    'max_size': self.shared_pool.max_size,
+                    'name': getattr(self.shared_pool, 'name', 'shared_pool'),
+                    'open': getattr(self.shared_pool, 'open', True),
+                    'closed': getattr(self.shared_pool, 'closed', False)
+                }
+            except Exception as e:
+                self.logger.warning(f"Failed to get shared pool stats: {e}")
+        elif self.rdf_pool:
+            try:
+                # Get dedicated psycopg3 ConnectionPool statistics
+                return {
+                    'pool_enabled': True,
+                    'pool_type': 'dedicated_rdf_psycopg3',
+                    'min_size': self.rdf_pool.min_size,
+                    'max_size': self.rdf_pool.max_size,
+                    'name': getattr(self.rdf_pool, 'name', 'rdf_pool'),
+                    'open': getattr(self.rdf_pool, 'open', True),
+                    'closed': getattr(self.rdf_pool, 'closed', False)
+                }
+            except Exception as e:
+                self.logger.warning(f"Failed to get psycopg3 pool stats: {e}")
+                return {'pool_enabled': True, 'pool_type': 'shared_psycopg3', 'error': str(e)}
+        else:
+            return {'pool_enabled': False, 'pool_type': 'direct_connections'}
+    
+    async def health_check(self) -> bool:
+        """
+        Perform a health check on the connection pool.
+        
+        Returns:
+            bool: True if pool is healthy, False otherwise
+        """
+        try:
+            # Use the async context manager for health check
+            async with self.get_db_connection() as conn:
+                async with conn.cursor() as cursor:
+                    await cursor.execute('SELECT 1')
+                    result = await cursor.fetchone()
+                    return result is not None
+        except Exception as e:
+            self.logger.error(f"Health check failed: {e}")
+            return False
+
+    def close_pool(self) -> None:
+        """
+        Close the connection pool and all connections.
+        """
+        if self.pool:
+            try:
+                self.pool.close()
+                self.logger.info("Connection pool closed successfully")
+            except Exception as e:
+                self.logger.error(f"Error closing connection pool: {e}")
+            finally:
+                self.pool = None
+
     def get_manager_info(self) -> Dict[str, Any]:
         """
         Get general information about this space manager.
@@ -1980,10 +2187,12 @@ class PostgreSQLSpaceImpl:
         Returns:
             dict: Manager information
         """
+        pool_stats = self.get_pool_stats()
         return {
             "global_prefix": self.global_prefix,
             "connected": self.connection_string is not None,
             "cached_spaces": list(self._table_cache.keys()),
-            "cache_size": len(self._table_cache)
+            "cache_size": len(self._table_cache),
+            "pool_info": pool_stats
         }
 

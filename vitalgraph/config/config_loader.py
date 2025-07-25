@@ -88,6 +88,14 @@ class VitalGraphConfig:
                 'pool_timeout': 30,
                 'pool_recycle': 3600
             },
+            'rdf_pool': {
+                'min_size': 0,
+                'max_size': 5,
+                'timeout': 5,
+                'max_lifetime': 3600,
+                'max_idle': 300,
+                'reconnect_failed': True
+            },
             'tables': {
                 'prefix': 'vg_'
             },
@@ -144,6 +152,18 @@ class VitalGraphConfig:
             Dictionary containing app configuration
         """
         return self.config_data.get('app', {})
+    
+    def get_rdf_pool_config(self) -> Dict[str, Any]:
+        """
+        Get RDF connection pool configuration section.
+        
+        Returns:
+            Dictionary containing RDF pool configuration
+        """
+        defaults = self._get_default_config()['rdf_pool']
+        config = self.config_data.get('rdf_pool', {})
+        # Merge with defaults
+        return {**defaults, **config}
     
     def get_database_url(self) -> str:
         """

@@ -3,12 +3,32 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from sqlalchemy import create_engine, MetaData, text, Column, Integer, String, DateTime, Boolean, UniqueConstraint
-from sqlalchemy.engine import URL
+from sqlalchemy import create_engine, text, URL
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy.pool import NullPool
+from psycopg_pool import ConnectionPool
+import psycopg
 
 # Import PostgreSQLSpaceImpl for RDF space management
 from .postgresql_space_impl import PostgreSQLSpaceImpl
+
+# Custom connection class for psycopg-pool < 3.3 to properly integrate with SQLAlchemy
+class SharedPoolConnection(psycopg.Connection):
+    """
+    Custom connection class that overrides close() to return connections to the pool
+    instead of closing them. This is required for psycopg-pool < 3.3 to work with SQLAlchemy.
+    """
+    def close(self):
+        if pool := getattr(self, "_pool", None):
+            # Connection currently checked out from its pool;
+            # instead of closing it, return it to the pool.
+            pool.putconn(self)
+        else:
+            # Connection being removed from its pool, or not part of any pool;
+            # close the connection for real.
+            super().close()
 
 # Create declarative base for ORM models
 Base = declarative_base()
@@ -145,28 +165,42 @@ class PostgreSQLDbImpl:
     table operations, user management, and space management.
     """
     
-    def __init__(self, config: Dict[str, Any], tables_config: Dict[str, Any] = None):
+    def __init__(self, config: Dict[str, Any], tables_config: Dict[str, Any] = None, config_loader=None):
         """
         Initialize PostgreSQL database implementation.
         
         Args:
             config: Database configuration dictionary containing connection parameters
             tables_config: Tables configuration dictionary containing table prefix
+            config_loader: Optional VitalGraphConfig instance for accessing RDF pool config
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.config = config
         self.tables_config = tables_config or {}
-        self.engine = None
-        self.session_factory = None
-        self.metadata = None
-        self.connected = False
+        self.config_loader = config_loader
         
-        # State management
-        self.state = "disconnected"  # disconnected, uninitialized, initialized
-        self.table_prefix = self.tables_config.get('prefix', 'vg_')
+        # Shared psycopg3 connection pool for both ORM and RDF operations
+        self.shared_pool = None
+        
+        # Database connection components
+        self.engine = None
+        self.async_engine = None
+        self.SessionLocal = None
+        self.AsyncSessionLocal = None
+        
+        # Space implementation for RDF operations
+        self.space_impl = None
+        
+        # Database state tracking
+        self.state = "disconnected"
+        self.connected = False
         self.current_install = None
         self.current_spaces = []
         self.current_users = []
+        
+        # Extract global prefix from config
+        self.global_prefix = self.config.get('global_prefix', 'vitalgraph')
+        self.table_prefix = self.tables_config.get('prefix', 'vg_')
         
         # Initialize models with prefix
         global Install, Space, User
@@ -194,10 +228,7 @@ class PostgreSQLDbImpl:
     
     async def connect(self) -> bool:
         """
-        Connect to database and populate state.
-        
-        Looks for existence of install, space, and user tables and loads current state.
-        If not found, state is set to "uninitialized".
+        Connect to PostgreSQL database and initialize components.
         
         Returns:
             True if connection successful, False otherwise
@@ -207,46 +238,106 @@ class PostgreSQLDbImpl:
             
             # Build database URL
             db_url = self._build_database_url()
+            self.logger.info(f"Database URL: {db_url}")
             
-            # Create engine
-            self.engine = create_engine(
-                db_url,
-                pool_size=self.config.get('pool_size', 10),
-                max_overflow=self.config.get('max_overflow', 20),
-                pool_timeout=self.config.get('pool_timeout', 30),
-                pool_recycle=self.config.get('pool_recycle', 3600)
+            # Get RDF pool configuration from config loader
+            rdf_pool_config = {}
+            if self.config_loader:
+                rdf_pool_config = self.config_loader.get_rdf_pool_config()
+                self.logger.info(f"RDF pool config: {rdf_pool_config}")
+            
+            # Create shared psycopg3 ConnectionPool for both SQLAlchemy and RDF operations
+            connection_string = str(db_url).replace('+psycopg', '')
+            pool_config = {
+                'min_size': rdf_pool_config.get('min_size', 2),
+                'max_size': rdf_pool_config.get('max_size', 10),
+                'max_idle': rdf_pool_config.get('max_idle', 300),
+                'timeout': rdf_pool_config.get('timeout', 30)
+            }
+            
+            self.logger.info(f"Creating shared psycopg3 ConnectionPool for both ORM and RDF operations with config: {pool_config}")
+            
+            # Create the shared psycopg3 connection pool with custom connection class for SQLAlchemy integration
+            self.shared_pool = ConnectionPool(
+                conninfo=connection_string,
+                connection_class=SharedPoolConnection,  # Use custom connection class for SQLAlchemy integration
+                min_size=pool_config['min_size'],
+                max_size=pool_config['max_size'],
+                max_idle=pool_config['max_idle'],
+                timeout=pool_config['timeout'],
+                open=True
             )
             
-            # Create session factory
-            self.session_factory = sessionmaker(bind=self.engine)
+            # Test the shared pool
+            with self.shared_pool.connection() as test_conn:
+                cursor = test_conn.cursor()
+                cursor.execute('SELECT 1')
+                result = cursor.fetchone()
+                self.logger.info(f"Shared pool connection test successful: {result}")
             
-            # Use ORM metadata from Base
-            self.metadata = Base.metadata
+            # Create SQLAlchemy sync engine with NullPool and shared psycopg3 pool
+            self.logger.info("Creating SQLAlchemy engine with NullPool using shared psycopg3 pool")
             
-            # Test connection
+            self.engine = create_engine(
+                "postgresql+psycopg://",  # note: dialect+driver without connection details
+                poolclass=NullPool,       # disable SQLAlchemy's own pool
+                creator=self.shared_pool.getconn,  # use shared psycopg3 pool to obtain connections
+                echo=False
+            )
+            
+            # Create async engine for async operations (separate asyncpg pool)
+            async_url = db_url.set(drivername="postgresql+asyncpg")
+            async_pool_config = {
+                'pool_size': 5,  # Smaller pool for async operations
+                'max_overflow': 10,
+                'pool_timeout': 30,
+                'pool_recycle': 3600,
+                'pool_pre_ping': True
+            }
+            
+            self.async_engine = create_async_engine(
+                async_url,
+                **async_pool_config,
+                echo=False
+            )
+            
+            # Create session factories
+            self.SessionLocal = sessionmaker(bind=self.engine)
+            self.AsyncSessionLocal = sessionmaker(
+                bind=self.async_engine,
+                class_=AsyncSession,
+                expire_on_commit=False
+            )
+            
+            # Set session_factory for backward compatibility
+            self.session_factory = self.SessionLocal
+            
+            # Test the connection
             with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT 1"))
-                self.logger.info(f"Database connection test successful: {result.scalar()}")
+                result = conn.execute(text("SELECT 2"))
+                self.logger.info(f"SQLAlchemy shared pool test successful: {result.scalar()}")
             
+            # Initialize PostgreSQLSpaceImpl for RDF space management with shared pool
+            use_unlogged = self.config.get('use_unlogged_tables', True)
+            
+            self.space_impl = PostgreSQLSpaceImpl(
+                connection_string=connection_string, 
+                global_prefix=self.global_prefix, 
+                use_unlogged=use_unlogged,
+                pool_config=rdf_pool_config,
+                shared_pool=self.shared_pool
+            )
+            self.logger.info(f"PostgreSQLSpaceImpl initialized with shared psycopg3 pool")
+            
+            self.state = "connected"
             self.connected = True
-            
-            # Initialize PostgreSQLSpaceImpl with connection string and config
-            connection_string = f"postgresql://{self.config['username']}:{self.config['password']}@{self.config['host']}:{self.config['port']}/{self.config['database']}"
-            use_unlogged = self.tables_config.get('use_unlogged', False)  # Default to False for safety
-            
-            self.space_impl = PostgreSQLSpaceImpl(connection_string=connection_string, global_prefix=self.global_prefix, use_unlogged=use_unlogged)
-            self.logger.info(f"PostgreSQLSpaceImpl initialized with global prefix: {self.global_prefix}")
-            
-            # Load current state from database
-            await self._load_current_state()
-            
-            self.logger.info(f"Successfully connected to PostgreSQL database - State: {self.state}")
+            self.logger.info("Successfully connected to PostgreSQL database")
             return True
             
-        except SQLAlchemyError as e:
-            self.logger.error(f"Database connection failed: {e}")
-            self.connected = False
-            self.state = "disconnected"
+        except Exception as e:
+            self.logger.error(f"Failed to connect to database: {e}")
+            import traceback
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
         except Exception as e:
             self.logger.error(f"Unexpected error during database connection: {e}")
@@ -318,8 +409,10 @@ class PostgreSQLDbImpl:
                 self.engine.dispose()
                 self.engine = None
             
-            # Clean up PostgreSQLSpaceImpl instance
-            self.space_impl = None
+            # Clean up PostgreSQLSpaceImpl instance and its connection pool
+            if self.space_impl:
+                self.space_impl.close()
+                self.space_impl = None
             
             self.session_factory = None
             self.metadata = None

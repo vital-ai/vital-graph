@@ -44,7 +44,7 @@ setup(
         'pgvector',
         'asyncpg',
         'openai',
-        'psycopg[binary]',
+        "psycopg[binary,pool]>=3.1.13",
         # 'greenlet',
         'aiofiles',
         'fastapi[standard, models]',

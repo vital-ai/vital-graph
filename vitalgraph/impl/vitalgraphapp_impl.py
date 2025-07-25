@@ -232,7 +232,7 @@ class VitalGraphAppImpl:
             return await self.api.add_space(space_data.dict(), current_user)
         
         async def get_space_wrapper(space_id: int, current_user: Dict = Depends(self.get_current_user)) -> Space:
-            return await self.api.get_space(space_id, current_user)
+            return await self.api.get_space_by_id(space_id, current_user)
         
         async def update_space_wrapper(space_id: int, space_data: Space, current_user: Dict = Depends(self.get_current_user)) -> Space:
             return await self.api.update_space(space_id, space_data.dict(), current_user)
@@ -371,13 +371,8 @@ class VitalGraphAppImpl:
             response_model=List[User]
         )(filter_users_wrapper)
 
-        # SPARQL endpoint
-        self.app.post(
-            "/api/graphs/sparql",
-            tags=["SPARQL"],
-            summary="Execute SPARQL Query",
-            description="Execute a SPARQL query against the knowledge graph and return results"
-        )(sparql_endpoint_wrapper)
+        # Include SPARQL 1.1 endpoints
+        self._setup_sparql_endpoints()
 
         # System routes
         self.app.get(
@@ -394,7 +389,28 @@ class VitalGraphAppImpl:
         else:
             self.app.get("/")(self.api_root)
     
-
+    def _setup_sparql_endpoints(self):
+        """Setup SPARQL 1.1 endpoints."""
+        # Import SPARQL endpoint routers
+        from vitalgraph.endpoint.sparql_query_endpoint import create_sparql_query_router
+        from vitalgraph.endpoint.sparql_update_endpoint import create_sparql_update_router
+        from vitalgraph.endpoint.sparql_insert_endpoint import create_sparql_insert_router
+        from vitalgraph.endpoint.sparql_delete_endpoint import create_sparql_delete_router
+        from vitalgraph.endpoint.sparql_graph_endpoint import create_sparql_graph_router
+        
+        # Create routers with database implementation and auth dependency
+        query_router = create_sparql_query_router(self.db_impl, self.get_current_user)
+        update_router = create_sparql_update_router(self.db_impl, self.get_current_user)
+        insert_router = create_sparql_insert_router(self.db_impl, self.get_current_user)
+        delete_router = create_sparql_delete_router(self.db_impl, self.get_current_user)
+        graph_router = create_sparql_graph_router(self.db_impl, self.get_current_user)
+        
+        # Include routers in the FastAPI app with /api/graphs/sparql prefix
+        self.app.include_router(query_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self.app.include_router(update_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self.app.include_router(insert_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self.app.include_router(delete_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
+        self.app.include_router(graph_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
 
     async def login(self, form_data: OAuth2PasswordRequestForm = Depends()):
         """Login endpoint - delegates to API class"""

@@ -4466,27 +4466,39 @@ class PostgreSQLSparqlImpl:
                 with conn.cursor() as cursor:
                     cursor.execute(cleaned_sql)
                     
-                    # Get column names
-                    columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                    # Check if this is a SELECT query that returns results
+                    query_type = cleaned_sql.strip().upper().split()[0]
                     
-                    # Fetch all results
-                    rows = cursor.fetchall()
-                    
-                    # Convert to list of dictionaries
-                    results = []
-                    for row in rows:
-                        if isinstance(row, dict):
-                            # Row is already a dictionary (some cursor configurations)
-                            results.append(row)
-                        else:
-                            # Row is a tuple/list - convert to dictionary
-                            result_dict = {}
-                            for i, value in enumerate(row):
-                                if i < len(columns):
-                                    result_dict[columns[i]] = value
-                            results.append(result_dict)
-                    
-                    return results
+                    if query_type == 'SELECT':
+                        # Get column names
+                        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                        
+                        # Fetch all results
+                        rows = cursor.fetchall()
+                        
+                        # Convert to list of dictionaries
+                        results = []
+                        for row in rows:
+                            if isinstance(row, dict):
+                                # Row is already a dictionary (some cursor configurations)
+                                results.append(row)
+                            else:
+                                # Row is a tuple/list - convert to dictionary
+                                result_dict = {}
+                                for i, value in enumerate(row):
+                                    if i < len(columns):
+                                        result_dict[columns[i]] = value
+                                results.append(result_dict)
+                        
+                        return results
+                    else:
+                        # For INSERT/UPDATE/DELETE operations, return row count information
+                        rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
+                        self.logger.debug(f"Non-SELECT operation completed successfully: {query_type}, rows affected: {rows_affected}")
+                        
+                        # Return a result that indicates success and rows affected
+                        # This is more appropriate than an empty list for modification operations
+                        return [{'operation': query_type, 'rows_affected': rows_affected}]
                 
         except Exception as e:
             self.logger.error(f"Error executing SQL query: {e}")
