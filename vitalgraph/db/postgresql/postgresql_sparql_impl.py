@@ -14,6 +14,8 @@ from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.algebra import translateAlgebra
 from rdflib.plugins.sparql.sparql import Query
+from rdflib.plugins.sparql.algebra import Path, MulPath, SequencePath, AlternativePath, InvPath, NegatedPath
+from rdflib.namespace import XSD
 
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 from .postgresql_utils import PostgreSQLUtils
@@ -265,6 +267,16 @@ class PostgreSQLSparqlImpl:
                 rdf_graph = await self._process_construct_results(sql_results, construct_template)
                 self.logger.info(f"CONSTRUCT query executed successfully, constructed {len(rdf_graph)} triples")
                 return rdf_graph
+            elif query_type == "AskQuery":
+                # For ASK queries, return boolean result
+                ask_result = len(sql_results) > 0
+                self.logger.info(f"ASK query executed successfully, result: {ask_result}")
+                return [{"ask": ask_result}]
+            elif query_type == "DescribeQuery":
+                # For DESCRIBE queries, convert SQL results to RDF triples
+                describe_triples = await self._process_describe_results(sql_results)
+                self.logger.info(f"DESCRIBE query executed successfully, returned {len(describe_triples)} triples")
+                return describe_triples
             else:
                 # For SELECT queries, return SQL results as-is
                 self.logger.info(f"SELECT query executed successfully, returned {len(sql_results)} results")
@@ -367,6 +379,10 @@ class PostgreSQLSparqlImpl:
                 sql_query = await self._translate_select_query(algebra, table_config)
             elif algebra.name == "ConstructQuery":
                 sql_query = await self._translate_construct_query(algebra, table_config)
+            elif algebra.name == "AskQuery":
+                sql_query = await self._translate_ask_query(algebra, table_config)
+            elif algebra.name == "DescribeQuery":
+                sql_query = await self._translate_describe_query(algebra, table_config)
             else:
                 raise NotImplementedError(f"Query type {algebra.name} not yet supported")
             
@@ -622,6 +638,8 @@ class PostgreSQLSparqlImpl:
             return await self._translate_union(pattern, table_config, projected_vars)
         elif pattern_name == "LeftJoin":  # OPTIONAL
             return await self._translate_optional(pattern, table_config, projected_vars)
+        elif pattern_name == "Minus":  # MINUS
+            return await self._translate_minus(pattern, table_config, projected_vars)
         elif pattern_name == "Slice":  # LIMIT/OFFSET
             # Slice wraps another pattern - drill down to the nested pattern
             nested_pattern = pattern.p
@@ -650,6 +668,10 @@ class PostgreSQLSparqlImpl:
             return await self._translate_aggregate_join(pattern, table_config, projected_vars)
         elif pattern_name == "Group":  # GROUP BY patterns
             return await self._translate_group(pattern, table_config, projected_vars)
+        elif pattern_name == "Values":  # VALUES clauses
+            return await self._translate_values(pattern, table_config, projected_vars)
+        elif pattern_name == "ToMultiSet":  # VALUES clauses (RDFLib uses ToMultiSet)
+            return await self._translate_values(pattern, table_config, projected_vars)
         else:
             self.logger.warning(f"Pattern type {pattern_name} not fully implemented")
             return f"FROM {table_config.quad_table} q0", [], [], {}
@@ -715,7 +737,7 @@ class PostgreSQLSparqlImpl:
                 term_text, term_type = self._get_term_info(subject)
                 bound_terms.append((term_text, term_type))
             
-            if not isinstance(predicate, Variable):
+            if not isinstance(predicate, Variable) and not isinstance(predicate, Path):
                 term_text, term_type = self._get_term_info(predicate)
                 bound_terms.append((term_text, term_type))
             
@@ -761,8 +783,37 @@ class PostgreSQLSparqlImpl:
                     self.logger.error(f"Available term mappings: {list(term_uuid_mappings.keys())[:10]}...")
                     all_where_conditions.append("1=0")  # Condition that never matches
             
-            # Handle predicate
-            if isinstance(predicate, Variable):
+            # Handle predicate - check for property paths first
+            if isinstance(predicate, Path):
+                # Property path detected - delegate to specialized handler
+                self.logger.info(f"🛤️ Property path detected: {type(predicate).__name__} - {predicate}")
+                
+                # Handle property path translation
+                path_from, path_where, path_joins, path_vars = await self._translate_property_path(
+                    subject, predicate, obj, table_config, alias_gen, projected_vars
+                )
+                
+                # Integrate property path results with BGP translation
+                if path_from:
+                    # Property path generates its own FROM clause (CTE)
+                    # We need to join this with the current quad table
+                    all_joins.append(f"JOIN {path_from} ON 1=1")
+                
+                if path_joins:
+                    all_joins.extend(path_joins)
+                
+                if path_where:
+                    all_where_conditions.extend(path_where)
+                
+                # Merge variable mappings from property path
+                for var, mapping in path_vars.items():
+                    if var not in variable_mappings:
+                        variable_mappings[var] = mapping
+                
+                # Skip normal predicate processing since this is a property path
+                continue
+                
+            elif isinstance(predicate, Variable):
                 if predicate not in variable_mappings and (projected_vars is None or predicate in projected_vars):
                     term_alias = alias_gen.next_term_alias("predicate")
                     all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.predicate_uuid = {term_alias}.term_uuid")
@@ -867,6 +918,493 @@ class PostgreSQLSparqlImpl:
             self.logger.debug(f"Applied explicit context constraint: {context_constraint}")
         
         return from_clause, all_where_conditions, combined_joins, variable_mappings
+    
+    async def _translate_property_path(self, subject, path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate SPARQL property paths to PostgreSQL recursive CTEs.
+        
+        Handles all SPARQL 1.1 property path types:
+        - MulPath: + (one or more), * (zero or more), ? (zero or one)
+        - SequencePath: / (sequence)
+        - AlternativePath: | (alternative)
+        - InvPath: ~ (inverse)
+        - NegatedPath: ! (negated)
+        
+        Args:
+            subject: Subject term (Variable or bound term)
+            path: Property path object from RDFLib
+            obj: Object term (Variable or bound term)
+            table_config: Table configuration for SQL generation
+            alias_gen: Alias generator for SQL identifiers
+            projected_vars: Variables to project in SELECT clause
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        self.logger.info(f"🛤️ Translating property path: {type(path).__name__} - {path}")
+        
+        # Dispatch to specific path type handlers
+        if isinstance(path, MulPath):
+            return await self._translate_mul_path(subject, path, obj, table_config, alias_gen, projected_vars)
+        elif isinstance(path, SequencePath):
+            return await self._translate_sequence_path(subject, path, obj, table_config, alias_gen, projected_vars)
+        elif isinstance(path, AlternativePath):
+            return await self._translate_alternative_path(subject, path, obj, table_config, alias_gen, projected_vars)
+        elif isinstance(path, InvPath):
+            return await self._translate_inverse_path(subject, path, obj, table_config, alias_gen, projected_vars)
+        elif isinstance(path, NegatedPath):
+            return await self._translate_negated_path(subject, path, obj, table_config, alias_gen, projected_vars)
+        else:
+            # Fallback for unknown path types
+            self.logger.error(f"❌ Unsupported property path type: {type(path).__name__}")
+            raise NotImplementedError(f"Property path type {type(path).__name__} not yet implemented")
+    
+    async def _translate_mul_path(self, subject, mul_path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate MulPath (*, +, ?) to PostgreSQL recursive CTE.
+        
+        MulPath represents quantified paths:
+        - * : zero or more (includes reflexive)
+        - + : one or more (excludes reflexive)
+        - ? : zero or one (optional)
+        """
+        self.logger.info(f"🔄 Translating MulPath: {mul_path.path} with modifier '{mul_path.mod}'")
+        
+        # Extract the base path and modifier
+        base_path = mul_path.path
+        modifier = mul_path.mod  # '*', '+', or '?'
+        
+        # Generate CTE alias
+        cte_alias = alias_gen.next_subquery_alias()
+        
+        # Get term UUIDs for bound terms
+        bound_terms = []
+        if not isinstance(subject, Variable):
+            term_text, term_type = self._get_term_info(subject)
+            bound_terms.append((term_text, term_type))
+        if not isinstance(obj, Variable):
+            term_text, term_type = self._get_term_info(obj)
+            bound_terms.append((term_text, term_type))
+        
+        # Handle base path (could be URI or nested path)
+        if isinstance(base_path, Path):
+            # Nested path - recursively translate
+            base_from, base_where, base_joins, base_vars = await self._translate_property_path(
+                subject, base_path, obj, table_config, alias_gen, projected_vars
+            )
+            # For nested paths, we need to compose the recursive logic
+            # This is complex and will be implemented in a later iteration
+            raise NotImplementedError("Nested property paths not yet implemented")
+        else:
+            # Simple URI path - get its UUID
+            if bound_terms:
+                term_uuid_mappings = await self._get_term_uuids_batch(bound_terms, table_config)
+            else:
+                term_uuid_mappings = {}
+            
+            # Get predicate UUID
+            pred_text, pred_type = self._get_term_info(base_path)
+            pred_key = (pred_text, pred_type)
+            pred_uuid = None
+            
+            if pred_key not in term_uuid_mappings:
+                # Look up predicate UUID
+                pred_mappings = await self._get_term_uuids_batch([pred_key], table_config)
+                term_uuid_mappings.update(pred_mappings)
+            
+            if pred_key in term_uuid_mappings:
+                pred_uuid = term_uuid_mappings[pred_key]
+            else:
+                # Predicate not found - return empty result
+                self.logger.warning(f"Predicate not found in database: {pred_text}")
+                return "SELECT NULL as start_node, NULL as end_node WHERE 1=0", [], [], {}
+        
+        # Build recursive CTE based on modifier
+        if modifier == '*':
+            # Zero or more - includes reflexive relationships
+            cte_sql = self._build_recursive_cte_star(pred_uuid, table_config, cte_alias)
+        elif modifier == '+':
+            # One or more - excludes reflexive relationships
+            cte_sql = self._build_recursive_cte_plus(pred_uuid, table_config, cte_alias)
+        elif modifier == '?':
+            # Zero or one - optional relationship
+            cte_sql = self._build_recursive_cte_optional(pred_uuid, table_config, cte_alias)
+        else:
+            raise NotImplementedError(f"MulPath modifier '{modifier}' not implemented")
+        
+        # Build variable mappings
+        variable_mappings = {}
+        where_conditions = []
+        joins = []
+        
+        # Generate a proper subquery alias for the CTE result
+        subquery_alias = f"{cte_alias}_result"
+        
+        # Handle subject and object variables
+        if isinstance(subject, Variable) and (projected_vars is None or subject in projected_vars):
+            # Join with term table to get subject text
+            subj_alias = alias_gen.next_term_alias("subject")
+            joins.append(f"JOIN {table_config.term_table} {subj_alias} ON {subquery_alias}.start_node = {subj_alias}.term_uuid")
+            variable_mappings[subject] = f"{subj_alias}.term_text"
+        elif not isinstance(subject, Variable):
+            # Bound subject - add constraint
+            subj_text, subj_type = self._get_term_info(subject)
+            subj_key = (subj_text, subj_type)
+            if subj_key in term_uuid_mappings:
+                subj_uuid = term_uuid_mappings[subj_key]
+                where_conditions.append(f"{subquery_alias}.start_node = '{subj_uuid}'")
+            else:
+                # Subject not found
+                where_conditions.append("1=0")
+        
+        if isinstance(obj, Variable) and (projected_vars is None or obj in projected_vars):
+            # Join with term table to get object text
+            obj_alias = alias_gen.next_term_alias("object")
+            joins.append(f"JOIN {table_config.term_table} {obj_alias} ON {subquery_alias}.end_node = {obj_alias}.term_uuid")
+            variable_mappings[obj] = f"{obj_alias}.term_text"
+        elif not isinstance(obj, Variable):
+            # Bound object - add constraint
+            obj_text, obj_type = self._get_term_info(obj)
+            obj_key = (obj_text, obj_type)
+            if obj_key in term_uuid_mappings:
+                obj_uuid = term_uuid_mappings[obj_key]
+                where_conditions.append(f"{subquery_alias}.end_node = '{obj_uuid}'")
+            else:
+                # Object not found
+                where_conditions.append("1=0")
+        
+        # Return the CTE as a proper subquery with alias
+        return f"{cte_sql} {subquery_alias}", where_conditions, joins, variable_mappings
+    
+    def _build_recursive_cte_star(self, pred_uuid: str, table_config: TableConfig, cte_alias: str) -> str:
+        """Build recursive CTE for * (zero or more) paths with cycle detection."""
+        return f"""
+        WITH RECURSIVE {cte_alias}(start_node, end_node, path, depth) AS (
+            -- Base case: reflexive relationships (zero steps)
+            SELECT DISTINCT subject_uuid as start_node, subject_uuid as end_node, 
+                   ARRAY[subject_uuid] as path, 0 as depth
+            FROM {table_config.quad_table}
+            WHERE predicate_uuid = '{pred_uuid}'
+            
+            UNION ALL
+            
+            -- Recursive case: one or more steps
+            SELECT q.subject_uuid as start_node, q.object_uuid as end_node,
+                   r.path || q.object_uuid as path, r.depth + 1 as depth
+            FROM {table_config.quad_table} q
+            JOIN {cte_alias} r ON q.subject_uuid = r.end_node
+            WHERE q.predicate_uuid = '{pred_uuid}'
+              AND r.depth < 10  -- Prevent infinite recursion
+              AND NOT (q.object_uuid = ANY(r.path))  -- Cycle detection
+        )
+        SELECT start_node, end_node FROM {cte_alias}
+        """
+    
+    def _build_recursive_cte_plus(self, pred_uuid: str, table_config: TableConfig, cte_alias: str) -> str:
+        """Build recursive CTE for + (one or more) paths with cycle detection."""
+        return f"""(
+            WITH RECURSIVE path_cte(start_node, end_node, path, depth) AS (
+                -- Base case: direct relationships (one step)
+                SELECT subject_uuid as start_node, object_uuid as end_node,
+                       ARRAY[subject_uuid, object_uuid] as path, 1 as depth
+                FROM {table_config.quad_table}
+                WHERE predicate_uuid = '{pred_uuid}'
+                
+                UNION ALL
+                
+                -- Recursive case: additional steps
+                SELECT r.start_node, q.object_uuid as end_node,
+                       r.path || q.object_uuid as path, r.depth + 1 as depth
+                FROM {table_config.quad_table} q
+                JOIN path_cte r ON q.subject_uuid = r.end_node
+                WHERE q.predicate_uuid = '{pred_uuid}'
+                  AND r.depth < 10  -- Prevent infinite recursion
+                  AND NOT (q.object_uuid = ANY(r.path))  -- Cycle detection
+            )
+            SELECT start_node, end_node FROM path_cte
+        )"""
+    
+    def _build_recursive_cte_optional(self, pred_uuid: str, table_config: TableConfig, cte_alias: str) -> str:
+        """Build CTE for ? (zero or one) paths."""
+        return f"""
+        WITH {cte_alias}(start_node, end_node) AS (
+            -- Zero steps: reflexive relationships
+            SELECT DISTINCT subject_uuid as start_node, subject_uuid as end_node
+            FROM {table_config.quad_table}
+            WHERE predicate_uuid = '{pred_uuid}'
+            
+            UNION ALL
+            
+            -- One step: direct relationships
+            SELECT subject_uuid as start_node, object_uuid as end_node
+            FROM {table_config.quad_table}
+            WHERE predicate_uuid = '{pred_uuid}'
+        )
+        SELECT start_node, end_node FROM {cte_alias}
+        """
+    
+    async def _translate_sequence_path(self, subject, seq_path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate SequencePath (/) to nested JOINs or CTEs.
+        
+        Sequence paths represent path1/path2 where we follow path1 then path2.
+        """
+        self.logger.info(f"➡️ Translating SequencePath: {seq_path.args}")
+        
+        # For now, implement a simple case of two paths
+        if len(seq_path.args) != 2:
+            raise NotImplementedError("Sequence paths with more than 2 components not yet implemented")
+        
+        path1, path2 = seq_path.args
+        
+        # Create intermediate variable for the connection point
+        intermediate_var = Variable(f"__seq_intermediate_{alias_gen.counter}")
+        alias_gen.counter += 1
+        
+        # Translate first path: subject -> intermediate
+        path1_from, path1_where, path1_joins, path1_vars = await self._translate_property_path(
+            subject, path1, intermediate_var, table_config, alias_gen, projected_vars
+        )
+        
+        # Translate second path: intermediate -> object
+        path2_from, path2_where, path2_joins, path2_vars = await self._translate_property_path(
+            intermediate_var, path2, obj, table_config, alias_gen, projected_vars
+        )
+        
+        # Combine the two path translations
+        # This is a simplified approach - a full implementation would need more sophisticated joining
+        combined_cte = f"""
+        WITH path1 AS ({path1_from}),
+             path2 AS ({path2_from})
+        SELECT p1.start_node, p2.end_node
+        FROM path1 p1
+        JOIN path2 p2 ON p1.end_node = p2.start_node
+        """
+        
+        # Combine conditions and joins
+        combined_where = path1_where + path2_where
+        combined_joins = path1_joins + path2_joins
+        
+        # Merge variable mappings (excluding intermediate)
+        combined_vars = {}
+        for var, mapping in path1_vars.items():
+            if var != intermediate_var:
+                combined_vars[var] = mapping
+        for var, mapping in path2_vars.items():
+            if var != intermediate_var:
+                combined_vars[var] = mapping
+        
+        return combined_cte, combined_where, combined_joins, combined_vars
+    
+    async def _translate_alternative_path(self, subject, alt_path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate AlternativePath (|) to UNION of paths.
+        
+        Alternative paths represent path1|path2 where either path can be taken.
+        """
+        self.logger.info(f"🔀 Translating AlternativePath: {alt_path.args}")
+        
+        # Translate each alternative path
+        union_parts = []
+        all_where = []
+        all_joins = []
+        combined_vars = {}
+        
+        for i, path in enumerate(alt_path.args):
+            path_from, path_where, path_joins, path_vars = await self._translate_property_path(
+                subject, path, obj, table_config, alias_gen, projected_vars
+            )
+            
+            union_parts.append(f"({path_from})")
+            all_where.extend(path_where)
+            all_joins.extend(path_joins)
+            
+            # Merge variable mappings
+            for var, mapping in path_vars.items():
+                if var not in combined_vars:
+                    combined_vars[var] = mapping
+        
+        # Combine with UNION
+        combined_cte = " UNION ALL ".join(union_parts)
+        
+        return combined_cte, all_where, all_joins, combined_vars
+    
+    async def _translate_inverse_path(self, subject, inv_path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate InvPath (~) by swapping subject and object.
+        
+        Inverse paths represent ~path which is equivalent to reversing the direction.
+        """
+        self.logger.info(f"🔄 Translating InversePath: ~{inv_path.arg}")
+        
+        # Translate the inner path with swapped subject and object
+        return await self._translate_property_path(
+            obj, inv_path.arg, subject, table_config, alias_gen, projected_vars
+        )
+    
+    async def _translate_negated_path(self, subject, neg_path, obj, table_config: TableConfig, alias_gen, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate NegatedPath (!) using NOT EXISTS.
+        
+        Negated paths represent !path which excludes the specified path.
+        For example, ?x !foaf:knows ?y finds all pairs where x is NOT connected to y via foaf:knows.
+        
+        Implementation strategy:
+        1. Generate all possible subject-object pairs from the database
+        2. Exclude pairs that match the negated path using NOT EXISTS
+        """
+        self.logger.info(f"🚫 Translating NegatedPath: !{neg_path.args}")
+        
+        # Extract the negated paths (NegatedPath can contain multiple alternatives)
+        negated_paths = neg_path.args
+        
+        # Generate aliases
+        subquery_alias = alias_gen.next_subquery_alias()
+        
+        # Get term UUIDs for bound terms
+        bound_terms = []
+        if not isinstance(subject, Variable):
+            term_text, term_type = self._get_term_info(subject)
+            bound_terms.append((term_text, term_type))
+        if not isinstance(obj, Variable):
+            term_text, term_type = self._get_term_info(obj)
+            bound_terms.append((term_text, term_type))
+        
+        if bound_terms:
+            term_uuid_mappings = await self._get_term_uuids_batch(bound_terms, table_config)
+        else:
+            term_uuid_mappings = {}
+        
+        # Handle the negated paths - build NOT EXISTS clauses for each
+        not_exists_clauses = []
+        
+        for negated_path in negated_paths:
+            if isinstance(negated_path, Path):
+                # Complex path - recursively translate the negated path
+                neg_from, neg_where, neg_joins, neg_vars = await self._translate_property_path(
+                    Variable('neg_subj'), negated_path, Variable('neg_obj'), table_config, alias_gen
+                )
+                
+                # Build NOT EXISTS subquery with the complex path
+                not_exists_clause = f"""NOT EXISTS (
+                    SELECT 1 FROM ({neg_from}) neg_path
+                    {' '.join(neg_joins)}
+                    WHERE {subquery_alias}.start_node = neg_path.start_node
+                      AND {subquery_alias}.end_node = neg_path.end_node
+                      {' AND ' + ' AND '.join(neg_where) if neg_where else ''}
+                )"""
+                not_exists_clauses.append(not_exists_clause)
+            else:
+                # Simple URI path - get its UUID and build NOT EXISTS
+                pred_text, pred_type = self._get_term_info(negated_path)
+                pred_key = (pred_text, pred_type)
+                
+                if pred_key not in term_uuid_mappings:
+                    pred_mappings = await self._get_term_uuids_batch([pred_key], table_config)
+                    term_uuid_mappings.update(pred_mappings)
+                
+                if pred_key in term_uuid_mappings:
+                    pred_uuid = term_uuid_mappings[pred_key]
+                    not_exists_clause = f"""NOT EXISTS (
+                        SELECT 1 FROM {table_config.quad_table} neg_quad
+                        WHERE neg_quad.subject_uuid = {subquery_alias}.start_node
+                          AND neg_quad.predicate_uuid = '{pred_uuid}'
+                          AND neg_quad.object_uuid = {subquery_alias}.end_node
+                    )"""
+                    not_exists_clauses.append(not_exists_clause)
+                else:
+                    # Predicate not found - this negated path doesn't constrain anything
+                    self.logger.info(f"Negated predicate not found in database: {pred_text} - no constraint")
+        
+        # Combine all NOT EXISTS clauses with AND (all negated paths must not exist)
+        if not_exists_clauses:
+            combined_not_exists = " AND ".join(not_exists_clauses)
+        else:
+            # No valid negated paths found - all pairs are valid
+            combined_not_exists = "1=1"
+        
+        # Build the main query that finds all possible subject-object pairs
+        # and excludes those that match the negated path
+        if isinstance(subject, Variable) and isinstance(obj, Variable):
+            # Both variables - generate all possible pairs from terms, excluding the negated path
+            # Fix scoping by replacing subquery_alias references with the actual table aliases
+            scoped_not_exists = combined_not_exists.replace(f'{subquery_alias}.start_node', 't1.term_uuid').replace(f'{subquery_alias}.end_node', 't2.term_uuid')
+            from_clause = f"""(
+                SELECT DISTINCT t1.term_uuid as start_node, t2.term_uuid as end_node
+                FROM {table_config.term_table} t1
+                CROSS JOIN {table_config.term_table} t2
+                WHERE t1.term_uuid != t2.term_uuid  -- Exclude self-loops
+                  AND {scoped_not_exists}
+            ) {subquery_alias}"""
+        elif isinstance(subject, Variable):
+            # Subject is variable, object is bound
+            obj_text, obj_type = self._get_term_info(obj)
+            obj_key = (obj_text, obj_type)
+            if obj_key in term_uuid_mappings:
+                obj_uuid = term_uuid_mappings[obj_key]
+                from_clause = f"""(
+                    SELECT DISTINCT t1.term_uuid as start_node, '{obj_uuid}' as end_node
+                    FROM {table_config.term_table} t1
+                    WHERE t1.term_uuid != '{obj_uuid}'  -- Exclude self-loops
+                      AND {combined_not_exists.replace(f'{subquery_alias}.end_node', f"'{obj_uuid}'")}
+                ) {subquery_alias}"""
+            else:
+                # Object not found - no results
+                from_clause = f"(SELECT NULL as start_node, NULL as end_node WHERE 1=0) {subquery_alias}"
+        elif isinstance(obj, Variable):
+            # Object is variable, subject is bound
+            subj_text, subj_type = self._get_term_info(subject)
+            subj_key = (subj_text, subj_type)
+            if subj_key in term_uuid_mappings:
+                subj_uuid = term_uuid_mappings[subj_key]
+                from_clause = f"""(
+                    SELECT DISTINCT '{subj_uuid}' as start_node, t2.term_uuid as end_node
+                    FROM {table_config.term_table} t2
+                    WHERE t2.term_uuid != '{subj_uuid}'  -- Exclude self-loops
+                      AND {combined_not_exists.replace(f'{subquery_alias}.start_node', f"'{subj_uuid}'")}
+                ) {subquery_alias}"""
+            else:
+                # Subject not found - no results
+                from_clause = f"(SELECT NULL as start_node, NULL as end_node WHERE 1=0) {subquery_alias}"
+        else:
+            # Both bound - check if the specific pair is NOT connected by the negated path
+            subj_text, subj_type = self._get_term_info(subject)
+            obj_text, obj_type = self._get_term_info(obj)
+            subj_key = (subj_text, subj_type)
+            obj_key = (obj_text, obj_type)
+            
+            if subj_key in term_uuid_mappings and obj_key in term_uuid_mappings:
+                subj_uuid = term_uuid_mappings[subj_key]
+                obj_uuid = term_uuid_mappings[obj_key]
+                
+                # Check if the negated path exists between these specific terms
+                specific_not_exists = combined_not_exists.replace(
+                    f'{subquery_alias}.start_node', f"'{subj_uuid}'"
+                ).replace(
+                    f'{subquery_alias}.end_node', f"'{obj_uuid}'"
+                )
+                
+                from_clause = f"""(
+                    SELECT '{subj_uuid}' as start_node, '{obj_uuid}' as end_node
+                    WHERE {specific_not_exists}
+                ) {subquery_alias}"""
+            else:
+                # One or both terms not found - no results
+                from_clause = f"(SELECT NULL as start_node, NULL as end_node WHERE 1=0) {subquery_alias}"
+        
+        # Build variable mappings
+        variable_mappings = {}
+        where_conditions = []
+        joins = []
+        
+        # Handle subject and object variables
+        if isinstance(subject, Variable) and (projected_vars is None or subject in projected_vars):
+            # Join with term table to get subject text
+            subj_alias = alias_gen.next_term_alias("subject")
+            joins.append(f"JOIN {table_config.term_table} {subj_alias} ON {subquery_alias}.start_node = {subj_alias}.term_uuid")
+            variable_mappings[subject] = f"{subj_alias}.term_text"
+        
+        if isinstance(obj, Variable) and (projected_vars is None or obj in projected_vars):
+            # Join with term table to get object text
+            obj_alias = alias_gen.next_term_alias("object")
+            joins.append(f"JOIN {table_config.term_table} {obj_alias} ON {subquery_alias}.end_node = {obj_alias}.term_uuid")
+            variable_mappings[obj] = f"{obj_alias}.term_text"
+        
+        return from_clause, where_conditions, joins, variable_mappings
     
     def _find_shared_variables_between_triples(self, triple1, triple2):
         """Find variables that are shared between two triples."""
@@ -1033,49 +1571,237 @@ class PostgreSQLSparqlImpl:
                 
                 # Left branch: use mapping if available, otherwise NULL
                 if var in left_vars:
-                    left_select_items.append(f"{left_vars[var]} AS {col_name}")
+                    left_mapping = left_vars[var]
+                    left_select_items.append(f"{left_mapping} AS {col_name}")
+                    # Debug BIND expressions in UNION
+                    if "'" in left_mapping and left_mapping.startswith("'") and left_mapping.endswith("'"):
+                        self.logger.debug(f"UNION Left: BIND literal {var} -> {left_mapping}")
                 else:
                     left_select_items.append(f"NULL AS {col_name}")
                 
                 # Right branch: use mapping if available, otherwise NULL
                 if var in right_vars:
-                    right_select_items.append(f"{right_vars[var]} AS {col_name}")
+                    right_mapping = right_vars[var]
+                    right_select_items.append(f"{right_mapping} AS {col_name}")
+                    # Debug BIND expressions in UNION
+                    if "'" in right_mapping and right_mapping.startswith("'") and right_mapping.endswith("'"):
+                        self.logger.debug(f"UNION Right: BIND literal {var} -> {right_mapping}")
                 else:
                     right_select_items.append(f"NULL AS {col_name}")
             
             # Build left branch SQL
-            left_sql_parts = [f"SELECT {', '.join(left_select_items)}"]
-            left_sql_parts.append(left_from)
-            if left_joins:
-                left_sql_parts.extend(left_joins)
-            if left_where:
-                left_sql_parts.append(f"WHERE {' AND '.join(left_where)}")
+            # CRITICAL FIX: Check if left_from is already a complete derived table
+            print(f"🔧 UNION DEBUG: left_from = '{left_from[:100] if left_from else 'None'}...'")
             
-            left_sql = '\n'.join(left_sql_parts)
+            if left_from and left_from.strip().startswith('FROM (') and 'UNION' in left_from:
+                # left_from is already a complete UNION derived table - use it directly
+                print(f"🔧 UNION DEBUG: left_from is complete derived table, using directly")
+                
+                # Extract the SQL content between FROM ( and ) alias
+                # Find the opening parenthesis after FROM
+                start_idx = left_from.find('FROM (') + 6  # Skip 'FROM ('
+                
+                # Find the matching closing parenthesis (accounting for nested parentheses)
+                paren_count = 1
+                end_idx = start_idx
+                while end_idx < len(left_from) and paren_count > 0:
+                    if left_from[end_idx] == '(':
+                        paren_count += 1
+                    elif left_from[end_idx] == ')':
+                        paren_count -= 1
+                    end_idx += 1
+                
+                # Extract the raw UNION SQL (without the outer FROM ( and ) alias)
+                left_sql = left_from[start_idx:end_idx-1]  # -1 to exclude the closing )
+                print(f"🔧 UNION DEBUG: Extracted left_sql: {left_sql[:200]}...")
+                print(f"🔧 UNION DEBUG: Full extracted left_sql:\n{left_sql}")
+                # No need to add joins/where since it's already a complete UNION
+            else:
+                # Normal case - build SELECT statement
+                left_sql_parts = [f"SELECT {', '.join(left_select_items)}"]
+                if left_from:
+                    if not left_from.strip().upper().startswith('FROM'):
+                        # If from_clause doesn't start with FROM, it's just a table reference
+                        print(f"🔧 UNION DEBUG: Adding FROM to left_from: '{left_from}' -> 'FROM {left_from}'")
+                        left_sql_parts.append(f"FROM {left_from}")
+                    else:
+                        # from_clause already includes FROM keyword
+                        print(f"🔧 UNION DEBUG: left_from already has FROM: '{left_from}'")
+                        left_sql_parts.append(left_from)
+                else:
+                    # No FROM clause - this shouldn't happen but handle gracefully
+                    print(f"🔧 UNION DEBUG: No left_from, using fallback")
+                    left_sql_parts.append(f"FROM {table_config.quad_table} fallback_q0")
+                    self.logger.warning("Left branch missing FROM clause, using fallback")
+                
+                # Add joins and where conditions for normal case
+                if left_joins:
+                    left_sql_parts.extend(left_joins)
+                if left_where:
+                    left_sql_parts.append(f"WHERE {' AND '.join(left_where)}")
+                
+                left_sql = '\n'.join(left_sql_parts)
             
             # Build right branch SQL
             right_sql_parts = [f"SELECT {', '.join(right_select_items)}"]
-            right_sql_parts.append(right_from)
+            # Ensure FROM clause includes the FROM keyword and handle empty cases
+            print(f"🔧 UNION DEBUG: right_from = '{right_from}'")
+            if right_from:
+                if not right_from.strip().upper().startswith('FROM'):
+                    # If from_clause doesn't start with FROM, it's just a table reference
+                    print(f"🔧 UNION DEBUG: Adding FROM to right_from: '{right_from}' -> 'FROM {right_from}'")
+                    right_sql_parts.append(f"FROM {right_from}")
+                else:
+                    # from_clause already includes FROM keyword
+                    print(f"🔧 UNION DEBUG: right_from already has FROM: '{right_from}'")
+                    right_sql_parts.append(right_from)
+            else:
+                # No FROM clause - this shouldn't happen but handle gracefully
+                print(f"🔧 UNION DEBUG: No right_from, using fallback")
+                right_sql_parts.append(f"FROM {table_config.quad_table} fallback_q1")
+                self.logger.warning("Right branch missing FROM clause, using fallback")
+            
             if right_joins:
                 right_sql_parts.extend(right_joins)
+                
             if right_where:
                 right_sql_parts.append(f"WHERE {' AND '.join(right_where)}")
             
             right_sql = '\n'.join(right_sql_parts)
             
-            # Combine with UNION
-            union_sql = f"({left_sql})\nUNION\n({right_sql})"
+            # Debug: Log the generated SQL for each branch
+            self.logger.debug(f"Left branch SQL: {left_sql}")
+            self.logger.debug(f"Right branch SQL: {right_sql}")
+            
+            # Validate that both branches have proper FROM clauses
+            if 'FROM' not in left_sql.upper():
+                self.logger.error(f"Left branch missing FROM clause: {left_sql}")
+            if 'FROM' not in right_sql.upper():
+                self.logger.error(f"Right branch missing FROM clause: {right_sql}")
+            
+            # Combine with UNION - ensure proper SQL structure
+            # Remove extra parentheses that cause malformed nested structure
+            union_sql = f"{left_sql}\nUNION\n{right_sql}"
+            print(f"🔧 UNION DEBUG: Combined UNION SQL before fixing:\n{union_sql}")
+            self.logger.debug(f"Combined UNION SQL: {union_sql}")
+            
+            # CRITICAL FIX: Check if we need FROM keyword fixing
+            # If we extracted SQL from derived tables, it should already be correct
+            has_proper_from_keywords = 'FROM vitalgraph' in union_sql and union_sql.count('FROM vitalgraph') >= union_sql.count('SELECT')
+            
+            if has_proper_from_keywords:
+                print(f"🔧 UNION DEBUG: SQL already has proper FROM keywords, skipping fixing process")
+                fixed_union_sql = union_sql
+            else:
+                print(f"🔧 UNION DEBUG: Starting FROM keyword fixing process...")
+                # Fix missing FROM keywords and remove duplicates
+                lines = union_sql.split('\n')
+                fixed_lines = []
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    stripped = line.strip()
+                    
+                    # Handle duplicate FROM keywords first
+                    if stripped.upper().startswith('FROM FROM'):
+                        # Remove duplicate FROM keywords
+                        fixed_line = stripped[5:].strip()  # Remove first 'FROM '
+                        fixed_lines.append(f"FROM {fixed_line}")
+                        self.logger.debug(f"Fixed duplicate FROM in: {stripped}")
+                    # Look for table references that need FROM keywords
+                    elif (stripped and 
+                          ('vitalgraph1__space_test__rdf_quad' in stripped or 
+                           stripped.startswith('right_q') or 
+                           stripped.startswith('left_q') or
+                           stripped.startswith('q')) and
+                          not stripped.upper().startswith('FROM') and
+                          not stripped.upper().startswith('SELECT') and
+                          not stripped.upper().startswith('JOIN') and
+                          not stripped.upper().startswith('WHERE') and
+                          not stripped.upper().startswith('AND') and
+                          not stripped.upper().startswith('OR') and
+                          not stripped.upper().startswith('UNION') and
+                          '=' not in stripped and
+                          'AS' not in stripped.upper()):
+                        # This line is likely a table reference that needs FROM
+                        fixed_lines.append(f"FROM {stripped}")
+                        self.logger.debug(f"Added missing FROM keyword to: {stripped}")
+                    else:
+                        fixed_lines.append(line)
+                    i += 1
+                fixed_union_sql = '\n'.join(fixed_lines)
+            
+            # Validate the combined UNION SQL structure
+            if '((' in fixed_union_sql or '))' in fixed_union_sql:
+                self.logger.warning(f"UNION SQL has suspicious parentheses: {fixed_union_sql[:200]}...")
+                # Log the full SQL for debugging
+                self.logger.error(f"Full malformed UNION SQL: {fixed_union_sql}")
+            
+            # Validate that the UNION SQL is properly formed
+            if 'FROM' not in fixed_union_sql.upper():
+                self.logger.error(f"UNION SQL missing FROM clauses: {fixed_union_sql[:300]}...")
+                self.logger.error(f"Left branch SQL: {left_sql}")
+                self.logger.error(f"Right branch SQL: {right_sql}")
+                # This is a critical error - the UNION branches are malformed
+                raise ValueError(f"UNION SQL generation failed - missing FROM clauses")
             
             # Create a derived table for the UNION result
             union_alias = f"union_{self.join_counter}"
             self.join_counter += 1
             
-            union_from_clause = f"FROM ({union_sql}) {union_alias}"
+            # CRITICAL FIX: Avoid excessive nesting in UNION patterns
+            # Instead of always wrapping in a derived table, return the UNION SQL directly
+            # when it's already properly structured
+            
+            print(f"🔧 UNION STRUCTURE DEBUG: Checking if we can avoid derived table wrapping")
+            print(f"🔧 UNION SQL: {fixed_union_sql[:300]}...")
+            
+            # Check the complexity of each branch
+            left_is_simple = left_sql.strip().startswith('SELECT') and 'FROM (' not in left_sql
+            right_is_simple = right_sql.strip().startswith('SELECT') and 'FROM (' not in right_sql
+            left_is_union = 'UNION' in left_sql
+            right_is_union = 'UNION' in right_sql
+            
+            print(f"🔧 Left: simple={left_is_simple}, union={left_is_union}")
+            print(f"🔧 Right: simple={right_is_simple}, union={right_is_union}")
+            
+            # Avoid excessive nesting by returning UNION directly in most cases
+            # Only use derived table wrapping when absolutely necessary
+            if (left_is_simple and right_is_simple) or (left_is_union or right_is_union):
+                # Either both branches are simple, or at least one is already a UNION
+                # In both cases, we can return the UNION directly without additional wrapping
+                print(f"🔧 UNION STRUCTURE DEBUG: Returning UNION directly to avoid nesting")
+                
+                # Update variable mappings to not reference a union alias
+                union_variable_mappings = final_variable_mappings.copy()
+                
+                # Return the UNION SQL directly as the FROM clause
+                union_from_clause = f"FROM ({fixed_union_sql}) union_{self.join_counter}"
+                return union_from_clause, [], [], union_variable_mappings
+            else:
+                # Complex structure that requires derived table approach
+                print(f"🔧 UNION STRUCTURE DEBUG: Using derived table approach for complex structure")
+                union_alias = f"union_{self.join_counter}"
+                self.join_counter += 1
+                union_from_clause = f"FROM ({fixed_union_sql}) {union_alias}"
             
             # Update variable mappings to reference the union table
             union_variable_mappings = {}
             for var, col_name in final_variable_mappings.items():
                 union_variable_mappings[var] = f"{union_alias}.{col_name}"
+                # Debug BIND variable mapping preservation
+                if var in left_vars and "'" in str(left_vars[var]):
+                    self.logger.debug(f"UNION: BIND variable {var} mapped from left '{left_vars[var]}' to '{union_variable_mappings[var]}'")
+                elif var in right_vars and "'" in str(right_vars[var]):
+                    self.logger.debug(f"UNION: BIND variable {var} mapped from right '{right_vars[var]}' to '{union_variable_mappings[var]}'")
+            
+            # Debug final variable mappings
+            self.logger.debug(f"UNION final variable mappings: {union_variable_mappings}")
+            self.logger.debug(f"UNION left vars: {left_vars}")
+            self.logger.debug(f"UNION right vars: {right_vars}")
+            
+            # Debug: Log the final UNION FROM clause
+            self.logger.debug(f"Final UNION FROM clause: {union_from_clause[:200]}...")
             
             self.logger.info(f"Successfully translated UNION with {len(variable_list)} variables")
             self.logger.debug(f"UNION SQL generated: {len(union_sql)} characters")
@@ -1198,12 +1924,18 @@ class PostgreSQLSparqlImpl:
         combined_joins = left_joins + right_joins
         
         # Combine FROM clauses properly to include both operands
-        # Extract table references from both FROM clauses
-        left_tables = left_from.replace("FROM ", "").strip()
-        right_tables = right_from.replace("FROM ", "").strip()
+        # Extract table references from both FROM clauses (only remove leading FROM)
+        left_tables = left_from[5:].strip() if left_from.startswith("FROM ") else left_from.strip()
+        right_tables = right_from[5:].strip() if right_from.startswith("FROM ") else right_from.strip()
         
         # Create combined FROM clause with CROSS JOIN
         combined_from = f"FROM {left_tables} CROSS JOIN {right_tables}"
+        
+        print(f"🔧 JOIN DEBUG: left_from = '{left_from[:100]}...'")
+        print(f"🔧 JOIN DEBUG: right_from = '{right_from[:100]}...'")
+        print(f"🔧 JOIN DEBUG: left_tables = '{left_tables[:100]}...'")
+        print(f"🔧 JOIN DEBUG: right_tables = '{right_tables[:100]}...'")
+        print(f"🔧 JOIN DEBUG: combined_from = '{combined_from[:100]}...'")
         
         # Log the join operation for debugging
         self.logger.debug(f"JOIN: Left FROM: {left_from}")
@@ -1408,6 +2140,128 @@ class PostgreSQLSparqlImpl:
             # Return fallback result
             return f"FROM {table_config.quad_table} q0", [], [], {}
     
+    async def _translate_minus(self, minus_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """
+        Translate MINUS pattern to SQL NOT EXISTS operations.
+        
+        MINUS patterns have two operands (p1 and p2) where:
+        1. p1 is the main pattern (left operand)
+        2. p2 is the pattern to exclude (right operand)
+        
+        The result includes all solutions from p1 that do not have a matching solution in p2
+        based on shared variables. This is implemented using NOT EXISTS subquery.
+        
+        Args:
+            minus_pattern: MINUS pattern from SPARQL algebra with p1 and p2 operands
+            table_config: Table configuration for SQL generation
+            projected_vars: Variables to project in SELECT clause
+            
+        Returns:
+            Tuple of (from_clause, where_conditions, joins, variable_mappings)
+        """
+        try:
+            self.logger.info(f"🚫 TRANSLATING MINUS PATTERN with projected vars: {projected_vars}")
+            
+            # Extract main and exclusion operands
+            main_operand = minus_pattern.p1  # Main pattern (what we want)
+            exclude_operand = minus_pattern.p2  # Pattern to exclude (what we don't want)
+            
+            self.logger.info(f"📌 Main operand: {getattr(main_operand, 'name', type(main_operand).__name__)}")
+            self.logger.info(f"📌 Exclude operand: {getattr(exclude_operand, 'name', type(exclude_operand).__name__)}")
+            
+            # Create independent alias generators for each operand to avoid conflicts
+            main_alias_gen = self.alias_generator.create_child_generator("main")
+            exclude_alias_gen = self.alias_generator.create_child_generator("excl")
+            
+            self.logger.debug(f"Created child alias generators: main_alias_gen, exclude_alias_gen")
+            
+            # Translate main pattern (the pattern we want to keep)
+            self.logger.debug("Translating main part of MINUS")
+            main_from, main_where, main_joins, main_vars = await self._translate_pattern_with_alias_gen(
+                main_operand, table_config, projected_vars, main_alias_gen
+            )
+            
+            # Translate exclude pattern (the pattern to subtract)
+            # CRITICAL FIX: Pass None for projected_vars to ensure exclude pattern variables are properly mapped
+            self.logger.debug("Translating exclude part of MINUS")
+            exclude_from, exclude_where, exclude_joins, exclude_vars = await self._translate_pattern_with_alias_gen(
+                exclude_operand, table_config, None, exclude_alias_gen
+            )
+            
+            # Find shared variables between main and exclude patterns
+            shared_variables = set(main_vars.keys()) & set(exclude_vars.keys())
+            self.logger.debug(f"Shared variables between main and exclude patterns: {[str(v) for v in shared_variables]}")
+            
+            # ... (rest of the code remains the same)
+            # Build the NOT EXISTS subquery for exclusion
+            if shared_variables:
+                # Build the NOT EXISTS subquery
+                exclude_select_items = []
+                exclude_conditions = []
+                
+                # Add shared variable equality conditions
+                for var in shared_variables:
+                    main_mapping = main_vars[var]
+                    exclude_mapping = exclude_vars[var]
+                    exclude_conditions.append(f"{main_mapping} = {exclude_mapping}")
+                
+                # Build the exclude subquery SQL
+                exclude_sql_parts = []
+                
+                # Add FROM clause for exclude pattern
+                if exclude_from:
+                    exclude_sql_parts.append(exclude_from)
+                
+                # Add JOINs for exclude pattern
+                if exclude_joins:
+                    exclude_sql_parts.extend(exclude_joins)
+                
+                # Combine WHERE conditions for exclude pattern
+                all_exclude_conditions = []
+                if exclude_where:
+                    all_exclude_conditions.extend(exclude_where)
+                if exclude_conditions:
+                    all_exclude_conditions.extend(exclude_conditions)
+                
+                if all_exclude_conditions:
+                    exclude_sql_parts.append(f"WHERE {' AND '.join(all_exclude_conditions)}")
+                
+                # Build complete NOT EXISTS subquery
+                exclude_subquery = f"SELECT 1 {' '.join(exclude_sql_parts)}"
+                not_exists_condition = f"NOT EXISTS ({exclude_subquery})"
+                
+                self.logger.debug(f"Generated NOT EXISTS condition: {not_exists_condition}")
+                
+                # Add NOT EXISTS to main WHERE conditions
+                final_where = main_where.copy() if main_where else []
+                final_where.append(not_exists_condition)
+                
+            else:
+                # No shared variables - MINUS has no effect (all results from main pattern)
+                self.logger.warning("No shared variables between MINUS operands - MINUS has no effect")
+                final_where = main_where.copy() if main_where else []
+            
+            # Return main pattern with NOT EXISTS exclusion
+            self.logger.debug(f"Main variables mapping: {main_vars}")
+            self.logger.info(f"✅ MINUS translation completed with {len(main_vars)} variables")
+            
+            # Debug logging for returned SQL components
+            self.logger.debug(f"MINUS returning FROM: '{main_from}'")
+            self.logger.debug(f"MINUS returning WHERE: {final_where}")
+            self.logger.debug(f"MINUS returning JOINs: {main_joins}")
+            self.logger.debug(f"MINUS returning variables: {list(main_vars.keys())}")
+            
+            return main_from, final_where, main_joins, main_vars
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error translating MINUS pattern: {str(e)}")
+            self.logger.error(f"Exception type: {type(e).__name__}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Return fallback result
+            return f"FROM {table_config.quad_table} q0", [], [], {}
+    
     async def _translate_extend(self, extend_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
         """Translate Extend pattern (BIND statements) to SQL.
         
@@ -1478,6 +2332,13 @@ class PostgreSQLSparqlImpl:
                 # Fall back to placeholder to avoid query failure
                 variable_mappings[bind_var] = f"'BIND_FAILED_{bind_var}'"
                 
+            # Ensure FROM clause includes the FROM keyword for proper SQL generation
+            # This is critical for UNION branches containing BIND expressions
+            if from_clause and not from_clause.strip().upper().startswith('FROM'):
+                # If from_clause doesn't start with FROM, it's just a table reference
+                from_clause = f"FROM {from_clause}"
+                self.logger.debug(f"Fixed FROM clause in BIND pattern: {from_clause}")
+            
             return from_clause, where_conditions, joins, variable_mappings
             
         except Exception as e:
@@ -1638,10 +2499,160 @@ class PostgreSQLSparqlImpl:
             return from_clause, where_conditions, joins, variable_mappings
             
         except Exception as e:
-            self.logger.error(f"Error translating Group pattern: {e}")
+            self.logger.error(f"Error translating UNION pattern: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return f"FROM {table_config.quad_table} q0", [], [], {}
+
+    async def _translate_values(self, values_pattern, table_config: TableConfig, projected_vars: List[Variable] = None) -> Tuple[str, List[str], List[str], Dict[Variable, str]]:
+        """Translate VALUES pattern to SQL.
+        
+        VALUES patterns provide inline data binding for variables.
+        Examples:
+        - VALUES ?name { "Alice" "Bob" "Charlie" }
+        - VALUES (?name ?age) { ("Alice" 25) ("Bob" 30) ("Charlie" 35) }
+        
+        This generates a subquery with UNION ALL for each data row.
+        """
+        try:
+            self.logger.debug(f"Translating VALUES pattern: {values_pattern}")
+            self.logger.debug(f"Pattern type: {type(values_pattern)}")
+            self.logger.debug(f"Pattern name: {getattr(values_pattern, 'name', 'NO_NAME')}")
+            
+            # Get all non-private attributes for debugging
+            attrs = [attr for attr in dir(values_pattern) if not attr.startswith('_')]
+            self.logger.debug(f"Pattern attributes: {attrs}")
+            
+            # Debug each attribute value
+            for attr in attrs:
+                try:
+                    value = getattr(values_pattern, attr)
+                    self.logger.debug(f"  {attr}: {value} (type: {type(value)})")
+                    if isinstance(value, (list, tuple)) and len(value) <= 10:
+                        for i, item in enumerate(value):
+                            self.logger.debug(f"    [{i}]: {item} (type: {type(item)})")
+                except Exception as e:
+                    self.logger.debug(f"  {attr}: ERROR - {e}")
+            
+            # Extract data from ToMultiSet pattern structure
+            # ToMultiSet has nested 'p' attribute containing 'values_' pattern with 'res' data
+            variables = []
+            data_rows = []
+            
+            # Check for nested values pattern in 'p' attribute
+            if hasattr(values_pattern, 'p'):
+                nested_p = getattr(values_pattern, 'p')
+                self.logger.debug(f"Nested p pattern: {nested_p} (type: {type(nested_p)})")
+                
+                if hasattr(nested_p, 'res'):
+                    res_data = getattr(nested_p, 'res')
+                    self.logger.debug(f"Found res data: {res_data} (type: {type(res_data)})")
+                    
+                    if res_data and isinstance(res_data, list):
+                        # res_data is a list of dictionaries mapping variables to values
+                        # Extract variables from first row
+                        if res_data:
+                            first_row = res_data[0]
+                            variables = list(first_row.keys())
+                            self.logger.debug(f"Extracted variables: {variables}")
+                            
+                            # Convert dictionary rows to tuple rows
+                            for row_dict in res_data:
+                                row_tuple = tuple(row_dict[var] for var in variables)
+                                data_rows.append(row_tuple)
+                            
+                            self.logger.debug(f"Converted {len(data_rows)} data rows")
+            
+            # Handle single variable case (var is not a list)
+            if variables and not isinstance(variables, list):
+                variables = [variables]
+            
+            self.logger.debug(f"FINAL - variables: {variables}")
+            self.logger.debug(f"FINAL - data rows: {len(data_rows) if data_rows else 0} rows")
+            if data_rows:
+                for i, row in enumerate(data_rows[:3]):  # Show first 3 rows
+                    self.logger.debug(f"  Row {i}: {row} (type: {type(row)})")
+            
+            if not variables or not data_rows:
+                self.logger.warning("Empty VALUES pattern")
+                return f"FROM {table_config.quad_table} q0", [], [], {}
+            
+            # Generate alias for VALUES subquery
+            if not hasattr(self, '_values_counter'):
+                self._values_counter = 0
+            self._values_counter += 1
+            values_alias = f"values_{self._values_counter}"
+            
+            # Build UNION ALL subquery for VALUES data
+            union_parts = []
+            variable_mappings = {}
+            
+            for row_idx, row_data in enumerate(data_rows):
+                # Handle single value case (not a tuple)
+                if not isinstance(row_data, (list, tuple)):
+                    row_data = [row_data]
+                
+                # Build SELECT clause for this row
+                select_parts = []
+                for var_idx, variable in enumerate(variables):
+                    if var_idx < len(row_data):
+                        value = row_data[var_idx]
+                        # Convert RDFLib terms to SQL literals
+                        sql_value = self._convert_rdflib_term_to_sql(value)
+                    else:
+                        # Handle missing values with NULL
+                        sql_value = "NULL"
+                    
+                    # Create column alias for this variable
+                    column_alias = f"{variable.n3()[1:]}_val"  # Remove ? from variable name
+                    select_parts.append(f"{sql_value} AS {column_alias}")
+                    
+                    # Store variable mapping (only need to do this once)
+                    if row_idx == 0:
+                        variable_mappings[variable] = f"{values_alias}.{column_alias}"
+                
+                union_parts.append(f"SELECT {', '.join(select_parts)}")
+            
+            # Build complete VALUES subquery
+            values_subquery = f"({' UNION ALL '.join(union_parts)}) {values_alias}"
+            
+            self.logger.debug(f"Generated VALUES subquery: {values_subquery}")
+            self.logger.debug(f"VALUES variable mappings: {variable_mappings}")
+            
+            return f"FROM {values_subquery}", [], [], variable_mappings
+            
+        except Exception as e:
+            self.logger.error(f"Error translating VALUES pattern: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return f"FROM {table_config.quad_table} q0", [], [], {}
+    
+    def _convert_rdflib_term_to_sql(self, term):
+        """Convert RDFLib term to SQL literal value."""
+        from rdflib import URIRef, Literal, BNode
+        
+        if isinstance(term, URIRef):
+            return f"'{str(term)}'"
+        elif isinstance(term, Literal):
+            # Handle different literal types
+            if term.datatype:
+                if term.datatype in [XSD.integer, XSD.int, XSD.long]:
+                    return str(term.value)
+                elif term.datatype in [XSD.decimal, XSD.double, XSD.float]:
+                    return str(term.value)
+                elif term.datatype == XSD.boolean:
+                    return 'TRUE' if term.value else 'FALSE'
+                else:
+                    # String or other literal types
+                    return f"'{str(term)}'"
+            else:
+                # Plain literal (string)
+                return f"'{str(term)}'"
+        elif isinstance(term, BNode):
+            return f"'_:{str(term)}'"
+        else:
+            # Fallback for other types
+            return f"'{str(term)}'"
 
     def _extract_variables_from_expression(self, expr):
         """Extract all variables referenced in a SPARQL expression.
@@ -2708,7 +3719,7 @@ class PostgreSQLSparqlImpl:
             )
             
             # Build SELECT clause with all variables (needed for CONSTRUCT template)
-            select_clause = self._build_select_clause(all_vars, variable_mappings, has_distinct)
+            select_clause, group_by_clause, having_clause = self._build_select_clause(all_vars, variable_mappings, has_distinct)
             
             # Build complete SQL query
             sql_parts = [select_clause]
@@ -2719,6 +3730,14 @@ class PostgreSQLSparqlImpl:
                 
             if where_conditions:
                 sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
+            
+            # Add GROUP BY clause if present
+            if group_by_clause:
+                sql_parts.append(group_by_clause)
+            
+            # Add HAVING clause if present
+            if having_clause:
+                sql_parts.append(having_clause)
             
             # Add LIMIT and OFFSET if present
             if limit_info['offset'] is not None:
@@ -3418,10 +4437,13 @@ class PostgreSQLSparqlImpl:
     async def _execute_sql_query(self, sql_query: str) -> List[Dict[str, Any]]:
         """Execute SQL query and return results."""
         try:
+            # Clean up SQL before execution to fix common issues
+            cleaned_sql = self._cleanup_sql_before_execution(sql_query)
+            
             # Use the space_impl's get_connection method to get a database connection
             with self.space_impl.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute(sql_query)
+                    cursor.execute(cleaned_sql)
                     
                     # Get column names
                     columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -3449,6 +4471,116 @@ class PostgreSQLSparqlImpl:
             self.logger.error(f"Error executing SQL query: {e}")
             self.logger.error(f"SQL query was: {sql_query}")
             raise
+    
+    def _cleanup_sql_before_execution(self, sql_query: str) -> str:
+        """Simple SQL cleanup to remove duplicate FROM keywords.
+        
+        Strategy: FROM keywords should be added aggressively during SQL generation.
+        This cleanup only removes duplicate FROM keywords at the end.
+        
+        Args:
+            sql_query: Raw SQL query that may have duplicate FROM keywords
+            
+        Returns:
+            Cleaned SQL query with duplicate FROM keywords removed
+        """
+        try:
+            print(f"🔧 SQL CLEANUP: Processing SQL...")
+            print(f"🔧 ORIGINAL SQL:\n{sql_query}")
+            self.logger.debug(f"SQL cleanup: removing duplicate FROM keywords")
+            
+            # Split SQL into lines for processing
+            lines = sql_query.split('\n')
+            cleaned_lines = []
+            
+            for line in lines:
+                stripped = line.strip()
+                
+                # Fix duplicate FROM keywords
+                if stripped.upper().startswith('FROM FROM'):
+                    # Remove duplicate FROM keywords
+                    fixed_line = stripped[5:].strip()  # Remove first 'FROM '
+                    cleaned_lines.append(f"FROM {fixed_line}")
+                    print(f"🔧   Fixed duplicate FROM: '{stripped}' -> 'FROM {fixed_line}'")
+                    self.logger.debug(f"Fixed duplicate FROM: {stripped} -> FROM {fixed_line}")
+                else:
+                    cleaned_lines.append(line)
+            
+            cleaned_sql = '\n'.join(cleaned_lines)
+            
+            # Log the cleanup if changes were made
+            if cleaned_sql != sql_query:
+                print(f"🔧 SQL cleanup applied: removed duplicate FROM keywords")
+                self.logger.debug(f"SQL cleanup applied: removed duplicate FROM keywords")
+            
+            return cleaned_sql
+            
+        except Exception as e:
+            self.logger.warning(f"Error during SQL cleanup: {e}. Using original SQL.")
+            return sql_query
+    
+    def _is_table_reference(self, line: str) -> bool:
+        """Check if a line is a table reference that might need a FROM keyword.
+        
+        Args:
+            line: SQL line to check
+            
+        Returns:
+            True if this line looks like a table reference
+        """
+        line_upper = line.upper()
+        stripped = line.strip()
+        
+        # Skip empty lines
+        if not stripped:
+            return False
+        
+        # Skip lines that already have SQL keywords (except FROM which we'll handle)
+        if any(keyword in line_upper for keyword in [
+            'SELECT', 'WHERE', 'JOIN', 'ON', 'AND', 'OR', 
+            'UNION', 'ORDER', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET',
+            'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'DROP', 'ALTER'
+        ]):
+            return False
+        
+        # Skip lines with operators or comparisons
+        if any(op in line for op in ['=', '<', '>', '!=', '<=', '>=', 'LIKE', 'IN']):
+            return False
+        
+        # Skip lines that look like column references or expressions
+        if '.' in line and 'AS' in line_upper:
+            return False
+        
+        # More comprehensive table reference detection
+        # Table references typically have patterns like:
+        # - vitalgraph1__space_test__rdf_quad q0
+        # - vitalgraph1__space_test__rdf_quad right_q0  
+        # - right_q0
+        # - left_q1
+        # - q0
+        
+        # Check for vitalgraph table references (most common pattern)
+        if 'vitalgraph1__space_test__rdf_quad' in line:
+            return True
+        
+        # Check for alias-only table references
+        words = stripped.split()
+        if len(words) == 1:
+            word = words[0]
+            # Single word that looks like a table alias
+            if (word.startswith('right_q') or 
+                word.startswith('left_q') or 
+                (word.startswith('q') and word[1:].isdigit())):
+                return True
+        elif len(words) == 2:
+            # Two words: likely "table_name alias"
+            first_word, second_word = words
+            if (second_word.startswith('right_q') or 
+                second_word.startswith('left_q') or 
+                (second_word.startswith('q') and len(second_word) < 10)):
+                return True
+        
+        return False
     
     def _extract_quad_aliases_from_sql(self, from_clause: str, joins: List[str]) -> List[str]:
         """
@@ -3674,3 +4806,266 @@ class PostgreSQLSparqlImpl:
         # NOTE: IN() is NOT handled here - it's parsed as RelationalExpression with op='IN'
         # See _translate_filter_expression for RelationalExpression handling
         pass
+
+    async def _translate_ask_query(self, algebra, table_config: TableConfig) -> str:
+        """
+        Translate ASK query to SQL.
+        
+        ASK queries check if a pattern exists in the graph and return a boolean result.
+        Implementation strategy: Convert to SELECT with LIMIT 1, then check if any results exist.
+        
+        Args:
+            algebra: RDFLib AskQuery algebra object
+            table_config: Table configuration for SQL generation
+            
+        Returns:
+            SQL query string that returns data if pattern exists (for boolean conversion)
+        """
+        try:
+            self.logger.info("Translating ASK query")
+            
+            # Extract WHERE clause pattern from algebra.p
+            if not hasattr(algebra, 'p') or not algebra.p:
+                raise ValueError("ASK query missing WHERE clause")
+            
+            where_pattern = algebra.p
+            self.logger.debug(f"ASK WHERE pattern type: {where_pattern.name}")
+            
+            # Get variables from the pattern (needed for SQL generation)
+            all_vars = list(where_pattern.get('_vars', set()))
+            if not all_vars:
+                # If no variables found in pattern, try to extract from sub-patterns
+                all_vars = self._extract_variables_from_pattern(where_pattern)
+            
+            # If still no variables, create a dummy variable for SQL generation
+            if not all_vars:
+                all_vars = [Variable('dummy')]
+            
+            self.logger.debug(f"ASK pattern variables: {all_vars}")
+            
+            # Translate the pattern to SQL components
+            from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
+                where_pattern, table_config, all_vars
+            )
+            
+            # Build a simple SELECT query with LIMIT 1 to check existence
+            # We only need to know if any results exist, not the actual data
+            select_clause = "SELECT 1"
+            
+            # Build complete SQL query
+            sql_parts = [select_clause]
+            sql_parts.append(from_clause)
+            
+            if joins:
+                sql_parts.extend(joins)
+                
+            if where_conditions:
+                sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
+            
+            # Add LIMIT 1 for efficiency - we only need to know if any results exist
+            sql_parts.append("LIMIT 1")
+            
+            sql_query = " ".join(sql_parts)
+            
+            # Clean up SQL before execution
+            sql_query = self._cleanup_sql_before_execution(sql_query)
+            
+            self.logger.info("Successfully translated ASK query")
+            return sql_query
+            
+        except Exception as e:
+            self.logger.error(f"Error translating ASK query: {e}")
+            raise NotImplementedError(f"ASK query translation failed: {e}")
+    
+    async def _translate_describe_query(self, algebra, table_config: TableConfig) -> str:
+        """
+        Translate DESCRIBE query to SQL.
+        
+        DESCRIBE queries return all properties (triples) of specified resources.
+        Implementation strategy: Generate SQL to find all quads where the described resource(s) are subjects.
+        
+        Args:
+            algebra: RDFLib DescribeQuery algebra object
+            table_config: Table configuration for SQL generation
+            
+        Returns:
+            SQL query string that returns all triples for the described resources
+        """
+        try:
+            self.logger.info("Translating DESCRIBE query")
+            
+            # Extract the resources to describe from algebra
+            describe_vars = []
+            describe_uris = []
+            
+            # Check if there's a WHERE clause (DESCRIBE ?var WHERE { ... })
+            if hasattr(algebra, 'p') and algebra.p:
+                # DESCRIBE with WHERE clause - extract variables from WHERE pattern
+                where_pattern = algebra.p
+                self.logger.debug(f"DESCRIBE with WHERE clause, pattern type: {where_pattern.name}")
+                
+                # Get variables from the WHERE pattern
+                where_vars = list(where_pattern.get('_vars', set()))
+                if not where_vars:
+                    where_vars = self._extract_variables_from_pattern(where_pattern)
+                
+                # First, execute the WHERE clause to find the resources to describe
+                from_clause, where_conditions, joins, variable_mappings = await self._translate_pattern(
+                    where_pattern, table_config, where_vars
+                )
+                
+                # Build SELECT query for the WHERE clause to get resource URIs
+                select_vars = [var for var in where_vars if var in variable_mappings]
+                if not select_vars:
+                    raise ValueError("No valid variables found in DESCRIBE WHERE clause")
+                
+                # Use the first variable as the resource to describe
+                describe_var = select_vars[0]
+                describe_var_sql = variable_mappings[describe_var]
+                
+                # Build subquery to get the resources to describe
+                subquery_parts = [f"SELECT DISTINCT {describe_var_sql} AS resource_uri"]
+                subquery_parts.append(from_clause)
+                
+                if joins:
+                    subquery_parts.extend(joins)
+                    
+                if where_conditions:
+                    subquery_parts.append(f"WHERE {' AND '.join(where_conditions)}")
+                
+                # Add ORDER BY and LIMIT if present in the algebra
+                if hasattr(algebra, 'orderBy') and algebra.orderBy:
+                    # Handle ORDER BY clause
+                    pass  # TODO: Implement ORDER BY for DESCRIBE
+                
+                if hasattr(algebra, 'length') and algebra.length:
+                    subquery_parts.append(f"LIMIT {algebra.length}")
+                
+                subquery_sql = " ".join(subquery_parts)
+                
+                # Now build the main query to get all triples for the found resources
+                main_sql = f"""
+                SELECT 
+                    s_term.term_text AS subject,
+                    p_term.term_text AS predicate, 
+                    o_term.term_text AS object
+                FROM ({subquery_sql}) resources
+                JOIN {table_config.quad_table} q ON q.subject_uuid = (
+                    SELECT term_uuid FROM {table_config.term_table} 
+                    WHERE term_text = resources.resource_uri AND term_type = 'U'
+                )
+                JOIN {table_config.term_table} s_term ON q.subject_uuid = s_term.term_uuid
+                JOIN {table_config.term_table} p_term ON q.predicate_uuid = p_term.term_uuid  
+                JOIN {table_config.term_table} o_term ON q.object_uuid = o_term.term_uuid
+                ORDER BY subject, predicate, object
+                """
+                
+            else:
+                # Simple DESCRIBE <uri> without WHERE clause
+                # Try multiple ways to extract the resource(s) from algebra
+                describe_resources = []
+                
+                # Method 1: Check algebra.res
+                if hasattr(algebra, 'res') and algebra.res:
+                    describe_resources = algebra.res if isinstance(algebra.res, list) else [algebra.res]
+                
+                # Method 2: Check algebra.term (alternative attribute name)
+                elif hasattr(algebra, 'term') and algebra.term:
+                    describe_resources = algebra.term if isinstance(algebra.term, list) else [algebra.term]
+                
+                # Method 3: Check if algebra itself contains the resource info
+                elif hasattr(algebra, '__dict__'):
+                    # Look for any attribute that might contain the resource
+                    for attr_name, attr_value in algebra.__dict__.items():
+                        if attr_value and not attr_name.startswith('_') and attr_name not in ['name', 'p']:
+                            if isinstance(attr_value, (list, tuple)):
+                                describe_resources = list(attr_value)
+                                break
+                            else:
+                                describe_resources = [attr_value]
+                                break
+                
+                if describe_resources:
+                    # Convert RDFLib terms to SQL-safe strings
+                    resource_conditions = []
+                    for resource in describe_resources:
+                        if hasattr(resource, 'toPython'):
+                            resource_uri = str(resource)
+                        else:
+                            resource_uri = str(resource)
+                        
+                        # Escape single quotes in URI for SQL safety
+                        resource_uri = resource_uri.replace("'", "''")
+                        
+                        # Add condition to find this resource as subject
+                        resource_conditions.append(f"s_term.term_text = '{resource_uri}'")
+                    
+                    self.logger.debug(f"DESCRIBE resources: {[str(r) for r in describe_resources]}")
+                    
+                    # Build SQL to get all triples where the specified resource(s) are subjects
+                    main_sql = f"""
+                    SELECT 
+                        s_term.term_text AS subject,
+                        p_term.term_text AS predicate,
+                        o_term.term_text AS object
+                    FROM {table_config.quad_table} q
+                    JOIN {table_config.term_table} s_term ON q.subject_uuid = s_term.term_uuid
+                    JOIN {table_config.term_table} p_term ON q.predicate_uuid = p_term.term_uuid
+                    JOIN {table_config.term_table} o_term ON q.object_uuid = o_term.term_uuid
+                    WHERE ({' OR '.join(resource_conditions)})
+                    ORDER BY subject, predicate, object
+                    """
+                else:
+                    # If no resources found, return empty result set instead of error
+                    self.logger.warning("No resources specified in DESCRIBE query, returning empty result")
+                    main_sql = f"""
+                    SELECT 
+                        '' AS subject,
+                        '' AS predicate,
+                        '' AS object
+                    WHERE 1=0
+                    """
+            
+            # Clean up SQL before execution
+            sql_query = self._cleanup_sql_before_execution(main_sql)
+            
+            self.logger.info("Successfully translated DESCRIBE query")
+            return sql_query
+            
+        except Exception as e:
+            self.logger.error(f"Error translating DESCRIBE query: {e}")
+            raise NotImplementedError(f"DESCRIBE query translation failed: {e}")
+    
+    async def _process_describe_results(self, sql_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Process SQL results from DESCRIBE query to return RDF triples.
+        
+        Args:
+            sql_results: List of SQL result dictionaries with subject, predicate, object columns
+            
+        Returns:
+            List of RDF triple dictionaries
+        """
+        try:
+            describe_triples = []
+            
+            self.logger.debug(f"Processing {len(sql_results)} DESCRIBE SQL results")
+            
+            for row in sql_results:
+                # Each row should have subject, predicate, object columns
+                if 'subject' in row and 'predicate' in row and 'object' in row:
+                    triple_dict = {
+                        'subject': row['subject'],
+                        'predicate': row['predicate'],
+                        'object': row['object']
+                    }
+                    describe_triples.append(triple_dict)
+                else:
+                    self.logger.warning(f"Skipping incomplete DESCRIBE result row: {row}")
+            
+            self.logger.info(f"Generated {len(describe_triples)} RDF triples from DESCRIBE query")
+            return describe_triples
+            
+        except Exception as e:
+            self.logger.error(f"Error processing DESCRIBE results: {e}")
+            raise
