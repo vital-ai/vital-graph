@@ -171,6 +171,10 @@ class PostgreSQLTermCache:
         
         self.logger.info("Cleared all cached data")
     
+    def size(self) -> int:
+        """Get current cache size."""
+        return self.term_uuid_cache.size()
+    
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get cache performance statistics.
