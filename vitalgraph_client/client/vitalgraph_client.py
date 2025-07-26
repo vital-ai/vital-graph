@@ -610,3 +610,180 @@ class VitalGraphClient:
             
         except requests.exceptions.RequestException as e:
             raise VitalGraphClientError(f"Failed to filter users: {e}")
+    
+    def execute_sparql_query(self, space_id: str, query: str, format: str = "json") -> Dict[str, Any]:
+        """
+        Execute a SPARQL query.
+        
+        Args:
+            space_id: Space identifier
+            query: SPARQL query string
+            format: Response format (default: "json")
+            
+        Returns:
+            Query result dictionary
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/query"
+            query_data = {
+                "query": query,
+                "format": format
+            }
+            
+            response = self.session.post(url, json=query_data)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to execute SPARQL query: {e}")
+    
+    def execute_sparql_insert(self, space_id: str, query: str) -> Dict[str, Any]:
+        """
+        Execute a SPARQL insert operation.
+        
+        Args:
+            space_id: Space identifier
+            query: SPARQL insert query string
+            
+        Returns:
+            Insert result dictionary
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/insert"
+            query_data = {"query": query}
+            
+            response = self.session.post(url, json=query_data)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to execute SPARQL insert: {e}")
+    
+    def execute_sparql_update(self, space_id: str, query: str) -> Dict[str, Any]:
+        """
+        Execute a SPARQL update operation.
+        
+        Args:
+            space_id: Space identifier
+            query: SPARQL update query string
+            
+        Returns:
+            Update result dictionary
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/update"
+            query_data = {"query": query}
+            
+            response = self.session.post(url, json=query_data)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to execute SPARQL update: {e}")
+    
+    def execute_sparql_delete(self, space_id: str, query: str) -> Dict[str, Any]:
+        """
+        Execute a SPARQL delete operation.
+        
+        Args:
+            space_id: Space identifier
+            query: SPARQL delete query string
+            
+        Returns:
+            Delete result dictionary
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/delete"
+            query_data = {"query": query}
+            
+            response = self.session.post(url, json=query_data)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to execute SPARQL delete: {e}")
+    
+    def execute_sparql_graph_operation(self, space_id: str, operation: str, **kwargs) -> Dict[str, Any]:
+        """
+        Execute a SPARQL graph management operation.
+        
+        Args:
+            space_id: Space identifier
+            operation: Graph operation (CREATE, DROP, CLEAR, etc.)
+            **kwargs: Additional operation parameters
+            
+        Returns:
+            Operation result dictionary
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph"
+            operation_data = {"operation": operation, **kwargs}
+            
+            response = self.session.post(url, json=operation_data)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to execute SPARQL graph operation: {e}")
+    
+    def list_graphs(self, space_id: str) -> Dict[str, Any]:
+        """
+        List graphs in a space.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            List of graphs
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        try:
+            url = f"{self.config.get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graphs"
+            
+            response = self.session.get(url)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            raise VitalGraphClientError(f"Failed to list graphs: {e}")

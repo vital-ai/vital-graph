@@ -32,113 +32,8 @@ class GraphConstants:
         return (cls.GLOBAL_GRAPH_URI, cls.GLOBAL_GRAPH_TYPE)
 
 
-class TermUUIDCache:
-    """
-    LRU cache for term UUID lookups to avoid repeated subqueries.
-    
-    This cache stores mappings from (term_text, term_type) tuples to term UUIDs,
-    using an LRU eviction policy when the cache reaches its maximum size.
-    """
-    
-    def __init__(self, max_size: int = 1000):
-        self.max_size = max_size
-        self.cache = {}
-        self.access_order = []
-        self.logger = logging.getLogger(f"{__name__}.TermUUIDCache")
-    
-    def get(self, term_text: str, term_type: str) -> Optional[str]:
-        """
-        Get term UUID from cache.
-        
-        Args:
-            term_text: The term text
-            term_type: The term type ('U', 'L', 'B')
-            
-        Returns:
-            Term UUID if found, None otherwise
-        """
-        key = (term_text, term_type)
-        if key in self.cache:
-            # Move to end (most recently used)
-            self.access_order.remove(key)
-            self.access_order.append(key)
-            self.logger.debug(f"Cache hit for term: {term_text} ({term_type})")
-            return self.cache[key]
-        
-        self.logger.debug(f"Cache miss for term: {term_text} ({term_type})")
-        return None
-    
-    def get_batch(self, terms: List[Tuple[str, str]]) -> Dict[Tuple[str, str], Optional[str]]:
-        """
-        Get multiple term UUIDs from cache.
-        
-        Args:
-            terms: List of (term_text, term_type) tuples
-            
-        Returns:
-            Dictionary mapping (term_text, term_type) to UUID (or None if not cached)
-        """
-        result = {}
-        cache_hits = 0
-        
-        for term_text, term_type in terms:
-            key = (term_text, term_type)
-            if key in self.cache:
-                # Move to end (most recently used)
-                self.access_order.remove(key)
-                self.access_order.append(key)
-                result[key] = self.cache[key]
-                cache_hits += 1
-            else:
-                result[key] = None
-        
-        self.logger.debug(f"Batch lookup: {cache_hits}/{len(terms)} cache hits")
-        return result
-    
-    def put(self, term_text: str, term_type: str, term_uuid: str):
-        """
-        Add term UUID to cache.
-        
-        Args:
-            term_text: The term text
-            term_type: The term type ('U', 'L', 'B')
-            term_uuid: The term UUID
-        """
-        key = (term_text, term_type)
-        
-        if key in self.cache:
-            # Update existing entry and move to end
-            self.access_order.remove(key)
-        elif len(self.cache) >= self.max_size:
-            # Evict least recently used
-            lru_key = self.access_order.pop(0)
-            del self.cache[lru_key]
-            self.logger.debug(f"Evicted LRU term: {lru_key[0]} ({lru_key[1]})")
-        
-        self.cache[key] = term_uuid
-        self.access_order.append(key)
-        self.logger.debug(f"Cached term: {term_text} ({term_type}) -> {term_uuid}")
-    
-    def put_batch(self, term_mappings: Dict[Tuple[str, str], str]):
-        """
-        Add multiple term UUIDs to cache.
-        
-        Args:
-            term_mappings: Dictionary mapping (term_text, term_type) to term_uuid
-        """
-        for (term_text, term_type), term_uuid in term_mappings.items():
-            self.put(term_text, term_type, term_uuid)
-        
-        self.logger.debug(f"Batch cached {len(term_mappings)} terms")
-    
-    def size(self) -> int:
-        """Get current cache size."""
-        return len(self.cache)
-    
-    def clear(self) -> None:
-        """Clear the cache."""
-        self.cache.clear()
-        self.access_order.clear()
+# Import the unified term cache
+from .postgresql_term_cache import PostgreSQLTermCache
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +126,7 @@ class PostgreSQLSparqlImpl:
         # Keep legacy counters for backward compatibility during transition
         self.variable_counter = 0
         self.join_counter = 0
-        self.term_uuid_cache = TermUUIDCache(max_size=10000)  # Cache for term UUID lookups
+        self.term_uuid_cache = PostgreSQLTermCache(cache_size=10000)  # Cache for term UUID lookups
         self.graph_cache = set()  # In-memory cache of known graphs (synced with graph table)
         
     async def _initialize_graph_cache_if_needed(self, space_id: str) -> None:
@@ -312,32 +207,47 @@ class PostgreSQLSparqlImpl:
             return {}
         
         # First, check cache for all terms
+        # self.logger.warning(f"🔍 CACHE CHECK: Looking up {len(terms)} terms in cache (cache size: {self.term_uuid_cache.get_statistics()['cache_size']})")
         cached_results = self.term_uuid_cache.get_batch(terms)
         
-        # Find terms that need database lookup
-        uncached_terms = [(term_text, term_type) for (term_text, term_type), uuid in cached_results.items() if uuid is None]
+        # Find terms that need database lookup (terms not found in cache)
+        cached_keys = set(cached_results.keys())
+        uncached_terms = [term for term in terms if term not in cached_keys]
+        cached_count = len(cached_results)
+        # self.logger.warning(f"🎯 CACHE RESULT: {cached_count}/{len(terms)} cache hits, {len(uncached_terms)} need DB lookup")
         
-        result = {}
-        
-        # Add cached results to final result
-        for (term_text, term_type), uuid in cached_results.items():
-            if uuid is not None:
-                result[(term_text, term_type)] = uuid
+        # Start with cached results
+        result = cached_results.copy()
         
         # Batch lookup uncached terms from database
         if uncached_terms:
             self.logger.debug(f"Batch database lookup for {len(uncached_terms)} uncached terms")
             
-            # Build batch query for all uncached terms
-            conditions = []
-            for term_text, term_type in uncached_terms:
-                conditions.append(f"(term_text = '{term_text}' AND term_type = '{term_type}')")
-            
-            batch_query = f"""
-                SELECT term_text, term_type, term_uuid 
-                FROM {table_config.term_table} 
-                WHERE {' OR '.join(conditions)}
-            """
+            # Build optimized batch query using IN clause for better performance
+            # This leverages the composite (term_text, term_type) index more efficiently than OR clauses
+            if len(uncached_terms) == 1:
+                # Single term - use simple equality for better readability
+                term_text, term_type = uncached_terms[0]
+                escaped_text = term_text.replace("'", "''")
+                batch_query = f"""
+                    SELECT term_text, term_type, term_uuid 
+                    FROM {table_config.term_table} 
+                    WHERE term_text = '{escaped_text}' AND term_type = '{term_type}'
+                """
+            else:
+                # Multiple terms - use IN clause with VALUES for better performance
+                # This approach is more reliable than string concatenation
+                values_list = []
+                for term_text, term_type in uncached_terms:
+                    escaped_text = term_text.replace("'", "''")
+                    values_list.append(f"('{escaped_text}', '{term_type}')")
+                
+                batch_query = f"""
+                    SELECT t.term_text, t.term_type, t.term_uuid 
+                    FROM {table_config.term_table} t
+                    INNER JOIN (VALUES {', '.join(values_list)}) AS v(term_text, term_type)
+                        ON t.term_text = v.term_text AND t.term_type = v.term_type
+                """
             
             # Execute batch query
             db_results = await self._execute_sql_query(batch_query)
@@ -4518,8 +4428,8 @@ class PostgreSQLSparqlImpl:
             Cleaned SQL query with duplicate FROM keywords removed
         """
         try:
-            print(f"🔧 SQL CLEANUP: Processing SQL...")
-            print(f"🔧 ORIGINAL SQL:\n{sql_query}")
+            # print(f"🔧 SQL CLEANUP: Processing SQL...")
+            # print(f"🔧 ORIGINAL SQL:\n{sql_query}")
             self.logger.debug(f"SQL cleanup: removing duplicate FROM keywords")
             
             # Split SQL into lines for processing
@@ -4543,7 +4453,7 @@ class PostgreSQLSparqlImpl:
             
             # Log the cleanup if changes were made
             if cleaned_sql != sql_query:
-                print(f"🔧 SQL cleanup applied: removed duplicate FROM keywords")
+                # print(f"🔧 SQL cleanup applied: removed duplicate FROM keywords")
                 self.logger.debug(f"SQL cleanup applied: removed duplicate FROM keywords")
             
             return cleaned_sql

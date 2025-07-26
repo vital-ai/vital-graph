@@ -205,9 +205,8 @@ class SPARQLGraphEndpoint:
                     detail="Space implementation not available"
                 )
             
-            # Get SPARQL implementation
-            from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
-            sparql_impl = PostgreSQLSparqlImpl(space_impl)
+            # Get cached SPARQL implementation (preserves term cache across requests)
+            sparql_impl = space_impl.get_sparql_impl(space_id)
             
             # Build SPARQL update query based on operation
             sparql_query = self._build_graph_operation_query(request)

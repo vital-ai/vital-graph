@@ -75,11 +75,17 @@ class PostgreSQLSpaceImpl:
         self.rdf_pool = None
         self.shared_pool = shared_pool
         
+        # Initialize utils instance for timing operations
+        self.utils = PostgreSQLUtils()
+        
         # Validate global prefix using utils
         PostgreSQLUtils.validate_global_prefix(global_prefix)
         
         # Cache of table definitions by space_id
         self._table_cache = {}
+        
+        # Cache of SPARQL implementations by space_id to persist term caches across requests
+        self._sparql_impl_cache = {}
         
         # Use shared pool if provided, otherwise create dedicated pool
         if shared_pool:
@@ -282,9 +288,29 @@ class PostgreSQLSpaceImpl:
             'rdf_quad': PostgreSQLUtils.get_table_name(self.global_prefix, space_id, 'rdf_quad')
         }
     
-
-    
-
+    def get_sparql_impl(self, space_id: str):
+        """
+        Get or create a cached SPARQL implementation for the given space.
+        
+        This ensures that the SPARQL implementation and its term cache persist
+        across multiple requests, providing significant performance benefits.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            PostgreSQLSparqlImpl: Cached SPARQL implementation instance
+        """
+        if space_id not in self._sparql_impl_cache:
+            # Import here to avoid circular imports
+            from .postgresql_sparql_impl import PostgreSQLSparqlImpl
+            
+            self.logger.info(f" Creating new cached SPARQL implementation for space: {space_id}")
+            self._sparql_impl_cache[space_id] = PostgreSQLSparqlImpl(self)
+        else:
+            self.logger.debug(f" Reusing cached SPARQL implementation for space: {space_id}")
+            
+        return self._sparql_impl_cache[space_id]
     
     def _get_create_table_sql(self, space_id: str) -> Dict[str, str]:
         """
@@ -314,7 +340,7 @@ class PostgreSQLSpaceImpl:
         
         sql_statements = {}
         
-        # UUID-based term table
+        # UUID-based term table with ALL performance indexes
         table_type = "UNLOGGED TABLE" if self.use_unlogged else "TABLE"
         sql_statements['term'] = f"""
             CREATE {table_type} {table_names['term']} (
@@ -326,11 +352,22 @@ class PostgreSQLSpaceImpl:
                 created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             
+            -- Basic indexes
             CREATE INDEX idx_{table_prefix}_term_text ON {table_names['term']} (term_text);
             CREATE INDEX idx_{table_prefix}_term_type ON {table_names['term']} (term_type);
+            
+            -- Composite index for optimized batch lookups
+            CREATE INDEX idx_{table_prefix}_term_text_type ON {table_names['term']} (term_text, term_type);
+            
+            -- Trigram indexes for text search
+            CREATE INDEX idx_{table_prefix}_term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);
+            CREATE INDEX idx_{table_prefix}_term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);
+            
+            -- Cluster term table by UUID for better JOIN performance
+            CLUSTER {table_names['term']} USING {table_names['term']}_pkey;
         """
         
-        # UUID-based quad table
+        # UUID-based quad table with ALL performance indexes
         sql_statements['rdf_quad'] = f"""
             CREATE {table_type} {table_names['rdf_quad']} (
                 subject_uuid UUID NOT NULL,
@@ -342,10 +379,18 @@ class PostgreSQLSpaceImpl:
                 PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
             );
             
+            -- Individual column indexes
+            CREATE INDEX idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);
             CREATE INDEX idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);
             CREATE INDEX idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);
             CREATE INDEX idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);
             CREATE INDEX idx_{table_prefix}_quad_uuid ON {table_names['rdf_quad']} (quad_uuid);
+            
+            -- SPARQL-optimized composite index (subject, predicate, object, context)
+            CREATE INDEX idx_{table_prefix}_quad_spoc ON {table_names['rdf_quad']} (subject_uuid, predicate_uuid, object_uuid, context_uuid);
+            
+            -- Cluster quad table by subject_uuid for subject-focused queries
+            CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}_quad_subject;
         """
         
         # Namespace table (unchanged)
@@ -372,84 +417,7 @@ class PostgreSQLSpaceImpl:
         
         return sql_statements
     
-    def _get_performance_indexes_sql(self, space_id: str) -> Dict[str, List[str]]:
-        """
-        Generate SQL statements for performance indexes to be created after bulk loading.
-        
-        Args:
-            space_id: Space identifier
-            use_unlogged: If True, create indexes on unlogged tables
-            
-        Returns:
-            dict: Dictionary of index creation SQL statements by table
-        """
-        PostgreSQLUtils.validate_space_id(space_id)
-        
-        table_names = self._get_table_names(space_id)
-        if self.use_unlogged:
-            table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
-        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-        
-        # Detect table schema (UUID vs ID based) by checking column names
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(f"""
-                        SELECT COUNT(*) 
-                        FROM information_schema.columns 
-                        WHERE table_name = '{table_names['rdf_quad'].split('.')[-1]}' 
-                        AND column_name = 'subject_uuid'
-                    """)
-                    result = cursor.fetchone()
-                    # Handle both dict-like and tuple-like cursor results
-                    if result:
-                        count = result[0] if isinstance(result, (tuple, list)) else result.get('count', 0)
-                        is_uuid_schema = count > 0
-                    else:
-                        is_uuid_schema = False
-        except Exception as e:
-            self.logger.warning(f"Could not detect table schema, assuming ID-based: {e}")
-            is_uuid_schema = False
-        
-        # Use appropriate column names based on schema
-        if is_uuid_schema:
-            subject_col, predicate_col, object_col, context_col = 'subject_uuid', 'predicate_uuid', 'object_uuid', 'context_uuid'
-        else:
-            subject_col, predicate_col, object_col, context_col = 'subject_id', 'predicate_id', 'object_id', 'context_id'
-        
-        indexes = {}
-        
-        # Term table performance indexes
-        indexes['term'] = [
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_text ON {table_names['term']} (term_text);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_type ON {table_names['term']} (term_type);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_text_type ON {table_names['term']} (term_text, term_type);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);"
-        ]
-        
-        # Add table clustering for UUID-based tables to physically order rows by UUID
-        if is_uuid_schema:
-            # Cluster term table by UUID for better JOIN performance
-            # This physically reorders table rows by UUID, improving cache locality and reducing I/O
-            indexes['term'].append(f"CLUSTER {table_names['term']} USING {table_names['term']}_pkey;")
-        
-        # Quad table performance indexes - SPARQL optimized with appropriate column names
-        indexes['rdf_quad'] = [
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_spoc ON {table_names['rdf_quad']} ({subject_col}, {predicate_col}, {object_col}, {context_col});",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_subject ON {table_names['rdf_quad']} ({subject_col});",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_predicate ON {table_names['rdf_quad']} ({predicate_col});",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_object ON {table_names['rdf_quad']} ({object_col});",
-            f"CREATE INDEX CONCURRENTLY idx_{table_prefix}quad_context ON {table_names['rdf_quad']} ({context_col});"
-        ]
-        
-        # Add clustering for quad table if UUID-based (optional optimization)
-        if is_uuid_schema:
-            # Cluster quad table by subject_uuid for subject-focused queries
-            # This can improve performance for queries that filter by subject
-            indexes['rdf_quad'].append(f"CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}quad_subject;")
-        
-        return indexes
+
         
     # Space lifecycle management
     async def _ensure_text_search_extensions(self) -> bool:
@@ -548,64 +516,153 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Unexpected error creating UUID-based tables for space '{space_id}': {e}")
             return False
     
-    def build_performance_indexes(self, space_id: str, concurrent: bool = True) -> bool:
+    def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
         """
-        Build performance indexes after bulk loading is complete.
+        Drop all indexes before bulk loading for maximum performance.
+        Keeps only primary keys and constraints.
         
         Args:
             space_id: Space identifier
-            concurrent: If True, use CONCURRENTLY to avoid blocking queries
-            use_unlogged: If True, build indexes on unlogged tables
             
         Returns:
-            bool: True if indexes built successfully, False otherwise
+            bool: True if indexes dropped successfully, False otherwise
         """
         try:
             PostgreSQLUtils.validate_space_id(space_id)
             
-            self.logger.info(f"Building performance indexes for space '{space_id}' (concurrent={concurrent})")
+            self.logger.info(f"Dropping indexes for bulk loading in space '{space_id}'")
             
-            with self.utils.time_operation("build_indexes", f"space '{space_id}'"):
+            with self.utils.time_operation("drop_indexes", f"space '{space_id}'"):
                 with self.get_connection() as conn:
                     with conn.cursor() as cursor:
-                        # Get index creation SQL (for unlogged tables if needed)
-                        indexes_sql = self._get_performance_indexes_sql(space_id)
+                        table_names = self._get_table_names(space_id)
+                        if self.use_unlogged:
+                            table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
                         
-                        total_indexes = sum(len(table_indexes) for table_indexes in indexes_sql.values())
-                        created_indexes = 0
+                        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+                        if self.use_unlogged:
+                            table_prefix += "_unlogged"
                         
-                        for table_name, table_indexes in indexes_sql.items():
-                            self.logger.info(f"Building {len(table_indexes)} indexes for {table_name} table...")
+                        # Drop all secondary indexes (keep primary keys)
+                        drop_statements = [
+                            # Term table indexes
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_term_text;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_term_type;", 
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_term_text_type;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_term_text_gin_trgm;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_term_text_gist_trgm;",
                             
-                            for index_sql in table_indexes:
-                                try:
-                                    # Remove CONCURRENTLY if not requested
-                                    if not concurrent:
-                                        index_sql = index_sql.replace(' CONCURRENTLY', '')
+                            # Quad table indexes
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_subject;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_predicate;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_object;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_context;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_uuid;",
+                            f"DROP INDEX IF EXISTS idx_{table_prefix}_quad_spoc;"
+                        ]
+                        
+                        dropped_count = 0
+                        for drop_sql in drop_statements:
+                            try:
+                                self.logger.debug(f"Executing: {drop_sql}")
+                                cursor.execute(drop_sql)
+                                dropped_count += 1
+                            except psycopg.Error as e:
+                                self.logger.debug(f"Index drop failed (may not exist): {e}")
+                        
+                        conn.commit()
+                        self.logger.info(f"Dropped {dropped_count} indexes for bulk loading")
+            
+            return True
+            
+        except psycopg.Error as e:
+            self.logger.error(f"Database error dropping indexes for space '{space_id}': {e}")
+            return False
+    
+    def recreate_indexes_after_bulk_load(self, space_id: str, concurrent: bool = True) -> bool:
+        """
+        Recreate all indexes after bulk loading is complete.
+        
+        Args:
+            space_id: Space identifier
+            concurrent: If True, use CONCURRENTLY to avoid blocking queries
+            
+        Returns:
+            bool: True if indexes recreated successfully, False otherwise
+        """
+        try:
+            PostgreSQLUtils.validate_space_id(space_id)
+            
+            self.logger.info(f"Recreating indexes after bulk loading in space '{space_id}' (concurrent={concurrent})")
+            
+            with self.utils.time_operation("recreate_indexes", f"space '{space_id}'"):
+                with self.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        table_names = self._get_table_names(space_id)
+                        if self.use_unlogged:
+                            table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
+                        
+                        table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
+                        if self.use_unlogged:
+                            table_prefix += "_unlogged"
+                        
+                        # Recreate all indexes
+                        concurrent_keyword = "CONCURRENTLY" if concurrent else ""
+                        
+                        create_statements = [
+                            # Term table indexes
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_term_text ON {table_names['term']} (term_text);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_term_type ON {table_names['term']} (term_type);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_term_text_type ON {table_names['term']} (term_text, term_type);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);",
+                            
+                            # Quad table indexes
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_uuid ON {table_names['rdf_quad']} (quad_uuid);",
+                            f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_spoc ON {table_names['rdf_quad']} (subject_uuid, predicate_uuid, object_uuid, context_uuid);"
+                        ]
+                        
+                        created_count = 0
+                        for create_sql in create_statements:
+                            try:
+                                self.logger.debug(f"Executing: {create_sql}")
+                                cursor.execute(create_sql)
+                                created_count += 1
+                                
+                                # Commit each index if using CONCURRENTLY
+                                if concurrent:
+                                    conn.commit()
                                     
-                                    self.logger.debug(f"Executing: {index_sql}")
-                                    cursor.execute(index_sql)
-                                    created_indexes += 1
-                                    
-                                    # Commit each index if using CONCURRENTLY
-                                    if concurrent:
-                                        conn.commit()
-                                        
-                                except psycopg.Error as e:
-                                    self.logger.warning(f"Failed to create index: {e}")
-                                    if concurrent:
-                                        conn.rollback()
+                            except psycopg.Error as e:
+                                self.logger.warning(f"Failed to create index: {e}")
+                                if concurrent:
+                                    conn.rollback()
                         
                         # Final commit if not using CONCURRENTLY
                         if not concurrent:
                             conn.commit()
                         
-                        self.logger.info(f"Successfully created {created_indexes}/{total_indexes} performance indexes for space '{space_id}'")
+                        # Optional: Cluster tables for better performance (only for large datasets)
+                        if created_count > 0:
+                            try:
+                                self.logger.info("Clustering tables for optimal performance...")
+                                cursor.execute(f"CLUSTER {table_names['term']} USING {table_names['term']}_pkey;")
+                                cursor.execute(f"CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}_quad_subject;")
+                                conn.commit()
+                                self.logger.info("Table clustering completed")
+                            except psycopg.Error as e:
+                                self.logger.warning(f"Table clustering failed (non-critical): {e}")
+                        
+                        self.logger.info(f"Successfully recreated {created_count} indexes after bulk loading")
             
-            return created_indexes > 0
+            return created_count > 0
             
         except psycopg.Error as e:
-            self.logger.error(f"Database error building indexes for space '{space_id}': {e}")
+            self.logger.error(f"Database error recreating indexes for space '{space_id}': {e}")
             return False
     
     def delete_space_tables(self, space_id: str) -> bool:
@@ -1212,28 +1269,88 @@ class PostgreSQLSpaceImpl:
             
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
-            # Convert subject to term UUID
-            subject_uuid = await self.add_term(space_id, s_value, s_type, s_lang, s_datatype_id)
-            if subject_uuid is None:
-                self.logger.error(f"Failed to add subject term '{s}' to space '{space_id}'")
-                return False
+            # Use cached SPARQL implementation for efficient batch term UUID lookup
+            sparql_impl = self.get_sparql_impl(space_id)
             
-            # Convert predicate to term UUID
-            predicate_uuid = await self.add_term(space_id, p_value, p_type, p_lang, p_datatype_id)
-            if predicate_uuid is None:
-                self.logger.error(f"Failed to add predicate term '{p}' to space '{space_id}'")
-                return False
+            # Prepare all 4 terms for batch lookup
+            terms_to_lookup = [
+                (s_value, s_type),
+                (p_value, p_type), 
+                (o_value, o_type),
+                (g_value, g_type)
+            ]
             
-            # Convert object to term UUID
-            object_uuid = await self.add_term(space_id, o_value, o_type, o_lang, o_datatype_id)
-            if object_uuid is None:
-                self.logger.error(f"Failed to add object term '{o}' to space '{space_id}'")
-                return False
+            # Get table configuration
+            table_names = PostgreSQLUtils.get_table_names(self.global_prefix, space_id)
+            from .postgresql_sparql_impl import TableConfig
+            table_config = TableConfig(quad_table=table_names['rdf_quad'], term_table=table_names['term'])
             
-            # Convert graph to term UUID
-            graph_uuid = await self.add_term(space_id, g_value, g_type, g_lang, g_datatype_id)
-            if graph_uuid is None:
-                self.logger.error(f"Failed to add graph term '{g}' to space '{space_id}'")
+            # Batch lookup all term UUIDs (leverages cache + optimized SQL)
+            term_uuid_mappings = await sparql_impl._get_term_uuids_batch(terms_to_lookup, table_config)
+            
+            # Extract UUIDs for each term
+            subject_uuid = term_uuid_mappings.get((s_value, s_type))
+            predicate_uuid = term_uuid_mappings.get((p_value, p_type))
+            object_uuid = term_uuid_mappings.get((o_value, o_type))
+            graph_uuid = term_uuid_mappings.get((g_value, g_type))
+            
+            # Check if any terms are missing (need to be inserted)
+            missing_terms = []
+            if not subject_uuid:
+                missing_terms.append((s_value, s_type, s_lang, s_datatype_id, 'subject'))
+            if not predicate_uuid:
+                missing_terms.append((p_value, p_type, p_lang, p_datatype_id, 'predicate'))
+            if not object_uuid:
+                missing_terms.append((o_value, o_type, o_lang, o_datatype_id, 'object'))
+            if not graph_uuid:
+                missing_terms.append((g_value, g_type, g_lang, g_datatype_id, 'graph'))
+            
+            # Insert missing terms if any
+            if missing_terms:
+                self.logger.debug(f"Inserting {len(missing_terms)} missing terms for quad")
+                
+                # Generate UUIDs for missing terms
+                from .postgresql_utils import generate_term_uuid
+                term_inserts = []
+                cache_updates = {}
+                
+                for term_text, term_type, lang, datatype_id, role in missing_terms:
+                    term_uuid = generate_term_uuid(term_text, term_type, lang, datatype_id)
+                    term_inserts.append((term_uuid, term_text, term_type, lang, datatype_id, datetime.utcnow()))
+                    cache_updates[(term_text, term_type)] = str(term_uuid)
+                    
+                    # Update our local mappings
+                    if role == 'subject':
+                        subject_uuid = str(term_uuid)
+                    elif role == 'predicate':
+                        predicate_uuid = str(term_uuid)
+                    elif role == 'object':
+                        object_uuid = str(term_uuid)
+                    elif role == 'graph':
+                        graph_uuid = str(term_uuid)
+                
+                # Insert terms into database
+                with self.get_connection() as conn:
+                    conn.row_factory = psycopg.rows.dict_row
+                    cursor = conn.cursor()
+                    
+                    cursor.executemany(
+                        f"""INSERT INTO {table_names['term']} 
+                           (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
+                           VALUES (%s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (term_uuid) DO NOTHING""",
+                        term_inserts
+                    )
+                    conn.commit()
+                
+                # Update SPARQL cache with newly inserted terms
+                if cache_updates:
+                    sparql_impl.term_uuid_cache.put_batch(cache_updates)
+                    self.logger.debug(f"Updated SPARQL cache with {len(cache_updates)} new terms")
+            
+            # Validate all UUIDs are now available
+            if not all([subject_uuid, predicate_uuid, object_uuid, graph_uuid]):
+                self.logger.error(f"Failed to resolve all term UUIDs for quad in space '{space_id}'")
                 return False
             
             # Add the quad using term UUIDs
@@ -1287,17 +1404,35 @@ class PostgreSQLSpaceImpl:
             
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             
-            # Generate deterministic UUIDs for the terms
-            RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
-            s_composite = f"{s_value}|{s_type}|{s_lang or ''}|{s_datatype_id or 0}"
-            p_composite = f"{p_value}|{p_type}|{p_lang or ''}|{p_datatype_id or 0}"
-            o_composite = f"{o_value}|{o_type}|{o_lang or ''}|{o_datatype_id or 0}"
-            g_composite = f"{g_value}|{g_type}|{g_lang or ''}|{g_datatype_id or 0}"
+            # Use cached SPARQL implementation for efficient term UUID lookup
+            sparql_impl = self.get_sparql_impl(space_id)
             
-            subject_uuid = uuid.uuid5(RDF_NAMESPACE, s_composite)
-            predicate_uuid = uuid.uuid5(RDF_NAMESPACE, p_composite)
-            object_uuid = uuid.uuid5(RDF_NAMESPACE, o_composite)
-            graph_uuid = uuid.uuid5(RDF_NAMESPACE, g_composite)
+            # Prepare all 4 terms for batch lookup
+            terms_to_lookup = [
+                (s_value, s_type),
+                (p_value, p_type), 
+                (o_value, o_type),
+                (g_value, g_type)
+            ]
+            
+            # Get table configuration
+            table_names = PostgreSQLUtils.get_table_names(self.global_prefix, space_id)
+            from .postgresql_sparql_impl import TableConfig
+            table_config = TableConfig(quad_table=table_names['rdf_quad'], term_table=table_names['term'])
+            
+            # Batch lookup all term UUIDs (leverages cache + optimized SQL)
+            term_uuid_mappings = await sparql_impl._get_term_uuids_batch(terms_to_lookup, table_config)
+            
+            # Extract UUIDs for each term - if any term doesn't exist, the quad can't exist
+            subject_uuid = term_uuid_mappings.get((s_value, s_type))
+            predicate_uuid = term_uuid_mappings.get((p_value, p_type))
+            object_uuid = term_uuid_mappings.get((o_value, o_type))
+            graph_uuid = term_uuid_mappings.get((g_value, g_type))
+            
+            # If any term doesn't exist, the quad can't exist either
+            if not all([subject_uuid, predicate_uuid, object_uuid, graph_uuid]):
+                self.logger.debug(f"One or more terms not found in database - quad doesn't exist to remove")
+                return False
             
             # Remove the quad using term UUIDs
             success = await self.remove_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid)
@@ -1399,7 +1534,8 @@ class PostgreSQLSpaceImpl:
             self.logger.error(f"Error checking RDF quad in space '{space_id}': {e}")
             return False
     
-    async def add_rdf_quads_batch(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]]) -> int:
+    async def add_rdf_quads_batch(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]], 
+                                 auto_commit: bool = True, verify_count: bool = False) -> int:
         """
         Ultra-clean UUID-based RDF quad batch insert.
         
@@ -1410,12 +1546,13 @@ class PostgreSQLSpaceImpl:
         4. Insert quads using UUIDs (no ID mapping needed)
         
         Args:
-            space_id: Space identifier
-            quads: List of (s, p, o, g) tuples representing RDF quads
-            use_unlogged: If True, target unlogged tables
+            space_id: The space identifier
+            quads: List of (subject, predicate, object, context) tuples
+            auto_commit: Whether to commit the transaction automatically (default: True)
+            verify_count: Whether to verify insertion with COUNT query (default: False, for performance)
             
         Returns:
-            int: Number of quads successfully added
+            Number of quads successfully inserted
         """
         if not quads:
             return 0
@@ -1440,7 +1577,7 @@ class PostgreSQLSpaceImpl:
                     self.logger.info(f"🚀 UUID BATCH INSERT: Starting processing of {len(quads)} quads...")
                     
                     # Step 1: Collect all unique terms and generate UUIDs
-                    self.logger.info("📋 STEP 1: Collecting unique terms and generating UUIDs...")
+                    # self.logger.info("📋 STEP 1: Collecting unique terms and generating UUIDs...")
                     unique_terms = set()
                     quad_term_data = []
                     
@@ -1468,7 +1605,7 @@ class PostgreSQLSpaceImpl:
                     self.logger.info(f"📊 Generated {len(unique_terms)} unique terms from {len(quads)} quads")
                     
                     # Step 2: Generate UUIDs for all unique terms
-                    self.logger.info("🔑 STEP 2: Generating UUIDs for all terms...")
+                    # self.logger.info("🔑 STEP 2: Generating UUIDs for all terms...")
                     term_to_uuid = {}
                     uuid_to_term = {}
                     
@@ -1480,22 +1617,45 @@ class PostgreSQLSpaceImpl:
                     
                     self.logger.info(f"🔑 Generated UUIDs for all {len(unique_terms)} terms")
                     
-                    # Step 3: Check which UUIDs already exist in database
-                    self.logger.info("🔍 STEP 3: Checking which UUIDs already exist...")
-                    all_uuids = list(term_to_uuid.values())
-                    cursor.execute(
-                        f"SELECT term_uuid FROM {table_names['term']} WHERE term_uuid = ANY(%s)",
-                        (all_uuids,)
-                    )
+                    # Step 3: Use cached SPARQL implementation for efficient term UUID lookups
+                    # self.logger.info("🔍 STEP 3: Checking term UUIDs using cached SPARQL implementation...")
                     
-                    existing_uuids = {row['term_uuid'] for row in cursor.fetchall()}
-                    missing_uuids = set(all_uuids) - existing_uuids
+                    # Get cached SPARQL implementation to leverage existing term cache
+                    sparql_impl = self.get_sparql_impl(space_id)
                     
-                    self.logger.info(f"✅ Found {len(existing_uuids)} existing terms, {len(missing_uuids)} new terms to insert")
+                    # Convert term info to (term_text, term_type) format for cache lookup
+                    cache_lookup_terms = [(term_text, term_type) for term_text, term_type, _, _ in unique_terms]
+                    
+                    # Use cached batch lookup (will hit cache for previously seen terms)
+                    from .postgresql_sparql_impl import TableConfig
+                    table_config = TableConfig(quad_table=table_names['rdf_quad'], term_table=table_names['term'])
+                    cached_term_uuids = await sparql_impl._get_term_uuids_batch(cache_lookup_terms, table_config)
+                    
+                    # Map results back to our UUID format and identify missing terms
+                    existing_uuids = set()
+                    missing_uuids = set()
+                    
+                    for term_info in unique_terms:
+                        term_text, term_type, lang, datatype_id = term_info
+                        cache_key = (term_text, term_type)
+                        expected_uuid = term_to_uuid[term_info]
+                        
+                        if cache_key in cached_term_uuids and cached_term_uuids[cache_key]:
+                            # Cache returns string UUIDs, convert to UUID object for comparison
+                            cached_uuid_str = cached_term_uuids[cache_key]
+                            if isinstance(cached_uuid_str, str):
+                                existing_uuids.add(uuid.UUID(cached_uuid_str))
+                            else:
+                                # Already a UUID object
+                                existing_uuids.add(cached_uuid_str)
+                        else:
+                            missing_uuids.add(expected_uuid)
+                    
+                    # self.logger.info(f"✅ Found {len(existing_uuids)} existing terms, {len(missing_uuids)} new terms to insert")
                     
                     # Step 4: Insert only missing terms
                     if missing_uuids:
-                        self.logger.info(f"🚀 STEP 4: Inserting {len(missing_uuids)} new terms...")
+                        # self.logger.info(f"🚀 STEP 4: Inserting {len(missing_uuids)} new terms...")
                         new_terms_data = []
                         for missing_uuid in missing_uuids:
                             term_info = uuid_to_term[missing_uuid]
@@ -1508,13 +1668,26 @@ class PostgreSQLSpaceImpl:
                                VALUES (%s, %s, %s, %s, %s, %s)""",
                             new_terms_data
                         )
-                        self.logger.info(f"✅ Inserted {len(new_terms_data)} new terms")
+                        # self.logger.info(f"✅ Inserted {len(new_terms_data)} new terms")
+                        
+                        # Populate SPARQL cache with newly inserted terms for future query performance
+                        cache_mappings = {}
+                        for missing_uuid in missing_uuids:
+                            term_info = uuid_to_term[missing_uuid]
+                            term_text, term_type, lang, datatype_id = term_info
+                            cache_key = (term_text, term_type)
+                            cache_mappings[cache_key] = str(missing_uuid)
+                        
+                        if cache_mappings:
+                            sparql_impl.term_uuid_cache.put_batch(cache_mappings)
+                            # self.logger.info(f"🚀 Populated SPARQL cache with {len(cache_mappings)} newly inserted terms")
                     else:
-                        self.logger.info("⚠️  STEP 4 SKIPPED: All terms already exist")
+                        # self.logger.info("⚠️  STEP 4 SKIPPED: All terms already exist")
+                        pass
                     
                     # Step 5: Insert quads using UUIDs (no ID mapping needed!)
                     if quad_term_data:
-                        self.logger.info(f"🔧 STEP 5: Inserting {len(quad_term_data)} quads using UUIDs...")
+                        # self.logger.info(f"🔧 STEP 5: Inserting {len(quad_term_data)} quads using UUIDs...")
                         quad_data = []
                         for s_info, p_info, o_info, g_info in quad_term_data:
                             quad_data.append((
@@ -1532,25 +1705,28 @@ class PostgreSQLSpaceImpl:
                             quad_data
                         )
                         
-                        # Verify the quad insert worked
-                        cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['rdf_quad']}")
-                        quad_count = cursor.fetchone()['count']
-                        self.logger.info(f"✅ STEP 5 COMPLETE: Inserted {len(quad_data)} quads, verified {quad_count} total quads in table")
+                        # Optional verification with COUNT query (disabled by default for performance)
+                        if verify_count:
+                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['rdf_quad']}")
+                            quad_count = cursor.fetchone()['count']
+                            self.logger.info(f"✅ Verified {quad_count} total quads in table after insert")
+                            
+                            if quad_count == 0:
+                                self.logger.error("❌ CRITICAL: Batch insert completed but no quads were inserted!")
+                                return 0
                         
-                        if quad_count == 0:
-                            self.logger.error("❌ CRITICAL: Batch insert completed but no quads were inserted!")
-                            return 0
-                        
-                        # Commit the transaction
-                        self.logger.info("💾 Committing transaction...")
-                        conn.commit()
-                        self.logger.info("✅ Transaction committed successfully")
+                        # Optional transaction commit (enabled by default)
+                        if auto_commit:
+                            conn.commit()
+                            self.logger.debug("💾 Transaction committed")
+                        else:
+                            self.logger.debug("💾 Transaction not committed (auto_commit=False)")
                         
                         self.logger.info(f"🎉 SUCCESS: UUID batch insert completed - {len(quads)} quads added to space '{space_id}'")
                         return len(quads)
                         
                     else:
-                        self.logger.info("⚠️  STEP 5 SKIPPED: No quads to insert")
+                        # self.logger.info("⚠️  STEP 5 SKIPPED: No quads to insert")
                         return 0
                     
         except Exception as e:
@@ -1558,6 +1734,25 @@ class PostgreSQLSpaceImpl:
             import traceback
             self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
             return 0
+    
+    async def commit_transaction(self) -> bool:
+        """
+        Manually commit the current transaction.
+        
+        This is useful when using auto_commit=False in batch operations
+        to commit multiple batches in a single transaction.
+        
+        Returns:
+            True if commit was successful, False otherwise
+        """
+        try:
+            with self.get_connection() as conn:
+                conn.commit()
+                self.logger.debug("💾 Transaction committed successfully")
+                return True
+        except Exception as e:
+            self.logger.error(f"Error committing transaction: {e}")
+            return False
     
     async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
         """
@@ -1580,10 +1775,14 @@ class PostgreSQLSpaceImpl:
             
         with self.utils.time_operation("remove_rdf_quads_batch_uuid", f"removing {len(quads)} quads from space '{space_id}'"):
             try:
-                # Step 1: Resolve all term types and generate UUIDs
+                # Step 1: Use cached SPARQL implementation for efficient term UUID lookup
                 with self.utils.time_operation("batch_term_resolution", f"resolving types for {len(quads)} quads"):
-                    unique_terms = set()  # Set of (value, type, lang, datatype_id) tuples
-                    quad_uuids = []  # [(s_uuid, p_uuid, o_uuid, g_uuid), ...]
+                    # Get cached SPARQL implementation
+                    sparql_impl = self.get_sparql_impl(space_id)
+                    
+                    # Collect all unique terms for batch lookup
+                    unique_terms_for_lookup = set()  # Set of (term_text, term_type) tuples for cache lookup
+                    quad_term_data = []  # Store quad term info for later UUID mapping
                     
                     for s, p, o, g in quads:
                         # Determine term types
@@ -1598,42 +1797,40 @@ class PostgreSQLSpaceImpl:
                         o_value = PostgreSQLUtils.extract_literal_value(o) if o_type == 'L' else str(o)
                         g_value = PostgreSQLUtils.extract_literal_value(g) if g_type == 'L' else str(g)
                         
-                        # Store unique terms
-                        s_info = (s_value, s_type, s_lang, s_datatype_id)
-                        p_info = (p_value, p_type, p_lang, p_datatype_id)
-                        o_info = (o_value, o_type, o_lang, o_datatype_id)
-                        g_info = (g_value, g_type, g_lang, g_datatype_id)
+                        # Add to unique terms for cache lookup (only term_text, term_type needed)
+                        unique_terms_for_lookup.update([
+                            (s_value, s_type),
+                            (p_value, p_type),
+                            (o_value, o_type),
+                            (g_value, g_type)
+                        ])
                         
-                        unique_terms.update([s_info, p_info, o_info, g_info])
-                        
-                        # Generate UUIDs for this quad
-                        s_key = (s_value, s_type, s_lang, s_datatype_id)
-                        p_key = (p_value, p_type, p_lang, p_datatype_id)
-                        o_key = (o_value, o_type, o_lang, o_datatype_id)
-                        g_key = (g_value, g_type, g_lang, g_datatype_id)
-                        
-                        # Generate deterministic UUIDs
-                        RDF_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
-                        s_composite = f"{s_value}|{s_type}|{s_lang or ''}|{s_datatype_id or 0}"
-                        p_composite = f"{p_value}|{p_type}|{p_lang or ''}|{p_datatype_id or 0}"
-                        o_composite = f"{o_value}|{o_type}|{o_lang or ''}|{o_datatype_id or 0}"
-                        g_composite = f"{g_value}|{g_type}|{g_lang or ''}|{g_datatype_id or 0}"
-                        
-                        s_uuid = uuid.uuid5(RDF_NAMESPACE, s_composite)
-                        p_uuid = uuid.uuid5(RDF_NAMESPACE, p_composite)
-                        o_uuid = uuid.uuid5(RDF_NAMESPACE, o_composite)
-                        g_uuid = uuid.uuid5(RDF_NAMESPACE, g_composite)
-                        
-                        quad_uuids.append((s_uuid, p_uuid, o_uuid, g_uuid))
+                        # Store quad term data for later UUID mapping
+                        quad_term_data.append(((s_value, s_type), (p_value, p_type), (o_value, o_type), (g_value, g_type)))
                     
-                    self.logger.debug(f"Resolved {len(unique_terms)} unique terms from {len(quads)} quads")
+                    # Get table configuration
+                    table_names = PostgreSQLUtils.get_table_names(self.global_prefix, space_id)
+                    from .postgresql_sparql_impl import TableConfig
+                    table_config = TableConfig(quad_table=table_names['rdf_quad'], term_table=table_names['term'])
+                    
+                    # Batch lookup all term UUIDs using cached SPARQL implementation
+                    term_uuid_mappings = await sparql_impl._get_term_uuids_batch(list(unique_terms_for_lookup), table_config)
+                    
+                    # Map quad term data to UUIDs, filtering out quads with missing terms
+                    quad_uuids = []
+                    for s_key, p_key, o_key, g_key in quad_term_data:
+                        s_uuid = term_uuid_mappings.get(s_key)
+                        p_uuid = term_uuid_mappings.get(p_key)
+                        o_uuid = term_uuid_mappings.get(o_key)
+                        g_uuid = term_uuid_mappings.get(g_key)
+                        
+                        # Only include quads where all terms exist in the database
+                        if all([s_uuid, p_uuid, o_uuid, g_uuid]):
+                            quad_uuids.append((s_uuid, p_uuid, o_uuid, g_uuid))
+                    
+                    self.logger.debug(f"Resolved {len(unique_terms_for_lookup)} unique terms from {len(quads)} quads, {len(quad_uuids)} quads have all terms available")
                 
-                # Step 2: Get table names
-                table_prefix = PostgreSQLUtils.get_table_prefix(self.global_prefix, space_id)
-                term_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "term")
-                quad_table_name = PostgreSQLUtils.get_table_name(self.global_prefix, space_id, "rdf_quad")
-                
-                # Step 3: Use raw psycopg3 connection for UUID-based operations
+                # Step 2: Use raw psycopg3 connection for UUID-based operations
                 with self.get_connection() as conn:
                     conn.row_factory = psycopg.rows.dict_row
                     

@@ -116,11 +116,27 @@ def test_space_crud_lifecycle(config_path=None):
         for space in initial_spaces:
             print(f"     - ID: {space.get('id')}, Name: {space.get('space_name')}, Space: {space.get('space')}")
         
-        # Step 2: Add a new test space
-        print("\n3. Adding new test space...")
+        # Step 2: Clean up any existing test space first
+        print("\n3. Cleaning up any existing test space...")
+        test_space_identifier = "test_space_crud"
+        existing_test_space = next((s for s in initial_spaces if s.get('space') == test_space_identifier), None)
+        
+        if existing_test_space:
+            print(f"   🧹 Found existing test space '{test_space_identifier}' (ID: {existing_test_space.get('id')}), deleting...")
+            try:
+                delete_result = client.delete_space(existing_test_space.get('id'))
+                print(f"   ✓ Existing test space deleted successfully")
+            except Exception as e:
+                print(f"   ⚠️  Could not delete existing test space: {e}")
+                raise VitalGraphClientError(f"Cannot proceed with test - existing space cleanup failed: {e}")
+        else:
+            print(f"   ✓ No existing test space found, ready to proceed")
+        
+        # Step 3: Add a new test space
+        print("\n4. Adding new test space...")
         test_space_data = {
             "tenant": "test_tenant",
-            "space": "test_space_crud",
+            "space": test_space_identifier,
             "space_name": "Test Space CRUD",
             "space_description": "Test space for CRUD lifecycle testing"
         }
