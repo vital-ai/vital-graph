@@ -124,7 +124,8 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         logger.debug(f"ASK pattern variables: {all_vars}")
         
         # Translate the pattern to SQL components using the new architecture
-        sql_components = await translate_algebra_pattern(where_pattern, context, all_vars)
+        # translate_algebra_pattern returns a tuple: (from_clause, where_conditions, joins, variable_mappings)
+        from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(where_pattern, context, all_vars)
         
         # Build a simple SELECT query with LIMIT 1 to check existence
         # We only need to know if any results exist, not the actual data
@@ -132,13 +133,13 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         
         # Build complete SQL query
         sql_parts = [select_clause]
-        sql_parts.append(sql_components.from_clause)
+        sql_parts.append(from_clause)
         
-        if sql_components.joins:
-            sql_parts.extend(sql_components.joins)
+        if joins:
+            sql_parts.extend(joins)
             
-        if sql_components.where_conditions:
-            sql_parts.append(f"WHERE {' AND '.join(sql_components.where_conditions)}")
+        if where_conditions:
+            sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
         
         # Add LIMIT 1 for efficiency - we only need to know if any results exist
         sql_parts.append("LIMIT 1")
@@ -181,26 +182,27 @@ async def _translate_describe_query(algebra, table_config: TableConfig, context:
                 where_vars = _extract_variables_from_pattern(where_pattern)
             
             # First, execute the WHERE clause to find the resources to describe
-            sql_components = await translate_algebra_pattern(where_pattern, context, where_vars)
+            # translate_algebra_pattern returns a tuple: (from_clause, where_conditions, joins, variable_mappings)
+            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(where_pattern, context, where_vars)
             
             # Build SELECT query for the WHERE clause to get resource URIs - exact original logic
-            select_vars = [var for var in where_vars if var in sql_components.variable_mappings]
+            select_vars = [var for var in where_vars if var in variable_mappings]
             if not select_vars:
                 raise ValueError("No valid variables found in DESCRIBE WHERE clause")
             
             # Use the first variable as the resource to describe
             describe_var = select_vars[0]
-            describe_var_sql = sql_components.variable_mappings[describe_var]
+            describe_var_sql = variable_mappings[describe_var]
             
             # Build subquery to get the resources to describe
             subquery_parts = [f"SELECT DISTINCT {describe_var_sql} AS resource_uri"]
-            subquery_parts.append(sql_components.from_clause)
+            subquery_parts.append(from_clause)
             
-            if sql_components.joins:
-                subquery_parts.extend(sql_components.joins)
+            if joins:
+                subquery_parts.extend(joins)
                 
-            if sql_components.where_conditions:
-                subquery_parts.append(f"WHERE {' AND '.join(sql_components.where_conditions)}")
+            if where_conditions:
+                subquery_parts.append(f"WHERE {' AND '.join(where_conditions)}")
             
             # Add ORDER BY and LIMIT if present in the algebra
             if hasattr(algebra, 'orderBy') and algebra.orderBy:
@@ -228,6 +230,9 @@ async def _translate_describe_query(algebra, table_config: TableConfig, context:
             JOIN {table_config.term_table} o_term ON q.object_uuid = o_term.term_uuid
             ORDER BY subject, predicate, object
             """
+            
+            logger.info("Successfully translated DESCRIBE query with WHERE clause")
+            return main_sql
                 
         else:
             # Simple DESCRIBE <uri> without WHERE clause
@@ -280,9 +285,12 @@ async def _translate_describe_query(algebra, table_config: TableConfig, context:
                 WHERE ({' OR '.join(uri_conditions)})
                 ORDER BY subject, predicate, object
                 """
+                
+                logger.info("Successfully translated DESCRIBE query without WHERE clause")
+                return main_sql
         
-        logger.info("Successfully translated DESCRIBE query")
-        return main_sql
+        logger.error("No valid DESCRIBE query structure found")
+        return "SELECT '' AS subject, '' AS predicate, '' AS object WHERE FALSE"
         
     except Exception as e:
         logger.error(f"Error translating DESCRIBE query: {e}")
@@ -335,6 +343,116 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
         logger.error(f"Error executing SQL query: {e}")
         logger.error(f"SQL query was: {sql_query}")
         raise
+
+
+def _substitute_template_term(template_term, variable_bindings: Dict[str, Any]) -> str:
+    """Substitute a template term with values from variable bindings.
+    
+    Args:
+        template_term: RDFLib term from CONSTRUCT template (Variable, URIRef, Literal)
+        variable_bindings: Dictionary of variable -> value mappings from SQL
+        
+    Returns:
+        String value for the term, or None if substitution fails
+    """
+    try:
+        from rdflib import Variable, URIRef, Literal, BNode
+        
+        logger = logging.getLogger(__name__)
+        
+        if isinstance(template_term, Variable):
+            # Variable - substitute with value from bindings
+            var_name = str(template_term)  # Variable name (e.g., '?entity')
+            
+            # Try to find the variable in bindings
+            if var_name in variable_bindings:
+                return str(variable_bindings[var_name])
+            else:
+                # Try without '?' prefix if present
+                clean_var_name = var_name.lstrip('?')
+                if clean_var_name in variable_bindings:
+                    return str(variable_bindings[clean_var_name])
+                else:
+                    logger.debug(f"Variable {var_name} not found in bindings: {list(variable_bindings.keys())}")
+                    return None
+                    
+        elif isinstance(template_term, (URIRef, Literal)):
+            # Constant term - return as-is
+            return str(template_term)
+            
+        elif isinstance(template_term, BNode):
+            # Blank node - return as string
+            return str(template_term)
+            
+        else:
+            # Unknown term type - convert to string
+            logger.warning(f"Unknown template term type: {type(template_term)}")
+            return str(template_term)
+            
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error substituting template term {template_term}: {e}")
+        return None
+
+
+async def _convert_sql_results_to_rdf_triples(sql_results: List[Dict[str, Any]], 
+                                            construct_template: List, 
+                                            variable_mappings: Dict, 
+                                            term_cache: Optional[PostgreSQLTermCache] = None) -> List[Dict[str, Any]]:
+    """
+    Convert SQL query results to RDF triples for CONSTRUCT queries.
+    Based on the original _process_construct_results function.
+    
+    Args:
+        sql_results: Raw SQL query results from database
+        construct_template: CONSTRUCT template triples
+        variable_mappings: Variable to SQL column mappings
+        term_cache: Optional term cache for performance
+        
+    Returns:
+        List of RDF triple dictionaries
+    """
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Converting {len(sql_results)} SQL results to RDF triples")
+    logger.debug(f"Construct template has {len(construct_template)} triples")
+    
+    if sql_results and len(sql_results) > 0:
+        logger.debug(f"First SQL result keys: {list(sql_results[0].keys())}")
+        logger.debug(f"First SQL result sample: {dict(list(sql_results[0].items())[:3])}")
+    
+    rdf_triples = []
+    triple_count = 0
+    
+    # For each SQL result row (variable binding)
+    for row in sql_results:
+        # For each triple template in the CONSTRUCT clause
+        for template_triple in construct_template:
+            subject_term, predicate_term, object_term = template_triple
+            
+            # Substitute variables with values from SQL result
+            subject_value = _substitute_template_term(subject_term, row)
+            predicate_value = _substitute_template_term(predicate_term, row)
+            object_value = _substitute_template_term(object_term, row)
+            
+            # Only create triple if all terms are successfully substituted
+            if (subject_value is not None and 
+                predicate_value is not None and 
+                object_value is not None):
+                
+                # Create RDF triple dictionary
+                triple_dict = {
+                    'subject': subject_value,
+                    'predicate': predicate_value,
+                    'object': object_value
+                }
+                
+                rdf_triples.append(triple_dict)
+                triple_count += 1
+            else:
+                logger.debug(f"Skipping incomplete triple: {subject_value} {predicate_value} {object_value}")
+    
+    logger.debug(f"Generated {triple_count} RDF triples from {len(sql_results)} SQL results")
+    return rdf_triples
 
 
 def create_table_config(space_impl: PostgreSQLSpaceImpl, space_id: str) -> TableConfig:
@@ -411,24 +529,40 @@ def build_construct_query_from_components(from_clause: str, where_conditions: Li
                                         joins: List[str], variable_mappings: Dict, 
                                         construct_template: List) -> str:
     """Build CONSTRUCT query from SQL components. Exact port from original."""
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Building CONSTRUCT query from components")
+    logger.debug(f"Variable mappings: {variable_mappings}")
+    logger.debug(f"Construct template: {construct_template}")
+    
     # For CONSTRUCT, we need to return all variable bindings that will be used
     # to instantiate the construct template
     construct_vars = set()
     for triple in construct_template:
         for term in triple:
-            if hasattr(term, 'n3') and str(term).startswith('?'):
+            # Check if term is a Variable using isinstance
+            from rdflib import Variable
+            if isinstance(term, Variable):
                 construct_vars.add(term)
+                logger.debug(f"Found construct variable: {term}")
+            # Also check the old way as fallback
+            elif hasattr(term, 'n3') and str(term).startswith('?'):
+                construct_vars.add(term)
+                logger.debug(f"Found construct variable (fallback): {term}")
     
     # Build SELECT clause for construct variables
     select_items = []
+    logger.debug(f"Construct vars to process: {construct_vars}")
     for var in construct_vars:
+        var_name = str(var).replace('?', '')
         if var in variable_mappings:
             var_mapping = variable_mappings[var]
-            var_name = str(var).replace('?', '')
-            select_items.append(f"{var_mapping} AS {var_name}")
+            select_item = f"{var_mapping} AS {var_name}"
+            select_items.append(select_item)
+            logger.debug(f"Mapped variable {var} -> {var_mapping} AS {var_name}")
         else:
-            var_name = str(var).replace('?', '')
-            select_items.append(f"'UNMAPPED_{var_name}' AS {var_name}")
+            select_item = f"'UNMAPPED_{var_name}' AS {var_name}"
+            select_items.append(select_item)
+            logger.debug(f"UNMAPPED variable {var} -> {select_item}")
     
     if not select_items:
         select_items = ["*"]
@@ -591,8 +725,10 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             # Return results as-is for SELECT queries
             return sql_results
         elif query_type == "ConstructQuery":
-            # Return RDF triples for CONSTRUCT queries
-            return sql_results
+            # Convert SQL results to RDF triples for CONSTRUCT queries
+            construct_template = getattr(query_algebra, 'template', [])
+            rdf_triples = await _convert_sql_results_to_rdf_triples(sql_results, construct_template, variable_mappings, term_cache)
+            return rdf_triples
         elif query_type == "AskQuery":
             # Return boolean result for ASK queries
             logger.debug(f"ASK query SQL results: {sql_results}")
@@ -600,7 +736,9 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             logger.debug(f"ASK query boolean result: {ask_result}")
             return [{"ask": ask_result}]
         elif query_type == "DescribeQuery":
-            # Return RDF triples for DESCRIBE queries
+            # DESCRIBE queries already return RDF triples in the correct format (subject, predicate, object)
+            # No need for complex conversion - just return the SQL results as-is
+            logger.debug(f"DESCRIBE query returned {len(sql_results)} triples")
             return sql_results
         else:
             return sql_results

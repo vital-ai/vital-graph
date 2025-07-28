@@ -65,10 +65,14 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
         return _translate_bnode_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_isURI":
         return _translate_isuri_filter_expression(expr, variable_mappings)
+    elif expr_name == "Builtin_isIRI":
+        return _translate_isuri_filter_expression(expr, variable_mappings)  # isIRI is alias for isURI
     elif expr_name == "Builtin_isLITERAL":
         return _translate_isliteral_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_isNUMERIC":
         return _translate_isnumeric_filter_expression(expr, variable_mappings)
+    elif expr_name == "Builtin_isBLANK":
+        return _translate_isblank_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_BOUND":
         return _translate_bound_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_sameTerm":
@@ -568,6 +572,189 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict) -> str:
                 logger.error(f"Error translating AdditiveExpression: {e}")
                 return "NULL"
         
+        # CRITICAL BUILTIN FUNCTIONS - Connect existing implementations
+        elif expr_name == 'Builtin_BOUND':
+            return _translate_builtin_bound(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_COALESCE':
+            # COALESCE(arg1, arg2, ...) -> COALESCE(arg1, arg2, ...)
+            if hasattr(bind_expr, 'arg') and isinstance(bind_expr.arg, list):
+                args = [translate_bind_arg(arg, variable_mappings) for arg in bind_expr.arg]
+                return f"COALESCE({', '.join(args)})"
+            else:
+                logger.warning(f"COALESCE missing arg list: {bind_expr}")
+                return "NULL"
+        elif expr_name in ['Builtin_URI', 'Builtin_IRI']:
+            # URI(string) -> string (assuming it's already a valid URI)
+            arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+            return arg
+        elif expr_name == 'Builtin_ENCODE_FOR_URI':
+            # ENCODE_FOR_URI(string) -> URL encode the string
+            arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+            # PostgreSQL doesn't have built-in URL encoding, use REPLACE for basic cases
+            return f"REPLACE(REPLACE(REPLACE({arg}, ' ', '%20'), '@', '%40'), '#', '%23')"
+            
+        # STRING FUNCTIONS - Connect existing implementations
+        elif expr_name == 'Builtin_SUBSTR':
+            # SUBSTR(string, start, length) -> SUBSTRING(string FROM start FOR length)
+            if hasattr(bind_expr, 'arg') and hasattr(bind_expr, 'start'):
+                string_arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+                start_arg = translate_bind_arg(bind_expr.start, variable_mappings)
+                if hasattr(bind_expr, 'length'):
+                    length_arg = translate_bind_arg(bind_expr.length, variable_mappings)
+                    return f"SUBSTRING({string_arg} FROM {start_arg} FOR {length_arg})"
+                else:
+                    return f"SUBSTRING({string_arg} FROM {start_arg})"
+            else:
+                logger.warning(f"SUBSTR missing required arguments: {bind_expr}")
+                return "''"
+        elif expr_name == 'Builtin_STRLEN':
+            # STRLEN(string) -> LENGTH(string)
+            arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+            return f"LENGTH({arg})"
+        elif expr_name == 'Builtin_UCASE':
+            # UCASE(string) -> UPPER(string)
+            arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+            return f"UPPER({arg})"
+        elif expr_name == 'Builtin_LCASE':
+            # LCASE(string) -> LOWER(string)
+            arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+            return f"LOWER({arg})"
+        elif expr_name == 'Builtin_CONTAINS':
+            # CONTAINS(string, substring) -> string LIKE '%substring%'
+            if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
+                string_arg = translate_bind_arg(bind_expr.arg1, variable_mappings)
+                substring_arg = translate_bind_arg(bind_expr.arg2, variable_mappings)
+                return f"({string_arg} LIKE CONCAT('%', {substring_arg}, '%'))"
+            else:
+                logger.warning(f"CONTAINS missing arg1/arg2: {bind_expr}")
+                return "FALSE"
+        elif expr_name == 'Builtin_STRSTARTS':
+            # STRSTARTS(string, prefix) -> string LIKE 'prefix%'
+            if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
+                string_arg = translate_bind_arg(bind_expr.arg1, variable_mappings)
+                prefix_arg = translate_bind_arg(bind_expr.arg2, variable_mappings)
+                return f"({string_arg} LIKE CONCAT({prefix_arg}, '%'))"
+            else:
+                logger.warning(f"STRSTARTS missing arg1/arg2: {bind_expr}")
+                return "FALSE"
+        elif expr_name == 'Builtin_STRENDS':
+            # STRENDS(string, suffix) -> string LIKE '%suffix'
+            if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
+                string_arg = translate_bind_arg(bind_expr.arg1, variable_mappings)
+                suffix_arg = translate_bind_arg(bind_expr.arg2, variable_mappings)
+                return f"({string_arg} LIKE CONCAT('%', {suffix_arg}))"
+            else:
+                logger.warning(f"STRENDS missing arg1/arg2: {bind_expr}")
+                return "FALSE"
+        elif expr_name == 'Builtin_REPLACE':
+            # REPLACE(string, pattern, replacement) -> REPLACE(string, pattern, replacement)
+            if hasattr(bind_expr, 'arg') and hasattr(bind_expr, 'pattern') and hasattr(bind_expr, 'replacement'):
+                string_arg = translate_bind_arg(bind_expr.arg, variable_mappings)
+                pattern_arg = translate_bind_arg(bind_expr.pattern, variable_mappings)
+                replacement_arg = translate_bind_arg(bind_expr.replacement, variable_mappings)
+                return f"REPLACE({string_arg}, {pattern_arg}, {replacement_arg})"
+            else:
+                logger.warning(f"REPLACE: Missing required arguments")
+                return "''"
+        elif expr_name == 'Builtin_STRBEFORE':
+            # STRBEFORE(string, delimiter) -> SUBSTRING(string, 1, POSITION(delimiter IN string) - 1)
+            if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
+                string_arg = translate_bind_arg(bind_expr.arg1, variable_mappings)
+                delimiter_arg = translate_bind_arg(bind_expr.arg2, variable_mappings)
+                return f"CASE WHEN POSITION({delimiter_arg} IN {string_arg}) > 0 THEN SUBSTRING({string_arg}, 1, POSITION({delimiter_arg} IN {string_arg}) - 1) ELSE '' END"
+            else:
+                logger.warning(f"STRBEFORE missing arg1/arg2: {bind_expr}")
+                return "''"
+        elif expr_name == 'Builtin_STRAFTER':
+            # STRAFTER(string, delimiter) -> SUBSTRING(string FROM POSITION(delimiter IN string) + LENGTH(delimiter))
+            if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
+                string_arg = translate_bind_arg(bind_expr.arg1, variable_mappings)
+                delimiter_arg = translate_bind_arg(bind_expr.arg2, variable_mappings)
+                return f"CASE WHEN POSITION({delimiter_arg} IN {string_arg}) > 0 THEN SUBSTRING({string_arg} FROM POSITION({delimiter_arg} IN {string_arg}) + LENGTH({delimiter_arg})) ELSE '' END"
+            else:
+                logger.warning(f"STRAFTER missing arg1/arg2: {bind_expr}")
+                return "''"
+                
+        # NUMERIC FUNCTIONS - Connect existing implementations
+        elif expr_name == 'Builtin_ABS':
+            return _translate_builtin_abs(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_CEIL':
+            return _translate_builtin_ceil(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_FLOOR':
+            return _translate_builtin_floor(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_ROUND':
+            return _translate_builtin_round(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_RAND':
+            return _translate_builtin_rand(bind_expr, variable_mappings)
+            
+        # TYPE CHECKING FUNCTIONS - Connect existing implementations
+        elif expr_name == 'Builtin_isURI':
+            return _translate_builtin_isuri(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_isLITERAL':
+            return _translate_builtin_isliteral(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_isNUMERIC':
+            return _translate_builtin_isnumeric(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_isBLANK':
+            return _translate_builtin_isblank(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_isIRI':
+            return _translate_builtin_isuri(bind_expr, variable_mappings)  # isIRI is alias for isURI
+        elif expr_name == 'Builtin_CONTAINS':
+            return _translate_builtin_contains(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_STRSTARTS':
+            return _translate_builtin_strstarts(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_STRENDS':
+            return _translate_builtin_strends(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_STRBEFORE':
+            return _translate_builtin_strbefore(bind_expr, variable_mappings)
+        elif expr_name == 'Builtin_STRAFTER':
+            return _translate_builtin_strafter(bind_expr, variable_mappings)
+            
+        # UNARY EXPRESSIONS - Handle unary operators
+        elif expr_name == 'UnaryMinus':
+            # Handle unary minus like -?age
+            if hasattr(bind_expr, 'expr'):
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings)
+                # Cast to numeric for unary operations
+                return f"(-CAST({operand} AS DECIMAL))"
+            else:
+                logger.warning(f"UnaryMinus missing expr: {bind_expr}")
+                return "0"
+        elif expr_name == 'UnaryPlus':
+            # Handle unary plus like +?age
+            if hasattr(bind_expr, 'expr'):
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings)
+                # Cast to numeric for unary operations
+                return f"(+CAST({operand} AS DECIMAL))"
+            else:
+                logger.warning(f"UnaryPlus missing expr: {bind_expr}")
+                return "0"
+                
+        # CONDITIONAL EXPRESSIONS - Handle complex logic
+        elif expr_name == 'ConditionalOrExpression':
+            # Handle OR expressions like BOUND(?email) || BOUND(?phone)
+            if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other'):
+                left = translate_bind_expression(bind_expr.expr, variable_mappings)
+                right_exprs = bind_expr.other if isinstance(bind_expr.other, list) else [bind_expr.other]
+                conditions = [left]
+                for right_expr in right_exprs:
+                    conditions.append(translate_bind_expression(right_expr, variable_mappings))
+                return f"({' OR '.join(conditions)})"
+            else:
+                logger.warning(f"ConditionalOrExpression missing expr/other: {bind_expr}")
+                return "FALSE"
+        elif expr_name == 'ConditionalAndExpression':
+            # Handle AND expressions like ISLITERAL(?x) && ISNUMERIC(?x)
+            if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other'):
+                left = translate_bind_expression(bind_expr.expr, variable_mappings)
+                right_exprs = bind_expr.other if isinstance(bind_expr.other, list) else [bind_expr.other]
+                conditions = [left]
+                for right_expr in right_exprs:
+                    conditions.append(translate_bind_expression(right_expr, variable_mappings))
+                return f"({' AND '.join(conditions)})"
+            else:
+                logger.warning(f"ConditionalAndExpression missing expr/other: {bind_expr}")
+                return "FALSE"
+        
         # Handle simple literal expressions
         elif isinstance(bind_expr, str):
             # String literal
@@ -769,6 +956,16 @@ def _translate_isliteral_filter_expression(expr, variable_mappings: Dict[Variabl
     return "1=0"
 
 
+def _translate_isblank_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isBLANK() filter expression."""
+    logger.debug("Translating isBLANK filter expression")
+    if hasattr(expr, 'arg'):
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        # Check if the term looks like a blank node (starts with _:)
+        return f"({arg_sql} LIKE '_:%')"
+    return "FALSE"
+
+
 def _translate_isnumeric_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate isNUMERIC() filter expression."""
     logger.debug("Translating isNUMERIC filter expression")
@@ -800,31 +997,131 @@ def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable
 # Math built-in function translators
 def _translate_builtin_ceil(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate CEIL() built-in to SQL CEIL()."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        value_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        value_sql = translate_bind_arg(arg, variable_mappings)
         return f"CEIL({value_sql})"
     return "0"
 
 
 def _translate_builtin_floor(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate FLOOR() built-in to SQL FLOOR()."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        value_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        value_sql = translate_bind_arg(arg, variable_mappings)
         return f"FLOOR({value_sql})"
     return "0"
 
 
-def _translate_builtin_round(expr, variable_mappings: Dict[Variable, str]) -> str:
-    """Translate ROUND() built-in to SQL ROUND()."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        value_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
-        return f"ROUND({value_sql})"
-    return "0"
+def _translate_builtin_replace(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate REPLACE() built-in to string replacement."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 3:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        pattern_sql = translate_bind_arg(args[1], variable_mappings)
+        replacement_sql = translate_bind_arg(args[2], variable_mappings)
+        return f"REPLACE({string_sql}, {pattern_sql}, {replacement_sql})"
+    else:
+        logger.warning("REPLACE: Missing required arguments")
+        return "''"
 
 
-def _translate_builtin_rand(expr, variable_mappings: Dict[Variable, str]) -> str:
-    """Translate RAND() built-in to SQL RANDOM()."""
-    return "RANDOM()"
+def _translate_builtin_contains(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate CONTAINS() built-in to string containment check."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 2:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        substring_sql = translate_bind_arg(args[1], variable_mappings)
+        return f"({string_sql} LIKE '%' || {substring_sql} || '%')"
+    return "FALSE"
+
+
+def _translate_builtin_strstarts(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate STRSTARTS() built-in to string prefix check."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 2:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        prefix_sql = translate_bind_arg(args[1], variable_mappings)
+        return f"({string_sql} LIKE {prefix_sql} || '%')"
+    return "FALSE"
+
+
+def _translate_builtin_strends(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate STRENDS() built-in to string suffix check."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 2:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        suffix_sql = translate_bind_arg(args[1], variable_mappings)
+        return f"({string_sql} LIKE '%' || {suffix_sql})"
+    return "FALSE"
+
+
+def _translate_builtin_strbefore(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate STRBEFORE() built-in to substring before delimiter."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 2:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        delimiter_sql = translate_bind_arg(args[1], variable_mappings)
+        return f"SUBSTRING({string_sql} FROM 1 FOR POSITION({delimiter_sql} IN {string_sql}) - 1)"
+    return "''"
+
+
+def _translate_builtin_strafter(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate STRAFTER() built-in to substring after delimiter."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    args = []
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        args = [expr.arg]
+    elif hasattr(expr, 'args') and expr.args:
+        args = expr.args
+    
+    if len(args) >= 2:
+        string_sql = translate_bind_arg(args[0], variable_mappings)
+        delimiter_sql = translate_bind_arg(args[1], variable_mappings)
+        return f"SUBSTRING({string_sql} FROM POSITION({delimiter_sql} IN {string_sql}) + LENGTH({delimiter_sql}))"
+    return "''"
 
 
 # Date/Time built-in function translators
@@ -918,34 +1215,65 @@ def _translate_builtin_langmatches(expr, variable_mappings: Dict[Variable, str])
 
 def _translate_builtin_bound(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate BOUND() built-in to check if variable is bound."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1 and isinstance(expr.args[0], Variable):
-        var_sql = _get_variable_sql_column(expr.args[0], variable_mappings)
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None and isinstance(arg, Variable):
+        var_sql = _get_variable_sql_column(arg, variable_mappings)
         return f"({var_sql} IS NOT NULL)"
-    return "1=0"
+    return "FALSE"
 
 
 def _translate_builtin_isuri(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate isURI() built-in to check if term is a URI."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        # Would need term type metadata - placeholder for now
-        return "1=0"
-    return "1=0"
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        arg_sql = translate_bind_arg(arg, variable_mappings)
+        # Check if the term looks like a URI (starts with http:// or https://)
+        return f"({arg_sql} LIKE 'http://%' OR {arg_sql} LIKE 'https://%' OR {arg_sql} LIKE 'urn:%')"
+    return "FALSE"
 
 
 def _translate_builtin_isliteral(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate isLITERAL() built-in to check if term is a literal."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        # Would need term type metadata - placeholder for now
-        return "1=0"
-    return "1=0"
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        arg_sql = translate_bind_arg(arg, variable_mappings)
+        # Check if the term is NOT a URI (inverse of isURI check)
+        return f"NOT ({arg_sql} LIKE 'http://%' OR {arg_sql} LIKE 'https://%' OR {arg_sql} LIKE 'urn:%')"
+    return "FALSE"
 
 
 def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate isBLANK() built-in to check if term is a blank node."""
-    if hasattr(expr, 'args') and len(expr.args) >= 1:
-        # Would need term type metadata - placeholder for now
-        return "1=0"
-    return "1=0"
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        arg_sql = translate_bind_arg(arg, variable_mappings)
+        # Check if the term looks like a blank node (starts with _:)
+        return f"({arg_sql} LIKE '_:%')"
+    return "FALSE"
 
 
 # String manipulation function translators
@@ -1210,6 +1538,70 @@ def is_having_clause(filter_sql: str, variable_mappings: Dict) -> bool:
                 return True
     
     return False
+
+
+def _translate_builtin_abs(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate ABS() function to SQL ABS()."""
+    if hasattr(expr, 'arg'):
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        return f"ABS({arg})"
+    else:
+        logger.warning(f"ABS missing arg: {expr}")
+        return "0"
+
+
+def _translate_builtin_isnumeric(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate ISNUMERIC() function to SQL numeric check."""
+    if hasattr(expr, 'arg'):
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        # PostgreSQL: Check if value can be cast to numeric
+        return f"({arg} ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$')"
+    else:
+        logger.warning(f"ISNUMERIC missing arg: {expr}")
+        return "FALSE"
+
+
+def _translate_builtin_round(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate ROUND() function to SQL ROUND()."""
+    if hasattr(expr, 'arg'):
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        return f"ROUND(CAST({arg} AS DECIMAL))"
+    else:
+        logger.warning(f"ROUND missing arg: {expr}")
+        return "0"
+
+
+def _translate_builtin_isiri(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isIRI() function - alias for isURI()."""
+    return _translate_builtin_isuri(expr, variable_mappings)
+
+
+def _translate_builtin_contains(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate CONTAINS() function to SQL LIKE with wildcards."""
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        # BIND expression format: single arg
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        # For BIND, we need to extract the arguments differently
+        if hasattr(expr, '_vars') and len(expr._vars) > 0:
+            # This is a complex case - let's handle it properly
+            logger.warning(f"Complex CONTAINS BIND expression: {expr}")
+            return "TRUE"  # Fallback
+        return f"({arg} LIKE '%' || ? || '%')"  # Placeholder for now
+    elif hasattr(expr, 'args') and len(expr.args) >= 2:
+        # Filter expression format: multiple args
+        text_arg = translate_bind_arg(expr.args[0], variable_mappings)
+        search_arg = translate_bind_arg(expr.args[1], variable_mappings)
+        return f"({text_arg} LIKE '%' || {search_arg} || '%')"
+    else:
+        logger.warning(f"CONTAINS missing args: {expr}")
+        return "FALSE"
+
+
+def _translate_builtin_rand(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate RAND() function to SQL RANDOM()."""
+    # RAND() takes no arguments and returns a random number between 0 and 1
+    return "RANDOM()"
 
 
 # End of expressions module
