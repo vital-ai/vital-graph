@@ -444,7 +444,12 @@ def translate_minus_pattern(main_sql: SQLComponents, exclude_sql: SQLComponents,
     # Build the NOT EXISTS subquery
     not_exists_subquery = "SELECT 1"
     if exclude_sql.from_clause:
-        not_exists_subquery += f" FROM {exclude_sql.from_clause}"
+        # CRITICAL FIX: from_clause already contains "FROM" keyword, don't add another one
+        # TODO fix this so it doesn't happen to begin with, such as in the MINUS case
+        if exclude_sql.from_clause.strip().upper().startswith('FROM'):
+            not_exists_subquery += f" {exclude_sql.from_clause}"
+        else:
+            not_exists_subquery += f" FROM {exclude_sql.from_clause}"
     if exclude_sql.joins:
         not_exists_subquery += f" {' '.join(exclude_sql.joins)}"
     
@@ -1306,7 +1311,7 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         if filter_expr:
             logger.debug(f"Translating filter expression: {filter_expr}")
             try:
-                filter_sql = await translate_filter_expression(filter_expr, nested_sql.variable_mappings)
+                filter_sql = await translate_filter_expression(filter_expr, nested_sql.variable_mappings, context)
                 logger.debug(f"Filter SQL result: {filter_sql}")
                 
                 if filter_sql and filter_sql != "1=1":  # Only add meaningful filters

@@ -334,6 +334,77 @@ async def test_complex_filter_combinations():
     """Test complex combinations of filter functions."""
     print("\n🔗 COMPLEX FILTER COMBINATIONS:")
     
+    # First test individual components to understand the issue
+    print("\n  🔍 DEBUG: Testing individual filter components:")
+    
+    # Test 1: Find Johns
+    await run_single_test(sparql_impl, "Find Johns with REGEX", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?person ?name WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasName ?name .
+                FILTER(REGEX(?name, "John.*"))
+            }}
+        }}
+    """, expected_count=None)
+    
+    # Test 2: Find people with ages
+    await run_single_test(sparql_impl, "Find people with ages", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?person ?age WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasAge ?age .
+            }}
+        }}
+    """, expected_count=None)
+    
+    # Test 3: Test isNUMERIC on ages
+    await run_single_test(sparql_impl, "Test isNUMERIC on ages", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?person ?age WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasAge ?age .
+                FILTER(isNUMERIC(?age))
+            }}
+        }}
+    """, expected_count=None)
+    
+    # Test 4: Test DATATYPE on ages - see what datatypes are actually returned
+    await run_single_test(sparql_impl, "Show actual DATATYPE values for ages", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?person ?age ?datatype WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasAge ?age .
+                BIND(DATATYPE(?age) AS ?datatype)
+            }}
+        }}
+        LIMIT 5
+    """, expected_count=None)
+    
+    # Test 5: Test DATATYPE on ages
+    await run_single_test(sparql_impl, "Test DATATYPE on ages", f"""
+        PREFIX ex: <http://example.org/>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?person ?age WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasAge ?age .
+                FILTER(DATATYPE(?age) = xsd:integer)
+            }}
+        }}
+    """, expected_count=None)
+    
+    # Test 5: Test numeric comparison
+    await run_single_test(sparql_impl, "Test numeric comparison on ages", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?person ?age WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasAge ?age .
+                FILTER(?age > 25)
+            }}
+        }}
+    """, expected_count=None)
+    
+    # Now test the full complex filter with debug
     await run_single_test(sparql_impl, "Multiple filter functions combined", f"""
         PREFIX ex: <http://example.org/>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -349,7 +420,7 @@ async def test_complex_filter_combinations():
                 )
             }}
         }}
-    """, expected_count=1)
+    """, expected_count=1, debug=True)
     
     await run_single_test(sparql_impl, "String and type filters with OR", """
         PREFIX ex: <http://example.org/>
@@ -446,65 +517,348 @@ async def test_filter_edge_cases():
         }}
     """, expected_count=0)
 
+async def inspect_database_tables(space_impl):
+    """Inspect database tables to understand datatype storage."""
+    print("\n🔍 DATABASE TABLE INSPECTION:")
+    
+    try:
+        # Get the proper table names using space_impl
+        table_names = space_impl._get_table_names('space_test')
+        datatype_table = table_names.get('datatype')
+        term_table = table_names.get('term')
+        quad_table = table_names.get('rdf_quad')
+        
+        print(f"  Using datatype table: {datatype_table}")
+        print(f"  Using term table: {term_table}")
+        
+        async with space_impl.get_db_connection() as connection:
+            cursor = connection.cursor()
+            
+            # Check datatype table contents
+            print("\n  📊 DATATYPE TABLE CONTENTS:")
+            datatype_query = f"SELECT datatype_id, datatype_uri FROM {datatype_table} ORDER BY datatype_id LIMIT 10"
+            try:
+                cursor.execute(datatype_query)
+                datatype_rows = cursor.fetchall()
+                for row in datatype_rows:
+                    print(f"    {row[0]}: {row[1]}")
+            except Exception as e:
+                print(f"  ❌ Error inspecting datatype table: {e}")
+                return
+            
+            # Check term table for numeric literals (ages)
+            print("\n  🔢 TERM TABLE - NUMERIC LITERALS:")
+            term_query = f"""
+                SELECT term_text, term_type, datatype_id 
+                FROM {term_table} 
+                WHERE term_type = 'L' AND term_text ~ '^[0-9]+$' 
+                ORDER BY CASE 
+                    WHEN LENGTH(term_text) <= 10 THEN CAST(term_text AS BIGINT)
+                    ELSE 0
+                END
+                LIMIT 10
+            """
+            try:
+                cursor.execute(term_query)
+                term_rows = cursor.fetchall()
+                for row in term_rows:
+                    print(f"    '{row[0]}' (type: {row[1]}, datatype_id: {row[2]})")
+            except Exception as e:
+                print(f"  ❌ Error inspecting term table: {e}")
+                # Rollback the transaction to clear the error state
+                try:
+                    await connection.rollback()
+                except:
+                    pass
+                
+            # Specific lookup for age value "25"
+            print("\n  🎯 SPECIFIC AGE LOOKUP - '25':")
+            age_query = f"""
+                SELECT t.term_text, t.term_type, t.datatype_id, dt.datatype_uri
+                FROM {term_table} t
+                LEFT JOIN {datatype_table} dt ON t.datatype_id = dt.datatype_id
+                WHERE t.term_text = '25' AND t.term_type = 'L'
+            """
+            try:
+                cursor.execute(age_query)
+                age_rows = cursor.fetchall()
+                if age_rows:
+                    for row in age_rows:
+                        print(f"    Text: '{row[0]}', Type: {row[1]}, Datatype ID: {row[2]}, Datatype URI: {row[3]}")
+                else:
+                    print("    No age value '25' found")
+            except Exception as e:
+                print(f"  ❌ Error looking up age '25': {e}")
+                try:
+                    await connection.rollback()
+                except:
+                    pass
+                
+            # Check age triples with their datatypes
+            print("\n  📊 AGE TRIPLES WITH DATATYPE INFO:")
+            age_triples_query = f"""
+                SELECT 
+                    s.term_text as subject, 
+                    p.term_text as predicate, 
+                    o.term_text as object, 
+                    o.datatype_id,
+                    dt.datatype_uri
+                FROM {quad_table} q
+                JOIN {term_table} s ON q.subject_uuid = s.term_uuid
+                JOIN {term_table} p ON q.predicate_uuid = p.term_uuid  
+                JOIN {term_table} o ON q.object_uuid = o.term_uuid
+                LEFT JOIN {datatype_table} dt ON o.datatype_id = dt.datatype_id
+                WHERE p.term_text = 'http://example.org/hasAge'
+                LIMIT 5
+            """
+            try:
+                cursor.execute(age_triples_query)
+                age_triple_results = cursor.fetchall()
+                print(f"    Found {len(age_triple_results)} age triples:")
+                for row in age_triple_results:
+                    print(f"      {row[0]} hasAge \"{row[2]}\" (datatype_id={row[3]}, datatype_uri={row[4]})")
+            except Exception as e:
+                print(f"  ❌ Error inspecting age triples: {e}")
+                try:
+                    await connection.rollback()
+                except:
+                    pass
+            
+            # Check what XSD integer URI is stored as
+            print("\n  📊 XSD INTEGER DATATYPE LOOKUP:")
+            xsd_int_query = f"SELECT datatype_id, datatype_uri FROM {datatype_table} WHERE datatype_uri LIKE '%integer%'"
+            try:
+                cursor.execute(xsd_int_query)
+                xsd_int_results = cursor.fetchall()
+                print(f"    Found {len(xsd_int_results)} integer-related datatypes:")
+                for row in xsd_int_results:
+                    print(f"      {row[0]} -> {row[1]}")
+            except Exception as e:
+                print(f"  ❌ Error looking up integer datatypes: {e}")
+                try:
+                    await connection.rollback()
+                except:
+                    pass
+                    
+    except Exception as e:
+        print(f"  ❌ Error inspecting database: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def debug_datatype_function(space_impl, space_id):
+    """Debug DATATYPE() function in isolation"""
+    
+    print("\n🔍 DATATYPE FUNCTION DEBUG:")
+    
+    # Enable debug logging to see SQL generation
+    import logging
+    logging.getLogger('vitalgraph.db.postgresql.sparql').setLevel(logging.DEBUG)
+    
+    # Get SPARQL implementation for direct access
+    sparql_impl = space_impl.get_sparql_impl(space_id)
+    
+    # Test 1: Simple DATATYPE query
+    print("\n1️⃣ Simple DATATYPE query:")
+    simple_query = """
+        PREFIX ex: <http://example.org/>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?person ?age (DATATYPE(?age) as ?ageType) WHERE {
+            GRAPH <urn:___GLOBAL> {
+                ?person ex:hasAge ?age .
+            }
+        }
+        LIMIT 5
+    """
+    
+    try:
+        print("    🔍 Executing with debug logging enabled...")
+        results = await sparql_impl.execute_sparql_query(space_id, simple_query)
+        print(f"    ✅ Results: {len(results)}")
+        for i, result in enumerate(results[:3]):
+            print(f"    [{i+1}] {result}")
+    except Exception as e:
+        print(f"    ❌ Error: {e}")
+        
+    # Test 2: DATATYPE filter with specific datatype
+    print("\n2️⃣ DATATYPE filter query:")
+    filter_query = """
+        PREFIX ex: <http://example.org/>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?person ?age WHERE {
+            GRAPH <urn:___GLOBAL> {
+                ?person ex:hasAge ?age .
+                FILTER(DATATYPE(?age) = xsd:integer)
+            }
+        }
+        LIMIT 5
+    """
+    
+    try:
+        print("    🔍 Executing DATATYPE filter with debug logging...")
+        results = await sparql_impl.execute_sparql_query(space_id, filter_query)
+        print(f"    ✅ Results: {len(results)}")
+        for i, result in enumerate(results[:3]):
+            print(f"    [{i+1}] {result}")
+    except Exception as e:
+        print(f"    ❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+    # Test 3: Check what datatypes are actually stored
+    print("\n3️⃣ Direct database inspection:")
+    async with space_impl.get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get table names
+        table_names = space_impl._get_table_names(space_id)
+        term_table = table_names.get('term')
+        datatype_table = table_names.get('datatype')
+        rdf_quad_table = table_names.get('rdf_quad')
+        
+        print(f"    Using tables: {term_table}, {datatype_table}, {rdf_quad_table}")
+        
+        # Query for age values and their datatypes
+        age_query = f"""
+            SELECT DISTINCT o.term_text, o.datatype_id, dt.datatype_uri
+            FROM {rdf_quad_table} rq
+            JOIN {term_table} p ON rq.predicate_uuid = p.term_uuid
+            JOIN {term_table} o ON rq.object_uuid = o.term_uuid
+            LEFT JOIN {datatype_table} dt ON o.datatype_id = dt.datatype_id
+            WHERE p.term_text = 'http://example.org/hasAge'
+            ORDER BY o.term_text
+            LIMIT 10
+        """
+        
+        try:
+            cursor.execute(age_query)
+            age_rows = cursor.fetchall()
+            print(f"    Found {len(age_rows)} age values:")
+            for row in age_rows:
+                print(f"      Age: '{row[0]}', Datatype ID: {row[1]}, URI: {row[2]}")
+        except Exception as e:
+            print(f"    ❌ Error querying ages: {e}")
+            
+    # Test 4: Direct SQL equivalent that should work
+    print("\n4️⃣ Direct SQL equivalent (should work):")
+    async with space_impl.get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get table names
+        table_names = space_impl._get_table_names(space_id)
+        term_table = table_names.get('term')
+        datatype_table = table_names.get('datatype')
+        rdf_quad_table = table_names.get('rdf_quad')
+        
+        # Direct SQL equivalent of the SPARQL DATATYPE filter
+        direct_sql = f"""
+            SELECT DISTINCT 
+                s.term_text as person, 
+                o.term_text as age
+            FROM {rdf_quad_table} rq
+            JOIN {term_table} s ON rq.subject_uuid = s.term_uuid
+            JOIN {term_table} p ON rq.predicate_uuid = p.term_uuid
+            JOIN {term_table} o ON rq.object_uuid = o.term_uuid
+            JOIN {datatype_table} dt ON o.datatype_id = dt.datatype_id
+            WHERE p.term_text = 'http://example.org/hasAge'
+              AND dt.datatype_uri = 'http://www.w3.org/2001/XMLSchema#integer'
+            ORDER BY o.term_text
+            LIMIT 5
+        """
+        
+        print("    🔍 Direct SQL query:")
+        print(f"    {direct_sql}")
+        
+        try:
+            cursor.execute(direct_sql)
+            direct_results = cursor.fetchall()
+            print(f"    ✅ Direct SQL Results: {len(direct_results)}")
+            for i, row in enumerate(direct_results[:3]):
+                print(f"    [{i+1}] person: {row[0]}, age: {row[1]}")
+        except Exception as e:
+            print(f"    ❌ Direct SQL Error: {e}")
+
+
 async def analyze_test_data_discrepancies(sparql_impl):
     """Analyze actual test data to understand result count discrepancies."""
     print("\n🔍 DATA ANALYSIS - Understanding Result Count Discrepancies:")
     
-    # Count all names in database
-    total_names_query = f"""
+    # Count total names in database
+    name_count_query = f"""
         PREFIX ex: <http://example.org/>
-        SELECT ?person ?name WHERE {{
+        SELECT (COUNT(?name) AS ?count) WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
                 ?person ex:hasName ?name .
+                FILTER(isLITERAL(?name))
             }}
         }}
     """
     
     try:
-        total_names = await sparql_impl.execute_sparql_query(SPACE_ID, total_names_query)
-        print(f"  Total names in database: {len(total_names)} (isLITERAL expected 5)")
-        
-        # Count names longer than 8 characters
-        long_names_query = f"""
-            PREFIX ex: <http://example.org/>
-            SELECT ?person ?name WHERE {{
-                GRAPH <{GLOBAL_GRAPH_URI}> {{
-                    ?person ex:hasName ?name .
-                    FILTER(STRLEN(?name) > 8)
-                }}
-            }}
-        """
-        
-        long_names = await sparql_impl.execute_sparql_query(SPACE_ID, long_names_query)
-        print(f"  Names longer than 8 chars: {len(long_names)} (BNODE test expected 3)")
-        
-        # Show sample names with lengths
-        print(f"  Sample names (first 10):")
-        for i, result in enumerate(total_names[:10], 1):
-            name = result['name']
-            length = len(name)
-            long_marker = " (>8)" if length > 8 else ""
-            print(f"    [{i}] '{name}' (len={length}){long_marker}")
-        
-        if len(total_names) > 10:
-            print(f"    ... and {len(total_names) - 10} more names")
-            
-        # Count emails ending with example.org
-        email_query = f"""
-            PREFIX ex: <http://example.org/>
-            SELECT ?person ?email WHERE {{
-                GRAPH <{GLOBAL_GRAPH_URI}> {{
-                    ?person ex:hasEmail ?email .
-                    FILTER(STRENDS(?email, "example.org"))
-                }}
-            }}
-        """
-        
-        emails = await sparql_impl.execute_sparql_query(SPACE_ID, email_query)
-        print(f"  Emails ending with 'example.org': {len(emails)} (test expected 5)")
-        
+        result = await sparql_impl.execute_sparql_query(name_count_query, SPACE_ID)
+        total_names = int(result[0]['count']) if result else 0
+        print(f"  Total names in database: {total_names} (isLITERAL expected 5)")
     except Exception as e:
-        print(f"  Error in data analysis: {e}")
+        print(f"  Error counting names: {e}")
+    
+    # Count names longer than 8 characters
+    long_name_query = f"""
+        PREFIX ex: <http://example.org/>
+        SELECT (COUNT(?name) AS ?count) WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasName ?name .
+                FILTER(STRLEN(?name) > 8)
+            }}
+        }}
+    """
+    
+    try:
+        result = await sparql_impl.execute_sparql_query(long_name_query, SPACE_ID)
+        long_names = int(result[0]['count']) if result else 0
+        print(f"  Names longer than 8 chars: {long_names} (BNODE test expected 3)")
+    except Exception as e:
+        print(f"  Error counting long names: {e}")
+    
+    # Sample some names
+    sample_names_query = f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?name WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasName ?name .
+            }}
+        }}
+        LIMIT 10
+    """
+    
+    try:
+        result = await sparql_impl.execute_sparql_query(sample_names_query, SPACE_ID)
+        print(f"  Sample names (first 10):")
+        for i, row in enumerate(result):
+            name = row['name']
+            length = len(name)
+            length_note = " (>8)" if length > 8 else ""
+            print(f"    [{i+1}] '{name}' (len={length}){length_note}")
+        if len(result) > 10:
+            print(f"    ... and {len(result) - 10} more names")
+    except Exception as e:
+        print(f"  Error sampling names: {e}")
+    
+    # Count emails ending with example.org
+    email_query = f"""
+        PREFIX ex: <http://example.org/>
+        SELECT (COUNT(?email) AS ?count) WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person ex:hasEmail ?email .
+                FILTER(STRENDS(?email, "example.org"))
+            }}
+        }}
+    """
+    
+    try:
+        result = await sparql_impl.execute_sparql_query(email_query, SPACE_ID)
+        email_count = int(result[0]['count']) if result else 0
+        print(f"  Emails ending with 'example.org': {email_count} (test expected 5)")
+    except Exception as e:
+        print(f"  Error counting emails: {e}")
 
 async def test_rdflib_function_parsing():
     """Test RDFLib's parsing of various SPARQL functions to understand their structure."""
@@ -532,37 +886,73 @@ async def test_rdflib_function_parsing():
         try:
             prepared_query = prepareQuery(sparql)
             algebra_str = str(prepared_query.algebra)
-            builtin_name = f"Builtin_{func_name.replace('()', '').upper()}"
+            
+            # Check for multiple possible builtin name formats
+            base_name = func_name.replace('()', '')
+            possible_builtin_names = [
+                f"Builtin_{base_name}",  # Mixed case (actual format for type functions)
+                f"Builtin_{base_name.upper()}",  # Uppercase
+                f"Builtin_{base_name.lower()}",  # Lowercase
+            ]
             
             # Special handling for sameTerm and IN to show algebra details
             if func_name in ["sameTerm()", "IN()"]:
                 print(f"    🔍 {func_name}: Algebra inspection")
                 print(f"        Full algebra: {algebra_str[:200]}...")
                 
-                # Look for various possible representations
-                possible_names = [
-                    builtin_name,
-                    func_name.replace('()', ''),
-                    f"Builtin_{func_name.replace('()', '')}",
-                    func_name.replace('()', '').upper(),
-                    func_name.replace('()', '').lower()
+                # Special case for IN() - it's handled as RelationalExpression, not builtin
+                if func_name == "IN()":
+                    if "RelationalExpression" in algebra_str and "'op': 'IN'" in algebra_str:
+                        print(f"    ✅ {func_name}: Parsed as RelationalExpression with op='IN'")
+                        return True
+                    else:
+                        print(f"    ⚠️  {func_name}: RelationalExpression with IN op not found")
+                        return False
+                
+                # Look for various possible representations for other functions
+                all_possible_names = possible_builtin_names + [
+                    base_name,
+                    base_name.upper(),
+                    base_name.lower()
                 ]
                 
-                found_names = [name for name in possible_names if name in algebra_str]
+                found_names = [name for name in all_possible_names if name in algebra_str]
                 if found_names:
                     print(f"        Found names: {found_names}")
                 else:
                     print(f"        No standard names found, checking for patterns...")
                     # Look for any mention of the function
-                    if func_name.replace('()', '').lower() in algebra_str.lower():
+                    if base_name.lower() in algebra_str.lower():
                         print(f"        Found lowercase pattern in algebra")
                 
-            if builtin_name in algebra_str:
-                print(f"    ✅ {func_name}: Parsed as {builtin_name}")
+                # Check if any of the possible builtin names are found for sameTerm
+                found_builtin = None
+                for builtin_name in possible_builtin_names:
+                    if builtin_name in algebra_str:
+                        found_builtin = builtin_name
+                        break
+                        
+                if found_builtin:
+                    print(f"    ✅ {func_name}: Parsed as {found_builtin}")
+                    return True
+                else:
+                    print(f"    ⚠️  {func_name}: Parsed but no builtin found")
+                    return False
+            
+            # Check if any of the possible builtin names are found for regular functions
+            found_builtin = None
+            for builtin_name in possible_builtin_names:
+                if builtin_name in algebra_str:
+                    found_builtin = builtin_name
+                    break
+                    
+            if found_builtin:
+                print(f"    ✅ {func_name}: Parsed as {found_builtin}")
                 return True
             else:
                 print(f"    ⚠️  {func_name}: Parsed but no builtin found")
                 return False
+                
         except ParseException as e:
             print(f"    ❌ {func_name}: Parse error - {str(e)[:50]}...")
             return False
@@ -697,13 +1087,15 @@ async def main():
         
         # Debug tests (enable for specific debugging)
         # await test_filter_debug()
-        
     finally:
         # Performance summary
         print("\n📊 Cache:", sparql_impl.term_cache.size() if hasattr(sparql_impl, 'term_uuid_cache') else "Statistics not available")
     
-    # Add data analysis section
-    await analyze_test_data_discrepancies(sparql_impl)
+    # Database inspection
+    await inspect_database_tables(sparql_impl.space_impl)
+    
+    # DATATYPE function debugging
+    await debug_datatype_function(sparql_impl.space_impl, 'space_test')
     
     # Close database connection
     await impl.get_db_impl().disconnect()

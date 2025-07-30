@@ -99,7 +99,7 @@ async def test_union_queries():
     test_results.append(result)
     
     # Test 2: Type UNION - different entity types
-    await run_union_query(sparql_impl, "Type UNION - TestEntity OR NumberEntity", f"""
+    result = await run_union_query(sparql_impl, "Type UNION - TestEntity OR NumberEntity", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -113,9 +113,10 @@ async def test_union_queries():
         ORDER BY ?type ?entity
         LIMIT 10
     """)
+    test_results.append(result)
     
     # Test 3: Cross-graph UNION - main graph OR global graph
-    await run_union_query(sparql_impl, "Cross-graph UNION - test graph OR global graph", f"""
+    result = await run_union_query(sparql_impl, "Cross-graph UNION - test graph OR global graph", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -138,11 +139,12 @@ async def test_union_queries():
         ORDER BY ?source ?entity
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n2. UNION WITH DIFFERENT VARIABLE PATTERNS:")
     
     # Test 4: Different variable bindings in UNION branches
-    await run_union_query(sparql_impl, "Different variables - names from entities OR labels from numbers", f"""
+    result = await run_union_query(sparql_impl, "Different variables - names from entities OR labels from numbers", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -164,9 +166,10 @@ async def test_union_queries():
         ORDER BY ?category ?item
         LIMIT 15
     """)
+    test_results.append(result)
     
     # Test 5: UNION with optional variables (some branches don't bind all variables)
-    await run_union_query(sparql_impl, "Optional variables - entities with/without descriptions", f"""
+    result = await run_union_query(sparql_impl, "Optional variables - entities with/without descriptions", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -188,11 +191,12 @@ async def test_union_queries():
         ORDER BY ?hasDesc ?entity
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n3. NESTED AND COMPLEX UNION PATTERNS:")
     
     # Test 6: Nested UNION - (A UNION B) UNION C
-    await run_union_query(sparql_impl, "Nested UNION - three-way alternative", f"""
+    result = await run_union_query(sparql_impl, "Nested UNION - three-way alternative", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -224,9 +228,10 @@ async def test_union_queries():
         ORDER BY ?type ?item
         LIMIT 15
     """)
+    test_results.append(result)
     
     # Test 7: UNION with filters in each branch
-    await run_union_query(sparql_impl, "UNION with filters - short names OR high values", f"""
+    result = await run_union_query(sparql_impl, "UNION with filters - short names OR high values", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -248,11 +253,12 @@ async def test_union_queries():
         ORDER BY ?reason ?value
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n4. UNION WITH CONSTRUCT QUERIES:")
     
     # Test 8: CONSTRUCT with UNION - create unified triples from different patterns
-    await run_union_query(sparql_impl, "CONSTRUCT with UNION - unified entity representation", f"""
+    result = await run_union_query(sparql_impl, "CONSTRUCT with UNION - unified entity representation", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -278,11 +284,12 @@ async def test_union_queries():
         }}
         LIMIT 8
     """)
+    test_results.append(result)
     
     print("\n5. UNION WITH RELATIONSHIPS:")
     
     # Test 9: UNION for different relationship types
-    await run_union_query(sparql_impl, "Relationship UNION - relatedTo OR knows", f"""
+    result = await run_union_query(sparql_impl, "Relationship UNION - relatedTo OR knows", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -305,9 +312,10 @@ async def test_union_queries():
         ORDER BY ?relationship ?entity1
         LIMIT 10
     """)
+    test_results.append(result)
     
     # Test 10: Complex UNION with multiple patterns per branch
-    await run_union_query(sparql_impl, "Complex UNION - multi-pattern branches", f"""
+    result = await run_union_query(sparql_impl, "Complex UNION - multi-pattern branches", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -340,6 +348,7 @@ async def test_union_queries():
         ORDER BY ?context ?subject
         LIMIT 12
     """)
+    test_results.append(result)
     
     # Test results summary
     total_tests = len(test_results)
@@ -364,7 +373,6 @@ async def test_union_queries():
     
     await impl.db_impl.disconnect()
     print("\n✅ UNION Query Tests Complete!")
-    print("💡 These queries will work once UNION implementation is added to postgresql_sparql_impl.py")
     print("🔗 Test data includes entities, numbers, and relationships across multiple graphs")
     
     # Return test results for aggregation

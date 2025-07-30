@@ -364,7 +364,7 @@ def _substitute_template_term(template_term, variable_bindings: Dict[str, Any]) 
             # Variable - substitute with value from bindings
             var_name = str(template_term)  # Variable name (e.g., '?entity')
             
-            # Try to find the variable in bindings
+            # Try to find the variable in bindings (case-sensitive first)
             if var_name in variable_bindings:
                 return str(variable_bindings[var_name])
             else:
@@ -373,8 +373,16 @@ def _substitute_template_term(template_term, variable_bindings: Dict[str, Any]) 
                 if clean_var_name in variable_bindings:
                     return str(variable_bindings[clean_var_name])
                 else:
-                    logger.debug(f"Variable {var_name} not found in bindings: {list(variable_bindings.keys())}")
-                    return None
+                    # PostgreSQL returns lowercase column names, so try case-insensitive lookup
+                    # Create a case-insensitive mapping
+                    lower_bindings = {k.lower(): v for k, v in variable_bindings.items()}
+                    
+                    # Try lowercase version of variable name
+                    if clean_var_name.lower() in lower_bindings:
+                        return str(lower_bindings[clean_var_name.lower()])
+                    else:
+                        logger.debug(f"Variable {var_name} not found in bindings: {list(variable_bindings.keys())}")
+                        return None
                     
         elif isinstance(template_term, (URIRef, Literal)):
             # Constant term - return as-is
@@ -478,15 +486,56 @@ def _has_distinct_pattern(pattern) -> bool:
     return False
 
 
-def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_distinct: bool = False) -> Tuple[str, str, str]:
+def _restore_variable_case(sql_results: List[Dict[str, Any]], case_mapping: Dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    Restore original SPARQL variable case in SQL result dictionaries.
+    PostgreSQL returns lowercase column names even when quoted, so we need to map them back.
+    
+    Args:
+        sql_results: List of result dictionaries with lowercase keys
+        case_mapping: Maps lowercase column names to original SPARQL variable names
+        
+    Returns:
+        List of result dictionaries with original case variable names
+    """
+    if not case_mapping:
+        return sql_results
+        
+    restored_results = []
+    for result in sql_results:
+        restored_result = {}
+        for key, value in result.items():
+            # Use case mapping to restore original variable name, or keep original key
+            original_key = case_mapping.get(key.lower(), key)
+            restored_result[original_key] = value
+        restored_results.append(restored_result)
+    
+    return restored_results
+
+
+def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_distinct: bool = False) -> Tuple[str, str, str, Dict]:
     """Build SELECT clause, GROUP BY clause, and HAVING clause. Exact port from original."""
+    case_mapping = {}  # Maps unique SQL aliases to original SPARQL variable names
+    alias_counter = {}  # Tracks collision counters for case-insensitive names
+    
     if not projection_vars:
         # No projection variables - return all mapped variables
         select_items = []
         for var, mapping in variable_mappings.items():
             if not str(var).startswith('__'):  # Skip internal variables
                 var_name = str(var).replace('?', '')
-                select_items.append(f"{mapping} AS {var_name}")
+                lowercase_name = var_name.lower()
+                
+                # Handle case collisions for non-projection variables too
+                if lowercase_name in alias_counter:
+                    alias_counter[lowercase_name] += 1
+                    unique_alias = f"{lowercase_name}_{alias_counter[lowercase_name]}"
+                else:
+                    alias_counter[lowercase_name] = 0
+                    unique_alias = lowercase_name
+                
+                case_mapping[unique_alias] = var_name
+                select_items.append(f'{mapping} AS "{unique_alias}"')
         
         if not select_items:
             select_items = ["*"]
@@ -495,12 +544,27 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
         select_items = []
         for var in projection_vars:
             var_name = str(var).replace('?', '')
+            lowercase_name = var_name.lower()
+            
+            # Handle case-sensitive variable collisions by generating unique aliases
+            if lowercase_name in alias_counter:
+                # Collision detected - generate unique alias
+                alias_counter[lowercase_name] += 1
+                unique_alias = f"{lowercase_name}_{alias_counter[lowercase_name]}"
+            else:
+                # First occurrence - use lowercase as alias
+                alias_counter[lowercase_name] = 0
+                unique_alias = lowercase_name
+            
+            # Store the mapping from unique alias to original variable name
+            case_mapping[unique_alias] = var_name
+            
             if var in variable_mappings:
                 var_mapping = variable_mappings[var]
-                select_items.append(f"{var_mapping} AS {var_name}")
+                select_items.append(f'{var_mapping} AS "{unique_alias}"')
             else:
                 # Variable not found in mappings - use UNMAPPED placeholder
-                select_items.append(f"'UNMAPPED_VAR_{var_name}' AS {var_name}")
+                select_items.append(f"'UNMAPPED_VAR_{var_name}' AS \"{unique_alias}\"")
     
     # Build SELECT clause
     distinct_modifier = "DISTINCT " if has_distinct else ""
@@ -522,7 +586,7 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
     having_conditions = variable_mappings.get('__HAVING_CONDITIONS__', [])
     having_clause = f"HAVING {' AND '.join(having_conditions)}" if having_conditions else ''
     
-    return select_clause, group_by_clause, having_clause
+    return select_clause, group_by_clause, having_clause, case_mapping
 
 
 def build_construct_query_from_components(from_clause: str, where_conditions: List[str], 
@@ -648,11 +712,15 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             term_cache=term_cache,
             space_impl=space_impl,
             table_config=table_config,
-            datatype_cache=datatype_cache
+            datatype_cache=datatype_cache,
+            space_id=space_id
         )
         # Add logger and graph_cache as attributes
         context.logger = logger
         context.graph_cache = graph_cache or {}
+        
+        # Initialize case_mapping for all query types
+        case_mapping = {}
         
         # Translate query based on type - follow exact original implementation pattern
         if query_type == "SelectQuery":
@@ -668,7 +736,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projection_vars)
             
             # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
-            select_clause, group_by_clause, having_clause = _build_select_clause(projection_vars, variable_mappings, has_distinct)
+            select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, variable_mappings, has_distinct)
             
             # Build complete SQL query - exact logic from original implementation
             sql_parts = [select_clause]
@@ -724,6 +792,22 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             pattern = query_algebra.p
             from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projected_vars)
             
+            # Build case mapping for CONSTRUCT variables with unique alias handling
+            alias_counter = {}
+            for var in construct_vars:
+                var_name = str(var).replace('?', '')
+                lowercase_name = var_name.lower()
+                
+                # Handle case-sensitive variable collisions
+                if lowercase_name in alias_counter:
+                    alias_counter[lowercase_name] += 1
+                    unique_alias = f"{lowercase_name}_{alias_counter[lowercase_name]}"
+                else:
+                    alias_counter[lowercase_name] = 0
+                    unique_alias = lowercase_name
+                
+                case_mapping[unique_alias] = var_name
+            
             # Build CONSTRUCT query from components
             sql_query = build_construct_query_from_components(from_clause, where_conditions, joins, variable_mappings, construct_template)
         elif query_type == "AskQuery":
@@ -733,12 +817,20 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         else:
             raise NotImplementedError(f"Unsupported query type: {query_type}")
         
-        logger.info(f"Generated SQL: {sql_query}")
+        # Log the generated SQL query with formatting for readability
+        logger.info(f"🔍 Generated SQL Query:")
+        logger.info(f"{'='*60}")
+        logger.info(sql_query)
+        logger.info(f"{'='*60}")
         
         # Execute SQL query using the space_impl's connection method (like original implementation)
-        logger.info(f"Executing SQL query...")
+        logger.info(f"⚡ Executing SQL query...")
         sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query)
-        logger.info(f"SQL execution completed. Result count: {len(sql_results) if sql_results else 0}")
+        
+        # Restore original variable case in results
+        sql_results = _restore_variable_case(sql_results, case_mapping)
+        
+        logger.info(f"✅ SQL execution completed. Result count: {len(sql_results) if sql_results else 0}")
         
         # Process results based on query type
         if query_type == "SelectQuery":

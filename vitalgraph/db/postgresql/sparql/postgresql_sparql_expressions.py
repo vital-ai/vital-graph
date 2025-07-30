@@ -16,17 +16,18 @@ from rdflib.plugins.sparql.parserutils import CompValue
 logger = logging.getLogger(__name__)
 
 
-async def translate_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+async def translate_filter_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate a SPARQL filter expression to SQL."""
     # Handle case where expr is a list (multiple filter expressions)
     if isinstance(expr, list):
         if len(expr) == 1:
-            return await translate_filter_expression(expr[0], variable_mappings)
+            return await translate_filter_expression(expr[0], variable_mappings, context)
         else:
             # Multiple expressions - combine with AND
             conditions = []
             for sub_expr in expr:
-                conditions.append(await translate_filter_expression(sub_expr, variable_mappings))
+                condition = await translate_filter_expression(sub_expr, variable_mappings, context)
+                conditions.append(condition)
             return f"({' AND '.join(conditions)})"
     
     # Handle case where expr doesn't have a name attribute
@@ -38,11 +39,11 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
     logger.debug(f"Processing filter expression: {expr_name}")
     
     if expr_name == "RelationalExpression":
-        return await _translate_relational_expression(expr, variable_mappings)
+        return await _translate_relational_expression(expr, variable_mappings, context)
     elif expr_name == "ConditionalAndExpression":
-        return await _translate_and_expression(expr, variable_mappings)
+        return await _translate_and_expression(expr, variable_mappings, context)
     elif expr_name == "ConditionalOrExpression":
-        return await _translate_or_expression(expr, variable_mappings)
+        return await _translate_or_expression(expr, variable_mappings, context)
     elif expr_name == "Builtin_REGEX":
         return _translate_regex_expression(expr, variable_mappings)
     elif expr_name == "Builtin_CONTAINS":
@@ -58,7 +59,7 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
     elif expr_name == "Builtin_LANG":
         return _translate_lang_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_DATATYPE":
-        return _translate_datatype_filter_expression(expr, variable_mappings)
+        return _translate_datatype_filter_expression(expr, variable_mappings, context)
     elif expr_name in ["Builtin_URI", "Builtin_IRI"]:
         return _translate_uri_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_BNODE":
@@ -83,7 +84,7 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
         return "1=1"  # No-op condition
 
 
-async def _translate_relational_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+async def _translate_relational_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate relational expression (=, !=, <, >, etc.)."""
     operator = expr['op']
     left = expr['expr']
@@ -91,12 +92,12 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
     
     # Handle IN operator specially
     if operator == 'IN':
-        left_sql = await _translate_expression_operand(left, variable_mappings)
+        left_sql = await _translate_expression_operand(left, variable_mappings, context=context)
         if isinstance(right, list):
             # Multiple values for IN
             values = []
             for value in right:
-                value_sql = await _translate_expression_operand(value, variable_mappings)
+                value_sql = await _translate_expression_operand(value, variable_mappings, context=context)
                 values.append(value_sql)
             if values:
                 return f"({left_sql} IN ({', '.join(values)}))"
@@ -104,7 +105,7 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
                 return "FALSE"  # Empty IN list is always false
         else:
             # Single value case (shouldn't happen with IN but handle gracefully)
-            right_sql = await _translate_expression_operand(right, variable_mappings)
+            right_sql = await _translate_expression_operand(right, variable_mappings, context=context)
             return f"({left_sql} = {right_sql})"
     
     # Determine if this is a numeric comparison
@@ -112,8 +113,8 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
     is_numeric = operator in numeric_operators
     
     try:
-        left_sql = await _translate_expression_operand(left, variable_mappings, cast_numeric=is_numeric)
-        right_sql = await _translate_expression_operand(right, variable_mappings, cast_numeric=is_numeric)
+        left_sql = await _translate_expression_operand(left, variable_mappings, cast_numeric=is_numeric, context=context)
+        right_sql = await _translate_expression_operand(right, variable_mappings, cast_numeric=is_numeric, context=context)
         
         # Ensure we got string SQL representations, not dict objects
         if not isinstance(left_sql, str):
@@ -143,21 +144,21 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
         return "1=1"
 
 
-async def _translate_and_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+async def _translate_and_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate AND expression."""
-    left = await translate_filter_expression(expr['expr'], variable_mappings)
-    right = await translate_filter_expression(expr['other'], variable_mappings)
+    left = await translate_filter_expression(expr['expr'], variable_mappings, context)
+    right = await translate_filter_expression(expr['other'], variable_mappings, context)
     return f"({left} AND {right})"
 
 
-async def _translate_or_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+async def _translate_or_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate OR expression."""
-    left = await translate_filter_expression(expr['expr'], variable_mappings)
-    right = await translate_filter_expression(expr['other'], variable_mappings)
+    left = await translate_filter_expression(expr['expr'], variable_mappings, context)
+    right = await translate_filter_expression(expr['other'], variable_mappings, context)
     return f"({left} OR {right})"
 
 
-async def _translate_expression_operand(operand, variable_mappings: Dict[Variable, str], cast_numeric: bool = False) -> str:
+async def _translate_expression_operand(operand, variable_mappings: Dict[Variable, str], cast_numeric: bool = False, context=None) -> str:
     """Translate an expression operand (variable or literal)."""
     logger.debug(f"Translating operand: {operand}, type: {type(operand)}, is Variable: {isinstance(operand, Variable)}")
     if isinstance(operand, Variable):
@@ -188,7 +189,7 @@ async def _translate_expression_operand(operand, variable_mappings: Dict[Variabl
     # Handle function expressions or other complex operands
     if hasattr(operand, 'name'):
         # This might be a function call like STRLEN
-        return await _translate_function_expression(operand, variable_mappings)
+        return await _translate_function_expression(operand, variable_mappings, context)
     
     # Direct value fallback
     if operand is None:
@@ -199,7 +200,7 @@ async def _translate_expression_operand(operand, variable_mappings: Dict[Variabl
         return str(operand)
 
 
-async def _translate_function_expression(func_expr, variable_mappings: Dict[Variable, str]) -> str:
+async def _translate_function_expression(func_expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate function expressions in FILTER operands."""
     func_name = func_expr.name
     
@@ -208,12 +209,12 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
         # Try 'arg' first (most common for STRLEN), then 'expr'
         if hasattr(func_expr, 'arg') and func_expr.arg:
             logger.debug(f"STRLEN arg: {func_expr.arg}, type: {type(func_expr.arg)}")
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
             logger.debug(f"STRLEN translated to: LENGTH({arg_sql})")
             return f"LENGTH({arg_sql})"
         elif hasattr(func_expr, 'expr') and func_expr.expr:
             logger.debug(f"STRLEN expr: {func_expr.expr}, type: {type(func_expr.expr)}")
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
             logger.debug(f"STRLEN translated to: LENGTH({arg_sql})")
             return f"LENGTH({arg_sql})"
         else:
@@ -223,35 +224,149 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # Handle other common SPARQL functions
     elif func_name == 'UCASE':
         if hasattr(func_expr, 'expr') and func_expr.expr:
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
             return f"UPPER({arg_sql})"
         else:
             return "NULL"
     
     elif func_name == 'LCASE':
         if hasattr(func_expr, 'expr') and func_expr.expr:
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
             return f"LOWER({arg_sql})"
         else:
             return "NULL"
     
     elif func_name == 'SUBSTR':
         if hasattr(func_expr, 'expr') and hasattr(func_expr, 'start'):
-            str_sql = await _translate_expression_operand(func_expr.expr, variable_mappings)
-            start_sql = await _translate_expression_operand(func_expr.start, variable_mappings)
+            str_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
+            start_sql = await _translate_expression_operand(func_expr.start, variable_mappings, context=context)
             if hasattr(func_expr, 'length') and func_expr.length:
-                length_sql = await _translate_expression_operand(func_expr.length, variable_mappings)
+                length_sql = await _translate_expression_operand(func_expr.length, variable_mappings, context=context)
                 return f"SUBSTRING({str_sql} FROM {start_sql} FOR {length_sql})"
             else:
                 return f"SUBSTRING({str_sql} FROM {start_sql})"
         else:
             return "NULL"
     
+    # DATATYPE and LANG functions - Previously missing
+    elif func_name == 'Builtin_DATATYPE':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # Use the same logic as _translate_datatype_filter_expression
+            if '.term_text' in arg_sql:
+                # Extract the table alias from the arg_sql
+                table_alias = arg_sql.split('.')[0]
+                
+                # Get the datatype table name from context
+                datatype_table = None
+                if context and context.space_impl and context.space_id:
+                    table_names = context.space_impl._get_table_names(context.space_id)
+                    datatype_table = table_names.get('datatype')
+                
+                if datatype_table:
+                    # Use the datatype table to resolve datatype URIs
+                    return f"""(
+                        CASE 
+                            WHEN {table_alias}.datatype_id IS NOT NULL THEN (
+                                SELECT dt.datatype_uri 
+                                FROM {datatype_table} dt 
+                                WHERE dt.datatype_id = {table_alias}.datatype_id
+                            )
+                            WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                            WHEN {table_alias}.term_type = 'U' THEN NULL
+                            WHEN {table_alias}.term_type = 'B' THEN NULL
+                            ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                        END
+                    )"""
+                else:
+                    # Fallback to regex-based datatype inference
+                    return f"""(
+                        CASE 
+                            WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#integer'
+                            WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#decimal'
+                            WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN 'http://www.w3.org/2001/XMLSchema#double'
+                            WHEN {table_alias}.term_type = 'L' AND LOWER({table_alias}.term_text) IN ('true', 'false') THEN 'http://www.w3.org/2001/XMLSchema#boolean'
+                            WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                            WHEN {table_alias}.term_type = 'U' THEN NULL
+                            WHEN {table_alias}.term_type = 'B' THEN NULL
+                            ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                        END
+                    )"""
+            else:
+                # For literal values in the query, return xsd:string as default
+                return "'http://www.w3.org/2001/XMLSchema#string'"
+        return "NULL"
+    
+    elif func_name == 'Builtin_LANG':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # For variables, we need to look up the language from the term table
+            if '.term_text' in arg_sql:
+                # Replace term_text with lang column
+                lang_sql = arg_sql.replace('.term_text', '.lang')
+                return f"COALESCE({lang_sql}, '')"
+            else:
+                # For non-variable values, return empty string
+                return "''"
+        return "''"
+    
+    # URI and IRI functions
+    elif func_name in ['Builtin_URI', 'Builtin_IRI']:
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # URI/IRI just returns the string value for SQL purposes
+            return arg_sql
+        return "NULL"
+    
+    # Type checking functions
+    elif func_name == 'Builtin_isURI':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # Check if the value looks like a URI using regex pattern matching
+            uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
+            return f"({arg_sql} ~ {uri_pattern})"
+        return "FALSE"
+    
+    elif func_name == 'Builtin_isLITERAL':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # Check if the value is NOT a URI (inverse of isURI check)
+            uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
+            return f"NOT ({arg_sql} ~ {uri_pattern})"
+        return "FALSE"
+    
+    elif func_name == 'Builtin_isNUMERIC':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # Use PostgreSQL's improved numeric pattern matching
+            numeric_pattern = "'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'"
+            return f"({arg_sql} ~ {numeric_pattern})"
+        return "FALSE"
+    
+    elif func_name == 'Builtin_isBLANK':
+        if hasattr(func_expr, 'arg'):
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            # For variables, check the term_type in the database
+            if '.term_text' in arg_sql:
+                # Replace term_text with term_type and check for 'B' (Blank Node)
+                term_type_sql = arg_sql.replace('.term_text', '.term_type')
+                return f"({term_type_sql} = 'B')"
+            else:
+                # For non-variable values, check if they start with '_:'
+                return f"({arg_sql}::text LIKE '_:%')"
+        return "FALSE"
+    
+    elif func_name == 'Builtin_BNODE':
+        return _translate_builtin_bnode(func_expr, variable_mappings)
+    
+    elif func_name == 'Builtin_UUID':
+        return _translate_builtin_uuid(func_expr, variable_mappings)
+    
     # For unimplemented functions, try using translate_bind_expression
     # This handles cases where builtin functions are used in filter expressions
     try:
         logger.debug(f"Attempting to translate function {func_name} using translate_bind_expression")
-        result = translate_bind_expression(func_expr, variable_mappings)
+        result = translate_bind_expression(func_expr, variable_mappings, context)
         if result and result != "1=1" and not result.startswith("'MISSING") and not result.startswith("'PARSE_ERROR"):
             return result
     except Exception as e:
@@ -741,6 +856,25 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
             return _translate_builtin_isblank(bind_expr, variable_mappings)
         elif expr_name == 'Builtin_isIRI':
             return _translate_builtin_isuri(bind_expr, variable_mappings)  # isIRI is alias for isURI
+            
+        # DATATYPE AND LANG FUNCTIONS - Previously missing
+        elif expr_name == 'Builtin_DATATYPE':
+            # DATATYPE(?var) -> get datatype URI for the variable
+            # Use the proper _translate_builtin_datatype function instead of placeholder
+            return _translate_builtin_datatype(bind_expr, variable_mappings, context)
+        elif expr_name == 'Builtin_LANG':
+            # LANG(?var) -> get language tag for the variable
+            if hasattr(bind_expr, 'arg'):
+                arg_sql = translate_bind_arg(bind_expr.arg, variable_mappings)
+                # For variables, we need to look up the language from the term table
+                if '.term_text' in arg_sql:
+                    # Replace term_text with lang column
+                    lang_sql = arg_sql.replace('.term_text', '.lang')
+                    return f"COALESCE({lang_sql}, '')"
+                else:
+                    # For non-variable values, return empty string
+                    return "''"
+            return "''"
         elif expr_name == 'Builtin_CONTAINS':
             # CONTAINS(string, substring) -> string LIKE '%substring%'
             if hasattr(bind_expr, 'arg1') and hasattr(bind_expr, 'arg2'):
@@ -801,6 +935,24 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
             else:
                 logger.warning(f"STRAFTER missing arg1/arg2: {bind_expr}")
                 return "''"
+        elif expr_name == 'Builtin_BNODE':
+            # BNODE() -> Generate blank node identifier with proper SPARQL semantics
+            # Per SPARQL spec: BNODE() without args should return the same blank node
+            # for all calls within a single solution, but distinct across solutions
+            # BNODE(expr) should return same blank node for same expr within solution
+            if hasattr(bind_expr, 'arg') and bind_expr.arg is not None:
+                # BNODE with argument - use argument + solution context for consistency
+                arg_sql = translate_bind_arg(bind_expr.arg, variable_mappings)
+                # Create solution-scoped blank node using row context
+                # Use a combination of the argument and a solution identifier
+                return f"('_:' || MD5(CONCAT({arg_sql}::text, COALESCE(ROW_NUMBER() OVER (), 1)::text)))"
+            else:
+                # BNODE without argument - same blank node per solution, unique across solutions
+                # Use ROW_NUMBER() to create a unique identifier per solution/row
+                return "('_:' || MD5(CONCAT('__BNODE_NO_ARG__', COALESCE(ROW_NUMBER() OVER (), 1)::text)))"
+        elif expr_name == 'Builtin_UUID':
+            # UUID() -> Generate unique UUID (always different)
+            return "gen_random_uuid()::text"
                 
         # LANG/DATATYPE FUNCTIONS - Handle language and datatype functions
         elif expr_name == 'Builtin_LANG':
@@ -995,9 +1147,48 @@ def extract_variables_from_expression(expr) -> Set[Variable]:
 
 # Helper functions for simple built-in expressions
 def _translate_regex_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
-    """Translate REGEX() function expressions."""
-    logger.debug("Translating REGEX expression")
-    return "1=1"  # Placeholder
+    """Translate REGEX() function to PostgreSQL regex operator with error handling."""
+    text_expr = expr['text']
+    pattern_expr = expr['pattern']
+    
+    text_sql = _translate_expression_operand_sync(text_expr, variable_mappings)
+    pattern_sql = _translate_expression_operand_sync(pattern_expr, variable_mappings)
+    
+    # Check if pattern is a literal string that we can validate
+    if hasattr(pattern_expr, 'toPython') and hasattr(pattern_expr, 'datatype'):
+        try:
+            # Extract literal pattern value
+            pattern_value = str(pattern_expr.toPython())
+            if not _validate_regex_pattern(pattern_value):
+                logger.warning(f"Invalid regex pattern detected: {pattern_value}")
+                return "FALSE"  # Return FALSE for invalid patterns
+        except Exception as e:
+            logger.debug(f"Could not validate regex pattern: {e}")
+    
+    # For valid patterns or variable patterns, use a safer approach
+    # Use PostgreSQL's position() function as fallback for problematic patterns
+    return f"""(
+        CASE 
+            WHEN {pattern_sql} IS NULL OR {pattern_sql} = '' THEN FALSE
+            WHEN {text_sql} IS NULL THEN FALSE
+            ELSE (
+                COALESCE(
+                    (SELECT {text_sql} ~ {pattern_sql}),
+                    FALSE
+                )
+            )
+        END
+    )"""
+
+
+def _validate_regex_pattern(pattern: str) -> bool:
+    """Validate a regex pattern to prevent SQL errors."""
+    import re
+    try:
+        re.compile(pattern)
+        return True
+    except re.error:
+        return False
 
 
 def _translate_contains_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
@@ -1014,15 +1205,27 @@ def _translate_contains_expression(expr, variable_mappings: Dict[Variable, str])
 
 
 def _translate_strstarts_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
-    """Translate STRSTARTS() function expressions."""
-    logger.debug("Translating STRSTARTS expression")
-    return "1=1"  # Placeholder
+    """Translate STRSTARTS() function to SQL LIKE."""
+    text_expr = expr['arg1']
+    prefix_expr = expr['arg2']
+    
+    text_sql = _translate_expression_operand_sync(text_expr, variable_mappings)
+    prefix_sql = _translate_expression_operand_sync(prefix_expr, variable_mappings)
+    
+    # Use LIKE with % wildcard for prefix matching - leverages text indexes
+    return f"({text_sql} LIKE {prefix_sql} || '%')"
 
 
 def _translate_strends_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
-    """Translate STRENDS() function expressions."""
-    logger.debug("Translating STRENDS expression")
-    return "1=1"  # Placeholder
+    """Translate STRENDS() function to SQL LIKE."""
+    text_expr = expr['arg1']
+    suffix_expr = expr['arg2']
+    
+    text_sql = _translate_expression_operand_sync(text_expr, variable_mappings)
+    suffix_sql = _translate_expression_operand_sync(suffix_expr, variable_mappings)
+    
+    # Use LIKE with % wildcard for suffix matching - leverages text indexes
+    return f"({text_sql} LIKE '%' || {suffix_sql})"
 
 
 # EXISTS/NOT EXISTS expression translators
@@ -1056,49 +1259,64 @@ def _translate_lang_filter_expression(expr, variable_mappings: Dict[Variable, st
 
 
 def _translate_datatype_filter_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate DATATYPE() filter expression."""
+    """Translate DATATYPE() filter expression using the datatype table."""
     logger.debug("Translating DATATYPE filter expression")
     if hasattr(expr, 'arg'):
         arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        logger.debug(f"DATATYPE filter arg_sql: {arg_sql}")
         
-        # For variables, we need to get the datatype URI from the term table
-        # The arg_sql should reference a term table column like 'o_term_1.term_text'
-        # We need to resolve the datatype_id to get the actual datatype URI
+        # For variables, get the datatype URI from the datatype table
         if '.term_text' in arg_sql:
             # Extract the table alias from the arg_sql (e.g., 'o_term_1' from 'o_term_1.term_text')
             table_alias = arg_sql.split('.')[0]
+            logger.debug(f"DATATYPE filter table_alias: {table_alias}")
             
-            # Get the actual term table name from context if available
-            if context and hasattr(context, 'table_config') and context.table_config:
-                term_table = context.table_config.term_table
+            # Get the datatype table name from context
+            datatype_table = None
+            if context and context.space_impl and context.space_id:
+                # Get all table names using the proper method with the actual space_id
+                table_names = context.space_impl._get_table_names(context.space_id)
+                datatype_table = table_names.get('datatype')
+                logger.debug(f"DATATYPE filter using space_id: {context.space_id}, datatype_table: {datatype_table}")
+            
+            if datatype_table:
+                # Use the datatype table to resolve datatype URIs
+                datatype_sql = f"""(
+                    CASE 
+                        WHEN {table_alias}.datatype_id IS NOT NULL THEN (
+                            SELECT dt.datatype_uri 
+                            FROM {datatype_table} dt 
+                            WHERE dt.datatype_id = {table_alias}.datatype_id
+                        )
+                        WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                        WHEN {table_alias}.term_type = 'U' THEN NULL
+                        WHEN {table_alias}.term_type = 'B' THEN NULL
+                        ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                    END
+                )"""
             else:
-                # Fallback: try to construct table name from alias pattern
-                # This is a heuristic approach when context is not available
-                term_table = table_alias.replace('_term_', '_term')
-                if not term_table.endswith('_term'):
-                    # If the alias doesn't follow expected pattern, use a generic approach
-                    term_table = 'term_table'  # This will likely fail, but it's a fallback
+                # Fallback to regex-based datatype inference
+                logger.debug("DATATYPE filter: falling back to regex-based datatype inference")
+                datatype_sql = f"""(
+                    CASE 
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#integer'
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#decimal'
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN 'http://www.w3.org/2001/XMLSchema#double'
+                        WHEN {table_alias}.term_type = 'L' AND LOWER({table_alias}.term_text) IN ('true', 'false') THEN 'http://www.w3.org/2001/XMLSchema#boolean'
+                        WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                        WHEN {table_alias}.term_type = 'U' THEN NULL
+                        WHEN {table_alias}.term_type = 'B' THEN NULL
+                        ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                    END
+                )"""
             
-            # Create a subquery to resolve the datatype_id to the actual datatype URI
-            # If datatype_id is NULL, default to xsd:string for literals, or appropriate type for URIs/BNodes
-            # Cast datatype_id to UUID to ensure proper comparison
-            datatype_sql = f"""(
-                CASE 
-                    WHEN {table_alias}.datatype_id IS NOT NULL THEN (
-                        SELECT dt.term_text 
-                        FROM {term_table} dt 
-                        WHERE dt.term_uuid = CAST({table_alias}.datatype_id AS UUID)
-                    )
-                    WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
-                    WHEN {table_alias}.term_type = 'U' THEN NULL
-                    WHEN {table_alias}.term_type = 'B' THEN NULL
-                    ELSE 'http://www.w3.org/2001/XMLSchema#string'
-                END
-            )"""
+            logger.debug(f"DATATYPE filter generated SQL: {datatype_sql}")
             return datatype_sql
         else:
             # For literal values in the query, return xsd:string as default
+            logger.debug("DATATYPE filter: returning default xsd:string for literal")
             return "'http://www.w3.org/2001/XMLSchema#string'"
+    logger.debug("DATATYPE filter: returning default xsd:string (no arg)")
     return "'http://www.w3.org/2001/XMLSchema#string'"
 
 
@@ -1125,8 +1343,10 @@ def _translate_isuri_filter_expression(expr, variable_mappings: Dict[Variable, s
         if isinstance(arg, Variable) and arg in variable_mappings:
             # Get the term column for this variable
             term_column = variable_mappings[arg]
-            # Check if the value looks like a URI using SQL pattern matching
-            return f"({term_column} ~ '^(https?|ftp|urn):')"
+            # Check if the value looks like a URI using regex pattern matching
+            # This matches common URI schemes without database lookups
+            uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
+            return f"({term_column} ~ {uri_pattern})"
         else:
             logger.warning(f"isURI argument not found in variable mappings: {arg}")
             return "FALSE"
@@ -1143,7 +1363,9 @@ def _translate_isliteral_filter_expression(expr, variable_mappings: Dict[Variabl
             # Get the term column for this variable
             term_column = variable_mappings[arg]
             # Check if the value is NOT a URI (inverse of isURI check)
-            return f"NOT ({term_column} ~ '^(https?|ftp|urn):')"
+            # A literal is anything that doesn't match URI patterns
+            uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
+            return f"NOT ({term_column} ~ {uri_pattern})"
         else:
             logger.warning(f"isLITERAL argument not found in variable mappings: {arg}")
             return "FALSE"
@@ -1169,8 +1391,10 @@ def _translate_isnumeric_filter_expression(expr, variable_mappings: Dict[Variabl
         if isinstance(arg, Variable) and arg in variable_mappings:
             # Get the term column for this variable
             term_column = variable_mappings[arg]
-            # Check if the value is numeric using SQL pattern matching
-            return f"({term_column} ~ '^[+-]?([0-9]*[.])?[0-9]+([eE][+-]?[0-9]+)?$')"
+            # Check if the value is numeric using PostgreSQL's improved regex pattern
+            # This pattern matches integers, decimals, and scientific notation
+            numeric_pattern = "'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'"
+            return f"({term_column} ~ {numeric_pattern})"
         else:
             logger.warning(f"isNUMERIC argument not found in variable mappings: {arg}")
             return "FALSE"
@@ -1382,81 +1606,64 @@ def _translate_builtin_seconds(expr, variable_mappings: Dict[Variable, str]) -> 
 
 # Type/Casting built-in function translators
 def _translate_builtin_datatype(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate DATATYPE() built-in - returns datatype of literal."""
+    """Translate DATATYPE() built-in function using the datatype table."""
+    logger.debug("Translating DATATYPE builtin function")
     if hasattr(expr, 'arg'):
-        # Handle both single argument and list of arguments
-        if isinstance(expr.arg, list) and len(expr.arg) >= 1:
-            arg_sql = translate_bind_arg(expr.arg[0], variable_mappings)
-        else:
-            # Single argument (most common case)
-            arg_sql = translate_bind_arg(expr.arg, variable_mappings)
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        logger.debug(f"DATATYPE builtin arg_sql: {arg_sql}")
         
-        # For variables, get the datatype URI from the term table
+        # For variables, get the datatype URI from the datatype table
         if '.term_text' in arg_sql:
-            # Extract the table alias from the arg_sql
+            # Extract the table alias from the arg_sql (e.g., 'o_term_1' from 'o_term_1.term_text')
             table_alias = arg_sql.split('.')[0]
+            logger.debug(f"DATATYPE builtin table_alias: {table_alias}")
             
-            # Get the actual term table name from context if available
-            if context and hasattr(context, 'table_config') and context.table_config:
-                term_table = context.table_config.term_table
+            # Get the datatype table name from context
+            datatype_table = None
+            if context and context.space_impl and context.space_id:
+                # Get all table names using the proper method with the actual space_id
+                table_names = context.space_impl._get_table_names(context.space_id)
+                datatype_table = table_names.get('datatype')
+                logger.debug(f"DATATYPE builtin using space_id: {context.space_id}, datatype_table: {datatype_table}")
+            
+            if datatype_table:
+                # Use the datatype table to resolve datatype URIs
+                datatype_sql = f"""(
+                    CASE 
+                        WHEN {table_alias}.datatype_id IS NOT NULL THEN (
+                            SELECT dt.datatype_uri 
+                            FROM {datatype_table} dt 
+                            WHERE dt.datatype_id = {table_alias}.datatype_id
+                        )
+                        WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                        WHEN {table_alias}.term_type = 'U' THEN NULL
+                        WHEN {table_alias}.term_type = 'B' THEN NULL
+                        ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                    END
+                )"""
             else:
-                # Fallback: try to construct table name from alias pattern
-                # This is a heuristic approach when context is not available
-                term_table = table_alias.replace('_term_', '_term')
-                if not term_table.endswith('_term'):
-                    # If the alias doesn't follow expected pattern, use a generic approach
-                    term_table = 'term_table'  # This will likely fail, but it's a fallback
+                # Fallback to regex-based datatype inference
+                logger.debug("DATATYPE builtin: falling back to regex-based datatype inference")
+                datatype_sql = f"""(
+                    CASE 
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#integer'
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.[0-9]+$' THEN 'http://www.w3.org/2001/XMLSchema#decimal'
+                        WHEN {table_alias}.term_type = 'L' AND {table_alias}.term_text ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN 'http://www.w3.org/2001/XMLSchema#double'
+                        WHEN {table_alias}.term_type = 'L' AND LOWER({table_alias}.term_text) IN ('true', 'false') THEN 'http://www.w3.org/2001/XMLSchema#boolean'
+                        WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
+                        WHEN {table_alias}.term_type = 'U' THEN NULL
+                        WHEN {table_alias}.term_type = 'B' THEN NULL
+                        ELSE 'http://www.w3.org/2001/XMLSchema#string'
+                    END
+                )"""
             
-            # Create a subquery to resolve the datatype_id to the actual datatype URI
-            # Cast datatype_id to UUID to ensure proper comparison
-            datatype_sql = f"""(
-                CASE 
-                    WHEN {table_alias}.datatype_id IS NOT NULL THEN (
-                        SELECT dt.term_text 
-                        FROM {term_table} dt 
-                        WHERE dt.term_uuid = CAST({table_alias}.datatype_id AS UUID)
-                    )
-                    WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
-                    WHEN {table_alias}.term_type = 'U' THEN NULL
-                    WHEN {table_alias}.term_type = 'B' THEN NULL
-                    ELSE 'http://www.w3.org/2001/XMLSchema#string'
-                END
-            )"""
+            logger.debug(f"DATATYPE builtin generated SQL: {datatype_sql}")
             return datatype_sql
         else:
-            # For literal values, return xsd:string as default
+            # For literal values in the query, return xsd:string as default
+            logger.debug("DATATYPE builtin: returning default xsd:string for literal")
             return "'http://www.w3.org/2001/XMLSchema#string'"
-    elif hasattr(expr, 'args') and len(expr.args) >= 1:
-        # Fallback for args format
-        arg_sql = translate_bind_arg(expr.args[0], variable_mappings)
-        if '.term_text' in arg_sql:
-            table_alias = arg_sql.split('.')[0]
-            
-            # Get the actual term table name from context if available
-            if context and hasattr(context, 'table_config') and context.table_config:
-                term_table = context.table_config.term_table
-            else:
-                # Fallback approach
-                term_table = table_alias.replace('_term_', '_term')
-                if not term_table.endswith('_term'):
-                    term_table = 'term_table'
-            
-            datatype_sql = f"""(
-                CASE 
-                    WHEN {table_alias}.datatype_id IS NOT NULL THEN (
-                        SELECT dt.term_text 
-                        FROM {term_table} dt 
-                        WHERE dt.term_uuid = CAST({table_alias}.datatype_id AS UUID)
-                    )
-                    WHEN {table_alias}.term_type = 'L' THEN 'http://www.w3.org/2001/XMLSchema#string'
-                    WHEN {table_alias}.term_type = 'U' THEN NULL
-                    WHEN {table_alias}.term_type = 'B' THEN NULL
-                    ELSE 'http://www.w3.org/2001/XMLSchema#string'
-                END
-            )"""
-            return datatype_sql
-        else:
-            return "'http://www.w3.org/2001/XMLSchema#string'"
+    logger.debug("DATATYPE builtin: returning default xsd:string (no arg)")
     return "'http://www.w3.org/2001/XMLSchema#string'"
 
 
@@ -1571,6 +1778,35 @@ def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str]) -> 
     return "FALSE"
 
 
+def _translate_builtin_bnode(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate BNODE() built-in to generate blank node identifiers with proper SPARQL semantics.
+    
+    Per SPARQL spec:
+    - BNODE() without args: same blank node for all calls within a single solution
+    - BNODE(expr) with args: same blank node for same expr within solution, different across solutions
+    """
+    # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
+    arg = None
+    if hasattr(expr, 'arg') and expr.arg is not None:
+        arg = expr.arg
+    elif hasattr(expr, 'args') and len(expr.args) >= 1:
+        arg = expr.args[0]
+    
+    if arg is not None:
+        # BNODE with argument - use argument + solution context for consistency
+        arg_sql = translate_bind_arg(arg, variable_mappings)
+        # Create solution-scoped blank node using row context
+        return f"('_:' || MD5(CONCAT({arg_sql}::text, COALESCE(ROW_NUMBER() OVER (), 1)::text)))"
+    else:
+        # BNODE without argument - same blank node per solution, unique across solutions
+        return "('_:' || MD5(CONCAT('__BNODE_NO_ARG__', COALESCE(ROW_NUMBER() OVER (), 1)::text)))"
+
+
+def _translate_builtin_uuid(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate UUID() built-in to generate unique UUID."""
+    return "gen_random_uuid()::text"
+
+
 # String manipulation function translators
 def _translate_concat_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
     """Translate CONCAT() function expressions."""
@@ -1623,13 +1859,18 @@ def _translate_lang_expression(expr, variable_mappings: Dict[Variable, str]) -> 
     return "''"
 
 
-def _translate_datatype_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_datatype_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
     """Translate DATATYPE() function expressions."""
     logger.debug("Translating DATATYPE expression")
     if hasattr(expr, 'arg'):
         # DATATYPE() returns the datatype URI of a literal
         # Need to resolve datatype_id to actual datatype URI
-        return f"CASE WHEN datatype_id IS NOT NULL THEN (SELECT term_text FROM term_table WHERE term_uuid = datatype_id) ELSE '{XSD.string}' END"
+        if context and context.table_config:
+            term_table = context.table_config.term_table
+        else:
+            # Fallback - this shouldn't happen but provides safety
+            term_table = 'term_table'
+        return f"CASE WHEN datatype_id IS NOT NULL THEN (SELECT term_text FROM {term_table} WHERE term_uuid = datatype_id) ELSE '{XSD.string}' END"
     return f"'{XSD.string}'"
 
 
@@ -1897,6 +2138,158 @@ def _translate_builtin_rand(expr, variable_mappings: Dict[Variable, str]) -> str
     """Translate RAND() function to SQL RANDOM()."""
     # RAND() takes no arguments and returns a random number between 0 and 1
     return "RANDOM()"
+
+
+def _translate_builtin_bound(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate BOUND() function to SQL IS NOT NULL check."""
+    if hasattr(expr, 'arg'):
+        arg_sql = translate_bind_arg(expr.arg, variable_mappings)
+        return f"({arg_sql} IS NOT NULL)"
+    return "FALSE"
+
+
+def _translate_builtin_ceil(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate CEIL() function to SQL CEIL()."""
+    if hasattr(expr, 'arg'):
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        return f"CEIL(CAST({arg} AS DECIMAL))"
+    else:
+        logger.warning(f"CEIL missing arg: {expr}")
+        return "0"
+
+
+def _translate_builtin_floor(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate FLOOR() function to SQL FLOOR()."""
+    if hasattr(expr, 'arg'):
+        arg = translate_bind_arg(expr.arg, variable_mappings)
+        return f"FLOOR(CAST({arg} AS DECIMAL))"
+    else:
+        logger.warning(f"FLOOR missing arg: {expr}")
+        return "0"
+
+
+def _translate_builtin_isuri(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isURI() function to SQL term_type check."""
+    if hasattr(expr, 'arg'):
+        arg_sql = translate_bind_arg(expr.arg, variable_mappings)
+        # For variables, check the term_type in the database
+        if '.term_text' in arg_sql:
+            # Replace term_text with term_type and check for 'U' (URI)
+            term_type_sql = arg_sql.replace('.term_text', '.term_type')
+            return f"({term_type_sql} = 'U')"
+        else:
+            # For literal values, they are not URIs
+            return "FALSE"
+    return "FALSE"
+
+
+def _translate_builtin_isliteral(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isLITERAL() function to SQL term_type check."""
+    if hasattr(expr, 'arg'):
+        arg_sql = translate_bind_arg(expr.arg, variable_mappings)
+        # For variables, check the term_type in the database
+        if '.term_text' in arg_sql:
+            # Replace term_text with term_type and check for 'L' (Literal)
+            term_type_sql = arg_sql.replace('.term_text', '.term_type')
+            return f"({term_type_sql} = 'L')"
+        else:
+            # For literal values, they are always literals
+            return "TRUE"
+    return "FALSE"
+
+
+def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isBLANK() function to SQL term_type check."""
+    if hasattr(expr, 'arg'):
+        arg_sql = translate_bind_arg(expr.arg, variable_mappings)
+        # For variables, check the term_type in the database
+        if '.term_text' in arg_sql:
+            # Replace term_text with term_type and check for 'B' (Blank Node)
+            term_type_sql = arg_sql.replace('.term_text', '.term_type')
+            return f"({term_type_sql} = 'B')"
+        else:
+            # For non-variable values, check if they start with '_:'
+            return f"({arg_sql}::text LIKE '_:%')"
+    return "FALSE"
+
+
+# Missing filter expression functions that were disconnected during refactoring
+
+def _translate_uri_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate URI()/IRI() function in filter expressions."""
+    # Extract the argument (should be a string expression)
+    if hasattr(expr, 'arg'):
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        # URI/IRI just returns the string value for SQL purposes
+        return arg_sql
+    return "NULL"
+
+
+def _translate_bnode_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate BNODE() function in filter expressions.
+    
+    Note: When BNODE() is used in a filter context, it should check if a value is a blank node,
+    not generate new blank nodes. For blank node generation, use BNODE() in BIND expressions.
+    """
+    # Check if the value is a blank node (term_type = 'B')
+    if hasattr(expr, 'arg') and expr.arg:
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        
+        # For variables, check the term_type in the database
+        if '.term_text' in arg_sql:
+            # Replace term_text with term_type and check for 'B' (Blank Node)
+            term_type_sql = arg_sql.replace('.term_text', '.term_type')
+            return f"({term_type_sql} = 'B')"
+        else:
+            # For non-variable values, check if they start with '_:'
+            return f"({arg_sql}::text LIKE '_:%')"
+    else:
+        # BNODE without argument in filter context - this is unusual but handle gracefully
+        # Return FALSE since we can't check a blank node without specifying what to check
+        return "FALSE"
+
+
+
+
+
+def _translate_isblank_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate isBLANK() function in filter expressions."""
+    # Check if the value is a blank node (term_type = 'B')
+    if hasattr(expr, 'arg'):
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        
+        # For variables, check the term_type in the database
+        if '.term_text' in arg_sql:
+            # Replace term_text with term_type and check for 'B' (Blank Node)
+            term_type_sql = arg_sql.replace('.term_text', '.term_type')
+            return f"({term_type_sql} = 'B')"
+        else:
+            # For non-variable values, check if they start with '_:'
+            return f"({arg_sql}::text LIKE '_:%')"
+    return "FALSE"
+
+
+def _translate_bound_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate BOUND() function in filter expressions."""
+    # Check if variable is bound (not NULL)
+    if hasattr(expr, 'arg'):
+        arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
+        return f"({arg_sql} IS NOT NULL)"
+    return "FALSE"
+
+
+def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+    """Translate sameTerm() function in filter expressions."""
+    # Test if two RDF terms are identical
+    if hasattr(expr, 'arg1') and hasattr(expr, 'arg2'):
+        arg1_sql = _translate_expression_operand_sync(expr.arg1, variable_mappings)
+        arg2_sql = _translate_expression_operand_sync(expr.arg2, variable_mappings)
+        return f"({arg1_sql} = {arg2_sql})"
+    elif hasattr(expr, 'args') and len(expr.args) >= 2:
+        arg1_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
+        arg2_sql = _translate_expression_operand_sync(expr.args[1], variable_mappings)
+        return f"({arg1_sql} = {arg2_sql})"
+    return "FALSE"
 
 
 # End of expressions module

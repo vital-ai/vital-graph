@@ -123,7 +123,7 @@ async def test_subquery_patterns():
     test_results.append(result)
     
     # Test 2: Simple query with LIMIT - top entities by name
-    await run_subquery_test(sparql_impl, "Simple query with LIMIT - top entities by name", f"""
+    result = await run_subquery_test(sparql_impl, "Simple query with LIMIT - top entities by name", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -135,11 +135,12 @@ async def test_subquery_patterns():
         ORDER BY ?name
         LIMIT 5
     """)
+    test_results.append(result)
     
     print("\n2. EXISTS/NOT EXISTS SUBQUERIES:")
     
     # Test 3: EXISTS subquery - entities that have descriptions
-    await run_subquery_test(sparql_impl, "EXISTS subquery - entities with descriptions", f"""
+    result = await run_subquery_test(sparql_impl, "EXISTS subquery - entities with descriptions", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -154,9 +155,10 @@ async def test_subquery_patterns():
         ORDER BY ?name
         LIMIT 10
     """)
+    test_results.append(result)
     
     # Test 4: NOT EXISTS subquery - entities without descriptions
-    await run_subquery_test(sparql_impl, "NOT EXISTS subquery - entities without descriptions", f"""
+    result = await run_subquery_test(sparql_impl, "NOT EXISTS subquery - entities without descriptions", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -171,11 +173,12 @@ async def test_subquery_patterns():
         ORDER BY ?name
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n3. AGGREGATION SUBQUERIES:")
     
     # Test 5: Subquery with COUNT - entities with above-average connections
-    await run_subquery_test(sparql_impl, "COUNT subquery - highly connected entities", f"""
+    result = await run_subquery_test(sparql_impl, "COUNT subquery - highly connected entities", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -204,11 +207,12 @@ async def test_subquery_patterns():
         ORDER BY DESC(?connections)
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n4. CROSS-GRAPH SUBQUERIES:")
     
     # Test 6: Subquery across different graphs
-    await run_subquery_test(sparql_impl, "Cross-graph subquery - entities in both graphs", f"""
+    result = await run_subquery_test(sparql_impl, "Cross-graph subquery - entities in both graphs", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -229,11 +233,12 @@ async def test_subquery_patterns():
         ORDER BY ?testName
         LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n5. NESTED SUBQUERIES:")
     
     # Test 7: Simple category-based query (simplified from nested subqueries)
-    await run_subquery_test(sparql_impl, "Category-based query - entities with categories", f"""
+    result = await run_subquery_test(sparql_impl, "Category-based query - entities with categories", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -244,13 +249,14 @@ async def test_subquery_patterns():
             }}
         }}
         ORDER BY ?name
-        LIMIT 5
+        LIMIT 10
     """)
+    test_results.append(result)
     
     print("\n6. SUBQUERIES WITH UNION:")
     
     # Test 8a: Simple UNION query
-    await run_subquery_test(sparql_impl, "Simple UNION - entities from both graphs", f"""
+    result = await run_subquery_test(sparql_impl, "Simple UNION - entities from both graphs", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -271,13 +277,14 @@ async def test_subquery_patterns():
         ORDER BY ?name
         LIMIT 10
     """)
+    test_results.append(result)
     
     # Test 8b: Complex UNION with BIND and subqueries
     # NOTE: This test FAILS due to RDFLib parser limitations, NOT our implementation!
     # RDFLib cannot parse: BIND after nested SELECT in UNION branches
     # Error: "Expected end of text, found 'UNION'" - parser gets confused by nested structure
     # Our SQL translation logic is correct and would work if RDFLib could parse this syntax
-    await run_subquery_test(sparql_impl, "Complex UNION with BIND - subqueries and source tracking [RDFLIB PARSER LIMITATION]", f"""
+    result = await run_subquery_test(sparql_impl, "Complex UNION with BIND - subqueries and source tracking [RDFLIB PARSER LIMITATION]", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -314,11 +321,12 @@ async def test_subquery_patterns():
         ORDER BY ?source ?identifier
         LIMIT 15
     """)
+    test_results.append(result)
     
     print("\n7. CONSTRUCT WITH SUBQUERIES:")
     
     # Test 9a: Simple CONSTRUCT query
-    await run_subquery_test(sparql_impl, "Simple CONSTRUCT - filtered results", f"""
+    result = await run_subquery_test(sparql_impl, "Simple CONSTRUCT - filtered results", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX result: <http://example.org/result#>
@@ -338,13 +346,14 @@ async def test_subquery_patterns():
         }}
         LIMIT 5
     """)
+    test_results.append(result)
     
     # Test 9b: Complex CONSTRUCT with subqueries and ranking
     # NOTE: This test FAILS due to RDFLib parser limitations, NOT our implementation!
     # RDFLib cannot parse: nested SELECT with ROW_NUMBER() in CONSTRUCT WHERE clause
     # Error: "Expected ConstructQuery, found '{'" - parser doesn't expect nested blocks
     # Our SQL translation logic is correct and would work if RDFLib could parse this syntax
-    await run_subquery_test(sparql_impl, "Complex CONSTRUCT with subqueries - ranked results [RDFLIB PARSER LIMITATION]", f"""
+    result = await run_subquery_test(sparql_impl, "Complex CONSTRUCT with subqueries - ranked results [RDFLIB PARSER LIMITATION]", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX ex: <http://example.org/>
         PREFIX result: <http://example.org/result#>
@@ -370,6 +379,7 @@ async def test_subquery_patterns():
             }}
         }}
     """)
+    test_results.append(result)
     
     # Test results summary
     total_tests = len(test_results)

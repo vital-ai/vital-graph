@@ -314,12 +314,13 @@ class TranslationContext:
     """
     
     def __init__(self, alias_generator: AliasGenerator, term_cache=None,
-                 space_impl=None, table_config: TableConfig = None, datatype_cache=None):
+                 space_impl=None, table_config: TableConfig = None, datatype_cache=None, space_id=None):
         self.alias_generator = alias_generator
         self.term_cache = term_cache
         self.space_impl = space_impl
         self.table_config = table_config
         self.datatype_cache = datatype_cache
+        self.space_id = space_id
         
         # Additional state that might be needed
         self.graph_cache = {}
@@ -471,15 +472,29 @@ def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen:
                 if shared_vars:
                     join_conditions = []
                     for var in shared_vars:
-                        if var in variable_mappings:
-                            # Use the existing variable mapping
-                            var_column = variable_mappings[var]
-                            if "subject_uuid" in var_column:
-                                join_conditions.append(f"{quad_aliases[i]}.subject_uuid = {quad_aliases[ref_idx]}.subject_uuid")
-                            elif "predicate_uuid" in var_column:
-                                join_conditions.append(f"{quad_aliases[i]}.predicate_uuid = {quad_aliases[ref_idx]}.predicate_uuid")
-                            elif "object_uuid" in var_column:
-                                join_conditions.append(f"{quad_aliases[i]}.object_uuid = {quad_aliases[ref_idx]}.object_uuid")
+                        # Find the position of this variable in both triples
+                        current_position = None
+                        ref_position = None
+                        
+                        # Find variable position in current triple
+                        if current_triple[0] == var:
+                            current_position = "subject_uuid"
+                        elif current_triple[1] == var:
+                            current_position = "predicate_uuid"
+                        elif current_triple[2] == var:
+                            current_position = "object_uuid"
+                        
+                        # Find variable position in reference triple
+                        if ref_triple[0] == var:
+                            ref_position = "subject_uuid"
+                        elif ref_triple[1] == var:
+                            ref_position = "predicate_uuid"
+                        elif ref_triple[2] == var:
+                            ref_position = "object_uuid"
+                        
+                        # Create JOIN condition based on positions
+                        if current_position and ref_position:
+                            join_conditions.append(f"{quad_aliases[i]}.{current_position} = {quad_aliases[ref_idx]}.{ref_position}")
                     
                     if len(join_conditions) > len(best_join_conditions):
                         best_join_conditions = join_conditions

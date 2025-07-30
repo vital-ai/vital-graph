@@ -250,7 +250,7 @@ async def test_bind_queries():
     """)
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_uuid_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
     
     # 5. NESTED BIND EXPRESSIONS (using test data space)
     print("\n5. NESTED BIND EXPRESSIONS:")
@@ -265,7 +265,7 @@ async def test_bind_queries():
     }
     WHERE {
         GRAPH <http://vital.ai/graph/test> {
-            ?entity <http://vital.ai/vital#hasName> ?name .
+            ?entity <http://example.org/test#hasName> ?name .
         }
         BIND(STRLEN(SUBSTR(?name, 1, 10)) AS ?shortLength)
     }
@@ -305,13 +305,14 @@ async def test_bind_queries():
     }
     WHERE {
         GRAPH <http://vital.ai/graph/test> {
-            ?entity <http://vital.ai/vital#hasName> ?name .
+            ?entity <http://example.org/test#hasName> ?name .
         }
         BIND(IF(STRLEN(?name) > 10, SUBSTR(?name, 1, 10), UCASE(?name)) AS ?processed)
     }
     LIMIT 2
     """
     
+
     try:
         start_time = time.time()
         result_graph = await sparql_impl.execute_sparql_query("space_test", nested_query2)
@@ -344,7 +345,7 @@ async def test_bind_queries():
     }
     WHERE {
         GRAPH <http://vital.ai/graph/test> {
-            ?entity <http://vital.ai/vital#hasName> ?name .
+            ?entity <http://example.org/test#hasName> ?name .
         }
         BIND(CONCAT("Result: ", IF(STRLEN(?name) < 5, "SHORT", SUBSTR(?name, 1, 3))) AS ?result)
     }
@@ -383,7 +384,7 @@ async def test_bind_queries():
     }
     WHERE {
         GRAPH <http://vital.ai/graph/test> {
-            ?entity <http://vital.ai/vital#hasName> ?name .
+            ?entity <http://example.org/test#hasName> ?name .
         }
         BIND(UCASE(SUBSTR(CONCAT("PREFIX_", ?name), 1, 8)) AS ?composed)
     }

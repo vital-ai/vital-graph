@@ -80,7 +80,7 @@ async def test_graph_queries():
     """)
     test_results.append(result)
     
-    await run_query(sparql_impl, "Entities with names in WordNet graph", f"""
+    result = await run_query(sparql_impl, "Entities with names in WordNet graph", f"""
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -92,8 +92,9 @@ async def test_graph_queries():
         }}
         LIMIT 3
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Non-existent graph (should return 0)", """
+    result = await run_query(sparql_impl, "Non-existent graph (should return 0)", """
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         SELECT ?entity WHERE {
@@ -102,10 +103,11 @@ async def test_graph_queries():
             }
         }
     """)
+    test_results.append(result)
     
     print("\n2. VARIABLE GRAPH QUERIES:")
     
-    await run_query(sparql_impl, "Count entities by graph", """
+    result = await run_query(sparql_impl, "Count entities by graph", """
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         SELECT ?g (COUNT(?entity) AS ?count) WHERE {
@@ -115,8 +117,9 @@ async def test_graph_queries():
         }
         GROUP BY ?g
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Variable graph with filtered entities", """
+    result = await run_query(sparql_impl, "Variable graph with filtered entities", """
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -129,10 +132,11 @@ async def test_graph_queries():
         }
         LIMIT 3
     """)
+    test_results.append(result)
     
     print("\n3. GLOBAL GRAPH QUERIES:")
     
-    await run_query(sparql_impl, "Query global graph directly", """
+    result = await run_query(sparql_impl, "Query global graph directly", """
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         SELECT ?person ?name ?age WHERE {
             GRAPH <urn:___GLOBAL> {
@@ -142,8 +146,9 @@ async def test_graph_queries():
             }
         }
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Global graph relationships", """
+    result = await run_query(sparql_impl, "Global graph relationships", """
         SELECT ?person1 ?name1 ?person2 ?name2 WHERE {
             GRAPH <urn:___GLOBAL> {
                 ?person1 <http://example.org/knows> ?person2 .
@@ -152,18 +157,20 @@ async def test_graph_queries():
             }
         }
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Global test entities", """
+    result = await run_query(sparql_impl, "Global test entities", """
         SELECT ?entity ?value WHERE {
             GRAPH <urn:___GLOBAL> {
                 ?entity <http://example.org/hasProperty> ?value .
             }
         }
     """)
+    test_results.append(result)
     
     print("\n4. DEFAULT GRAPH UNION QUERIES:")
     
-    await run_query(sparql_impl, "Default graph union - should include both named and global data", """
+    result = await run_query(sparql_impl, "Default graph union - should include both named and global data", """
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         SELECT ?s ?p ?o WHERE {
             ?s ?p ?o .
@@ -174,8 +181,9 @@ async def test_graph_queries():
         }
         LIMIT 10
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Count all entities across all graphs (union)", """
+    result = await run_query(sparql_impl, "Count all entities across all graphs (union)", """
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         SELECT (COUNT(?entity) AS ?count) WHERE {
@@ -186,10 +194,11 @@ async def test_graph_queries():
             }
         }
     """)
+    test_results.append(result)
     
     print("\n5. COMPLEX GRAPH PATTERNS:")
     
-    await run_query(sparql_impl, "Graph with connected entities", f"""
+    result = await run_query(sparql_impl, "Graph with connected entities", f"""
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -203,6 +212,7 @@ async def test_graph_queries():
             FILTER(CONTAINS(?name, "happy"))
         }}
     """)
+    test_results.append(result)
     
     # Test results summary
     total_tests = len(test_results)

@@ -38,6 +38,8 @@ from tool_utils import TestToolUtils
 from test_union_queries import test_union_queries
 from test_select_queries import test_subquery_patterns
 from test_graph_queries import test_graph_queries
+from test_optional_queries import test_optional_queries
+from test_values_queries import test_values_queries
 from test_builtin_critical import test_critical_builtins
 from test_builtin_numeric import test_numeric_builtins
 from test_builtin_string import test_string_builtins
@@ -84,6 +86,16 @@ class VitalGraphTestApp:
                 'name': 'GRAPH Query Tests',
                 'function': test_graph_queries,
                 'description': 'Tests GRAPH pattern functionality with WordNet and named graph data'
+            },
+            {
+                'name': 'OPTIONAL Query Tests',
+                'function': test_optional_queries,
+                'description': 'Tests OPTIONAL pattern functionality with various scenarios and BOUND functions'
+            },
+            {
+                'name': 'VALUES Query Tests',
+                'function': test_values_queries,
+                'description': 'Tests VALUES clause functionality with single/multi-variable patterns, FILTER, OPTIONAL, UNION, BIND, and complex queries'
             },
             {
                 'name': 'Critical Built-in Tests',

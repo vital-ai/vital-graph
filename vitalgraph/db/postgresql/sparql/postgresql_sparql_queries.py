@@ -32,7 +32,7 @@ def build_select_query(sql_components: SQLComponents, projection_vars: List,
     logger = logging.getLogger(__name__)
     
     # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
-    select_clause, group_by_clause, having_clause = _build_select_clause(projection_vars, sql_components.variable_mappings, distinct)
+    select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, sql_components.variable_mappings, distinct)
     
     # Build complete SQL query - exact logic from original implementation
     sql_parts = [select_clause]
@@ -75,7 +75,8 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
     Exact port from original implementation.
     
     Returns:
-        Tuple of (select_clause, group_by_clause, having_clause)
+        Tuple of (select_clause, group_by_clause, having_clause, case_mapping)
+        where case_mapping maps lowercase column names to original SPARQL variable names
     """
     logger = logging.getLogger(__name__)
     logger.debug(f"Building SELECT clause with projection_vars: {projection_vars}")
@@ -83,18 +84,37 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
     
     if not projection_vars:
         distinct_keyword = "DISTINCT " if has_distinct else ""
-        return f"SELECT {distinct_keyword}*", "", ""
+        return f"SELECT {distinct_keyword}*", "", "", {}
     
     select_items = []
+    case_mapping = {}  # Maps unique SQL aliases to original SPARQL variable names
+    alias_counter = {}  # Tracks collision counters for case-insensitive names
+    
     for var in projection_vars:
         var_name = str(var).replace('?', '')
+        lowercase_name = var_name.lower()
+        
+        # Handle case-sensitive variable collisions by generating unique aliases
+        if lowercase_name in alias_counter:
+            # Collision detected - generate unique alias
+            alias_counter[lowercase_name] += 1
+            unique_alias = f"{lowercase_name}_{alias_counter[lowercase_name]}"
+        else:
+            # First occurrence - use lowercase as alias
+            alias_counter[lowercase_name] = 0
+            unique_alias = lowercase_name
+        
+        # Store the mapping from unique alias to original variable name
+        case_mapping[unique_alias] = var_name
+        
         # Get the term text for this variable using the mapping
         if var in variable_mappings:
             term_column = variable_mappings[var]
-            select_items.append(f"{term_column} AS {var_name}")
+            # Use unique alias to avoid PostgreSQL case conflicts
+            select_items.append(f'{term_column} AS "{unique_alias}"')
         else:
             # Fallback - shouldn't happen with proper mapping
-            select_items.append(f"'UNMAPPED_VAR_{var_name}' AS {var_name}")
+            select_items.append(f"'UNMAPPED_VAR_{var_name}' AS \"{unique_alias}\"")
         
     distinct_keyword = "DISTINCT " if has_distinct else ""
     select_clause = f"SELECT {distinct_keyword}{', '.join(select_items)}"
@@ -121,7 +141,7 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
         having_clause = f"HAVING {' AND '.join(having_conditions)}"
         logger.debug(f"Built HAVING clause: {having_clause}")
     
-    return select_clause, group_by_clause, having_clause
+    return select_clause, group_by_clause, having_clause, case_mapping
 
 
 def build_construct_query(sql_components: SQLComponents, construct_template: List[Tuple]) -> str:

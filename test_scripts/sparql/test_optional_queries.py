@@ -29,6 +29,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 
+# Import test utilities for consistent test execution and reporting
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+from tool_utils import TestToolUtils
+
 # Configure logging - TEMPORARILY SET TO DEBUG
 logging.basicConfig(
     level=logging.DEBUG,
@@ -119,54 +123,15 @@ async def run_optional_query(sparql_impl, query_name, query):
     except Exception as e:
         print(f"    ⚠️  Could not analyze algebra: {e}")
     
-    # Execute the query
-    try:
-        start_time = time.time()
-        results = await sparql_impl.execute_sparql_query(SPACE_ID, query)
-        elapsed = time.time() - start_time
-        
-        # Handle different result types
-        if hasattr(results, '__len__') and hasattr(results, '__iter__'):
-            if hasattr(results, 'vars'):
-                # SPARQL SELECT results
-                result_count = len(results)
-                print(f"    ⏱️  {elapsed:.3f}s | {result_count} results")
-                
-                # Show first few results
-                results_shown = 0
-                for result in results:
-                    if results_shown >= 3:
-                        break
-                    result_str = " | ".join([f"{var}: {result.get(var, 'NULL')}" for var in results.vars])
-                    print(f"      {result_str}")
-                    results_shown += 1
-                    
-                if len(results) > 3:
-                    print(f"      ... and {len(results) - 3} more results")
-                    
-            elif hasattr(results, 'triples'):
-                # RDFLib Graph (CONSTRUCT results)
-                triple_count = len(results)
-                print(f"    ⏱️  {elapsed:.3f}s | {triple_count} triples constructed")
-                
-                triples_shown = 0
-                for subject, predicate, obj in results:
-                    if triples_shown >= 3:
-                        break
-                    print(f"    [{triples_shown+1}] {subject} -> {predicate} -> {obj}")
-                    triples_shown += 1
-                    
-                if triple_count > 3:
-                    print(f"    ... and {triple_count - 3} more triples")
-            else:
-                print(f"    ⏱️  {elapsed:.3f}s | {len(results)} results")
-        else:
-            print(f"    ⏱️  {elapsed:.3f}s | Unexpected result type: {type(results)}")
-            
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+    # Use TestToolUtils to run the query with proper result tracking
+    result = await TestToolUtils.run_test_query(
+        sparql_impl=sparql_impl,
+        space_id=SPACE_ID,
+        query_name=query_name,
+        query=query,
+        max_results=20  # Reasonable limit for display
+    )
+    return result
 
 async def test_basic_optional_patterns(sparql_impl, GLOBAL_GRAPH_URI):
     """Test basic OPTIONAL patterns."""
@@ -309,8 +274,8 @@ async def test_nested_optional_patterns(sparql_impl, GLOBAL_GRAPH_URI):
     """)
 
 async def test_optional_queries():
-    """Test OPTIONAL pattern functionality with various scenarios."""
-    print("🔧 OPTIONAL Query Tests")
+    """Test OPTIONAL pattern functionality with various scenarios using TestToolUtils."""
+    print("🧪 OPTIONAL Query Tests")
     print("=" * 60)
     
     # Initialize
@@ -322,37 +287,20 @@ async def test_optional_queries():
     impl = VitalGraphImpl(config=config)
     await impl.db_impl.connect()
     
-    # Get SPARQL implementation for test space
+    # Get SPARQL implementation
     space_impl = impl.db_impl.get_space_impl()
     sparql_impl = PostgreSQLSparqlImpl(space_impl)
     
-    # Temporarily enable debug logging to see detailed internal state
-    import logging
-    logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl').setLevel(logging.DEBUG)
+    print(f"✅ Connected | Testing OPTIONAL patterns with comprehensive test coverage")
+    print(f"🎯 Target Graph: {GLOBAL_GRAPH_URI}")
     
-    # Test data constants
-    GLOBAL_GRAPH_URI = "urn:___GLOBAL"
-    GRAPH_URI = "http://example.org/test-graph"
+    # Track test results for summary
+    test_results = []
     
-    # Enable/disable test groups here
-    RUN_BASIC_TESTS = False
-    RUN_BOUND_TESTS = True  # Focus on BOUND function tests
-    RUN_NESTED_TESTS = False
-    RUN_DIAGNOSTICS = False
+    TestToolUtils.print_test_section_header("1. BASIC OPTIONAL PATTERNS", "Testing fundamental OPTIONAL patterns")
     
-    if RUN_BASIC_TESTS:
-        await test_basic_optional_patterns(sparql_impl, GLOBAL_GRAPH_URI)
-    
-    if RUN_BOUND_TESTS:
-        await test_bound_function_queries(sparql_impl, GLOBAL_GRAPH_URI)
-    
-    if RUN_NESTED_TESTS:
-        await test_nested_optional_patterns(sparql_impl, GLOBAL_GRAPH_URI)
-
-    # End of tests
-    
-    # Check 3: Test the exact pattern from the first OPTIONAL query without OPTIONAL
-    diagnostic_query3 = f"""
+    # Test 1: Basic OPTIONAL - people with optional email addresses
+    result = await run_optional_query(sparql_impl, "People with optional email addresses", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -360,31 +308,56 @@ async def test_optional_queries():
             GRAPH <{GLOBAL_GRAPH_URI}> {{
                 ?person rdf:type ex:Person .
                 ?person ex:hasName ?name .
-                ?person ex:hasEmail ?email .
+                OPTIONAL {{ ?person ex:hasEmail ?email }}
             }}
         }}
         ORDER BY ?name
         LIMIT 10
-    """
+    """)
+    test_results.append(result)
     
-    try:
-        results = await sparql_impl.execute_sparql_query(SPACE_ID, diagnostic_query3)
-        print(f"Found {len(results)} Person entities with BOTH name AND email (required match):")
-        for result in results:
-            print(f"   - {result.get('person', 'NULL')} : {result.get('name', 'NULL')} : {result.get('email', 'NULL')}")
-    except Exception as e:
-        print(f"Error checking required matches: {e}")
+    # Test 2: Multiple OPTIONAL properties
+    result = await run_optional_query(sparql_impl, "People with optional email and phone", f"""
+        PREFIX ex: <http://example.org/>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        
+        SELECT ?person ?name ?email ?phone WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person rdf:type ex:Person .
+                ?person ex:hasName ?name .
+                OPTIONAL {{ ?person ex:hasEmail ?email }}
+                OPTIONAL {{ ?person ex:hasPhone ?phone }}
+            }}
+        }}
+        ORDER BY ?name
+        LIMIT 10
+    """)
+    test_results.append(result)
     
-    print("\n" + "="*80)
-    print(f"Using test data from space: {SPACE_ID}")
-    print("Test data includes entities with deliberately missing optional properties")
+    # Test 3: OPTIONAL with FILTER
+    result = await run_optional_query(sparql_impl, "People with optional email containing 'wayne'", f"""
+        PREFIX ex: <http://example.org/>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        
+        SELECT ?person ?name ?email WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person rdf:type ex:Person .
+                ?person ex:hasName ?name .
+                OPTIONAL {{ 
+                    ?person ex:hasEmail ?email 
+                    FILTER(CONTAINS(?email, "wayne"))
+                }}
+            }}
+        }}
+        ORDER BY ?name
+        LIMIT 10
+    """)
+    test_results.append(result)
     
-    print("\n1. BASIC OPTIONAL PATTERNS:")
+    TestToolUtils.print_test_section_header("2. BOUND FUNCTION TESTS", "Testing BOUND function with OPTIONAL")
     
-    print("🎯 Testing BOUND function queries only...")
-    
-    # Test with BOUND in BIND expression
-    await run_optional_query(sparql_impl, "BOUND function test 1 - IF with BOUND", f"""
+    # Test 4: BOUND function test 1 - IF with BOUND
+    result = await run_optional_query(sparql_impl, "BOUND function test 1 - IF with BOUND", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -402,11 +375,31 @@ async def test_optional_queries():
         ORDER BY ?name
         LIMIT 5
     """)
+    test_results.append(result)
     
-    # print("\n2. NESTED OPTIONAL PATTERNS:")
+    # Test 5: BOUND function test 2 - Complex BOUND with OR
+    result = await run_optional_query(sparql_impl, "BOUND function test 2 - Complex BOUND with OR", f"""
+        PREFIX ex: <http://example.org/>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        
+        SELECT ?person ?name ?complete WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?person rdf:type ex:Person .
+                ?person ex:hasName ?name .
+                OPTIONAL {{ ?person ex:hasEmail ?email }}
+                OPTIONAL {{ ?person ex:hasPhone ?phone }}
+            }}
+            BIND(IF(BOUND(?email) || BOUND(?phone), "yes", "no") AS ?complete)
+        }}
+        ORDER BY ?name
+        LIMIT 5
+    """)
+    test_results.append(result)
     
-    # Test 4: Nested OPTIONAL - employees with optional manager info
-    await run_optional_query(sparql_impl, "Employees with optional manager details", f"""
+    TestToolUtils.print_test_section_header("3. NESTED OPTIONAL PATTERNS", "Testing nested OPTIONAL structures")
+    
+    # Test 6: Nested OPTIONAL - employees with optional manager details
+    result = await run_optional_query(sparql_impl, "Employees with optional manager details", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -426,9 +419,10 @@ async def test_optional_queries():
         }}
         ORDER BY ?empName
     """)
+    test_results.append(result)
     
-    # Test 5: OPTIONAL with complex patterns
-    await run_optional_query(sparql_impl, "Products with optional specifications", f"""
+    # Test 7: OPTIONAL with complex patterns - products with specifications
+    result = await run_optional_query(sparql_impl, "Products with optional specifications", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -445,13 +439,12 @@ async def test_optional_queries():
         }}
         ORDER BY ?name
     """)
+    test_results.append(result)
     
-    # print("\n3. OPTIONAL WITH BIND EXPRESSIONS:")
+    TestToolUtils.print_test_section_header("4. OPTIONAL WITH BIND EXPRESSIONS", "Testing OPTIONAL with BIND")
     
-    print("\n3. OPTIONAL WITH BIND EXPRESSIONS:")
-    
-    # Test 6: OPTIONAL with BIND - create computed values for optional data
-    await run_optional_query(sparql_impl, "People with computed contact info", f"""
+    # Test 8: OPTIONAL with BIND - create computed values for optional data
+    result = await run_optional_query(sparql_impl, "People with computed contact info", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -474,11 +467,12 @@ async def test_optional_queries():
         }}
         ORDER BY ?name
     """)
+    test_results.append(result)
     
-    print("\n4. OPTIONAL ACROSS GRAPHS:")
+    TestToolUtils.print_test_section_header("5. CROSS-GRAPH OPTIONAL", "Testing OPTIONAL across different graphs")
     
-    # Test 7: OPTIONAL patterns across different graphs
-    await run_optional_query(sparql_impl, "Cross-graph OPTIONAL patterns", f"""
+    # Test 9: OPTIONAL patterns across different graphs
+    result = await run_optional_query(sparql_impl, "Cross-graph OPTIONAL patterns", f"""
         PREFIX ex: <http://example.org/>
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -496,11 +490,12 @@ async def test_optional_queries():
         }}
         ORDER BY ?name
     """)
+    test_results.append(result)
     
-    print("\n5. OPTIONAL WITH UNION:")
+    TestToolUtils.print_test_section_header("6. OPTIONAL WITH UNION", "Testing OPTIONAL combined with UNION")
     
-    # Test 8: Combining OPTIONAL and UNION patterns
-    await run_optional_query(sparql_impl, "OPTIONAL with UNION - flexible contact lookup", f"""
+    # Test 10: Combining OPTIONAL and UNION patterns
+    result = await run_optional_query(sparql_impl, "OPTIONAL with UNION - flexible contact lookup", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -529,11 +524,12 @@ async def test_optional_queries():
         }}
         ORDER BY ?contactType ?name
     """)
+    test_results.append(result)
     
-    print("\n6. COMPLEX OPTIONAL SCENARIOS:")
+    TestToolUtils.print_test_section_header("7. COMPLEX OPTIONAL SCENARIOS", "Testing advanced OPTIONAL patterns")
     
-    # Test 9: OPTIONAL with aggregation-like patterns (once aggregates are implemented)
-    await run_optional_query(sparql_impl, "Organizations with optional project relationships", f"""
+    # Test 11: Organizations with optional project relationships
+    result = await run_optional_query(sparql_impl, "Organizations with optional project relationships", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -551,9 +547,10 @@ async def test_optional_queries():
         }}
         ORDER BY ?orgName ?projectName
     """)
+    test_results.append(result)
     
-    # Test 10: CONSTRUCT with OPTIONAL patterns
-    await run_optional_query(sparql_impl, "CONSTRUCT with OPTIONAL - unified profiles", f"""
+    # Test 12: CONSTRUCT with OPTIONAL patterns
+    result = await run_optional_query(sparql_impl, "CONSTRUCT with OPTIONAL - unified profiles [CONSTRUCT LIMITATION]", f"""
         PREFIX ex: <http://example.org/>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -574,12 +571,38 @@ async def test_optional_queries():
             BIND(COALESCE(?email, ?phone, "none") AS ?contact)
             BIND(IF(BOUND(?email) || BOUND(?phone), "yes", "no") AS ?complete)
         }}
+        LIMIT 5
     """)
+    test_results.append(result)
+    
+    # Test results summary
+    total_tests = len(test_results)
+    successful_tests = sum(1 for result in test_results if result.get('success', False))
+    failed_tests = total_tests - successful_tests
+    success_rate = (successful_tests / total_tests * 100) if total_tests > 0 else 0
+    
+    print(f"\n📊 Test Results Summary:")
+    print(f"   Total Tests: {total_tests}")
+    print(f"   ✅ Passed: {successful_tests}")
+    print(f"   ❌ Failed: {failed_tests}")
+    print(f"   📈 Success Rate: {success_rate:.1f}%")
+    
+    if failed_tests > 0:
+        print(f"\n❌ Failed Tests:")
+        for result in test_results:
+            if not result.get('success', False):
+                print(f"   • {result.get('query_name', 'Unknown')}: {result.get('error_msg', 'Unknown error')}")
+    
+    # Performance summary
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ OPTIONAL Query Tests Complete!")
-    print("💡 BOUND function tests focused on SQL generation issues")
+    print("💡 These queries test OPTIONAL pattern functionality with various scenarios")
     print("🔗 Test data includes entities with deliberately missing optional properties")
+    
+    # Return test results for aggregation
+    return test_results
 
 if __name__ == "__main__":
     asyncio.run(test_optional_queries())

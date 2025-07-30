@@ -8,9 +8,11 @@ that use the PostgreSQLCacheTerm for optimal performance.
 import logging
 from typing import Dict, List, Tuple, Optional, Any
 from rdflib import Variable, URIRef, Literal, BNode
+from rdflib.plugins.sparql.algebra import Path, MulPath, SequencePath, AlternativePath, InvPath, NegatedPath
 
 from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils
 from ..postgresql_cache_term import PostgreSQLCacheTerm
+from .postgresql_sparql_property_paths import translate_property_path
 
 logger = logging.getLogger(__name__)
 
@@ -220,8 +222,34 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
                 logger.error(f"Available term mappings: {list(term_uuid_mappings.keys())[:10]}...")
                 all_where_conditions.append("1=0")  # Condition that never matches
         
-        # Handle predicate - exact logic from original
-        if isinstance(predicate, Variable):
+        # Handle predicate - check for property paths first (exact logic from original)
+        if isinstance(predicate, Path):
+            # Property path detected - delegate to specialized handler
+            logger.info(f"🛤️ Property path detected: {type(predicate).__name__} - {predicate}")
+            
+            try:
+                # Translate property path using the original implementation
+                path_from, path_where, path_joins, path_vars = await translate_property_path(
+                    subject, predicate, obj, table_config, alias_gen, projected_vars, term_cache, space_impl
+                )
+                
+                # Integrate property path results into BGP SQL (exact logic from original)
+                all_joins.append(f"JOIN {path_from} ON 1=1")
+                all_joins.extend(path_joins)
+                all_where_conditions.extend(path_where)
+                variable_mappings.update(path_vars)
+                
+                logger.info(f"✅ Property path translated successfully: {len(path_joins)} joins, {len(path_where)} conditions")
+                
+                # Skip normal predicate processing since this is a property path
+                continue
+                
+            except Exception as e:
+                logger.error(f"❌ Property path translation failed: {e}")
+                all_where_conditions.append("1=0")  # Condition that never matches
+                continue
+            
+        elif isinstance(predicate, Variable):
             if predicate not in variable_mappings and (projected_vars is None or predicate in projected_vars):
                 term_alias = alias_gen.next_term_alias("predicate")
                 all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.predicate_uuid = {term_alias}.term_uuid")
@@ -264,39 +292,15 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
     # Build FROM clause with first quad table - exact logic from original
     from_clause = f"FROM {table_config.quad_table} {quad_aliases[0]}"
     
-    # Add additional quad tables as JOINs if multiple triples - exact logic from original
+    # Add additional quad tables as CROSS JOINs and let PostgreSQL optimizer handle it
+    # This is simpler and relies on WHERE conditions for optimization
     if len(quad_aliases) > 1:
         for i in range(1, len(quad_aliases)):
-            # Find shared variables between current triple and ANY previous triple
-            best_join_conditions = []
-            best_reference_idx = 0
-            
-            # Check against all previous triples to find the best join
-            for ref_idx in range(i):
-                shared_vars = _find_shared_variables_between_triples(triples[ref_idx], triples[i])
-                if shared_vars:
-                    # Create join conditions based on shared variables
-                    join_conditions = []
-                    for var in shared_vars:
-                        # Both triples share this variable, so their corresponding positions should match
-                        pos_in_ref = _get_variable_position_in_triple(triples[ref_idx], var)
-                        pos_in_current = _get_variable_position_in_triple(triples[i], var)
-                        
-                        if pos_in_ref and pos_in_current:
-                            col_ref = f"{quad_aliases[ref_idx]}.{pos_in_ref}_uuid"
-                            col_current = f"{quad_aliases[i]}.{pos_in_current}_uuid"
-                            join_conditions.append(f"{col_ref} = {col_current}")
-                    
-                    # Use the join with the most conditions (most specific)
-                    if len(join_conditions) > len(best_join_conditions):
-                        best_join_conditions = join_conditions
-                        best_reference_idx = ref_idx
-            
-            if best_join_conditions:
-                quad_joins.append(f"JOIN {table_config.quad_table} {quad_aliases[i]} ON {' AND '.join(best_join_conditions)}")
-            else:
-                # Fallback: cross join if no shared variables found
-                quad_joins.append(f"JOIN {table_config.quad_table} {quad_aliases[i]} ON 1=1")
+            quad_joins.append(f"CROSS JOIN {table_config.quad_table} {quad_aliases[i]}")
+    
+    # Add WHERE conditions for shared variables to enable PostgreSQL optimization
+    shared_var_conditions = _generate_shared_variable_conditions(triples, quad_aliases)
+    all_where_conditions.extend(shared_var_conditions)
     
     # Combine quad JOINs first, then term JOINs - exact logic from original
     combined_joins = quad_joins + all_joins
@@ -313,6 +317,14 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
             constraint = f"{quad_alias}.{context_constraint}"
             all_where_conditions.append(constraint)
         logger.debug(f"Applied explicit context constraint: {context_constraint}")
+    
+    # Log the generated SQL components for debugging
+    logger.debug(f"🔧 BGP SQL Components Generated:")
+    logger.debug(f"  FROM: {from_clause}")
+    logger.debug(f"  JOINS: {combined_joins}")
+    logger.debug(f"  WHERE: {all_where_conditions}")
+    logger.debug(f"  SHARED VAR CONDITIONS: {shared_var_conditions}")
+    logger.debug(f"  VARIABLE MAPPINGS: {variable_mappings}")
     
     return SQLComponents(
         from_clause=from_clause,
@@ -339,6 +351,40 @@ def _get_variable_position_in_triple(triple, variable):
     elif obj == variable:
         return "object"
     return None
+
+
+def _generate_shared_variable_conditions(triples, quad_aliases):
+    """
+    Generate WHERE conditions for shared variables between triples.
+    This allows PostgreSQL to optimize CROSS JOINs by understanding the relationships.
+    """
+    from rdflib.term import Variable
+    
+    # Build a mapping of variables to their positions in triples
+    var_to_positions = {}  # variable -> list of (triple_idx, position)
+    
+    for i, triple in enumerate(triples):
+        for pos, term in enumerate(["subject", "predicate", "object"]):
+            if isinstance(triple[pos], Variable):
+                var = triple[pos]
+                if var not in var_to_positions:
+                    var_to_positions[var] = []
+                var_to_positions[var].append((i, ["subject", "predicate", "object"][pos]))
+    
+    # Generate WHERE conditions for variables that appear in multiple triples
+    where_conditions = []
+    
+    for var, positions in var_to_positions.items():
+        if len(positions) > 1:
+            # This variable appears in multiple triples - create equality conditions
+            first_triple_idx, first_pos = positions[0]
+            first_col = f"{quad_aliases[first_triple_idx]}.{first_pos}_uuid"
+            
+            for triple_idx, pos in positions[1:]:
+                other_col = f"{quad_aliases[triple_idx]}.{pos}_uuid"
+                where_conditions.append(f"{first_col} = {other_col}")
+    
+    return where_conditions
 
 
 async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: TableConfig, 

@@ -13,6 +13,9 @@ import sys
 import time
 from pathlib import Path
 
+# Set up DEBUG logging to see SQL queries
+logging.basicConfig(level=logging.DEBUG, format='%(levelname)s - %(name)s - %(message)s')
+
 # Add project root directory for vitalgraph imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -173,7 +176,6 @@ async def test_construct_queries():
                 ?edge vital:vital__hasEdgeDestination ?entity2 .
             }}
         }}
-        LIMIT 10
     """)
     
     await run_construct_query(sparql_impl, "Construct named entity relationships", f"""
@@ -287,7 +289,6 @@ async def test_construct_queries():
     
     await impl.db_impl.disconnect()
     print("\n✅ CONSTRUCT Query Tests Complete!")
-    print("💡 These queries will work once CONSTRUCT implementation is added")
 
 if __name__ == "__main__":
     asyncio.run(test_construct_queries())

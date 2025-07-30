@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-VALUES Clause Test Script
-=========================
+VALUES Query Test Script - Refactored with Test Utilities
+=========================================================
 
-Focused testing of SPARQL VALUES clauses with inline data binding
-using test data specifically designed for VALUES clause testing.
+Test SPARQL VALUES clause functionality in VitalGraph's PostgreSQL-backed SPARQL engine.
+This file focuses specifically on VALUES clause translation and execution.
+
+VALUES clauses allow inline data binding:
+- Single variable VALUES: VALUES ?var { "value1" "value2" }
+- Multi-variable VALUES: VALUES (?var1 ?var2) { ("a" "b") ("c" "d") }
+- VALUES with FILTER, OPTIONAL, UNION, BIND patterns
+- Complex VALUES queries with multiple graph patterns
 """
 
 import asyncio
@@ -14,195 +20,49 @@ import time
 from pathlib import Path
 
 # Add project root directory for vitalgraph imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.config.config_loader import get_config
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 
-# Reduce logging chatter
-logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
+# Import test utilities for consistent test execution and reporting
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+from tool_utils import TestToolUtils
+
+# Configure logging to see SQL generation
+logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(name)s - %(message)s')
+
+# Suppress verbose logging from other modules but keep SPARQL SQL logging
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
+# Keep SPARQL implementation logging at INFO level to see SQL generation
+logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl').setLevel(logging.INFO)
 
 # Configuration
 SPACE_ID = "space_test"
 GRAPH_URI = "http://vital.ai/graph/test"
 GLOBAL_GRAPH_URI = "urn:___GLOBAL"
 
-async def run_query(sparql_impl, name, sparql, debug=False):
-    """Execute a single SPARQL query and display results."""
-    print(f"\n  {name}:")
-    
-    if debug:
-        print(f"\n🔍 DEBUG QUERY: {name}")
-        print("=" * 60)
-        print("SPARQL:")
-        print(sparql)
-        print("\n" + "-" * 60)
-        
-        # Enable debug logging temporarily
-        sparql_logger = logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl')
-        original_level = sparql_logger.level
-        sparql_logger.setLevel(logging.DEBUG)
-        
-        # Add console handler if not present
-        if not sparql_logger.handlers:
-            import logging
-            logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            sparql_logger.addHandler(console_handler)
-    
-    try:
-        start_time = time.time()
-        results = await sparql_impl.execute_sparql_query(SPACE_ID, sparql)
-        query_time = time.time() - start_time
-        
-        print(f"    ⏱️  {query_time:.3f}s | {len(results)} results")
-        
-        # Show all results for VALUES queries (usually small result sets)
-        for i, result in enumerate(results):
-            print(f"    [{i+1}] {dict(result)}")
-            
-        if debug:
-            print("\n" + "=" * 60)
-            
-            # Add algebra debugging for VALUES queries
-            if "VALUES" in sparql:
-                try:
-                    from rdflib.plugins.sparql import prepareQuery
-                    prepared = prepareQuery(sparql)
-                    print(f"    🔍 Algebra: {prepared.algebra}")
-                    
-                    # Look for ToMultiSet patterns
-                    def find_tomultiset(pattern, path=""):
-                        if hasattr(pattern, 'name'):
-                            if pattern.name == 'ToMultiSet':
-                                print(f"    🎯 ToMultiSet found at {path}")
-                                if hasattr(pattern, 'multiset'):
-                                    print(f"       multiset: {pattern.multiset}")
-                                if hasattr(pattern, 'var'):
-                                    print(f"       var: {pattern.var}")
-                            
-                            # Recurse
-                            for attr in ['p', 'p1', 'p2', 'left', 'right']:
-                                if hasattr(pattern, attr):
-                                    nested = getattr(pattern, attr)
-                                    if nested and hasattr(nested, 'name'):
-                                        find_tomultiset(nested, f"{path}.{attr}")
-                    
-                    find_tomultiset(prepared.algebra)
-                except Exception as debug_e:
-                    print(f"    🔍 Algebra debug failed: {debug_e}")
-    
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
-        if debug:
-            import traceback
-            traceback.print_exc()
-    
-    finally:
-        if debug:
-            # Restore original logging level
-            sparql_logger.setLevel(original_level)
+async def run_values_query(sparql_impl, query_name, query):
+    """Run a single VALUES query using TestToolUtils for clean, maintainable code."""
+    # Use the utility function to run the complete test with all features
+    result = await TestToolUtils.run_test_query(
+        sparql_impl=sparql_impl,
+        space_id=SPACE_ID,
+        query_name=query_name,
+        query=query,
+        enable_algebra_logging=True,
+        max_results=10  # Show up to 10 results for VALUES queries
+    )
+    return result
 
-async def debug_values_algebra():
-    """Debug VALUES query algebra structure."""
-    print("🔍 Debug VALUES Algebra")
+async def test_values_queries():
+    """Test VALUES clause functionality with various scenarios using TestToolUtils."""
+    print("📊 VALUES Query Tests - Refactored with Utilities")
     print("=" * 50)
     
-    from rdflib.plugins.sparql import prepareQuery
-    
-    # Simple VALUES query
-    sparql = f'''
-        PREFIX ex: <http://example.org/>
-        SELECT ?name ?population WHERE {{
-            VALUES (?name ?population) {{
-                ("New York" 8336817)
-                ("Los Angeles" 3979576)
-                ("Chicago" 2693976)
-            }}
-            GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?city ex:hasName ?name .
-                ?city ex:hasPopulation ?population .
-            }}
-        }}
-    '''
-    
-    print("SPARQL Query:")
-    print(sparql)
-    print()
-    
-    prepared_query = prepareQuery(sparql)
-    print("Algebra structure:")
-    print(prepared_query.algebra)
-    print()
-    print("Projection variables:")
-    print(prepared_query.algebra.get('PV', []))
-    print()
-    
-    # Detailed pattern analysis
-    def analyze_pattern(pattern, depth=0):
-        indent = '  ' * depth
-        print(f'{indent}Pattern: {pattern.name if hasattr(pattern, "name") else type(pattern)}')
-        
-        if hasattr(pattern, 'name') and pattern.name == 'ToMultiSet':
-            print(f'{indent}  ToMultiSet found!')
-            print(f'{indent}  Attributes: {[attr for attr in dir(pattern) if not attr.startswith("_")]}')
-            if hasattr(pattern, 'p'):
-                print(f'{indent}  p (nested pattern): {pattern.p}')
-            if hasattr(pattern, 'var'):
-                print(f'{indent}  var: {pattern.var}')
-            if hasattr(pattern, 'res'):
-                print(f'{indent}  res: {pattern.res}')
-            if hasattr(pattern, 'multiset'):
-                print(f'{indent}  multiset: {pattern.multiset}')
-        
-        # Recurse into nested patterns
-        for attr in ['p', 'p1', 'p2', 'left', 'right']:
-            if hasattr(pattern, attr):
-                nested = getattr(pattern, attr)
-                if nested and hasattr(nested, 'name'):
-                    analyze_pattern(nested, depth + 1)
-    
-    print("Detailed Pattern Analysis:")
-    analyze_pattern(prepared_query.algebra)
-    print()
-    
-    # Single variable VALUES
-    sparql_single = f'''
-        PREFIX ex: <http://example.org/>
-        SELECT ?color WHERE {{
-            VALUES ?color {{ "Red" "Green" "Blue" }}
-            GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?colorEntity ex:hasName ?color .
-            }}
-        }}
-    '''
-    
-    print("Single Variable VALUES Query:")
-    print(sparql_single)
-    print()
-    
-    prepared_single = prepareQuery(sparql_single)
-    print("Single VALUES Algebra structure:")
-    print(prepared_single.algebra)
-    print()
-    
-    print("Single VALUES Pattern Analysis:")
-    analyze_pattern(prepared_single.algebra)
-    print()
-
-# Global variables for database connection
-impl = None
-sparql_impl = None
-
-async def setup_connection():
-    """Initialize database connection for tests."""
-    global impl, sparql_impl
-    
+    # Initialize
     config_path = Path(__file__).parent.parent.parent / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
     
     from vitalgraph.config.config_loader import get_config
@@ -214,84 +74,59 @@ async def setup_connection():
     space_impl = impl.db_impl.get_space_impl()
     sparql_impl = PostgreSQLSparqlImpl(space_impl)
     
-    print(f"✅ Connected | Graph: {GRAPH_URI}")
-
-async def cleanup_connection():
-    """Clean up database connection."""
-    global impl
-    if impl:
-        await impl.db_impl.disconnect()
-        print("🔌 Disconnected")
-
-async def check_available_predicates():
-    """Check what predicates are available in the database."""
-    print("\n🔍 CHECKING AVAILABLE PREDICATES:")
+    print(f"✅ Connected | Testing VALUES patterns with utility modules")
     
-    try:
-        # Check predicates in global graph
-        results = await sparql_impl.execute_sparql_query(
-            SPACE_ID,
-            f'''
-                SELECT DISTINCT ?p WHERE {{
-                    GRAPH <{GLOBAL_GRAPH_URI}> {{
-                        ?s ?p ?o .
-                    }}
-                }}
-                ORDER BY ?p
-                LIMIT 20
-            '''
-        )
-        print(f"\n  Predicates in global graph ({len(results)} found):")
-        for i, result in enumerate(results):
-            print(f"    [{i+1}] {result['p']}")
-            
-        # Check for specific VALUES test predicates
-        test_predicates = [
-            "http://example.org/hasPopulation",
-            "http://example.org/hasCode", 
-            "http://example.org/hasYear",
-            "http://example.org/hasISBN",
-            "http://example.org/hasAuthor",
-            "http://example.org/hasHex",
-            "http://example.org/hasContinent"
-        ]
-        
-        print("\n  Checking specific VALUES test predicates:")
-        for predicate in test_predicates:
-            try:
-                check_results = await sparql_impl.execute_sparql_query(
-                    SPACE_ID,
-                    f'''
-                        SELECT ?s ?o WHERE {{
-                            GRAPH <{GLOBAL_GRAPH_URI}> {{
-                                ?s <{predicate}> ?o .
-                            }}
-                        }}
-                        LIMIT 1
-                    '''
-                )
-                exists = len(check_results) > 0
-                status = "✅" if exists else "❌"
-                count = len(check_results) if exists else 0
-                print(f"    {status} {predicate} ({count} triples)")
-            except Exception as e:
-                print(f"    ❌ {predicate} - Error: {e}")
-                
-    except Exception as e:
-        print(f"    ❌ Error checking predicates: {e}")
-
-async def debug_bind_mapping():
-    """Debug BIND variable mapping in simple and complex patterns."""
-    print("\n🔧 BIND VARIABLE MAPPING DEBUG:")
+    # Track test results for summary
+    test_results = []
     
-    # Enable debug logging for this test
-    import logging
-    logger = logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl')
-    logger.setLevel(logging.DEBUG)
+    TestToolUtils.print_test_section_header("0. UTILITY QUERIES", "Debug algebra and predicate checking queries")
     
-    # Test 1: Simple BIND without VALUES
-    print("\n  Simple BIND test (no VALUES):")
-    await run_query(sparql_impl, "Simple BIND", f"""
+    # Test 1: Debug VALUES algebra (from debug_values_algebra)
+    result = await run_values_query(sparql_impl, "Debug VALUES algebra - multi-variable", f"""
+        SELECT ?name ?population WHERE {{
+            VALUES (?name ?population) {{
+                ("New York" 8336817)
+                ("Los Angeles" 3979576)
+            }}
+        }}
+    """)
+    test_results.append(result)
+    
+    # Test 2: Debug VALUES algebra - single variable (from debug_values_algebra)
+    result = await run_values_query(sparql_impl, "Debug VALUES algebra - single variable", f"""
+        SELECT ?color WHERE {{
+            VALUES ?color {{ "Red" "Green" "Blue" }}
+        }}
+    """)
+    test_results.append(result)
+    
+    # Test 3: Check available predicates (from check_available_predicates)
+    result = await run_values_query(sparql_impl, "Check available predicates", f"""
+        SELECT DISTINCT ?p WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?s ?p ?o .
+            }}
+        }}
+        ORDER BY ?p
+        LIMIT 20
+    """)
+    test_results.append(result)
+    
+    # Test 4: Check specific predicate existence (from check_available_predicates)
+    result = await run_values_query(sparql_impl, "Check specific predicate existence", f"""
+        SELECT ?s ?o WHERE {{
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?s <http://example.org/hasPopulation> ?o .
+            }}
+        }}
+        LIMIT 1
+    """)
+    test_results.append(result)
+    
+    TestToolUtils.print_test_section_header("1. DEBUG BIND MAPPING TESTS", "Testing BIND variable mapping in simple and complex patterns")
+    
+    # Test 1: Simple BIND (from debug_bind_mapping)
+    result = await run_values_query(sparql_impl, "Simple BIND", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?type WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
@@ -302,10 +137,10 @@ async def debug_bind_mapping():
             }}
         }}
     """)
+    test_results.append(result)
     
-    # Test 2: Simple VALUES + BIND (no UNION)
-    print("\n  VALUES + BIND test (no UNION):")
-    await run_query(sparql_impl, "VALUES + BIND", f"""
+    # Test 2: VALUES + BIND (from debug_bind_mapping)
+    result = await run_values_query(sparql_impl, "VALUES + BIND", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?type WHERE {{
             VALUES ?name {{ "New York" }}
@@ -316,10 +151,10 @@ async def debug_bind_mapping():
             }}
         }}
     """)
+    test_results.append(result)
     
-    # Test 3: Simple UNION + BIND (no VALUES)
-    print("\n  UNION + BIND test (no VALUES):")
-    await run_query(sparql_impl, "UNION + BIND", f"""
+    # Test 3: UNION + BIND (from debug_bind_mapping)
+    result = await run_values_query(sparql_impl, "UNION + BIND", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?type WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
@@ -337,10 +172,10 @@ async def debug_bind_mapping():
             }}
         }}
     """)
+    test_results.append(result)
     
-    # Test 4: Full VALUES + UNION + BIND (the problematic case)
-    print("\n  VALUES + UNION + BIND test (problematic case):")
-    await run_query(sparql_impl, "VALUES + UNION + BIND", f"""
+    # Test 4: VALUES + UNION + BIND (from debug_bind_mapping)
+    result = await run_values_query(sparql_impl, "VALUES + UNION + BIND", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?type WHERE {{
             VALUES ?name {{ "New York" "The Great Gatsby" }}
@@ -357,103 +192,74 @@ async def debug_bind_mapping():
             }}
         }}
     """)
-
-async def test_simple_values_only():
-    """Debug VALUES structure and algebra patterns."""
-    print("\n🔍 SIMPLE VALUES-ONLY DEBUG:")
+    test_results.append(result)
     
-    # Test 1: Single variable VALUES
-    print("\n  Single variable VALUES:")
-    try:
-        results = await sparql_impl.execute_sparql_query(
-            SPACE_ID,
-            '''
-                SELECT ?color WHERE {
-                    VALUES ?color { "Red" "Green" "Blue" }
-                }
-            '''
-        )
-        print(f"    ⏱️  {len(results)} results")
-        for i, result in enumerate(results):
-            print(f"    [{i+1}] {dict(result)}")
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
+    TestToolUtils.print_test_section_header("2. SIMPLE VALUES-ONLY DEBUG", "Testing basic VALUES structure and algebra patterns")
     
-    # Test 2: Multi-variable VALUES
-    print("\n  Multi-variable VALUES:")
-    try:
-        results = await sparql_impl.execute_sparql_query(
-            SPACE_ID,
-            '''
-                SELECT ?name ?code WHERE {
-                    VALUES (?name ?code) {
-                        ("USA" "US")
-                        ("Canada" "CA")
-                        ("Mexico" "MX")
-                    }
-                }
-            '''
-        )
-        print(f"    ⏱️  {len(results)} results")
-        for i, result in enumerate(results):
-            print(f"    [{i+1}] {dict(result)}")
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
-
-async def test_basic_single_variable_values():
-    """Test basic single-variable VALUES queries."""
-    print("\n🎯 BASIC SINGLE VARIABLE VALUES:")
+    # Test 5: Single variable VALUES (from test_simple_values_only)
+    result = await run_values_query(sparql_impl, "Single variable VALUES debug", f"""
+        SELECT ?color WHERE {{
+            VALUES ?color {{ "Red" "Green" "Blue" }}
+        }}
+    """)
+    test_results.append(result)
     
-    # Simple color VALUES
-    await run_query(
-        sparql_impl,
-        "Simple color VALUES",
-        f'''
-            PREFIX ex: <http://example.org/>
-            SELECT ?color WHERE {{
-                VALUES ?color {{ "Red" "Green" "Blue" }}
-                GRAPH <{GLOBAL_GRAPH_URI}> {{
-                    ?colorEntity ex:hasName ?color .
-                }}
+    # Test 6: Multi-variable VALUES (from test_simple_values_only)
+    result = await run_values_query(sparql_impl, "Multi-variable VALUES debug", f"""
+        SELECT ?name ?code WHERE {{
+            VALUES (?name ?code) {{
+                ("USA" "US")
+                ("Canada" "CA")
+                ("Mexico" "MX")
             }}
-        '''
-    )
+        }}
+    """)
+    test_results.append(result)
     
-    await run_query(
-        sparql_impl,
-        "Country code VALUES",
-        f'''
-            PREFIX ex: <http://example.org/>
-            SELECT ?code ?name WHERE {{
-                VALUES ?code {{ "USA" "CAN" "MEX" }}
-                GRAPH <{GLOBAL_GRAPH_URI}> {{
-                    ?country ex:hasCode ?code ;
-                            ex:hasName ?name .
-                }}
+    TestToolUtils.print_test_section_header("3. BASIC SINGLE VARIABLE VALUES", "Testing fundamental single-variable VALUES patterns")
+    
+    # Test 7: Simple color VALUES
+    result = await run_values_query(sparql_impl, "Simple color VALUES", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?color WHERE {{
+            VALUES ?color {{ "Red" "Green" "Blue" }}
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?colorEntity ex:hasName ?color .
             }}
-        '''
-    )
+        }}
+    """)
+    test_results.append(result)
     
-    await run_query(
-        sparql_impl,
-        "Book year VALUES",
-        f'''
-            PREFIX ex: <http://example.org/>
-            SELECT ?year ?title WHERE {{
-                VALUES ?year {{ 1925 1949 1960 }}
-                GRAPH <{GLOBAL_GRAPH_URI}> {{
-                    ?book ex:hasYear ?year ;
-                         ex:hasTitle ?title .
-                }}
+    # Test 8: Country code VALUES
+    result = await run_values_query(sparql_impl, "Country code VALUES", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?code ?name WHERE {{
+            VALUES ?code {{ "USA" "CAN" "MEX" }}
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?country ex:hasCode ?code ;
+                        ex:hasName ?name .
             }}
-        '''
-    )
-
-async def test_multi_variable_values():
-    """Test multi-variable VALUES clauses with tuples."""
-    print("\n🎯 MULTI-VARIABLE VALUES:")
+        }}
+    """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "City name and population VALUES", f"""
+    # Test 9: Book year VALUES
+    result = await run_values_query(sparql_impl, "Book year VALUES", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?year ?title WHERE {{
+            VALUES ?year {{ 1925 1949 1960 }}
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?book ex:hasYear ?year ;
+                     ex:hasTitle ?title .
+            }}
+        }}
+    """)
+    test_results.append(result)
+    
+    TestToolUtils.print_test_section_header("4. MULTI-VARIABLE VALUES", "Testing VALUES with multiple variables and tuples")
+    
+    # Test 10: City name and population VALUES
+    result = await run_values_query(sparql_impl, "City name and population VALUES", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?population WHERE {{
             VALUES (?name ?population) {{
@@ -467,8 +273,10 @@ async def test_multi_variable_values():
             }}
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Book title and author VALUES", f"""
+    # Test 11: Book title and author VALUES
+    result = await run_values_query(sparql_impl, "Book title and author VALUES", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?title ?author ?year WHERE {{
             VALUES (?title ?author) {{
@@ -483,8 +291,10 @@ async def test_multi_variable_values():
             }}
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Country name and code VALUES", f"""
+    # Test 12: Country name and code VALUES
+    result = await run_values_query(sparql_impl, "Country name and code VALUES", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?code ?continent WHERE {{
             VALUES (?name ?code) {{
@@ -499,12 +309,12 @@ async def test_multi_variable_values():
             }}
         }}
     """)
-
-async def test_values_with_filters():
-    """Test VALUES clauses combined with FILTER conditions."""
-    print("\n🎯 VALUES WITH FILTERS:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with population filter", f"""
+    TestToolUtils.print_test_section_header("5. VALUES WITH FILTERS", "Testing VALUES combined with FILTER conditions")
+    
+    # Test 17: VALUES with population filter
+    result = await run_values_query(sparql_impl, "VALUES with population filter", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?population WHERE {{
             VALUES ?name {{ "New York" "Los Angeles" "Chicago" "Houston" "Phoenix" }}
@@ -515,8 +325,10 @@ async def test_values_with_filters():
             FILTER(?population > 3000000)
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with string filter", f"""
+    # Test 18: VALUES with string filter
+    result = await run_values_query(sparql_impl, "VALUES with string filter", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?title ?author ?year WHERE {{
             VALUES ?author {{ "F. Scott Fitzgerald" "George Orwell" "Harper Lee" }}
@@ -528,8 +340,10 @@ async def test_values_with_filters():
             FILTER(CONTAINS(?title, "a"))
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with numeric range filter", f"""
+    # Test 19: VALUES with numeric range filter
+    result = await run_values_query(sparql_impl, "VALUES with numeric range filter", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?title ?year WHERE {{
             VALUES ?year {{ 1925 1949 1960 }}
@@ -540,12 +354,12 @@ async def test_values_with_filters():
             FILTER(?year >= 1940 && ?year <= 1970)
         }}
     """)
-
-async def test_values_with_optional():
-    """Test VALUES clauses combined with OPTIONAL patterns."""
-    print("\n🎯 VALUES WITH OPTIONAL:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with optional ISBN", f"""
+    TestToolUtils.print_test_section_header("6. VALUES WITH OPTIONAL", "Testing VALUES combined with OPTIONAL patterns")
+    
+    # Test 20: VALUES with optional ISBN
+    result = await run_values_query(sparql_impl, "VALUES with optional ISBN", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?title ?author ?isbn WHERE {{
             VALUES ?title {{ "The Great Gatsby" "1984" "To Kill a Mockingbird" }}
@@ -558,8 +372,10 @@ async def test_values_with_optional():
             }}
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with optional color hex", f"""
+    # Test 21: VALUES with optional color hex
+    result = await run_values_query(sparql_impl, "VALUES with optional color hex", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?hex WHERE {{
             VALUES ?name {{ "Red" "Green" "Blue" "Yellow" "Purple" }}
@@ -571,12 +387,12 @@ async def test_values_with_optional():
             }}
         }}
     """)
-
-async def test_values_with_union():
-    """Test VALUES clauses combined with UNION patterns."""
-    print("\n🎯 VALUES WITH UNION:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with UNION types", f"""
+    TestToolUtils.print_test_section_header("7. VALUES WITH UNION", "Testing VALUES combined with UNION patterns")
+    
+    # Test 22: VALUES with UNION types
+    result = await run_values_query(sparql_impl, "VALUES with UNION types", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?type WHERE {{
             VALUES ?name {{ "New York" "The Great Gatsby" "Red" }}
@@ -597,12 +413,38 @@ async def test_values_with_union():
             }}
         }}
     """)
-
-async def test_empty_and_edge_cases():
-    """Test empty VALUES and edge cases."""
-    print("\n🎯 EMPTY VALUES AND EDGE CASES:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with non-existent data", f"""
+    # Test 10: Complex VALUES with UNION and BIND
+    result = await run_values_query(sparql_impl, "Complex VALUES with UNION and BIND", f"""
+        PREFIX ex: <http://example.org/>
+        PREFIX test: <http://example.org/test#>
+        SELECT ?entity ?label ?sourceType ?category WHERE {{
+            VALUES ?label {{ "TestEntity1" "TestEntity2" "John" "Jane" }}
+            {{
+                GRAPH <{GRAPH_URI}> {{
+                    ?entity test:hasName ?label .
+                    BIND("test_entity" AS ?sourceType)
+                    BIND("test" AS ?category)
+                }}
+            }}
+            UNION
+            {{
+                GRAPH <{GLOBAL_GRAPH_URI}> {{
+                    ?entity ex:hasName ?label .
+                    BIND("global_person" AS ?sourceType)
+                    BIND("person" AS ?category)
+                }}
+            }}
+        }}
+        ORDER BY ?sourceType ?label
+    """)
+    test_results.append(result)
+    
+    TestToolUtils.print_test_section_header("8. EMPTY VALUES AND EDGE CASES", "Testing empty VALUES and edge cases")
+    
+    # Test 23: VALUES with non-existent data
+    result = await run_values_query(sparql_impl, "VALUES with non-existent data", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?population WHERE {{
             VALUES (?name ?population) {{
@@ -615,8 +457,10 @@ async def test_empty_and_edge_cases():
             }}
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "Single value in VALUES", f"""
+    # Test 24: Single value in VALUES
+    result = await run_values_query(sparql_impl, "Single value in VALUES", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?population WHERE {{
             VALUES ?name {{ "New York" }}
@@ -626,12 +470,12 @@ async def test_empty_and_edge_cases():
             }}
         }}
     """)
-
-async def test_values_with_bind():
-    """Test VALUES clauses combined with BIND expressions."""
-    print("\n🎯 VALUES WITH BIND:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with BIND calculations", f"""
+    TestToolUtils.print_test_section_header("9. VALUES WITH BIND", "Testing VALUES combined with BIND expressions")
+    
+    # Test 25: VALUES with BIND calculations
+    result = await run_values_query(sparql_impl, "VALUES with BIND calculations", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?population ?populationMillion WHERE {{
             VALUES (?name ?population) {{
@@ -646,8 +490,10 @@ async def test_values_with_bind():
             BIND(?population / 1000000.0 AS ?populationMillion)
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with BIND string operations", f"""
+    # Test 26: VALUES with BIND string operations
+    result = await run_values_query(sparql_impl, "VALUES with BIND string operations", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?name ?code ?fullName WHERE {{
             VALUES (?name ?code) {{
@@ -662,12 +508,12 @@ async def test_values_with_bind():
             BIND(CONCAT(?name, " (", ?code, ")") AS ?fullName)
         }}
     """)
-
-async def test_complex_values_queries():
-    """Test complex queries combining VALUES with multiple patterns."""
-    print("\n🎯 COMPLEX VALUES QUERIES:")
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with multiple graph patterns", f"""
+    TestToolUtils.print_test_section_header("10. COMPLEX VALUES QUERIES", "Testing complex queries combining VALUES with multiple patterns")
+    
+    # Test 27: VALUES with multiple graph patterns
+    result = await run_values_query(sparql_impl, "VALUES with multiple graph patterns", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?cityName ?countryName ?population WHERE {{
             VALUES (?cityName ?countryCode) {{
@@ -684,8 +530,10 @@ async def test_complex_values_queries():
             }}
         }}
     """)
+    test_results.append(result)
     
-    await run_query(sparql_impl, "VALUES with aggregation", f"""
+    # Test 28: VALUES with aggregation
+    result = await run_values_query(sparql_impl, "VALUES with aggregation", f"""
         PREFIX ex: <http://example.org/>
         SELECT ?countryCode (AVG(?population) AS ?avgPopulation) WHERE {{
             VALUES ?countryCode {{ "USA" }}
@@ -696,50 +544,50 @@ async def test_complex_values_queries():
         }}
         GROUP BY ?countryCode
     """)
-
-async def main():
-    """Main test execution function."""
-    print("🎯 SPARQL VALUES Clause Tests")
-    print("=" * 50)
+    test_results.append(result)
     
-    # Debug algebra structure first
-    await debug_values_algebra()
+    TestToolUtils.print_test_section_header("8. VALUES EDGE CASES", "Testing empty VALUES and edge cases")
     
-    # Setup database connection
-    await setup_connection()
+    # Test 15: Single value in VALUES (edge case)
+    result = await run_values_query(sparql_impl, "Single value in VALUES", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?name ?population WHERE {{
+            VALUES ?name {{ "New York" }}
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?city ex:hasName ?name ;
+                     ex:hasPopulation ?population .
+            }}
+        }}
+    """)
+    test_results.append(result)
     
-    try:
-        # Check what predicates are available first
-        await check_available_predicates()
-        
-        # Run all VALUES test categories for comprehensive verification
-        await test_simple_values_only()  # Basic VALUES structure
-        await test_basic_single_variable_values()  # Single variable VALUES
-        await test_multi_variable_values()  # Multi-variable VALUES
-        print("\n🔧 VALUES+UNION working perfectly, now testing more complex cases")
-        await test_values_with_union()  # VALUES+UNION (already working)
-        print("\n🔧 Now testing VALUES with BIND expressions")
-        await test_values_with_bind()  # VALUES+BIND combinations
-        print("\n🔧 Now testing VALUES with FILTER conditions")
-        await test_values_with_filters()  # VALUES+FILTER combinations
-        print("\n🔧 Now testing VALUES with OPTIONAL patterns")
-        await test_values_with_optional()  # VALUES+OPTIONAL combinations
-        print("\n🔧 Now testing VALUES edge cases")
-        await test_empty_and_edge_cases()  # Edge cases and error handling
-        print("\n🔧 Now testing complex VALUES queries")
-        await test_complex_values_queries()  # Complex multi-pattern VALUES
-        
-        print("\n" + "=" * 50)
-        print("🎯 VALUES Clause Tests Complete!")
-        
-    except Exception as e:
-        print(f"\n❌ Test execution failed: {e}")
-        import traceback
-        traceback.print_exc()
+    # Test 16: VALUES with year range filter
+    result = await run_values_query(sparql_impl, "VALUES with year range filter", f"""
+        PREFIX ex: <http://example.org/>
+        SELECT ?title ?year WHERE {{
+            VALUES ?year {{ 1925 1960 1949 1813 1951 1953 1962 1937 1884 1950 }}
+            GRAPH <{GLOBAL_GRAPH_URI}> {{
+                ?book ex:hasPublicationYear ?year ;
+                     ex:hasTitle ?title .
+            }}
+            FILTER(?year >= 1940 && ?year <= 1970)
+        }}
+        ORDER BY ?year
+    """)
+    test_results.append(result)
     
-    finally:
-        # Clean up connection
-        await cleanup_connection()
+    # Test results summary using TestToolUtils
+    TestToolUtils.print_test_summary(test_results)
+    
+    # Performance summary
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    
+    await impl.db_impl.disconnect()
+    print("\n✅ VALUES Query Tests Complete!")
+    print("📊 Test data includes cities, countries, books, and colors with comprehensive VALUES clause testing")
+    
+    # Return test results for aggregation
+    return test_results
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(test_values_queries())
