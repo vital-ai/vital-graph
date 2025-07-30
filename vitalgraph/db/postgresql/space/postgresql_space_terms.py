@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 from datetime import datetime
 
 # RDFLib imports for term handling
@@ -196,11 +196,11 @@ class PostgreSQLSpaceTerms:
                 cursor = conn.cursor()
                 
                 # Check if term exists
-                await cursor.execute(
+                cursor.execute(
                     f"SELECT term_uuid FROM {table_names['term']} WHERE term_uuid = %s",
                     (str(term_uuid),)
                 )
-                result = await cursor.fetchone()
+                result = cursor.fetchone()
                 
                 return str(term_uuid) if result else None
                 
@@ -247,11 +247,11 @@ class PostgreSQLSpaceTerms:
             async with self.space_impl.get_db_connection() as conn:
                 cursor = conn.cursor()
                 
-                await cursor.execute(
+                cursor.execute(
                     f"SELECT term_uuid FROM {table_names['term']} WHERE term_uuid = %s",
                     (str(term_uuid),)
                 )
-                result = await cursor.fetchone()
+                result = cursor.fetchone()
                 
                 return str(term_uuid) if result else None
                 
@@ -323,6 +323,70 @@ class PostgreSQLSpaceTerms:
             self.logger.error(f"Error deleting term from space '{space_id}': {e}")
             return False
     
+    async def batch_lookup_term_uuids(self, space_id: str, terms: List[str], 
+                                     term_cache=None) -> Dict[str, str]:
+        """
+        Batch lookup term UUIDs using efficient SQL batch query.
+        
+        Args:
+            space_id: Space identifier
+            terms: List of term strings to lookup
+            term_cache: Optional term cache for performance
+            
+        Returns:
+            Dictionary mapping term strings to UUIDs
+        """
+        if not terms:
+            return {}
+        
+        # Check cache first if available
+        result = {}
+        remaining_terms = terms.copy()
+        
+        if term_cache:
+            cached_results = term_cache.get_batch(terms)
+            result.update(cached_results)
+            remaining_terms = [term for term in terms if term not in cached_results]
+        
+        if not remaining_terms:
+            return result
+        
+        # Get table names
+        table_names = self.space_impl._get_table_names(space_id)
+        
+        # Batch lookup remaining terms with SQL
+        if remaining_terms:
+            try:
+                async with self.space_impl.get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Use parameterized query with IN clause for batch lookup
+                    placeholders = ','.join(['%s'] * len(remaining_terms))
+                    sql = f"""
+                        SELECT term_uuid, term_text, term_type 
+                        FROM {table_names['term']} 
+                        WHERE term_text IN ({placeholders})
+                    """
+                    
+                    cursor.execute(sql, remaining_terms)
+                    rows = cursor.fetchall()
+                    
+                    # Process results
+                    for row in rows:
+                        term_uuid, term_text, term_type = row
+                        result[term_text] = str(term_uuid)
+                        
+                        # Update cache if available
+                        if term_cache:
+                            term_key = (term_text, term_type)
+                            term_cache.put_term_uuid(term_key, str(term_uuid))
+                            
+            except Exception as e:
+                self.logger.warning(f"Batch term lookup failed: {e}")
+                # If batch fails, return what we have from cache
+        
+        return result
+
     def term_to_db_info(self, term):
         """
         Convert term to database info for query processing.

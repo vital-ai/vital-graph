@@ -18,7 +18,9 @@ from rdflib.term import Identifier
 # Import PostgreSQL utilities
 from .postgresql_log_utils import PostgreSQLLogUtils
 from .space.postgresql_space_utils import PostgreSQLSpaceUtils
+from .original.postgresql_utils import PostgreSQLUtils
 from .postgresql_cache_term import PostgreSQLCacheTerm
+from .postgresql_cache_graph import PostgreSQLCacheGraph
 from .space.postgresql_space_core import PostgreSQLSpaceCore
 from .space.postgresql_space_schema import PostgreSQLSpaceSchema
 from .space.postgresql_space_db_mgmt import PostgreSQLSpaceDbMgmt
@@ -27,6 +29,7 @@ from .space.postgresql_space_datatypes import PostgreSQLSpaceDatatypes
 from .space.postgresql_space_terms import PostgreSQLSpaceTerms
 from .space.postgresql_space_queries import PostgreSQLSpaceQueries
 from .space.postgresql_space_db_ops import PostgreSQLSpaceDBOps
+from .space.postgresql_space_graphs import PostgreSQLSpaceGraphs
 
 class PostgreSQLSpaceImpl:
     """
@@ -67,8 +70,8 @@ class PostgreSQLSpaceImpl:
         self.global_prefix = global_prefix
         self.use_unlogged = use_unlogged
         
-        # Initialize utils instance for timing operations
-        self.utils = PostgreSQLLogUtils()
+        # Initialize utils instance for timing operations and table name generation
+        self.utils = PostgreSQLUtils()
         
         # Validate global prefix using utils
         PostgreSQLSpaceUtils.validate_global_prefix(global_prefix)
@@ -91,6 +94,9 @@ class PostgreSQLSpaceImpl:
         # Initialize database operations class
         self.db_ops = PostgreSQLSpaceDBOps(self)
         
+        # Initialize graph management class
+        self.graphs = PostgreSQLSpaceGraphs(self)
+        
         # Cache of schema instances by space_id
         self._schema_cache = {}
         
@@ -99,6 +105,12 @@ class PostgreSQLSpaceImpl:
         
         # Cache of datatype caches by space_id - each space has its own datatype cache
         self._datatype_caches = {}
+        
+        # Cache of graph caches by space_id - each space has its own graph cache
+        self._graph_caches = {}
+        
+        # Flag to track if datatype cache has been loaded
+        self._datatype_cache_loaded = False
     
     def _get_schema(self, space_id: str) -> PostgreSQLSpaceSchema:
         """
@@ -139,6 +151,27 @@ class PostgreSQLSpaceImpl:
             PostgreSQLCacheDatatype: The datatype cache for the specified space
         """
         return self.datatypes.get_datatype_cache(space_id)
+    
+    def get_graph_cache(self, space_id: str) -> 'PostgreSQLCacheGraph':
+        """
+        Get the graph cache for a specific space, creating it if necessary.
+        Each space has its own graph cache for tracking graph existence.
+        The cache is automatically initialized with all existing graphs from the database.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            PostgreSQLCacheGraph: The graph cache for the specified space
+        """
+        if space_id not in self._graph_caches:
+            # Create new cache (will be lazily initialized on first async access)
+            cache = PostgreSQLCacheGraph()
+            self.logger.info(f"Created graph cache for space '{space_id}' (will be initialized on first access)")
+            
+            self._graph_caches[space_id] = cache
+            
+        return self._graph_caches[space_id]
     
     def close(self):
         """

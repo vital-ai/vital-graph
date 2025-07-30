@@ -284,22 +284,25 @@ class AliasGenerator:
 
 @dataclass
 class TableConfig:
-    """Configuration for quad and term table names."""
+    """Configuration for quad, term, and graph table names."""
     quad_table: str
     term_table: str
+    graph_table: str
     
     @classmethod
     def from_space_impl(cls, space_impl, space_id: str, use_unlogged: bool = False) -> 'TableConfig':
         """Create TableConfig from PostgreSQLSpaceImpl and space_id."""
         quad_table = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, space_id, "rdf_quad")
         term_table = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, space_id, "term")
+        graph_table = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, space_id, "graph")
         
         # Add _unlogged suffix if using unlogged tables
         if use_unlogged:
             quad_table += "_unlogged"
             term_table += "_unlogged"
+            graph_table += "_unlogged"
             
-        return cls(quad_table=quad_table, term_table=term_table)
+        return cls(quad_table=quad_table, term_table=term_table, graph_table=graph_table)
 
 
 class TranslationContext:

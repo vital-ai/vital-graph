@@ -193,9 +193,11 @@ async def reload_wordnet_data():
         total_inserted = 0
         batch_loading_start = time.time()
         
-        # Get a single connection for all batch operations
-        conn = space_impl.get_connection()
-        print("Processing triples...")
+        # Create a transaction for all batch operations
+        transaction = await space_impl.core.create_transaction(space_impl)
+        print(f"✅ Created transaction: {transaction.transaction_id}")
+        print(f"📊 Active transactions: {space_impl.core.get_active_transaction_count()}")
+        print("Processing triples with transaction management...")
         
         # Stream triples and collect them into batches
         for triple in stream_parse_ntriples_nquads_generator(str(test_data_file), RDFFormat.NT, progress_interval=2500):
@@ -217,13 +219,20 @@ async def reload_wordnet_data():
                 
                 # Insert batch using UUID-based batch insert method with performance optimization
                 # auto_commit=False, verify_count=False for maximum bulk loading speed (commit at end)
-                inserted_count = await space_impl.add_rdf_quads_batch(SPACE_ID, current_batch, 
-                                                                     auto_commit=False, verify_count=False, connection=conn)
+                inserted_count = await space_impl.db_ops.add_rdf_quads_batch(SPACE_ID, current_batch, 
+                                                                     auto_commit=False, verify_count=False, transaction=transaction)
                 total_inserted += inserted_count
                 
                 batch_time = time.time() - batch_start
                 quads_per_sec = inserted_count / batch_time if batch_time > 0 else 0
-                print(f"Inserted {total_inserted:,} quads ({quads_per_sec:,.0f} quads/sec)")
+                
+                # Show transaction statistics every 10 batches
+                if (total_inserted // BATCH_SIZE) % 10 == 0:
+                    stats = transaction.get_transaction_stats()
+                    print(f"Inserted {total_inserted:,} quads ({quads_per_sec:,.0f} quads/sec) - "
+                          f"Transaction stats: {stats['quads_added']:,} quads, {stats['terms_added']:,} terms")
+                else:
+                    print(f"Inserted {total_inserted:,} quads ({quads_per_sec:,.0f} quads/sec)")
                 
                 if inserted_count != len(current_batch):
                     print(f"⚠️  Warning: Batch insert returned {inserted_count}, expected {len(current_batch)}")
@@ -242,8 +251,8 @@ async def reload_wordnet_data():
         if current_batch:
             final_batch_start = time.time()
             
-            batch_inserted = await space_impl.add_rdf_quads_batch(SPACE_ID, current_batch, 
-                                                                auto_commit=False, verify_count=False, connection=conn)
+            batch_inserted = await space_impl.db_ops.add_rdf_quads_batch(SPACE_ID, current_batch, 
+                                                                auto_commit=False, verify_count=False, transaction=transaction)
             total_inserted += batch_inserted
             
             final_batch_time = time.time() - final_batch_start
@@ -258,18 +267,21 @@ async def reload_wordnet_data():
         commit_start = time.time()
         
         try:
-            # Use the space implementation's commit function with our connection
-            commit_success = await space_impl.commit_transaction(connection=conn)
+            # Commit the transaction (synchronous method)
+            success = await space_impl.core.commit_transaction_object(transaction)
             
             commit_time = time.time() - commit_start
-            if commit_success:
+            if success:
                 print(f"✅ Transaction committed in {commit_time:.2f}s")
+                print(f"📊 Active transactions after commit: {space_impl.core.get_active_transaction_count()}")
             else:
-                print(f"❌ Transaction commit failed after {commit_time:.2f}s")
+                print(f"❌ Transaction commit failed")
                 return False
-        finally:
-            # Close the connection
-            conn.close()
+        except Exception as e:
+            # Rollback on error (synchronous method)
+            rollback_success = await space_impl.core.rollback_transaction_object(transaction)
+            print(f"❌ Transaction commit failed, rolled back: {e} (rollback success: {rollback_success})")
+            return False
         
         # Calculate and display total batch loading time
         total_batch_time = time.time() - batch_loading_start
@@ -303,10 +315,17 @@ async def reload_wordnet_data():
         # Convert triples to quads with None as graph (should trigger global graph assignment)
         sample_quads = [(s, p, o, None) for s, p, o in sample_triples]
         
-        # Insert sample quads using the same method
+        # Create a new transaction for sample data (previous transaction was committed)
+        sample_transaction = await space_impl.core.create_transaction(space_impl)
+        
+        # Insert sample quads using the new transaction
         sample_start = time.time()
-        sample_inserted = await space_impl.add_rdf_quads_batch(SPACE_ID, sample_quads)
+        sample_inserted = await space_impl.db_ops.add_rdf_quads_batch(SPACE_ID, sample_quads, 
+                                                                     auto_commit=False, transaction=sample_transaction)
         sample_time = time.time() - sample_start
+        
+        # Commit the sample transaction
+        sample_commit_success = await space_impl.core.commit_transaction_object(sample_transaction)
         
         print(f"✅ Sample global graph data inserted: {sample_inserted} quads in {sample_time:.3f}s")
         
@@ -319,6 +338,15 @@ async def reload_wordnet_data():
         print(f"❌ Error loading WordNet data: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Ensure transaction is rolled back on any error
+        try:
+            if 'transaction' in locals() and transaction:
+                rollback_success = await space_impl.core.rollback_transaction_object(transaction)
+                print(f"🔄 Transaction rolled back due to error (success: {rollback_success})")
+        except Exception as rollback_error:
+            print(f"⚠️ Warning: Failed to rollback transaction: {rollback_error}")
+        
         return False
 
     # Step 7: Recreate indexes after bulk loading for optimal query performance
@@ -342,8 +370,6 @@ async def reload_wordnet_data():
         
         # Get table names using the same logic as table creation (respects use_unlogged config)
         table_names = space_impl._get_table_names(SPACE_ID)
-        if space_impl.use_unlogged:
-            table_names = {key: f"{value}_unlogged" for key, value in table_names.items()}
         quad_table_name = table_names['rdf_quad']
         
         # Use synchronous connection but ensure we're reading committed data

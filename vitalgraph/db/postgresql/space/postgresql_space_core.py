@@ -8,6 +8,7 @@ from psycopg.rows import dict_row
 # Import PostgreSQL utilities
 from ..postgresql_log_utils import PostgreSQLLogUtils
 from .postgresql_space_utils import PostgreSQLSpaceUtils
+from .postgresql_space_transaction import PostgreSQLSpaceTransaction
 
 
 class PostgreSQLSpaceCore:
@@ -46,6 +47,9 @@ class PostgreSQLSpaceCore:
         
         # Initialize utils instance for timing operations
         self.utils = PostgreSQLLogUtils()
+        
+        # Transaction management
+        self.active_transactions: Dict[str, PostgreSQLSpaceTransaction] = {}
         
         # Validate global prefix using utils
         PostgreSQLSpaceUtils.validate_global_prefix(global_prefix)
@@ -182,10 +186,10 @@ class PostgreSQLSpaceCore:
         try:
             # Use the async context manager for health check
             async with self.get_db_connection() as conn:
-                async with conn.cursor() as cursor:
-                    await cursor.execute('SELECT 1')
-                    result = await cursor.fetchone()
-                    return result is not None
+                cursor = conn.cursor()
+                await cursor.execute('SELECT 1')
+                result = await cursor.fetchone()
+                return result is not None
         except Exception as e:
             self.logger.error(f"Health check failed: {e}")
             return False
@@ -278,27 +282,43 @@ class PostgreSQLSpaceCore:
             
             conn = self.get_connection()
             try:
-                with conn.cursor() as cursor:
-                    # Check if the main rdf_quad table exists
-                    rdf_quad_table = table_names.get('rdf_quad')
-                    if not rdf_quad_table:
-                        return False
-                    
-                    cursor.execute("""
-                        SELECT EXISTS (
-                            SELECT FROM information_schema.tables 
-                            WHERE table_name = %s
-                        )
-                    """, (rdf_quad_table,))
-                    
-                    result = cursor.fetchone()
-                    return result[0] if result else False
-                    
+                cursor = conn.cursor()
+                # Check if the main rdf_quad table exists
+                rdf_quad_table = table_names.get('rdf_quad')
+                if not rdf_quad_table:
+                    self.logger.debug(f"No rdf_quad table name found for space '{space_id}'")
+                    return False
+                
+                self.logger.debug(f"Checking if table '{rdf_quad_table}' exists for space '{space_id}'")
+                
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = %s
+                    )
+                """, (rdf_quad_table,))
+                
+                result = cursor.fetchone()
+                self.logger.debug(f"Raw result from query: {result} (type: {type(result)})")
+                if result:
+                    # Handle different result formats
+                    if isinstance(result, (tuple, list)) and len(result) > 0:
+                        exists = bool(result[0])
+                    else:
+                        # If result is not indexable, try to convert directly
+                        exists = bool(result)
+                else:
+                    exists = False
+                self.logger.debug(f"Table '{rdf_quad_table}' exists: {exists}")
+                return exists
+                
             finally:
                 conn.close()
                 
         except Exception as e:
-            self.logger.error(f"Error checking if space '{space_id}' exists: {e}")
+            import traceback
+            self.logger.error(f"Error checking if space '{space_id}' exists: {type(e).__name__}: {e}")
+            self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
     def list_spaces(self) -> List[str]:
@@ -416,6 +436,138 @@ class PostgreSQLSpaceCore:
                 "exists": False,
                 "error": str(e)
             }
+    
+    async def create_transaction(self, space_impl) -> PostgreSQLSpaceTransaction:
+        """
+        Create a new transaction object with a database connection.
+        
+        Args:
+            space_impl: Reference to the PostgreSQLSpaceImpl instance
+            
+        Returns:
+            PostgreSQLSpaceTransaction: New transaction object
+        """
+        try:
+            # Get a connection - we need to manage it manually since the transaction will own it
+            if self.shared_pool:
+                # For shared pool (psycopg3 ConnectionPool), get connection synchronously
+                conn = self.shared_pool.getconn()
+            elif self.rdf_pool:
+                # For RDF pool, get connection from psycopg3 pool
+                conn = self.rdf_pool.getconn()
+            else:
+                # Fallback to direct connection
+                conn = psycopg.connect(self.connection_string, row_factory=dict_row)
+            
+            # Create transaction object
+            transaction = PostgreSQLSpaceTransaction(space_impl, conn)
+            
+            # Track the active transaction
+            self.active_transactions[transaction.transaction_id] = transaction
+            
+            self.logger.debug(f"Created transaction {transaction.transaction_id}")
+            return transaction
+                
+        except Exception as e:
+            self.logger.error(f"Failed to create transaction: {e}")
+            raise
+    
+    async def get_transaction(self, space_impl) -> PostgreSQLSpaceTransaction:
+        """
+        Get a new transaction object (alias for create_transaction).
+        
+        Args:
+            space_impl: Reference to the PostgreSQLSpaceImpl instance
+            
+        Returns:
+            PostgreSQLSpaceTransaction: New transaction object
+        """
+        return await self.create_transaction(space_impl)
+    
+    async def commit_transaction_object(self, transaction: PostgreSQLSpaceTransaction) -> bool:
+        """
+        Commit a specific transaction object.
+        
+        Args:
+            transaction: The transaction object to commit
+            
+        Returns:
+            bool: True if commit was successful, False otherwise
+        """
+        if not isinstance(transaction, PostgreSQLSpaceTransaction):
+            self.logger.error("Invalid transaction object provided")
+            return False
+            
+        return await transaction.commit()
+    
+    async def rollback_transaction_object(self, transaction: PostgreSQLSpaceTransaction) -> bool:
+        """
+        Rollback a specific transaction object.
+        
+        Args:
+            transaction: The transaction object to rollback
+            
+        Returns:
+            bool: True if rollback was successful, False otherwise
+        """
+        if not isinstance(transaction, PostgreSQLSpaceTransaction):
+            self.logger.error("Invalid transaction object provided")
+            return False
+            
+        return await transaction.rollback()
+    
+    def get_active_transaction_count(self) -> int:
+        """
+        Get the number of currently active transactions.
+        
+        Returns:
+            int: Number of active transactions
+        """
+        active_count = sum(1 for tx in self.active_transactions.values() if tx.is_active)
+        return active_count
+    
+    async def rollback_all_transactions(self) -> Dict[str, bool]:
+        """
+        Rollback all pending transactions.
+        
+        This is typically used during shutdown or error recovery.
+        
+        Returns:
+            Dict[str, bool]: Dictionary mapping transaction IDs to rollback success status
+        """
+        results = {}
+        
+        # Get list of active transactions to avoid modification during iteration
+        active_transactions = [(tx_id, tx) for tx_id, tx in self.active_transactions.items() if tx.is_active]
+        
+        self.logger.info(f"Rolling back {len(active_transactions)} active transactions")
+        
+        for tx_id, transaction in active_transactions:
+            try:
+                success = await transaction.rollback()
+                results[tx_id] = success
+                if success:
+                    self.logger.debug(f"Successfully rolled back transaction {tx_id}")
+                else:
+                    self.logger.warning(f"Failed to rollback transaction {tx_id}")
+            except Exception as e:
+                self.logger.error(f"Error rolling back transaction {tx_id}: {e}")
+                results[tx_id] = False
+        
+        return results
+    
+    async def _remove_active_transaction(self, transaction_id: str) -> None:
+        """
+        Remove a transaction from the active transactions list.
+        
+        This is called internally by PostgreSQLSpaceTransaction when it completes.
+        
+        Args:
+            transaction_id: ID of the transaction to remove
+        """
+        if transaction_id in self.active_transactions:
+            del self.active_transactions[transaction_id]
+            self.logger.debug(f"Removed transaction {transaction_id} from active list")
     
     async def commit_transaction(self, connection=None) -> bool:
         """

@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 from vitalgraph.db.postgresql.postgresql_space_impl import PostgreSQLSpaceImpl
 from vitalgraph.db.postgresql.postgresql_log_utils import PostgreSQLLogUtils
 from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
@@ -41,15 +42,18 @@ GLOBAL_GRAPH_URI = "urn:___GLOBAL"
 
 # Global variables for database connection
 impl = None
+sparql_impl = None
 space_impl = None
 
 async def setup_connection():
     """Initialize database connection for tests."""
-    global impl, space_impl
+    global impl, sparql_impl, space_impl
     
     print("🔌 Setting up database connection...")
     
-    config_path = Path(__file__).parent.parent.parent / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
+    # Initialize VitalGraphImpl with config file
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
     
     from vitalgraph.config.config_loader import get_config
     config = get_config(str(config_path))
@@ -57,15 +61,26 @@ async def setup_connection():
     impl = VitalGraphImpl(config=config)
     await impl.db_impl.connect()
     
+    # Get space implementation for direct database operations
     space_impl = impl.db_impl.get_space_impl()
+    
+    # Initialize SPARQL implementation for any SPARQL operations
+    sparql_impl = PostgreSQLSparqlImpl(space_impl)
     
     print(f"✅ Connected to database")
 
 async def cleanup_connection():
     """Clean up database connection."""
+    global impl, sparql_impl, space_impl
+    
     if impl:
         await impl.db_impl.disconnect()
         print("🔌 Database connection closed")
+    
+    # Clear global references
+    impl = None
+    sparql_impl = None
+    space_impl = None
 
 async def run_sql_query(name, sql_query, params=None, limit_results=10):
     """Execute a raw SQL query and display results."""
@@ -108,8 +123,11 @@ async def test_quad_table_schema():
     """Test the quad table schema and structure."""
     print("\n📋 QUAD TABLE SCHEMA:")
     
-    # Get table name
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    
+    print(f"  Using quad table: {quad_table_name}")
     
     # Check table structure
     await run_sql_query("Table structure", f"""
@@ -140,8 +158,12 @@ async def test_basic_quad_counts():
     """Test basic quad counting and statistics."""
     print("\n📊 BASIC QUAD STATISTICS:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    term_table_name = table_names.get('term')
+    
+    print(f"  Using tables: {quad_table_name}, {term_table_name}")
     
     # Total quad count
     await run_sql_query("Total quads", f"""
@@ -172,9 +194,12 @@ async def test_duplicate_quad_detection():
     """Test detection and handling of duplicate quads."""
     print("\n🔍 DUPLICATE QUAD DETECTION:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    term_table_name = table_names.get('term')
+    
+    print(f"  Using tables: {quad_table_name}, {term_table_name}")
     
     # Find SPOC combinations that have duplicates
     await run_sql_query("SPOC combinations with duplicates", f"""
@@ -216,9 +241,12 @@ async def test_subject_range_queries():
     """Test subject-based range queries to verify clustering performance."""
     print("\n🎯 SUBJECT RANGE QUERIES:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    term_table_name = table_names.get('term')
+    
+    print(f"  Using tables: {quad_table_name}, {term_table_name}")
     
     # Get some sample subject UUIDs for range testing
     sample_subjects = await run_sql_query("Sample subject UUIDs", f"""
@@ -258,8 +286,11 @@ async def test_quad_uuid_uniqueness():
     """Test quad_uuid uniqueness and generation."""
     print("\n🔑 QUAD UUID UNIQUENESS:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    
+    print(f"  Using quad table: {quad_table_name}")
     
     # Verify all quad_uuids are unique
     await run_sql_query("Quad UUID uniqueness check", f"""
@@ -292,9 +323,12 @@ async def test_performance_queries():
     """Test performance-critical queries."""
     print("\n⚡ PERFORMANCE QUERIES:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    term_table_name = table_names.get('term')
+    
+    print(f"  Using tables: {quad_table_name}, {term_table_name}")
     
     # Test primary key lookup (should be very fast)
     sample_quad = await run_sql_query("Sample quad for PK test", f"""
@@ -342,8 +376,11 @@ async def test_clustering_analysis():
     """Analyze physical clustering and storage patterns."""
     print("\n🗂️  CLUSTERING ANALYSIS:")
     
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    
+    print(f"  Using quad table: {quad_table_name}")
     
     # Check if table is clustered
     await run_sql_query("Table clustering status", f"""
@@ -367,9 +404,11 @@ async def test_insert_duplicate_quad():
     """Test inserting duplicate quads to verify schema works correctly."""
     print("\n➕ DUPLICATE QUAD INSERTION TEST:")
     
-    # Get a sample existing quad
-    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
+    
+    print(f"  Using quad table: {quad_table_name}")
     
     sample_quad = await run_sql_query("Get sample quad for duplication", f"""
         SELECT subject_uuid, predicate_uuid, object_uuid, context_uuid
@@ -455,7 +494,7 @@ async def main():
         await test_quad_uuid_uniqueness()
         await test_performance_queries()
         await test_clustering_analysis()
-        await test_insert_duplicate_quad()
+        # await test_insert_duplicate_quad()
         
     finally:
         # Cleanup

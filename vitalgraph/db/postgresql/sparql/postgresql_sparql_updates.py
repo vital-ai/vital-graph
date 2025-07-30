@@ -305,14 +305,15 @@ def translate_create_operation(graph_uri: str, table_config: TableConfig) -> Lis
     logger = logging.getLogger(__name__)
     logger.debug(f"Translating CREATE operation for graph: {graph_uri}")
     
-    # CREATE operation just ensures the graph URI exists in the term table
-    # The graph is implicitly created when triples are added to it
+    # CREATE operation ensures the graph URI exists in the graph table
+    # Extract a simple name from the URI for the graph_name field
+    graph_name = graph_uri.split('/')[-1] if '/' in graph_uri else graph_uri
     
     sql_statements = [
         f"""
-            INSERT INTO {table_config.term_table} (term_text, term_type)
-            VALUES ('{graph_uri.replace("'", "''")}', 'U')
-            ON CONFLICT (term_text, term_type) DO NOTHING
+            INSERT INTO {table_config.graph_table} (graph_uri, graph_name, triple_count)
+            VALUES ('{graph_uri.replace("'", "''")}', '{graph_name.replace("'", "''")}', 0)
+            ON CONFLICT (graph_uri) DO NOTHING
         """
     ]
     

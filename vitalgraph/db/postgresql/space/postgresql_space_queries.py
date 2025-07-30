@@ -304,12 +304,13 @@ class PostgreSQLSpaceQueries:
         PostgreSQLSpaceUtils.validate_space_id(space_id)
         
         # Check if space exists first - this will throw if it doesn't
-        space_exists = await self.space_impl.space_exists(space_id)
+        space_exists = self.space_impl.space_exists(space_id)
         if not space_exists:
             raise ValueError(f"Space '{space_id}' does not exist")
         
-        # Get table names using UUID-based approach
-        quad_table_name = PostgreSQLSpaceUtils.get_table_name(self.space_impl.global_prefix, space_id, "rdf_quad")
+        # Get table names using the same method as insertion operations
+        table_names = self.space_impl._get_table_names(space_id)
+        quad_table_name = table_names['rdf_quad']
         
         try:
             # Use raw psycopg3 connection for UUID-based operations

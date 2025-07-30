@@ -33,7 +33,7 @@ class PostgreSQLSpaceDBOps:
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
     
     async def add_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, 
-                      object_uuid: str, context_uuid: str) -> bool:
+                      object_uuid: str, context_uuid: str, transaction=None, auto_commit: bool = True) -> bool:
         """
         Add an RDF quad to a specific space using UUID-based approach.
         
@@ -52,10 +52,19 @@ class PostgreSQLSpaceDBOps:
             
             # Get table names using UUID-based approach
             table_prefix = PostgreSQLSpaceUtils.get_table_prefix(self.space_impl.global_prefix, space_id)
-            quad_table_name = PostgreSQLSpaceUtils.get_table_name(self.space_impl.global_prefix, space_id, "rdf_quad")
+            table_names = self.space_impl._get_table_names(space_id)
+            quad_table_name = table_names.get('rdf_quad')
             
-            # Use raw psycopg3 connection for UUID-based operations
-            with self.space_impl.get_connection() as conn:
+            # Use provided transaction or get a connection directly if None
+            should_close_conn = transaction is None
+            if transaction is not None:
+                conn = transaction.get_connection()
+                if conn is None:
+                    raise RuntimeError("Transaction object does not provide a valid connection")
+            else:
+                conn = self.space_impl.get_connection()
+        
+            try:
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
@@ -71,16 +80,32 @@ class PostgreSQLSpaceDBOps:
                 )
                 result = cursor.fetchone()
                 quad_uuid = result['quad_uuid']
-                conn.commit()
                 
-                self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
+                # Update transaction statistics if transaction is provided
+                if transaction is not None:
+                    transaction.increment_quads_added(1)
+                
+                # Only commit if auto_commit is True and no transaction is provided
+                if auto_commit and transaction is None:
+                    conn.commit()
+                    self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
+                elif transaction is None:
+                    # If auto_commit is False but no transaction, still commit for consistency
+                    conn.commit()
+                    self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid} (auto_commit=False)")
+                else:
+                    self.logger.debug(f"Prepared quad for space '{space_id}' with UUID: {quad_uuid} (will commit with transaction)")
+                
                 return True
+            finally:
+                if should_close_conn and conn:
+                    conn.close()
                 
         except Exception as e:
             self.logger.error(f"Error adding quad to space '{space_id}': {e}")
             return False
     
-    async def remove_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, object_uuid: str, context_uuid: str) -> bool:
+    async def remove_quad(self, space_id: str, subject_uuid: str, predicate_uuid: str, object_uuid: str, context_uuid: str, transaction=None, auto_commit: bool = True) -> bool:
         """
         Remove a single RDF quad from a specific space using UUID-based approach.
         
@@ -102,10 +127,19 @@ class PostgreSQLSpaceDBOps:
             
             # Get table names using UUID-based approach
             table_prefix = PostgreSQLSpaceUtils.get_table_prefix(self.space_impl.global_prefix, space_id)
-            quad_table_name = PostgreSQLSpaceUtils.get_table_name(self.space_impl.global_prefix, space_id, "rdf_quad")
+            table_names = self.space_impl._get_table_names(space_id)
+            quad_table_name = table_names.get('rdf_quad')
             
-            # Use raw psycopg3 connection for UUID-based operations
-            with self.space_impl.get_connection() as conn:
+            # Use provided transaction or get a connection directly if None
+            should_close_conn = transaction is None
+            if transaction is not None:
+                conn = transaction.get_connection()
+                if conn is None:
+                    raise RuntimeError("Transaction object does not provide a valid connection")
+            else:
+                conn = self.space_impl.get_connection()
+            
+            try:
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
@@ -124,7 +158,18 @@ class PostgreSQLSpaceDBOps:
                 )
                 
                 removed_count = cursor.rowcount
-                conn.commit()
+                
+                # Update transaction statistics if transaction is provided
+                if transaction is not None and removed_count > 0:
+                    transaction.increment_quads_removed(1)
+                
+                # Only commit if auto_commit is True and no transaction is provided
+                if auto_commit and transaction is None:
+                    conn.commit()
+                elif transaction is None:
+                    # If auto_commit is False but no transaction, still commit for consistency
+                    conn.commit()
+                # If transaction is provided, don't commit (will be handled by transaction)
                 
                 if removed_count > 0:
                     self.logger.debug(f"Removed one quad instance from space '{space_id}'")
@@ -132,25 +177,29 @@ class PostgreSQLSpaceDBOps:
                 else:
                     self.logger.debug(f"No quad was actually removed from space '{space_id}'")
                     return False
+            finally:
+                if should_close_conn and conn:
+                    conn.close()
                 
         except Exception as e:
             self.logger.error(f"Error removing quad from space '{space_id}': {e}")
             return False
     
     async def add_rdf_quads_batch(self, space_id: str, quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]], 
-                                 auto_commit: bool = True, verify_count: bool = False, connection=None) -> int:
+                             auto_commit: bool = True, verify_count: bool = False, transaction=None) -> int:
         """
         Datatype-aware batch RDF quad insertion with proper datatype handling.
         
         This method uses the new datatype cache system to properly resolve and store
-        datatype IDs for all literal terms in the batch.
+        datatype IDs for all literal terms in the batch. It also uses the graph cache
+        to ensure all graphs are registered before inserting quads.
         
         Args:
             space_id: The space identifier
             quads: List of (subject, predicate, object, context) tuples
             auto_commit: Whether to commit the transaction automatically (default: True)
             verify_count: Whether to verify insertion with COUNT query (default: False, for performance)
-            connection: Optional connection to use (for transaction management)
+            transaction: Optional PostgreSQLSpaceTransaction object for transaction management
             
         Returns:
             Number of quads successfully inserted
@@ -174,12 +223,11 @@ class PostgreSQLSpaceDBOps:
                 
                 # Handle global graph if no graph is specified
                 if g is None:
-                    from vitalgraph.db.postgresql.postgresql_sparql_impl import GraphConstants
                     from rdflib import URIRef
-                    g = URIRef(GraphConstants.GLOBAL_GRAPH_URI)
+                    g = URIRef("urn:___GLOBAL")
                 
                 g_type, g_lang, g_datatype_uri = PostgreSQLSpaceUtils.determine_term_type(g)
-                    
+
                 # Extract literal values if needed
                 s_value = PostgreSQLSpaceUtils.extract_literal_value(s) if s_type == 'L' else s
                 p_value = PostgreSQLSpaceUtils.extract_literal_value(p) if p_type == 'L' else p
@@ -229,7 +277,31 @@ class PostgreSQLSpaceDBOps:
                 unique_terms_final.add(final_term)
             quad_term_data_final.append(tuple(final_quad_terms))
         
-        # Step 4: Generate UUIDs and process batch insertion
+        # Step 4: Extract unique graph URIs and ensure they exist in the database
+        unique_graph_uris = set()
+        for quad_terms in quad_term_data_final:
+            s_info, p_info, o_info, g_info = quad_terms
+            g_value, g_type, g_lang, g_datatype_id = g_info
+            if g_type == 'U':  # Only URI graphs need to be registered
+                unique_graph_uris.add(str(g_value))
+        
+        # Use graph cache to check which graphs need to be created
+        if unique_graph_uris:
+            graph_cache = self.space_impl.get_graph_cache(space_id)
+            # Ensure cache is initialized with existing graphs from database
+            await graph_cache.ensure_initialized_async(space_id, self.space_impl.graphs)
+            missing_graphs = graph_cache.get_missing_graphs(unique_graph_uris)
+            
+            if missing_graphs:
+                self.logger.info(f"📊 Ensuring {len(missing_graphs)} graphs exist in database")
+                # Use batch ensure graphs exist to create missing graphs
+                await self.space_impl.graphs.batch_ensure_graphs_exist(space_id, missing_graphs)
+                # Add newly created graphs to cache
+                graph_cache.add_graphs_to_cache_batch(missing_graphs)
+            
+            self.logger.debug(f"Graph cache stats: {len(unique_graph_uris)} total graphs, {len(missing_graphs)} created")
+        
+        # Step 5: Generate UUIDs and process batch insertion
         term_to_uuid = {}
         
         for term_info in unique_terms_final:
@@ -240,9 +312,13 @@ class PostgreSQLSpaceDBOps:
         # Get table names for this space (already includes unlogged suffix if configured)
         table_names = self.space_impl._get_table_names(space_id)
         
-        # Use provided connection or get one if None
-        should_close_conn = connection is None
-        if connection is None:
+        # Use provided transaction or get a connection directly if None
+        should_close_conn = transaction is None
+        if transaction is not None:
+            connection = transaction.get_connection()
+            if connection is None:
+                raise RuntimeError("Transaction object does not provide a valid connection")
+        else:
             connection = self.space_impl.get_connection()
         
         try:
@@ -293,6 +369,11 @@ class PostgreSQLSpaceDBOps:
             
             inserted_count = cursor.rowcount
             
+            # Update transaction statistics if transaction is provided
+            if transaction is not None:
+                transaction.increment_quads_added(inserted_count)
+                transaction.increment_terms_added(len(unique_terms_final))
+            
             if auto_commit:
                 connection.commit()
                 self.logger.info(f"✅ Successfully inserted {inserted_count} quads")
@@ -302,9 +383,16 @@ class PostgreSQLSpaceDBOps:
             return inserted_count
             
         except Exception as e:
-            self.logger.error(f"❌ Error in batch quad insertion: {e}")
-            import traceback
-            self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
+            error_msg = str(e)
+            # Clean up verbose PostgreSQL error messages for invalid spaces
+            if "does not exist" in error_msg and "relation" in error_msg:
+                if "invalid_space" in error_msg:
+                    self.logger.error(f"❌ Error in batch quad insertion: Invalid space '{space_id}' does not exist")
+                else:
+                    self.logger.error(f"❌ Error in batch quad insertion: Space '{space_id}' tables not found")
+            else:
+                self.logger.error(f"❌ Error in batch quad insertion: {error_msg}")
+            
             if auto_commit:
                 connection.rollback()
             return 0
@@ -312,7 +400,7 @@ class PostgreSQLSpaceDBOps:
             if should_close_conn and connection:
                 connection.close()
     
-    async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
+    async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple], transaction=None) -> int:
         """
         Datatype-aware batch RDF quad removal with proper datatype handling.
         
@@ -322,6 +410,7 @@ class PostgreSQLSpaceDBOps:
         Args:
             space_id: Space identifier
             quads: List of (s, p, o, g) tuples representing RDF quads to remove
+            transaction: Optional PostgreSQLSpaceTransaction object for transaction management
             
         Returns:
             int: Number of quads successfully removed
@@ -377,7 +466,7 @@ class PostgreSQLSpaceDBOps:
             
             # Step 2: Resolve datatype URIs to IDs using the cache and database
             if datatype_uris_to_resolve:
-                datatype_uri_to_id = await self.space_impl._resolve_datatype_ids_batch(space_id, datatype_uris_to_resolve)
+                datatype_uri_to_id = await self.space_impl.datatypes.resolve_datatype_ids_batch(space_id, datatype_uris_to_resolve)
             else:
                 datatype_uri_to_id = {}
             
@@ -396,7 +485,16 @@ class PostgreSQLSpaceDBOps:
             if quad_uuids:
                 table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
                 
-                async with self.space_impl.get_db_connection() as conn:
+                # Use provided transaction or get a connection directly if None
+                should_close_conn = transaction is None
+                if transaction is not None:
+                    conn = transaction.get_connection()
+                    if conn is None:
+                        raise RuntimeError("Transaction object does not provide a valid connection")
+                else:
+                    conn = self.space_impl.get_connection()
+                
+                try:
                     cursor = conn.cursor()
                     
                     removed_count = 0
@@ -416,28 +514,52 @@ class PostgreSQLSpaceDBOps:
                         if placeholders:
                             query = f"DELETE FROM {table_names['rdf_quad']} WHERE {' OR '.join(placeholders)}"
                             
-                            await cursor.execute(query, params)
+                            cursor.execute(query, params)
                             batch_removed = cursor.rowcount
                             removed_count += batch_removed
                             
                             self.logger.debug(f"🗑️ Batch {i//batch_size + 1}: Removed {batch_removed} quads")
                     
-                    await conn.commit()
+                    # Update transaction statistics if transaction is provided
+                    if transaction is not None:
+                        transaction.increment_quads_removed(removed_count)
+                    
+                    if transaction is None:
+                        conn.commit()
                     
                     if removed_count > 0:
                         self.logger.info(f"✅ Successfully removed {removed_count} quads")
                         return removed_count
+                    else:
+                        self.logger.info("No matching quads found to remove")
+                        return 0
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    # Clean up verbose PostgreSQL error messages for invalid spaces
+                    if "does not exist" in error_msg and "relation" in error_msg:
+                        if "invalid_space" in error_msg:
+                            self.logger.error(f"❌ Error in batch quad removal: Invalid space '{space_id}' does not exist")
+                        else:
+                            self.logger.error(f"❌ Error in batch quad removal: Space '{space_id}' tables not found")
+                    else:
+                        self.logger.error(f"❌ Error in batch quad removal: {error_msg}")
+                    
+                    if transaction is None:
+                        conn.rollback()
+                    return 0
+                finally:
+                    if should_close_conn and conn:
+                        conn.close()
             else:
                 self.logger.info("No quads to remove")
                 return 0
-                    
+                
         except Exception as e:
-            self.logger.error(f"Error in batch RDF quad removal: {e}")
-            import traceback
-            self.logger.error(f"📋 Full traceback: {traceback.format_exc()}")
+            self.logger.error(f"❌ Error in batch quad removal: {e}")
             return 0
     
-    async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list]) -> bool:
+    async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list], transaction=None) -> bool:
         """
         Add an RDF quad to a specific space with proper datatype handling.
         
@@ -476,30 +598,14 @@ class PostgreSQLSpaceDBOps:
             self.logger.debug(f"Detected types: s={s_type}, p={p_type}, o={o_type}, g={g_type}")
             self.logger.debug(f"Datatype IDs: s={s_datatype_id}, p={p_datatype_id}, o={o_datatype_id}, g={g_datatype_id}")
             
-            # Use cached SPARQL implementation for efficient batch term UUID lookup
-            sparql_impl = self.space_impl.get_sparql_impl(space_id)
+            # Get table names for operations
+            table_names = self.space_impl._get_table_names(space_id)
             
-            # Prepare all 4 terms for batch lookup
-            terms_to_lookup = [
-                (s_value, s_type),
-                (p_value, p_type), 
-                (o_value, o_type),
-                (g_value, g_type)
-            ]
-            
-            # Get table configuration
-            table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
-            from ..postgresql_sparql_impl import TableConfig
-            table_config = TableConfig(quad_table=table_names['rdf_quad'], term_table=table_names['term'])
-            
-            # Batch lookup all term UUIDs (leverages cache + optimized SQL)
-            term_uuid_mappings = await sparql_impl._get_term_uuids_batch(terms_to_lookup, table_config)
-            
-            # Extract UUIDs for each term
-            subject_uuid = term_uuid_mappings.get((s_value, s_type))
-            predicate_uuid = term_uuid_mappings.get((p_value, p_type))
-            object_uuid = term_uuid_mappings.get((o_value, o_type))
-            graph_uuid = term_uuid_mappings.get((g_value, g_type))
+            # Look up existing terms using complete term characteristics
+            subject_uuid = await self.space_impl.get_term_uuid(space_id, s_value, s_type, s_lang, s_datatype_id)
+            predicate_uuid = await self.space_impl.get_term_uuid(space_id, p_value, p_type, p_lang, p_datatype_id)
+            object_uuid = await self.space_impl.get_term_uuid(space_id, o_value, o_type, o_lang, o_datatype_id)
+            graph_uuid = await self.space_impl.get_term_uuid(space_id, g_value, g_type, g_lang, g_datatype_id)
             
             # Check if any terms are missing (need to be inserted)
             missing_terms = []
@@ -512,9 +618,14 @@ class PostgreSQLSpaceDBOps:
             if not graph_uuid:
                 missing_terms.append((g_value, g_type, g_lang, g_datatype_id, 'graph'))
             
+            # DEBUG: Print missing terms info
+            print(f"🔍 DEBUG add_rdf_quad: Found {len(missing_terms)} missing terms:")
+            for term_value, term_type, lang, datatype_id, role in missing_terms:
+                print(f"  - {role}: '{term_value}' (type: {term_type}, lang: {lang}, dt_id: {datatype_id})")
+            
             # Insert missing terms if any
             if missing_terms:
-                self.logger.debug(f"Inserting {len(missing_terms)} missing terms for quad")
+                self.logger.debug(f"🔧 DEBUG: Inserting {len(missing_terms)} missing terms for quad")
                 
                 # Generate UUIDs for missing terms
                 # Use the static method from PostgreSQLSpaceTerms
@@ -526,6 +637,7 @@ class PostgreSQLSpaceDBOps:
                     term_uuid = PostgreSQLSpaceTerms.generate_term_uuid(term_text, term_type, lang, datatype_id)
                     term_inserts.append((term_uuid, term_text, term_type, lang, datatype_id, datetime.utcnow()))
                     cache_updates[(term_text, term_type)] = str(term_uuid)
+                    self.logger.debug(f"🔧 DEBUG: Generated {role} term: {term_text[:50]} -> {term_uuid}")
                     
                     # Update our local mappings
                     if role == 'subject':
@@ -537,28 +649,52 @@ class PostgreSQLSpaceDBOps:
                     elif role == 'graph':
                         graph_uuid = str(term_uuid)
                 
-                # Insert terms into database
-                async with self.space_impl.get_db_connection() as conn:
-                    cursor = conn.cursor()
-                    
-                    # Use executemany for batch insert
-                    await cursor.executemany(
-                        f"""INSERT INTO {table_names['term']} 
-                             (term_uuid, term_text, term_type, language, datatype_id, created_time) 
-                             VALUES (%s, %s, %s, %s, %s, %s)
-                             ON CONFLICT (term_uuid) DO NOTHING""",
-                        term_inserts
-                    )
-                    
-                    await conn.commit()
-                    
-                    # Update SPARQL cache with new terms
-                    sparql_impl._update_term_cache(cache_updates)
-                    
-                    self.logger.debug(f"Inserted {len(term_inserts)} new terms")
+                # Insert terms into database using sync connection (same as batch operations)
+                try:
+                    with self.space_impl.get_connection() as conn:
+                        conn.row_factory = psycopg.rows.dict_row
+                        cursor = conn.cursor()
+                        self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']}")
+                        
+                        # Use executemany for batch insert
+                        cursor.executemany(
+                            f"""INSERT INTO {table_names['term']} 
+                                 (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
+                                 VALUES (%s, %s, %s, %s, %s, %s)
+                                 ON CONFLICT (term_uuid) DO NOTHING""",
+                            term_inserts
+                        )
+                        
+                        rows_affected = cursor.rowcount
+                        self.logger.debug(f"🔧 DEBUG: Term insertion rowcount: {rows_affected}")
+                        
+                        # Don't commit yet - let add_quad handle the commit for the entire transaction
+                        self.logger.debug(f"🔧 DEBUG: Term insertion prepared (will commit with quad)")
+                        
+                        # Verify terms were actually inserted
+                        for term_uuid, term_text, term_type, lang, datatype_id, created_time in term_inserts:
+                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['term']} WHERE term_uuid = %s", [str(term_uuid)])
+                            result = cursor.fetchone()
+                            count = result['count'] if result else 0
+                            self.logger.debug(f"🔧 DEBUG: Term {term_text[:30]} exists after insert: {count > 0}")
+                        
+                        # Only commit if no transaction is provided (for transaction isolation)
+                        if transaction is None:
+                            conn.commit()
+                            self.logger.debug(f"✅ Successfully inserted {len(term_inserts)} new terms")
+                        else:
+                            self.logger.debug(f"✅ Prepared {len(term_inserts)} new terms (will commit with transaction)")
+                        
+                except Exception as term_insert_error:
+                    self.logger.error(f"❌ ERROR during term insertion: {term_insert_error}")
+                    import traceback
+                    self.logger.error(f"📋 Term insertion traceback: {traceback.format_exc()}")
+                    return False
+            else:
+                self.logger.debug(f"🔧 DEBUG: No missing terms to insert")
             
             # Now add the quad using the UUIDs
-            success = await self.add_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid)
+            success = await self.add_quad(space_id, subject_uuid, predicate_uuid, object_uuid, graph_uuid, transaction)
             
             if success:
                 self.logger.debug(f"Successfully added RDF quad to space '{space_id}'")

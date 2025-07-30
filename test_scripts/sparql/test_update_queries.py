@@ -44,7 +44,9 @@ async def setup_connection():
     """Initialize database connection for tests."""
     global impl, sparql_impl
     
-    config_path = Path(__file__).parent.parent.parent / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
+    # Initialize VitalGraphImpl with config file
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
     
     from vitalgraph.config.config_loader import get_config
     config = get_config(str(config_path))
@@ -60,12 +62,9 @@ async def setup_connection():
 async def cleanup_connection():
     """Clean up database connection."""
     global impl
-    
-    if impl and hasattr(impl, 'db_impl') and hasattr(impl.db_impl, 'close'):
-        await impl.db_impl.close()
-        print("🔌 Database connection closed")
-    else:
-        print("🔌 Database connection cleanup skipped")
+    if impl:
+        if impl.db_impl:
+            await impl.db_impl.disconnect()
 
 async def run_update(sparql_impl, name, sparql, debug=False):
     """Execute a single SPARQL UPDATE operation and display results."""
@@ -632,33 +631,28 @@ async def main():
     await setup_connection()
     
     try:
-        # Debug UPDATE parsing first
+        # Debug SPARQL parsing
         await debug_update_parsing()
         
-        # Run INSERT DATA tests (Phase 1)
+        print("\n📊 Testing SPARQL UPDATE operations:")
+        
+        # Run all SPARQL UPDATE tests
         await test_insert_data()
-        
-        # Run pattern-based tests (Phase 2)
+        await test_delete_data()
         await test_insert_delete_patterns()
-        
-        # Run graph management tests (Phase 3)
         await test_graph_management()
-        
-        # Run LOAD operation tests (Phase 4)
         await test_load_operations()
-        
-        # Skip other tests for now
-        # await test_delete_data()
-        # await test_combined_delete_insert()
-        # await test_error_cases()
+        await test_combined_delete_insert()
+        await test_error_cases()
         
     finally:
         # Performance summary
-        print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+        if sparql_impl and hasattr(sparql_impl, 'term_cache'):
+            print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
         
         # Cleanup
         await cleanup_connection()
-        print("\n✅ SPARQL UPDATE Test Suite Complete!")
+        print("\nℹ️ SPARQL UPDATE Test Suite Complete!")
 
 if __name__ == "__main__":
     asyncio.run(main())

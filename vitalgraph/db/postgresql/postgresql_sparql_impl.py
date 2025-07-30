@@ -18,7 +18,7 @@ from .postgresql_cache_term import PostgreSQLCacheTerm
 # Import orchestrator helper functions
 from .sparql.postgresql_sparql_orchestrator import (
     execute_sparql_query, execute_sparql_update, execute_sql_query,
-    batch_lookup_term_uuids, initialize_graph_cache
+    initialize_graph_cache
 )
 
 # Import core utilities
@@ -128,23 +128,76 @@ class PostgreSQLSparqlImpl:
     
     # Additional methods for backward compatibility with original implementation
     
-    async def _get_term_uuids_batch(self, terms: List[Tuple[str, str]], table_config: TableConfig) -> Dict[Tuple[str, str], str]:
+    async def _get_term_uuids_batch(self, terms: List[Tuple[str, str]], table_config: TableConfig, space_id: str) -> Dict[Tuple[str, str], str]:
         """
         Get term UUIDs for multiple terms using cache and batch database lookup.
         
         Args:
             terms: List of (term_text, term_type) tuples
             table_config: Table configuration for database queries
+            space_id: Space identifier for the batch lookup
             
         Returns:
             Dictionary mapping (term_text, term_type) to term_uuid
         """
-        return await batch_lookup_term_uuids(
-            space_impl=self.space_impl,
-            terms=terms,
-            table_config=table_config,
-            term_cache=self.term_cache
-        )
+        if not terms:
+            return {}
+        
+        result = {}
+        remaining_terms = []
+        
+        # Check cache first if available
+        if self.term_cache:
+            for term_text, term_type in terms:
+                term_key = (term_text, term_type)
+                cached_uuid = self.term_cache.get_term_uuid(term_key)
+                if cached_uuid:
+                    result[term_key] = cached_uuid
+                else:
+                    remaining_terms.append(term_key)
+        else:
+            remaining_terms = [(term_text, term_type) for term_text, term_type in terms]
+        
+        # Batch lookup remaining terms with proper type matching
+        if remaining_terms:
+            try:
+                table_names = self.space_impl._get_table_names(space_id)
+                async with self.space_impl.get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Build parameterized query for batch lookup with term types
+                    conditions = []
+                    params = []
+                    
+                    for term_text, term_type in remaining_terms:
+                        conditions.append("(term_text = %s AND term_type = %s)")
+                        params.extend([term_text, term_type])
+                    
+                    if conditions:
+                        sql = f"""
+                            SELECT term_uuid, term_text, term_type 
+                            FROM {table_names['term']} 
+                            WHERE {' OR '.join(conditions)}
+                        """
+                        
+                        cursor.execute(sql, params)
+                        rows = cursor.fetchall()
+                        
+                        # Process results
+                        for row in rows:
+                            term_uuid, term_text, term_type = row
+                            term_key = (term_text, term_type)
+                            result[term_key] = str(term_uuid)
+                            
+                            # Update cache if available
+                            if self.term_cache:
+                                self.term_cache.put_term_uuid(term_key, str(term_uuid))
+                            
+            except Exception as e:
+                self.logger.warning(f"Batch term lookup failed: {e}")
+                # If batch fails, return what we have from cache
+        
+        return result
     
     async def _initialize_graph_cache_if_needed(self, space_id: str) -> None:
         """

@@ -21,10 +21,13 @@ import uuid
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+import psycopg.rows
+
 # Add project root directory for vitalgraph imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 from vitalgraph.config.config_loader import get_config
 from vitalgraph.db.postgresql.postgresql_log_utils import PostgreSQLLogUtils
 from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
@@ -48,6 +51,7 @@ TEST_OBJECT_BASE = "http://test.crud.org/object"
 
 # Global variables for database connection
 impl = None
+sparql_impl = None
 space_impl = None
 
 def create_test_quad(subject_id: str, predicate: str, object_val: str, is_literal: bool = False) -> Tuple:
@@ -77,44 +81,234 @@ async def verify_quad_count(expected_count: int, description: str, context_uri: 
         print(f"    ❌ {description}: Error getting count - {e}")
         return False
 
+async def debug_term_storage(quad: Tuple) -> None:
+    """Debug function to see how terms are actually stored vs. queried."""
+    try:
+        subject, predicate, obj, context = quad
+        table_names = space_impl._get_table_names(SPACE_ID)
+        term_table_name = table_names.get('term')
+        
+        print(f"    🔍 DEBUG: Investigating term storage for quad:")
+        print(f"      Subject: {repr(subject)} -> {str(subject)}")
+        print(f"      Predicate: {repr(predicate)} -> {str(predicate)}")
+        print(f"      Object: {repr(obj)} -> {str(obj)}")
+        print(f"      Context: {repr(context)} -> {str(context)}")
+        
+        # Check what terms actually exist in the database
+        async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
+            cursor = conn.cursor()
+            
+            # Look for terms that might match our quad terms
+            for term_name, term_value in [("subject", subject), ("predicate", predicate), ("object", obj), ("context", context)]:
+                cursor.execute(f"""
+                    SELECT term_text, term_type, lang, datatype_id, term_uuid
+                    FROM {term_table_name} 
+                    WHERE term_text LIKE %s
+                    LIMIT 5
+                """, [f"%{str(term_value)[-20:]}%"])  # Match last 20 chars
+                
+                results = cursor.fetchall()
+                print(f"      {term_name} matches: {len(results)} found")
+                for result in results:
+                    print(f"        - {result['term_text'][:50]}... (type: {result['term_type']}, uuid: {result['term_uuid']})")
+                    
+    except Exception as e:
+        print(f"    ❌ DEBUG error: {e}")
+
+async def debug_term_insertion_process(quad: Tuple, operation: str = "unknown") -> None:
+    """Debug the term insertion process during quad creation."""
+    try:
+        subject, predicate, obj, context = quad
+        table_names = space_impl._get_table_names(SPACE_ID)
+        term_table_name = table_names.get('term')
+        
+        print(f"    🔧 DEBUG [{operation}]: Checking term insertion process:")
+        
+        async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
+            cursor = conn.cursor()
+            
+            # Count total terms before
+            cursor.execute(f"SELECT COUNT(*) as count FROM {term_table_name}")
+            before_count = cursor.fetchone()['count']
+            print(f"      Terms in DB before: {before_count}")
+            
+            # Check if specific terms exist before
+            terms_to_check = {
+                "S": str(subject),
+                "P": str(predicate), 
+                "O": str(obj),
+                "G": str(context)
+            }
+            
+            before_exists = {}
+            for name, term_text in terms_to_check.items():
+                cursor.execute(f"SELECT COUNT(*) as count FROM {term_table_name} WHERE term_text = %s", [term_text])
+                count = cursor.fetchone()['count']
+                before_exists[name] = count > 0
+                print(f"      {name} exists before: {before_exists[name]} ('{term_text[:30]}...')")
+                    
+    except Exception as e:
+        print(f"    ❌ DEBUG term insertion error: {e}")
+
+async def debug_quad_terms(quad: Tuple, operation: str = "unknown") -> None:
+    """Debug function to investigate term storage and retrieval for a quad."""
+    try:
+        subject, predicate, obj, context = quad
+        table_names = space_impl._get_table_names(SPACE_ID)
+        term_table_name = table_names.get('term')
+        quad_table_name = table_names.get('rdf_quad')
+        
+        print(f"    🔍 DEBUG [{operation}]: Investigating quad terms:")
+        print(f"      S: {repr(subject)} -> '{str(subject)}'")
+        print(f"      P: {repr(predicate)} -> '{str(predicate)}'")
+        print(f"      O: {repr(obj)} -> '{str(obj)}'")
+        print(f"      G: {repr(context)} -> '{str(context)}'")
+        
+        async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
+            cursor = conn.cursor()
+            
+            # Check if terms exist in database
+            term_matches = {}
+            for term_name, term_value in [("S", subject), ("P", predicate), ("O", obj), ("G", context)]:
+                cursor.execute(f"""
+                    SELECT term_uuid, term_text, term_type, lang, datatype_id
+                    FROM {term_table_name} 
+                    WHERE term_text = %s
+                    LIMIT 3
+                """, [str(term_value)])
+                
+                results = cursor.fetchall()
+                term_matches[term_name] = results
+                if results:
+                    print(f"      {term_name} found: {len(results)} matches")
+                    for r in results:
+                        print(f"        UUID: {r['term_uuid']}, Type: {r['term_type']}, Lang: {r['lang']}, DT: {r['datatype_id']}")
+                else:
+                    print(f"      {term_name} NOT FOUND in database")
+            
+            # If all terms found, check for quad existence
+            if all(term_matches.values()):
+                s_uuid = term_matches['S'][0]['term_uuid']
+                p_uuid = term_matches['P'][0]['term_uuid']
+                o_uuid = term_matches['O'][0]['term_uuid']
+                g_uuid = term_matches['G'][0]['term_uuid']
+                
+                cursor.execute(f"""
+                    SELECT COUNT(*) as count, quad_uuid
+                    FROM {quad_table_name}
+                    WHERE subject_uuid = %s AND predicate_uuid = %s 
+                      AND object_uuid = %s AND context_uuid = %s
+                    GROUP BY quad_uuid
+                """, [s_uuid, p_uuid, o_uuid, g_uuid])
+                
+                quad_results = cursor.fetchall()
+                print(f"      Quad matches: {len(quad_results)} found")
+                for qr in quad_results:
+                    print(f"        Quad UUID: {qr.get('quad_uuid', 'N/A')}, Count: {qr.get('count', 0)}")
+            else:
+                print(f"      Cannot check quad - missing terms")
+                    
+    except Exception as e:
+        print(f"    ❌ DEBUG error: {e}")
+        import traceback
+        print(f"    📋 DEBUG traceback: {traceback.format_exc()}")
+
 async def verify_quad_exists_db(quad: Tuple, should_exist: bool = True) -> bool:
-    """Verify quad existence using low-level DB query."""
+    """Verify quad existence using direct database queries (like debug_quad_terms)."""
     try:
         subject, predicate, obj, context = quad
         
-        # Get table names
-        quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-        term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+        # Get proper table names using space_impl method
+        table_names = space_impl._get_table_names(SPACE_ID)
+        quad_table_name = table_names.get('rdf_quad')
+        term_table_name = table_names.get('term')
         
-        # Query for the quad using term text values
-        with space_impl.get_connection() as conn:
+        # Use async connection with synchronous cursor operations (like debug_quad_terms)
+        async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT COUNT(*) as count
-                FROM {quad_table_name} q
-                JOIN {term_table_name} s ON q.subject_uuid = s.term_uuid
-                JOIN {term_table_name} p ON q.predicate_uuid = p.term_uuid  
-                JOIN {term_table_name} o ON q.object_uuid = o.term_uuid
-                JOIN {term_table_name} c ON q.context_uuid = c.term_uuid
-                WHERE s.term_text = %s 
-                  AND p.term_text = %s 
-                  AND o.term_text = %s 
-                  AND c.term_text = %s
-            """, [str(subject), str(predicate), str(obj), str(context)])
+            
+            # Find term UUIDs using complete term characteristics (same as insertion logic)
+            from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
+            
+            # Determine term types and characteristics for each term
+            terms_info = []
+            for term_name, term_value in [("subject", subject), ("predicate", predicate), ("object", obj), ("context", context)]:
+                term_type, term_lang, term_datatype_uri = PostgreSQLSpaceUtils.determine_term_type(term_value)
+                
+                # Extract literal value if needed
+                if term_type == 'L':
+                    processed_value = PostgreSQLSpaceUtils.extract_literal_value(term_value)
+                else:
+                    processed_value = str(term_value)
+                
+                terms_info.append((term_name, processed_value, term_type, term_lang, term_datatype_uri))
+            
+            # Resolve datatype URIs to IDs
+            datatype_uris = {info[4] for info in terms_info if info[4]}
+            if datatype_uris:
+                datatype_uri_to_id = await space_impl._resolve_datatype_ids_batch(SPACE_ID, datatype_uris)
+            else:
+                datatype_uri_to_id = {}
+            
+            # Look up terms using complete characteristics
+            term_uuids = {}
+            for term_name, term_text, term_type, term_lang, term_datatype_uri in terms_info:
+                datatype_id = datatype_uri_to_id.get(term_datatype_uri) if term_datatype_uri else None
+                
+                # Build WHERE clause for complete term matching
+                where_conditions = ["term_text = %s", "term_type = %s"]
+                params = [term_text, term_type]
+                
+                if term_lang is not None:
+                    where_conditions.append("lang = %s")
+                    params.append(term_lang)
+                else:
+                    where_conditions.append("lang IS NULL")
+                
+                if datatype_id is not None:
+                    where_conditions.append("datatype_id = %s")
+                    params.append(datatype_id)
+                else:
+                    where_conditions.append("datatype_id IS NULL")
+                
+                cursor.execute(f"""
+                    SELECT term_uuid FROM {term_table_name} 
+                    WHERE {' AND '.join(where_conditions)}
+                    LIMIT 1
+                """, params)
+                
+                result = cursor.fetchone()
+                term_uuids[term_name] = result['term_uuid'] if result else None
+            
+            # Check if quad exists using found term UUIDs
+            if all(term_uuids.values()):
+                cursor.execute(f"""
+                    SELECT COUNT(*) as count
+                    FROM {quad_table_name}
+                    WHERE subject_uuid = %s AND predicate_uuid = %s 
+                      AND object_uuid = %s AND context_uuid = %s
+                """, [term_uuids['subject'], term_uuids['predicate'], term_uuids['object'], term_uuids['context']])
+            else:
+                # If any term UUID is missing, the quad doesn't exist
+                cursor.execute("SELECT 0 as count")
             
             result = cursor.fetchone()
             count = result['count'] if result else 0
-            
-            if should_exist:
-                exists = count > 0
-                status = "✅" if exists else "❌"
-                print(f"    {status} Quad exists in DB: {exists} (count: {count})")
-                return exists
-            else:
-                not_exists = count == 0
-                status = "✅" if not_exists else "❌"
-                print(f"    {status} Quad not in DB: {not_exists} (count: {count})")
-                return not_exists
+        
+        if should_exist:
+            exists = count > 0
+            status = "✅" if exists else "❌"
+            print(f"    {status} Quad exists in DB: {exists} (count: {count})")
+            return exists
+        else:
+            not_exists = count == 0
+            status = "✅" if not_exists else "❌"
+            print(f"    {status} Quad not in DB: {not_exists} (count: {count})")
+            return not_exists
                 
     except Exception as e:
         print(f"    ❌ DB verification error: {e}")
@@ -137,27 +331,38 @@ async def run_timed_operation(operation_name: str, operation_func, *args, **kwar
 
 async def setup_connection():
     """Initialize database connection for tests."""
-    global impl, space_impl
+    global impl, sparql_impl, space_impl
     
-    print("🔧 Setting up database connection...")
+    print("🔌 Setting up database connection...")
     
-    config_path = Path(__file__).parent.parent.parent / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
+    # Initialize VitalGraphImpl with config file
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
     
     config = get_config(str(config_path))
     impl = VitalGraphImpl(config=config)
     await impl.db_impl.connect()
     
+    # Get space implementation for direct database operations
     space_impl = impl.db_impl.get_space_impl()
     
-    print(f"✅ Connected | Graph: {GRAPH_URI}")
+    # Initialize SPARQL implementation for any SPARQL operations
+    sparql_impl = PostgreSQLSparqlImpl(space_impl)
+    
+    print(f"✅ Connected to database")
 
 async def cleanup_connection():
     """Clean up database connection."""
-    global impl
+    global impl, sparql_impl, space_impl
     
     if impl:
         await impl.db_impl.disconnect()
         print("🔌 Database connection closed")
+    
+    # Clear global references
+    impl = None
+    sparql_impl = None
+    space_impl = None
 
 async def test_single_quad_create():
     """Test creating single quads - success and failure cases."""
@@ -166,6 +371,8 @@ async def test_single_quad_create():
     # Test 1: Create a simple quad (should succeed)
     test_quad = create_test_quad("create1", "hasName", "TestObject1")
     
+    await debug_term_insertion_process(test_quad, "before_single_uri_add")
+    
     result, elapsed = await run_timed_operation(
         "Add single quad (URI objects)",
         space_impl.add_rdf_quad,
@@ -173,6 +380,7 @@ async def test_single_quad_create():
     )
     
     if result:
+        await debug_quad_terms(test_quad, "after_single_uri_add")
         await verify_quad_exists_db(test_quad, should_exist=True)
     
     # Test 2: Create quad with literal object (should succeed)
@@ -185,6 +393,7 @@ async def test_single_quad_create():
     )
     
     if result:
+        await debug_quad_terms(literal_quad, "after_single_literal_add")
         await verify_quad_exists_db(literal_quad, should_exist=True)
     
     # Test 3: Try to add duplicate quad (should succeed with new quad_uuid)
@@ -499,7 +708,9 @@ async def test_consistency_checks():
     print(f"    📊 Final test graph count: {graph_count}")
     
     # Verify no null quad_uuids
-    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    # Get proper table names using space_impl method
+    table_names = space_impl._get_table_names(SPACE_ID)
+    quad_table_name = table_names.get('rdf_quad')
     
     with space_impl.get_connection() as conn:
         cursor = conn.cursor()
@@ -552,7 +763,7 @@ async def reset_test_environment():
         
         # Delete the test space if it exists (following unload_test_data.py pattern)
         print(f"🗑️  Deleting test space '{SPACE_ID}'...")
-        if await space_impl.space_exists(SPACE_ID):
+        if space_impl.space_exists(SPACE_ID):
             quad_count = await space_impl.get_quad_count(SPACE_ID)
             print(f"   📊 Found space with {quad_count:,} quads")
             success = space_impl.delete_space_tables(SPACE_ID)
@@ -605,8 +816,12 @@ async def main():
         
         # Check if space exists and get initial count
         try:
-            initial_count = await space_impl.get_quad_count(SPACE_ID)
-            print(f"    📊 Initial quad count: {initial_count}")
+            if space_impl.space_exists(SPACE_ID):
+                initial_count = await space_impl.get_quad_count(SPACE_ID)
+                print(f"    📊 Initial quad count: {initial_count}")
+            else:
+                print(f"    ⚠️  Space '{SPACE_ID}' does not exist")
+                initial_count = 0
         except Exception as e:
             print(f"    ⚠️  Space may not exist or be empty: {e}")
             initial_count = 0
@@ -624,9 +839,10 @@ async def main():
     finally:
         # Performance summary
         try:
-            final_count = await space_impl.get_quad_count(SPACE_ID)
-            print(f"\n📊 Final quad count: {final_count}")
-            print(f"📊 Net change: {final_count - initial_count} quads")
+            if space_impl.space_exists(SPACE_ID):
+                final_count = await space_impl.get_quad_count(SPACE_ID)
+                print(f"\n📊 Final quad count: {final_count}")
+                print(f"📊 Net change: {final_count - initial_count} quads")
         except:
             pass
         
