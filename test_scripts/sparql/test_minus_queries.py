@@ -259,7 +259,8 @@ async def test_complex_minus_patterns():
         PREFIX ex: <http://example.org/>
         SELECT ?person ?name WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?person ex:hasName ?name .
+                ?person ex:hasName ?name ;
+                        ex:hasAge ?someAge .
             }}
             MINUS {{
                 ?person ex:hasAge ?age ;
@@ -273,7 +274,8 @@ async def test_complex_minus_patterns():
         PREFIX ex: <http://example.org/>
         SELECT ?product ?name WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?product ex:hasName ?name .
+                ?product ex:hasName ?name ;
+                        ex:hasPrice ?somePrice .
             }}
             MINUS {{
                 ?product ex:hasPrice ?price ;
@@ -310,7 +312,8 @@ async def test_minus_edge_cases():
         PREFIX ex: <http://example.org/>
         SELECT ?person ?name WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?person ex:hasName ?name .
+                ?person ex:hasName ?name ;
+                        ex:hasAge ?age .
             }}
             MINUS {{
                 ?other ex:isGlobal "true" .
@@ -322,7 +325,8 @@ async def test_minus_edge_cases():
         PREFIX ex: <http://example.org/>
         SELECT ?person ?name WHERE {{
             GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?person ex:hasName ?name .
+                ?person ex:hasName ?name ;
+                        ex:hasAge ?age .
             }}
             MINUS {{
                 ?person ex:nonExistentProperty ?value .

@@ -418,47 +418,94 @@ async def translate_optional_pattern(required_sql: SQLComponents, optional_sql: 
 def translate_minus_pattern(main_sql: SQLComponents, exclude_sql: SQLComponents,
                           shared_vars: Set[Variable]) -> SQLComponents:
     """
-    Translate MINUS pattern to SQL NOT EXISTS operations.
+    Translate a MINUS pattern to SQL using NOT EXISTS with proper correlation.
+    
+    SPARQL MINUS semantics: The main pattern is filtered to exclude solutions
+    where the exclude pattern would also match with the same variable bindings.
+    
+    This requires a correlated NOT EXISTS subquery where shared variables
+    are properly linked between outer and inner queries using valid SQL.
     
     Args:
-        main_sql: SQL components from main pattern (left operand)
-        exclude_sql: SQL components from exclude pattern (right operand)
+        main_sql: SQL components for the main pattern
+        exclude_sql: SQL components for the pattern to exclude
         shared_vars: Variables shared between main and exclude patterns
-        
+    
     Returns:
-        SQLComponents with NOT EXISTS SQL structure
+        Updated SQLComponents with NOT EXISTS condition
     """
     logger.debug(f"Translating MINUS pattern with {len(shared_vars)} shared variables")
     
-    # Build NOT EXISTS subquery
-    exclude_select_items = []
-    exclude_conditions = []
-    
-    # Add shared variable equality conditions
-    for var in shared_vars:
-        if var in main_sql.variable_mappings and var in exclude_sql.variable_mappings:
-            main_col = main_sql.variable_mappings[var]
-            exclude_col = exclude_sql.variable_mappings[var]
-            exclude_conditions.append(f"{main_col} = {exclude_col}")
-    
-    # Build the NOT EXISTS subquery
-    not_exists_subquery = "SELECT 1"
-    if exclude_sql.from_clause:
-        # CRITICAL FIX: from_clause already contains "FROM" keyword, don't add another one
-        # TODO fix this so it doesn't happen to begin with, such as in the MINUS case
-        if exclude_sql.from_clause.strip().upper().startswith('FROM'):
-            not_exists_subquery += f" {exclude_sql.from_clause}"
-        else:
-            not_exists_subquery += f" FROM {exclude_sql.from_clause}"
-    if exclude_sql.joins:
-        not_exists_subquery += f" {' '.join(exclude_sql.joins)}"
-    
-    # Combine exclude pattern conditions with shared variable conditions
-    all_exclude_conditions = exclude_sql.where_conditions + exclude_conditions
-    if all_exclude_conditions:
-        not_exists_subquery += f" WHERE {' AND '.join(all_exclude_conditions)}"
+    if not shared_vars:
+        # No shared variables - MINUS excludes everything if exclude pattern matches anything
+        # This is a simple NOT EXISTS without correlation
+        not_exists_subquery = "SELECT 1"
+        if exclude_sql.from_clause:
+            if exclude_sql.from_clause.strip().upper().startswith('FROM'):
+                not_exists_subquery += f" {exclude_sql.from_clause}"
+            else:
+                not_exists_subquery += f" FROM {exclude_sql.from_clause}"
+        if exclude_sql.joins:
+            not_exists_subquery += f" {' '.join(exclude_sql.joins)}"
+        if exclude_sql.where_conditions:
+            not_exists_subquery += f" WHERE {' AND '.join(exclude_sql.where_conditions)}"
+    else:
+        # Shared variables - build correlated subquery
+        # CRITICAL: We need to restructure this to avoid cross-scope table alias references
+        
+        # The key insight is that for SPARQL MINUS with shared variables,
+        # we need to check if there exists a matching pattern in the exclude clause
+        # where the shared variables have the same values as in the main pattern.
+        
+        # For proper correlation, we need to reference the main query's variable values
+        # directly in the subquery WHERE clause, not through table aliases.
+        
+        # Build the exclude pattern subquery structure
+        not_exists_subquery = "SELECT 1"
+        if exclude_sql.from_clause:
+            if exclude_sql.from_clause.strip().upper().startswith('FROM'):
+                not_exists_subquery += f" {exclude_sql.from_clause}"
+            else:
+                not_exists_subquery += f" FROM {exclude_sql.from_clause}"
+        if exclude_sql.joins:
+            not_exists_subquery += f" {' '.join(exclude_sql.joins)}"
+        
+        # Build correlation conditions using proper SQL correlation syntax
+        # SOLUTION: Instead of trying to correlate table aliases across scopes,
+        # we'll modify the subquery to reference the outer query's tables directly.
+        
+        correlation_conditions = []
+        
+        # Extract the main query's table information for correlation
+        # We need to identify which tables in the main query correspond to shared variables
+        main_table_info = {}
+        for var in shared_vars:
+            if var in main_sql.variable_mappings:
+                main_col = main_sql.variable_mappings[var]
+                # Extract table alias and column from something like "s_term_0.term_text"
+                if '.' in main_col:
+                    table_alias, column = main_col.rsplit('.', 1)
+                    main_table_info[var] = {'alias': table_alias, 'column': column}
+        
+        # Now build correlation conditions that reference the outer query properly
+        for var in shared_vars:
+            if var in exclude_sql.variable_mappings and var in main_table_info:
+                exclude_col = exclude_sql.variable_mappings[var]
+                main_info = main_table_info[var]
+                
+                # Create a correlation condition that references the outer query
+                # The exclude_col should equal the main query's column value
+                # We reference the main query's table alias directly
+                correlation_conditions.append(f"{exclude_col} = {main_info['alias']}.{main_info['column']}")
+        
+        # Combine exclude pattern conditions with correlation conditions
+        all_conditions = exclude_sql.where_conditions + correlation_conditions
+        if all_conditions:
+            not_exists_subquery += f" WHERE {' AND '.join(all_conditions)}"
     
     not_exists_condition = f"NOT EXISTS ({not_exists_subquery})"
+    
+    logger.debug(f"Generated MINUS NOT EXISTS condition: {not_exists_condition}")
     
     return SQLComponents(
         from_clause=main_sql.from_clause,
@@ -1375,7 +1422,9 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
     elif pattern_name == "Minus":  # MINUS
         # Translate both operands
         main_sql = await translate_algebra_pattern_to_components(pattern.p1, context, projected_vars, context_constraint)
-        exclude_sql = await translate_algebra_pattern_to_components(pattern.p2, context, projected_vars, context_constraint)
+        # CRITICAL FIX: For MINUS exclude patterns, use projected_vars=None to ensure ALL variables
+        # in the exclude pattern are mapped, including those only used in FILTER expressions
+        exclude_sql = await translate_algebra_pattern_to_components(pattern.p2, context, None, context_constraint)
         shared_vars = find_shared_variables(main_sql.variable_mappings, exclude_sql.variable_mappings)
         return translate_minus_pattern(main_sql, exclude_sql, shared_vars)
     elif pattern_name == "Slice":  # LIMIT/OFFSET
