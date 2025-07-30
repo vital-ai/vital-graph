@@ -22,7 +22,7 @@ from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "wordnet_space"
@@ -283,7 +283,7 @@ async def test_construct_queries():
     """)
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_uuid_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ CONSTRUCT Query Tests Complete!")

@@ -26,14 +26,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.config.config_loader import get_config
-from vitalgraph.db.postgresql.postgresql_utils import PostgreSQLUtils
+from vitalgraph.db.postgresql.postgresql_log_utils import PostgreSQLLogUtils
+from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
 from rdflib import URIRef, Literal, BNode
 from rdflib.namespace import RDF, RDFS, XSD
 
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "space_test"
@@ -82,8 +83,8 @@ async def verify_quad_exists_db(quad: Tuple, should_exist: bool = True) -> bool:
         subject, predicate, obj, context = quad
         
         # Get table names
-        quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-        term_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+        quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+        term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
         
         # Query for the quad using term text values
         with space_impl.get_connection() as conn:
@@ -498,7 +499,7 @@ async def test_consistency_checks():
     print(f"    📊 Final test graph count: {graph_count}")
     
     # Verify no null quad_uuids
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     with space_impl.get_connection() as conn:
         cursor = conn.cursor()

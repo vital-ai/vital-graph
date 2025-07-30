@@ -40,7 +40,7 @@ async def reload_wordnet_data():
     # Reduce logging chatter from verbose modules
     logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
     logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-    logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+    logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
     
     print("🔄 WordNet Data Reload with Graph URI")
     print("=" * 50)
@@ -187,12 +187,14 @@ async def reload_wordnet_data():
                 # Assume URI if not quoted or blank node
                 return URIRef(term_str)
         
-        # Load data in batches
-        total_inserted = 0
+        # Process triples in batches for optimal performance
+        print("Processing triples...")
         current_batch = []
-        
-        # Start timing the entire batch loading process
+        total_inserted = 0
         batch_loading_start = time.time()
+        
+        # Get a single connection for all batch operations
+        conn = space_impl.get_connection()
         print("Processing triples...")
         
         # Stream triples and collect them into batches
@@ -216,7 +218,7 @@ async def reload_wordnet_data():
                 # Insert batch using UUID-based batch insert method with performance optimization
                 # auto_commit=False, verify_count=False for maximum bulk loading speed (commit at end)
                 inserted_count = await space_impl.add_rdf_quads_batch(SPACE_ID, current_batch, 
-                                                                     auto_commit=False, verify_count=False)
+                                                                     auto_commit=False, verify_count=False, connection=conn)
                 total_inserted += inserted_count
                 
                 batch_time = time.time() - batch_start
@@ -241,7 +243,7 @@ async def reload_wordnet_data():
             final_batch_start = time.time()
             
             batch_inserted = await space_impl.add_rdf_quads_batch(SPACE_ID, current_batch, 
-                                                                auto_commit=False, verify_count=False)
+                                                                auto_commit=False, verify_count=False, connection=conn)
             total_inserted += batch_inserted
             
             final_batch_time = time.time() - final_batch_start
@@ -255,15 +257,19 @@ async def reload_wordnet_data():
         print(f"\n💾 Committing all WordNet data...")
         commit_start = time.time()
         
-        # Use the space implementation's commit function
-        commit_success = await space_impl.commit_transaction()
-        
-        commit_time = time.time() - commit_start
-        if commit_success:
-            print(f"✅ Transaction committed in {commit_time:.2f}s")
-        else:
-            print(f"❌ Transaction commit failed after {commit_time:.2f}s")
-            return False
+        try:
+            # Use the space implementation's commit function with our connection
+            commit_success = await space_impl.commit_transaction(connection=conn)
+            
+            commit_time = time.time() - commit_start
+            if commit_success:
+                print(f"✅ Transaction committed in {commit_time:.2f}s")
+            else:
+                print(f"❌ Transaction commit failed after {commit_time:.2f}s")
+                return False
+        finally:
+            # Close the connection
+            conn.close()
         
         # Calculate and display total batch loading time
         total_batch_time = time.time() - batch_loading_start

@@ -13,8 +13,7 @@ from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.algebra import translateQuery
 
 from ..postgresql_space_impl import PostgreSQLSpaceImpl
-from ..postgresql_utils import PostgreSQLUtils
-from ..postgresql_term_cache import PostgreSQLTermCache
+from ..postgresql_cache_term import PostgreSQLCacheTerm
 
 # Import orchestrator helper functions
 from .postgresql_sparql_orchestrator import (
@@ -49,7 +48,7 @@ class PostgreSQLSparqlImpl:
         
         # Initialize components that maintain compatibility with original API
         self.alias_generator = AliasGenerator()
-        self.term_cache = PostgreSQLTermCache()
+        self.term_cache = PostgreSQLCacheTerm()
         self.graph_cache = {}
         
         self.logger.info("New PostgreSQL SPARQL implementation initialized with orchestrator functions")

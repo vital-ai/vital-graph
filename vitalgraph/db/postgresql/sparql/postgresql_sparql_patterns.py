@@ -744,6 +744,9 @@ def translate_bind_pattern(nested_sql: SQLComponents, bind_var: Variable,
         if bind_expr.strip().startswith('__') and bind_expr.strip().replace('__', '').replace('_', '').isalnum():
             # This is likely a reference to an aggregation variable, use it directly
             select_items.append(f"{bind_expr} AS {bind_alias}")
+        elif bind_expr.strip().startswith('ABS(') or bind_expr.strip().startswith('CEIL(') or bind_expr.strip().startswith('FLOOR(') or bind_expr.strip().startswith('ROUND('):
+            # Function calls already have proper parentheses, don't wrap again
+            select_items.append(f"{bind_expr} AS {bind_alias}")
         else:
             select_items.append(f"({bind_expr}) AS {bind_alias}")
         
@@ -1466,15 +1469,28 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
             logger.warning(f"Unsupported graph term type: {type(graph_term)}")
             return await translate_algebra_pattern_to_components(inner_pattern, context, projected_vars, context_constraint)
     elif pattern_name == "Extend":  # BIND statements
-        # Translate nested pattern first
-        nested_sql = await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
-        
-        # Process the bind expression (critical for aggregate result variables)
+        # Process the bind expression and extract variables BEFORE translating nested pattern
         bind_var = pattern.var if hasattr(pattern, 'var') else None
         bind_expr = pattern.expr if hasattr(pattern, 'expr') else None
         
         if bind_var and bind_expr:
             logger.debug(f"Processing Extend/BIND: {bind_var} = {bind_expr}")
+            
+            # CRITICAL FIX: Extract variables from BIND expression and add to projected_vars
+            # This ensures all referenced variables get proper mappings from nested patterns
+            extended_projected_vars = list(projected_vars) if projected_vars else []
+            if bind_var not in extended_projected_vars:
+                extended_projected_vars.append(bind_var)
+            
+            # Extract all variables referenced in the BIND expression
+            bind_expr_vars = _extract_variables_from_expression(bind_expr)
+            for var in bind_expr_vars:
+                if var not in extended_projected_vars:
+                    extended_projected_vars.append(var)
+                    logger.debug(f"Added BIND expression variable {var} to projected_vars")
+            
+            # Now translate nested pattern with extended projected variables
+            nested_sql = await translate_algebra_pattern_to_components(pattern.p, context, extended_projected_vars, context_constraint)
             
             # For aggregate result variables, the expression is typically just a reference to __agg_N__
             # We need to map the bind variable to the expression in variable_mappings
@@ -1495,7 +1511,7 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
                         updated_mappings[bind_var] = f"'UNMAPPED_AGG_{bind_expr}'"
                 else:
                     # Use the comprehensive BIND expression translator
-                    sql_expr = translate_bind_expression(bind_expr, updated_mappings)
+                    sql_expr = translate_bind_expression(bind_expr, updated_mappings, context)
                     updated_mappings[bind_var] = sql_expr
                     logger.debug(f"Translated BIND expression for {bind_var}: {sql_expr}")
                     
@@ -1518,6 +1534,8 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
             )
         else:
             logger.warning("Extend pattern missing var or expr")
+            # Still need to translate the nested pattern even if bind info is missing
+            nested_sql = await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
             return nested_sql
     elif pattern_name == "SelectQuery":  # Sub-SELECT (subquery)
         return translate_subquery_pattern(pattern, table_config, alias_gen)
@@ -1861,3 +1879,41 @@ def get_pattern_complexity(pattern) -> int:
         complexity += get_pattern_complexity(pattern.p2)
     
     return complexity
+
+
+def _extract_variables_from_expression(expr):
+    """Extract all variables referenced in a SPARQL expression.
+    
+    This is critical for BIND+OPTIONAL bug fix - ensures that all variables
+    used in BIND expressions are included in projected_vars so they get
+    proper mappings from OPTIONAL patterns.
+    
+    Ported from original PostgreSQLSparqlImpl._extract_variables_from_expression
+    """
+    from rdflib.term import Variable
+    variables = set()
+    
+    try:
+        if isinstance(expr, Variable):
+            variables.add(expr)
+        elif hasattr(expr, '_vars') and expr._vars:
+            # Expression has _vars attribute (common in rdflib expressions)
+            variables.update(expr._vars)
+        elif hasattr(expr, 'args') and expr.args:
+            # Recursively extract from arguments
+            for arg in expr.args:
+                variables.update(_extract_variables_from_expression(arg))
+        elif hasattr(expr, '__dict__'):
+            # Check all attributes for variables
+            for attr_name, attr_value in expr.__dict__.items():
+                if isinstance(attr_value, Variable):
+                    variables.add(attr_value)
+                elif hasattr(attr_value, '_vars') and attr_value._vars:
+                    variables.update(attr_value._vars)
+                    
+        logger.debug(f"Extracted variables from expression {expr}: {[str(v) for v in variables]}")
+        return list(variables)
+        
+    except Exception as e:
+        logger.warning(f"Failed to extract variables from expression {expr}: {e}")
+        return []

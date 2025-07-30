@@ -26,12 +26,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.db.postgresql.postgresql_space_impl import PostgreSQLSpaceImpl
-from vitalgraph.db.postgresql.postgresql_utils import PostgreSQLUtils
+from vitalgraph.db.postgresql.postgresql_log_utils import PostgreSQLLogUtils
+from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
 
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "wordnet_space"
@@ -108,7 +109,7 @@ async def test_quad_table_schema():
     print("\n📋 QUAD TABLE SCHEMA:")
     
     # Get table name
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     # Check table structure
     await run_sql_query("Table structure", f"""
@@ -139,8 +140,8 @@ async def test_basic_quad_counts():
     """Test basic quad counting and statistics."""
     print("\n📊 BASIC QUAD STATISTICS:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     # Total quad count
     await run_sql_query("Total quads", f"""
@@ -171,9 +172,9 @@ async def test_duplicate_quad_detection():
     """Test detection and handling of duplicate quads."""
     print("\n🔍 DUPLICATE QUAD DETECTION:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
     
     # Find SPOC combinations that have duplicates
     await run_sql_query("SPOC combinations with duplicates", f"""
@@ -215,9 +216,9 @@ async def test_subject_range_queries():
     """Test subject-based range queries to verify clustering performance."""
     print("\n🎯 SUBJECT RANGE QUERIES:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
     
     # Get some sample subject UUIDs for range testing
     sample_subjects = await run_sql_query("Sample subject UUIDs", f"""
@@ -257,8 +258,8 @@ async def test_quad_uuid_uniqueness():
     """Test quad_uuid uniqueness and generation."""
     print("\n🔑 QUAD UUID UNIQUENESS:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     # Verify all quad_uuids are unique
     await run_sql_query("Quad UUID uniqueness check", f"""
@@ -291,9 +292,9 @@ async def test_performance_queries():
     """Test performance-critical queries."""
     print("\n⚡ PERFORMANCE QUERIES:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
-    term_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    term_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "term")
     
     # Test primary key lookup (should be very fast)
     sample_quad = await run_sql_query("Sample quad for PK test", f"""
@@ -341,8 +342,8 @@ async def test_clustering_analysis():
     """Analyze physical clustering and storage patterns."""
     print("\n🗂️  CLUSTERING ANALYSIS:")
     
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     # Check if table is clustered
     await run_sql_query("Table clustering status", f"""
@@ -367,8 +368,8 @@ async def test_insert_duplicate_quad():
     print("\n➕ DUPLICATE QUAD INSERTION TEST:")
     
     # Get a sample existing quad
-    table_prefix = PostgreSQLUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
-    quad_table_name = PostgreSQLUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
+    table_prefix = PostgreSQLSpaceUtils.get_table_prefix(space_impl.global_prefix, SPACE_ID)
+    quad_table_name = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, SPACE_ID, "rdf_quad")
     
     sample_quad = await run_sql_query("Get sample quad for duplication", f"""
         SELECT subject_uuid, predicate_uuid, object_uuid, context_uuid

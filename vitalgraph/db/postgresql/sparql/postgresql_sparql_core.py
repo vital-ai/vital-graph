@@ -12,7 +12,8 @@ from rdflib import Variable, URIRef, Literal, BNode
 
 # Import shared utilities only
 from ..postgresql_space_impl import PostgreSQLSpaceImpl
-from ..postgresql_utils import PostgreSQLUtils
+from ..postgresql_log_utils import PostgreSQLLogUtils
+from ..space.postgresql_space_utils import PostgreSQLSpaceUtils
 
 
 class GraphConstants:
@@ -290,8 +291,8 @@ class TableConfig:
     @classmethod
     def from_space_impl(cls, space_impl, space_id: str, use_unlogged: bool = False) -> 'TableConfig':
         """Create TableConfig from PostgreSQLSpaceImpl and space_id."""
-        quad_table = PostgreSQLUtils.get_table_name(space_impl.global_prefix, space_id, "rdf_quad")
-        term_table = PostgreSQLUtils.get_table_name(space_impl.global_prefix, space_id, "term")
+        quad_table = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, space_id, "rdf_quad")
+        term_table = PostgreSQLSpaceUtils.get_table_name(space_impl.global_prefix, space_id, "term")
         
         # Add _unlogged suffix if using unlogged tables
         if use_unlogged:
@@ -313,11 +314,12 @@ class TranslationContext:
     """
     
     def __init__(self, alias_generator: AliasGenerator, term_cache=None,
-                 space_impl=None, table_config: TableConfig = None):
+                 space_impl=None, table_config: TableConfig = None, datatype_cache=None):
         self.alias_generator = alias_generator
         self.term_cache = term_cache
         self.space_impl = space_impl
         self.table_config = table_config
+        self.datatype_cache = datatype_cache
         
         # Additional state that might be needed
         self.graph_cache = {}

@@ -28,7 +28,7 @@ from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "space_test"
@@ -700,7 +700,7 @@ async def main():
         
     finally:
         # Performance summary
-        print("\n📊 Cache:", sparql_impl.term_uuid_cache.size() if hasattr(sparql_impl, 'term_uuid_cache') else "Statistics not available")
+        print("\n📊 Cache:", sparql_impl.term_cache.size() if hasattr(sparql_impl, 'term_uuid_cache') else "Statistics not available")
     
     # Add data analysis section
     await analyze_test_data_discrepancies(sparql_impl)

@@ -23,14 +23,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.config.config_loader import get_config
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
+
+# Import test utilities for consistent test execution and reporting
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+from tool_utils import TestToolUtils
 
 # Configure logging to see SQL generation
 logging.basicConfig(level=logging.INFO, format='%(levelname)s - %(name)s - %(message)s')
 
 # Suppress verbose logging from other modules but keep SPARQL SQL logging
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 # Keep SPARQL implementation logging at INFO level to see SQL generation
 logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl').setLevel(logging.INFO)
 
@@ -40,131 +45,21 @@ GRAPH_URI = "http://vital.ai/graph/test"
 GLOBAL_GRAPH_URI = "urn:___GLOBAL"
 
 async def run_union_query(sparql_impl, query_name, query):
-    """Run a single UNION query and display results."""
-    print(f"  {query_name}:")
-    
-    # Log the RDFLib query algebra for debugging
-    try:
-        from rdflib.plugins.sparql import prepareQuery
-        from rdflib.plugins.sparql.algebra import translateAlgebra
-        
-        print(f"    📋 Analyzing query algebra...")
-        prepared_query = prepareQuery(query)
-        algebra = translateAlgebra(prepared_query)
-        
-        # Log algebra structure
-        print(f"    🔍 Query type: {algebra.name}")
-        print(f"    🔍 Algebra structure:")
-        
-        def log_algebra_node(node, indent=6):
-            """Recursively log algebra node structure."""
-            spaces = " " * indent
-            
-            # Handle different node types
-            if hasattr(node, 'name'):
-                print(f"{spaces}📌 {node.name}")
-                
-                # Special handling for UNION patterns
-                if node.name == 'Union':
-                    if hasattr(node, 'p1') and node.p1:
-                        print(f"{spaces}  ├─ LEFT BRANCH:")
-                        log_algebra_node(node.p1, indent + 4)
-                    if hasattr(node, 'p2') and node.p2:
-                        print(f"{spaces}  └─ RIGHT BRANCH:")
-                        log_algebra_node(node.p2, indent + 4)
-                    return
-                
-                # Log nested pattern
-                if hasattr(node, 'p') and node.p:
-                    if hasattr(node.p, 'name'):
-                        print(f"{spaces}  └─ p: {node.p.name}")
-                        log_algebra_node(node.p, indent + 4)
-                    else:
-                        print(f"{spaces}  └─ p: {type(node.p).__name__}")
-                
-                # Log direct p1/p2 attributes
-                if hasattr(node, 'p1') and node.p1:
-                    if hasattr(node.p1, 'name'):
-                        print(f"{spaces}  ├─ p1: {node.p1.name}")
-                        log_algebra_node(node.p1, indent + 4)
-                    else:
-                        print(f"{spaces}  ├─ p1: {type(node.p1).__name__}")
-                        
-                if hasattr(node, 'p2') and node.p2:
-                    if hasattr(node.p2, 'name'):
-                        print(f"{spaces}  └─ p2: {node.p2.name}")
-                        log_algebra_node(node.p2, indent + 4)
-                    else:
-                        print(f"{spaces}  └─ p2: {type(node.p2).__name__}")
-                        
-                # Log triples for BGP patterns
-                if hasattr(node, 'triples') and node.triples:
-                    print(f"{spaces}  └─ triples: {len(node.triples)} patterns")
-                    for i, triple in enumerate(node.triples[:2]):  # Show first 2 triples
-                        print(f"{spaces}    [{i+1}] {triple}")
-                    if len(node.triples) > 2:
-                        print(f"{spaces}    ... and {len(node.triples) - 2} more")
-                        
-            elif isinstance(node, (list, tuple)):
-                print(f"{spaces}📌 {type(node).__name__} with {len(node)} items")
-                for i, item in enumerate(node[:2]):
-                    if hasattr(item, 'name'):
-                        print(f"{spaces}  [{i+1}] {item.name}")
-                    else:
-                        print(f"{spaces}  [{i+1}] {str(item)[:30]}")
-                if len(node) > 2:
-                    print(f"{spaces}  ... and {len(node) - 2} more items")
-            else:
-                print(f"{spaces}📌 {type(node).__name__}: {str(node)[:50]}...")
-        
-        log_algebra_node(algebra)
-        print(f"    " + "─" * 40)
-        
-    except Exception as algebra_error:
-        print(f"    ⚠️  Algebra analysis failed: {algebra_error}")
-    
-    try:
-        start_time = time.time()
-        results = await sparql_impl.execute_sparql_query(SPACE_ID, query)
-        elapsed = time.time() - start_time
-        
-        if isinstance(results, list):
-            # SELECT query results
-            print(f"    ⏱️  {elapsed:.3f}s | {len(results)} results")
-            
-            # Show first few results
-            for i, result in enumerate(results[:3]):
-                variables = list(result.keys())
-                values = [str(result.get(var, 'NULL')) for var in variables]
-                print(f"    [{i+1}] {' | '.join(f'{var}={val}' for var, val in zip(variables, values))}")
-                
-            if len(results) > 3:
-                print(f"    ... and {len(results) - 3} more results")
-                
-        elif hasattr(results, '__len__') and hasattr(results, '__iter__'):
-            # CONSTRUCT query results (RDFLib Graph)
-            triple_count = len(results)
-            print(f"    ⏱️  {elapsed:.3f}s | {triple_count} triples constructed")
-            
-            # Show first few triples
-            triples_shown = 0
-            for subject, predicate, obj in results:
-                if triples_shown >= 3:
-                    break
-                print(f"    [{triples_shown+1}] {subject} -> {predicate} -> {obj}")
-                triples_shown += 1
-                
-            if triple_count > 3:
-                print(f"    ... and {triple_count - 3} more triples")
-        else:
-            print(f"    ⏱️  {elapsed:.3f}s | Unexpected result type: {type(results)}")
-            
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
+    """Run a single UNION query using TestToolUtils for clean, maintainable code."""
+    # Use the utility function to run the complete test with all features
+    result = await TestToolUtils.run_test_query(
+        sparql_impl=sparql_impl,
+        space_id=SPACE_ID,
+        query_name=query_name,
+        query=query,
+        enable_algebra_logging=True,
+        max_results=3  # Show first 3 results like the original
+    )
+    return result
 
 async def test_union_queries():
-    """Test UNION pattern functionality with various scenarios."""
-    print("🔗 UNION Query Tests")
+    """Test UNION pattern functionality with various scenarios using TestToolUtils."""
+    print("🔗 UNION Query Tests - Refactored with Utilities")
     print("=" * 50)
     
     # Initialize
@@ -179,13 +74,15 @@ async def test_union_queries():
     space_impl = impl.db_impl.get_space_impl()
     sparql_impl = PostgreSQLSparqlImpl(space_impl)
     
-    print(f"✅ Connected | Testing UNION patterns")
-    print("⚠️  Note: UNION queries will fail until implementation is complete")
+    print(f"✅ Connected | Testing UNION patterns with utility modules")
     
-    print("\n1. BASIC UNION PATTERNS:")
+    # Track test results for summary
+    test_results = []
+    
+    TestToolUtils.print_test_section_header("1. BASIC UNION PATTERNS", "Testing fundamental UNION query patterns")
     
     # Test 1: Simple property UNION - entities with either name or description
-    await run_union_query(sparql_impl, "Properties UNION - name OR description", f"""
+    result = await run_union_query(sparql_impl, "Properties UNION - name OR description", f"""
         PREFIX test: <http://example.org/test#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         
@@ -199,6 +96,7 @@ async def test_union_queries():
         ORDER BY ?entity
         LIMIT 10
     """)
+    test_results.append(result)
     
     # Test 2: Type UNION - different entity types
     await run_union_query(sparql_impl, "Type UNION - TestEntity OR NumberEntity", f"""
@@ -443,13 +341,34 @@ async def test_union_queries():
         LIMIT 12
     """)
     
+    # Test results summary
+    total_tests = len(test_results)
+    successful_tests = sum(1 for result in test_results if result.get('success', False))
+    failed_tests = total_tests - successful_tests
+    success_rate = (successful_tests / total_tests * 100) if total_tests > 0 else 0
+    
+    print(f"\n📊 Test Results Summary:")
+    print(f"   Total Tests: {total_tests}")
+    print(f"   ✅ Passed: {successful_tests}")
+    print(f"   ❌ Failed: {failed_tests}")
+    print(f"   📈 Success Rate: {success_rate:.1f}%")
+    
+    if failed_tests > 0:
+        print(f"\n❌ Failed Tests:")
+        for result in test_results:
+            if not result.get('success', False):
+                print(f"   • {result.get('query_name', 'Unknown')}: {result.get('error_msg', 'Unknown error')}")
+    
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_uuid_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ UNION Query Tests Complete!")
     print("💡 These queries will work once UNION implementation is added to postgresql_sparql_impl.py")
     print("🔗 Test data includes entities, numbers, and relationships across multiple graphs")
+    
+    # Return test results for aggregation
+    return test_results
 
 if __name__ == "__main__":
     asyncio.run(test_union_queries())

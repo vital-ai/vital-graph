@@ -14,8 +14,8 @@ from rdflib.plugins.sparql.algebra import translateQuery
 
 # Import PostgreSQL space implementation and utilities
 from ..postgresql_space_impl import PostgreSQLSpaceImpl
-from ..postgresql_utils import PostgreSQLUtils
-from ..postgresql_term_cache import PostgreSQLTermCache
+from ..postgresql_cache_term import PostgreSQLCacheTerm
+from ..postgresql_cache_datatype import PostgreSQLCacheDatatype
 
 # Import all function modules
 from .postgresql_sparql_core import (
@@ -111,7 +111,7 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         logger.debug(f"ASK WHERE pattern type: {where_pattern.name}")
         
         # Get variables from the pattern (needed for SQL generation)
-        all_vars = list(where_pattern.get('_vars', set()))
+        all_vars = list(getattr(where_pattern, '_vars', set()))
         if not all_vars:
             # If no variables found in pattern, try to extract from sub-patterns
             all_vars = _extract_variables_from_pattern(where_pattern)
@@ -398,7 +398,7 @@ def _substitute_template_term(template_term, variable_bindings: Dict[str, Any]) 
 async def _convert_sql_results_to_rdf_triples(sql_results: List[Dict[str, Any]], 
                                             construct_template: List, 
                                             variable_mappings: Dict, 
-                                            term_cache: Optional[PostgreSQLTermCache] = None) -> List[Dict[str, Any]]:
+                                            term_cache: Optional[PostgreSQLCacheTerm] = None) -> List[Dict[str, Any]]:
     """
     Convert SQL query results to RDF triples for CONSTRUCT queries.
     Based on the original _process_construct_results function.
@@ -466,7 +466,7 @@ def create_table_config(space_impl: PostgreSQLSpaceImpl, space_id: str) -> Table
     Returns:
         TableConfig with table names for the space
     """
-    return TableConfig.from_space_impl(space_impl, space_id)
+    return TableConfig.from_space_impl(space_impl, space_id, use_unlogged=space_impl.use_unlogged)
 
 
 def _has_distinct_pattern(pattern) -> bool:
@@ -606,7 +606,7 @@ def _extract_limit_offset(pattern) -> dict:
 
 
 async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: str, 
-                                 sparql_query: str, term_cache: Optional[PostgreSQLTermCache] = None,
+                                 sparql_query: str, term_cache: Optional[PostgreSQLCacheTerm] = None,
                                  graph_cache: Optional[Dict] = None) -> List[Dict[str, Any]]:
     """
     Orchestrate SPARQL query execution by coordinating parsing, translation, and execution.
@@ -639,12 +639,16 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         # Get table configuration
         table_config = create_table_config(space_impl, space_id)
         
+        # Use datatype cache from space implementation
+        datatype_cache = space_impl.get_datatype_cache(space_id)
+        
         # Create translation context
         context = TranslationContext(
             alias_generator=AliasGenerator(),
             term_cache=term_cache,
             space_impl=space_impl,
-            table_config=table_config
+            table_config=table_config,
+            datatype_cache=datatype_cache
         )
         # Add logger and graph_cache as attributes
         context.logger = logger
@@ -653,10 +657,10 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         # Translate query based on type - follow exact original implementation pattern
         if query_type == "SelectQuery":
             # Extract projection variables
-            projection_vars = query_algebra.get('PV', [])
+            projection_vars = getattr(query_algebra, 'PV', [])
             
             # Check if we have a DISTINCT pattern and extract LIMIT/OFFSET
-            pattern = query_algebra['p']
+            pattern = query_algebra.p
             has_distinct = _has_distinct_pattern(pattern)
             limit_info = _extract_limit_offset(pattern)
             
@@ -702,9 +706,23 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             # Extract construct template
             construct_template = getattr(query_algebra, 'template', [])
             
+            # CRITICAL FIX: Extract variables from CONSTRUCT template to ensure proper mappings
+            # This ensures that variables used in the CONSTRUCT template are included in projected_vars
+            construct_vars = set()
+            for triple in construct_template:
+                for term in triple:
+                    from rdflib import Variable
+                    if isinstance(term, Variable):
+                        construct_vars.add(term)
+                        logger.debug(f"Found CONSTRUCT template variable: {term}")
+            
+            # Convert to list for projected_vars parameter
+            projected_vars = list(construct_vars) if construct_vars else None
+            logger.debug(f"CONSTRUCT projected_vars: {projected_vars}")
+            
             # Translate the WHERE clause pattern to get variable bindings
-            pattern = query_algebra['p']
-            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context)
+            pattern = query_algebra.p
+            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projected_vars)
             
             # Build CONSTRUCT query from components
             sql_query = build_construct_query_from_components(from_clause, where_conditions, joins, variable_mappings, construct_template)
@@ -715,10 +733,12 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         else:
             raise NotImplementedError(f"Unsupported query type: {query_type}")
         
-        logger.debug(f"Generated SQL: {sql_query}")
+        logger.info(f"Generated SQL: {sql_query}")
         
         # Execute SQL query using the space_impl's connection method (like original implementation)
+        logger.info(f"Executing SQL query...")
         sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query)
+        logger.info(f"SQL execution completed. Result count: {len(sql_results) if sql_results else 0}")
         
         # Process results based on query type
         if query_type == "SelectQuery":
@@ -753,7 +773,7 @@ execute_sparql_query = orchestrate_sparql_query
 
 
 async def execute_sparql_update(space_impl: PostgreSQLSpaceImpl, space_id: str, 
-                               sparql_update: str, term_cache: Optional[PostgreSQLTermCache] = None,
+                               sparql_update: str, term_cache: Optional[PostgreSQLCacheTerm] = None,
                                graph_cache: Optional[Dict] = None) -> List[Dict[str, Any]]:
     """
     Execute SPARQL UPDATE operations.
@@ -790,7 +810,7 @@ async def execute_sql_query(space_impl: PostgreSQLSpaceImpl, sql_query: str) -> 
 
 
 async def batch_lookup_term_uuids(space_impl: PostgreSQLSpaceImpl, terms: List[str], 
-                                 term_cache: Optional[PostgreSQLTermCache] = None) -> Dict[str, str]:
+                                 term_cache: Optional[PostgreSQLCacheTerm] = None) -> Dict[str, str]:
     """
     Batch lookup term UUIDs.
     

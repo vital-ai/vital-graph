@@ -413,7 +413,7 @@ async def test_bind_queries():
     except Exception as e:
         print(f"    ❌ Error: {e}")
 
-    print("\n📊 Cache:", sparql_impl.term_uuid_cache.size(), "terms")
+    print("\n📊 Cache:", sparql_impl.term_cache.size(), "terms")
     
     print("\n✅ BIND Query Tests Complete!")
     print("💡 BIND expressions are now implemented with PostgreSQL SQL translation")

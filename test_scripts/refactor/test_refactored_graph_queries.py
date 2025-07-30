@@ -30,7 +30,7 @@ from vitalgraph.db.postgresql.sparql.postgres_sparql_impl import PostgreSQLSparq
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "wordnet_space"

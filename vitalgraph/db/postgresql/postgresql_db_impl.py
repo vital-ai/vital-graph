@@ -258,6 +258,7 @@ class PostgreSQLDbImpl:
             self.logger.info(f"Creating shared psycopg3 ConnectionPool for both ORM and RDF operations with config: {pool_config}")
             
             # Create the shared psycopg3 connection pool with custom connection class for SQLAlchemy integration
+            # Note: Do not use dict_row here as it breaks SQLAlchemy compatibility
             self.shared_pool = ConnectionPool(
                 conninfo=connection_string,
                 connection_class=SharedPoolConnection,  # Use custom connection class for SQLAlchemy integration
@@ -318,7 +319,9 @@ class PostgreSQLDbImpl:
                 self.logger.info(f"SQLAlchemy shared pool test successful: {result.scalar()}")
             
             # Initialize PostgreSQLSpaceImpl for RDF space management with shared pool
-            use_unlogged = self.config.get('use_unlogged_tables', True)
+            # Read use_unlogged from tables section in config
+            tables_config = self.config.get('tables', {})
+            use_unlogged = tables_config.get('use_unlogged', True)
             
             self.space_impl = PostgreSQLSpaceImpl(
                 connection_string=connection_string, 

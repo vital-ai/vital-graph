@@ -1,9 +1,7 @@
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-from rdflib import Dataset
 from .space_impl import SpaceImpl
-from ..store.store import VitalGraphSQLStore
 
 
 @dataclass
@@ -12,15 +10,11 @@ class SpaceRecord:
     Record that keeps references to all objects representing a space.
     
     This class encapsulates all the components needed for a complete space:
-    - space_id: Unique identifier for the space (same as store_id)
+    - space_id: Unique identifier for the space
     - space_impl: SpaceImpl instance for database operations
-    - dataset: RDFLib Dataset instance for RDF operations
-    - store: VitalGraphSQLStore instance for RDFLib Store interface
     """
     space_id: str
     space_impl: SpaceImpl
-    dataset: Dataset
-    store: VitalGraphSQLStore
     
     def __post_init__(self):
         """Validate the space record after initialization."""
@@ -28,23 +22,15 @@ class SpaceRecord:
             raise ValueError("space_id cannot be empty")
         if not isinstance(self.space_impl, SpaceImpl):
             raise TypeError(f"space_impl must be SpaceImpl instance, got {type(self.space_impl)}")
-        if not isinstance(self.dataset, Dataset):
-            raise TypeError(f"dataset must be Dataset instance, got {type(self.dataset)}")
-        if not isinstance(self.store, VitalGraphSQLStore):
-            raise TypeError(f"store must be VitalGraphSQLStore instance, got {type(self.store)}")
     
     def __repr__(self) -> str:
-        return f"SpaceRecord(space_id='{self.space_id}', space_impl={type(self.space_impl).__name__}, dataset={type(self.dataset).__name__}, store={type(self.store).__name__})"
+        return f"SpaceRecord(space_id='{self.space_id}', space_impl={type(self.space_impl).__name__})"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert SpaceRecord to dictionary representation."""
         return {
             'space_id': self.space_id,
             'space_impl_type': type(self.space_impl).__name__,
-            'dataset_type': type(self.dataset).__name__,
-            'store_type': type(self.store).__name__,
-            'store_identifier': str(self.store.identifier) if hasattr(self.store, 'identifier') else None,
-            'store_configuration': str(self.store.configuration) if hasattr(self.store, 'configuration') else None
         }
 
 
@@ -158,10 +144,6 @@ class SpaceManager:
                 if hasattr(space_record.space_impl, 'close'):
                     space_record.space_impl.close()
                     self.logger.debug(f"SpaceImpl closed for space '{space_id}'")
-                    
-                if hasattr(space_record.store, 'close'):
-                    space_record.store.close()
-                    self.logger.debug(f"Store closed for space '{space_id}'")
                     
             except Exception as e:
                 self.logger.warning(f"Error closing space components for '{space_id}': {e}")
@@ -284,8 +266,7 @@ class SpaceManager:
             try:
                 if hasattr(space_record.space_impl, 'close'):
                     space_record.space_impl.close()
-                if hasattr(space_record.store, 'close'):
-                    space_record.store.close()
+                
             except Exception as e:
                 self.logger.warning(f"Error closing space components for '{space_id}': {e}")
         

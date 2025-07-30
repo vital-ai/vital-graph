@@ -103,7 +103,7 @@ async def unload_test_data(spaces_to_unload=None):
     # Reduce logging chatter from verbose modules
     logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
     logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-    logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+    logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
     
     spaces = spaces_to_unload or DEFAULT_SPACES
     

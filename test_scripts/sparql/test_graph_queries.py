@@ -13,74 +13,40 @@ import time
 from pathlib import Path
 
 # Add project root directory for vitalgraph imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 
+# Import test utilities for consistent test execution and reporting
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+from tool_utils import TestToolUtils
+
 # Reduce logging chatter
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
-logging.getLogger('vitalgraph.db.postgresql.postgresql_term_cache').setLevel(logging.WARNING)
+logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
 
 # Configuration
 SPACE_ID = "wordnet_space"
 GRAPH_URI = "http://vital.ai/graph/wordnet"
 
 async def run_query(sparql_impl, name, sparql, debug=False):
-    """Execute a single SPARQL query and display results."""
-    print(f"\n  {name}:")
-    
-    if debug:
-        print(f"\n🔍 DEBUG QUERY: {name}")
-        print("=" * 60)
-        print("SPARQL:")
-        print(sparql)
-        print("\n" + "-" * 60)
-        
-        # Enable debug logging temporarily
-        sparql_logger = logging.getLogger('vitalgraph.db.postgresql.postgresql_sparql_impl')
-        original_level = sparql_logger.level
-        sparql_logger.setLevel(logging.DEBUG)
-        
-        # Add console handler if not present
-        if not sparql_logger.handlers:
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.DEBUG)
-            formatter = logging.Formatter('%(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            sparql_logger.addHandler(console_handler)
-    
-    try:
-        start_time = time.time()
-        results = await sparql_impl.execute_sparql_query(SPACE_ID, sparql)
-        query_time = time.time() - start_time
-        
-        print(f"    ⏱️  {query_time:.3f}s | {len(results)} results")
-        
-        # Show first 2 results
-        for i, result in enumerate(results[:2]):
-            print(f"    [{i+1}] {dict(result)}")
-        if len(results) > 2:
-            print(f"    ... +{len(results) - 2} more")
-            
-        if debug:
-            print("\n" + "=" * 60)
-            
-    except Exception as e:
-        print(f"    ❌ Error: {e}")
-        if debug:
-            import traceback
-            traceback.print_exc()
-    
-    finally:
-        if debug:
-            # Restore original logging level
-            sparql_logger.setLevel(original_level)
+    """Execute a single SPARQL query using TestToolUtils for clean, maintainable code."""
+    # Use the utility function to run the complete test with all features
+    result = await TestToolUtils.run_test_query(
+        sparql_impl=sparql_impl,
+        space_id=SPACE_ID,
+        query_name=name,
+        query=sparql,
+        enable_algebra_logging=debug,  # Enable detailed logging only if debug is True
+        max_results=2  # Show first 2 results like the original
+    )
+    return result
 
 async def test_graph_queries():
-    """Test GRAPH pattern queries."""
-    print("🧪 GRAPH Query Tests")
+    """Test GRAPH pattern queries using TestToolUtils for clean, maintainable code."""
+    print("🧪 GRAPH Query Tests - Refactored with Utilities")
     print("=" * 50)
     
     # Initialize
@@ -95,12 +61,15 @@ async def test_graph_queries():
     space_impl = impl.db_impl.get_space_impl()
     sparql_impl = PostgreSQLSparqlImpl(space_impl)
     
-    print(f"✅ Connected | Graph: {GRAPH_URI}")
+    print(f"✅ Connected | Testing GRAPH patterns with utility modules")
+    print(f"🎯 Target Graph: {GRAPH_URI}")
     
-    # Test queries focused on GRAPH patterns
-    print("\n1. NAMED GRAPH QUERIES:")
+    # Track test results for summary
+    test_results = []
     
-    await run_query(sparql_impl, "Count entities in WordNet graph", f"""
+    TestToolUtils.print_test_section_header("1. NAMED GRAPH QUERIES", "Testing specific named graph patterns")
+    
+    result = await run_query(sparql_impl, "Count entities in WordNet graph", f"""
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         SELECT (COUNT(?entity) AS ?count) WHERE {{
@@ -109,6 +78,7 @@ async def test_graph_queries():
             }}
         }}
     """)
+    test_results.append(result)
     
     await run_query(sparql_impl, "Entities with names in WordNet graph", f"""
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -234,11 +204,32 @@ async def test_graph_queries():
         }}
     """)
     
+    # Test results summary
+    total_tests = len(test_results)
+    successful_tests = sum(1 for result in test_results if result.get('success', False))
+    failed_tests = total_tests - successful_tests
+    success_rate = (successful_tests / total_tests * 100) if total_tests > 0 else 0
+    
+    print(f"\n📊 Test Results Summary:")
+    print(f"   Total Tests: {total_tests}")
+    print(f"   ✅ Passed: {successful_tests}")
+    print(f"   ❌ Failed: {failed_tests}")
+    print(f"   📈 Success Rate: {success_rate:.1f}%")
+    
+    if failed_tests > 0:
+        print(f"\n❌ Failed Tests:")
+        for result in test_results:
+            if not result.get('success', False):
+                print(f"   • {result.get('query_name', 'Unknown')}: {result.get('error_msg', 'Unknown error')}")
+    
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_uuid_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ GRAPH Query Tests Complete!")
+    
+    # Return test results for aggregation
+    return test_results
 
 if __name__ == "__main__":
     asyncio.run(test_graph_queries())

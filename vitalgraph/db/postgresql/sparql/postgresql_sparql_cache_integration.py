@@ -2,7 +2,7 @@
 PostgreSQL SPARQL Cache Integration for VitalGraph
 
 This module provides cache-integrated versions of SPARQL translation functions
-that use the PostgreSQLTermCache for optimal performance.
+that use the PostgreSQLCacheTerm for optimal performance.
 """
 
 import logging
@@ -10,14 +10,14 @@ from typing import Dict, List, Tuple, Optional, Any
 from rdflib import Variable, URIRef, Literal, BNode
 
 from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils
-from ..postgresql_term_cache import PostgreSQLTermCache
+from ..postgresql_cache_term import PostgreSQLCacheTerm
 
 logger = logging.getLogger(__name__)
 
 
 async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableConfig, 
                                     alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None,
-                                    term_cache: PostgreSQLTermCache = None, space_impl = None, 
+                                    term_cache: PostgreSQLCacheTerm = None, space_impl = None, 
                                     context_constraint: str = None) -> SQLComponents:
     """
     Generate SQL components for Basic Graph Pattern (BGP) using exact logic from original implementation.
@@ -342,7 +342,7 @@ def _get_variable_position_in_triple(triple, variable):
 
 
 async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: TableConfig, 
-                               term_cache: PostgreSQLTermCache, space_impl) -> Dict[Tuple[str, str], str]:
+                               term_cache: PostgreSQLCacheTerm, space_impl) -> Dict[Tuple[str, str], str]:
     """
     Get term UUIDs for multiple terms using cache and batch database lookup.
     Ported from original PostgreSQLSparqlImpl._get_term_uuids_batch method.

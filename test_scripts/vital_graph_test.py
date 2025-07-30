@@ -1,4 +1,0 @@
-
-
-# test connecting to tikv
-
