@@ -78,6 +78,26 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
         return _translate_bound_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_sameTerm":
         return _translate_sameterm_filter_expression(expr, variable_mappings)
+    elif expr_name == "OrderCondition":
+        # OrderCondition should be handled by ORDER BY translation, not filter translation
+        # This is likely being called incorrectly - return the variable or expression for ORDER BY use
+        if hasattr(expr, 'expr'):
+            order_expr = expr.expr
+            if isinstance(order_expr, Variable):
+                if order_expr in variable_mappings:
+                    return variable_mappings[order_expr]
+                else:
+                    logger.warning(f"Variable {order_expr} not found in mappings for OrderCondition")
+                    return str(order_expr)
+            else:
+                # For complex expressions, try to translate them
+                try:
+                    return await translate_filter_expression(order_expr, variable_mappings, context)
+                except:
+                    return str(order_expr)
+        else:
+            logger.warning(f"OrderCondition expression missing 'expr' attribute: {expr}")
+            return "1"
     # NOTE: IN() is handled as RelationalExpression with op='IN', not as a builtin function
     else:
         logger.warning(f"Filter expression {expr_name} not implemented")
@@ -2290,6 +2310,161 @@ def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable
         arg2_sql = _translate_expression_operand_sync(expr.args[1], variable_mappings)
         return f"({arg1_sql} = {arg2_sql})"
     return "FALSE"
+
+
+async def translate_order_by_expressions(order_expressions, variable_mappings: Dict[Variable, str], context=None) -> str:
+    """
+    Translate SPARQL ORDER BY expressions to PostgreSQL ORDER BY clause.
+    
+    Args:
+        order_expressions: List of ORDER BY expressions from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        context: Translation context (optional)
+        
+    Returns:
+        SQL ORDER BY clause string
+    """
+    if not order_expressions:
+        return ""
+    
+    order_items = []
+    
+    for expr in order_expressions:
+        try:
+            # Handle lists of ORDER BY expressions (e.g., ORDER BY ?var1 ?var2)
+            if isinstance(expr, list):
+                # Recursively process each expression in the list
+                for sub_expr in expr:
+                    if hasattr(sub_expr, 'name') and sub_expr.name == 'OrderCondition':
+                        # Extract the variable from OrderCondition
+                        if hasattr(sub_expr, 'expr') and isinstance(sub_expr.expr, Variable):
+                            order_var = sub_expr.expr
+                            if order_var in variable_mappings:
+                                sql_column = variable_mappings[order_var]
+                                direction = "ASC"  # Default for OrderCondition without explicit direction
+                                if hasattr(sub_expr, 'order') and sub_expr.order:
+                                    direction = str(sub_expr.order).upper()
+                                order_items.append(f"{sql_column} {direction}")
+                                logger.debug(f"Added ORDER BY from list: {sql_column} {direction}")
+                            else:
+                                logger.warning(f"Variable {order_var} not found in mappings for ORDER BY")
+                        else:
+                            logger.warning(f"OrderCondition in list missing variable: {sub_expr}")
+                    else:
+                        logger.warning(f"Unsupported expression in ORDER BY list: {sub_expr}")
+                continue  # Skip the rest of the loop for this expression
+            
+            # Handle different types of ORDER BY expressions
+            if hasattr(expr, 'name'):
+                expr_name = expr.name
+                
+                if expr_name == "OrderCondition":
+                    # Standard ORDER BY condition with optional ASC/DESC
+                    direction = "ASC"  # Default direction
+                    
+                    # Check for direction (ASC/DESC)
+                    if hasattr(expr, 'order') and expr.order:
+                        direction = str(expr.order).upper()
+                    
+                    # Get the expression to order by
+                    if hasattr(expr, 'expr'):
+                        order_expr = expr.expr
+                        
+                        # Handle the inner expression directly
+                        if isinstance(order_expr, Variable):
+                            # Simple variable ordering
+                            if order_expr in variable_mappings:
+                                sql_column = variable_mappings[order_expr]
+                                order_items.append(f"{sql_column} {direction}")
+                                logger.debug(f"Added ORDER BY: {sql_column} {direction}")
+                            else:
+                                logger.warning(f"Variable {order_expr} not found in mappings for ORDER BY")
+                        elif hasattr(order_expr, 'name') and order_expr.name == 'OrderCondition':
+                            # Nested OrderCondition - extract the inner variable
+                            if hasattr(order_expr, 'expr') and isinstance(order_expr.expr, Variable):
+                                inner_var = order_expr.expr
+                                if inner_var in variable_mappings:
+                                    sql_column = variable_mappings[inner_var]
+                                    order_items.append(f"{sql_column} {direction}")
+                                    logger.debug(f"Added nested ORDER BY: {sql_column} {direction}")
+                                else:
+                                    logger.warning(f"Nested variable {inner_var} not found in mappings for ORDER BY")
+                        else:
+                            # For other expressions, try to handle them as variables if possible
+                            logger.warning(f"Unhandled ORDER BY expression type: {type(order_expr)} - {order_expr}")
+                            # Try to extract variable if it's a simple case
+                            if hasattr(order_expr, 'toPython'):
+                                try:
+                                    var_name = str(order_expr)
+                                    # Look for matching variable in mappings
+                                    for var, sql_col in variable_mappings.items():
+                                        if str(var) == var_name or str(var).replace('?', '') == var_name.replace('?', ''):
+                                            order_items.append(f"{sql_col} {direction}")
+                                            logger.debug(f"Added inferred ORDER BY: {sql_col} {direction}")
+                                            break
+                                except:
+                                    logger.warning(f"Could not infer ORDER BY for expression: {order_expr}")
+                    else:
+                        logger.warning(f"OrderCondition missing 'expr' attribute: {expr}")
+                
+                elif expr_name in ["Builtin_ASC", "Builtin_DESC"]:
+                    # Direct ASC/DESC builtin functions
+                    direction = "ASC" if expr_name == "Builtin_ASC" else "DESC"
+                    
+                    if hasattr(expr, 'arg'):
+                        order_expr = expr.arg
+                        
+                        if isinstance(order_expr, Variable):
+                            if order_expr in variable_mappings:
+                                sql_column = variable_mappings[order_expr]
+                                order_items.append(f"{sql_column} {direction}")
+                            else:
+                                logger.warning(f"Variable {order_expr} not found in mappings for ORDER BY")
+                        else:
+                            # For non-variable ORDER BY expressions, we need to handle them differently
+                            # ORDER BY should only use variables that are in the SELECT clause
+                            logger.warning(f"Unsupported ORDER BY expression type: {type(order_expr)} - {order_expr}")
+                            logger.warning(f"ORDER BY expressions must reference variables in the SELECT clause")
+                
+                else:
+                    # Unknown expression type - ORDER BY should only use variables
+                    logger.warning(f"Unsupported ORDER BY expression type: {expr_name} - {expr}")
+                    logger.warning(f"ORDER BY expressions must reference variables in the SELECT clause")
+            
+            elif isinstance(expr, Variable):
+                # Simple variable without wrapper
+                if expr in variable_mappings:
+                    sql_column = variable_mappings[expr]
+                    order_items.append(f"{sql_column} ASC")  # Default to ASC
+                else:
+                    logger.warning(f"Variable {expr} not found in mappings for ORDER BY")
+            
+            else:
+                # For non-variable ORDER BY expressions, check if it's a simple case we can handle
+                logger.warning(f"Unsupported ORDER BY expression type: {type(expr)} - {expr}")
+                # Try to extract variable name if possible
+                expr_str = str(expr)
+                if expr_str.startswith('?'):
+                    # This looks like a variable - try to find it in mappings
+                    var_name = expr_str
+                    for var, sql_col in variable_mappings.items():
+                        if str(var) == var_name:
+                            order_items.append(f"{sql_col} ASC")
+                            logger.debug(f"Found variable mapping for {var_name}: {sql_col}")
+                            break
+                    else:
+                        logger.warning(f"Variable {var_name} not found in mappings for ORDER BY")
+                else:
+                    logger.warning(f"ORDER BY expressions must reference variables in the SELECT clause")
+        
+        except Exception as e:
+            logger.error(f"Error processing ORDER BY expression {expr}: {e}")
+            continue
+    
+    if order_items:
+        return f"ORDER BY {', '.join(order_items)}"
+    else:
+        return ""
 
 
 # End of expressions module

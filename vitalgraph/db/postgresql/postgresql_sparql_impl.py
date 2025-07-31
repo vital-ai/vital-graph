@@ -77,7 +77,6 @@ class PostgreSQLSparqlImpl:
                 space_impl=self.space_impl,
                 space_id=space_id,
                 sparql_query=sparql_query,
-                term_cache=self.term_cache,
                 graph_cache=self.graph_cache
             )
             

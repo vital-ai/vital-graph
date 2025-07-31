@@ -1437,8 +1437,33 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         # Distinct wraps another pattern - drill down to the nested pattern
         return await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
     elif pattern_name == "OrderBy":  # ORDER BY
-        # OrderBy wraps another pattern - drill down to the nested pattern
-        return await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
+        # OrderBy wraps another pattern - translate the nested pattern first
+        nested_sql = await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
+        
+        # Extract ORDER BY expressions from the pattern
+        order_expressions = []
+        if hasattr(pattern, 'expr') and pattern.expr:
+            # Single ORDER BY expression
+            order_expressions = [pattern.expr]
+        elif hasattr(pattern, 'expressions') and pattern.expressions:
+            # Multiple ORDER BY expressions
+            order_expressions = pattern.expressions
+        elif hasattr(pattern, 'order') and pattern.order:
+            # Alternative attribute name for order expressions
+            order_expressions = pattern.order if isinstance(pattern.order, list) else [pattern.order]
+        
+        # Translate ORDER BY expressions to SQL
+        if order_expressions:
+            from .postgresql_sparql_expressions import translate_order_by_expressions
+            try:
+                order_by_clause = await translate_order_by_expressions(order_expressions, nested_sql.variable_mappings, context)
+                if order_by_clause:
+                    nested_sql.order_by = order_by_clause
+                    logger.debug(f"Added ORDER BY clause: {order_by_clause}")
+            except Exception as e:
+                logger.warning(f"Error translating ORDER BY expressions: {e}")
+        
+        return nested_sql
     elif pattern_name == "Graph":  # GRAPH pattern
         # Follow the original implementation structure exactly
         graph_term = pattern.term if hasattr(pattern, 'term') else None
@@ -1564,10 +1589,16 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
                         logger.warning(f"Aggregate result variable {bind_expr} not found in mappings")
                         updated_mappings[bind_var] = f"'UNMAPPED_AGG_{bind_expr}'"
                 else:
-                    # Use the comprehensive BIND expression translator
-                    sql_expr = translate_bind_expression(bind_expr, updated_mappings, context)
-                    updated_mappings[bind_var] = sql_expr
-                    logger.debug(f"Translated BIND expression for {bind_var}: {sql_expr}")
+                    # Check if this is an OrderCondition expression that should be handled by OrderBy pattern
+                    if hasattr(bind_expr, 'name') and bind_expr.name == 'OrderCondition':
+                        logger.debug(f"Skipping OrderCondition expression in BIND pattern - should be handled by OrderBy pattern")
+                        # Don't process OrderCondition expressions in BIND context
+                        updated_mappings[bind_var] = f"'SKIPPED_ORDER_CONDITION_{bind_var}'"
+                    else:
+                        # Use the comprehensive BIND expression translator
+                        sql_expr = translate_bind_expression(bind_expr, updated_mappings, context)
+                        updated_mappings[bind_var] = sql_expr
+                        logger.debug(f"Translated BIND expression for {bind_var}: {sql_expr}")
                     
             except Exception as expr_error:
                 logger.warning(f"Failed to translate BIND expression for {bind_var}: {expr_error}")

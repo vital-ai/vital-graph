@@ -29,7 +29,7 @@ from .postgresql_sparql_patterns import (
     translate_values_pattern, translate_join_pattern, translate_bind_pattern,
     translate_filter_pattern, translate_graph_pattern, translate_subquery_pattern,
     find_shared_variables, extract_variables_from_triples, validate_pattern_structure,
-    translate_algebra_pattern
+    translate_algebra_pattern, translate_algebra_pattern_to_components
 )
 from .postgresql_sparql_expressions import (
     translate_filter_expression, translate_bind_expression, translate_aggregate_expression,
@@ -465,14 +465,14 @@ async def _convert_sql_results_to_rdf_triples(sql_results: List[Dict[str, Any]],
 
 def create_table_config(space_impl: PostgreSQLSpaceImpl, space_id: str) -> TableConfig:
     """
-    Create table configuration for the specified space.
+    Create table configuration from PostgreSQL space implementation.
     
     Args:
         space_impl: PostgreSQL space implementation
         space_id: Space identifier
         
     Returns:
-        TableConfig with table names for the space
+        TableConfig instance for SQL generation
     """
     return TableConfig.from_space_impl(space_impl, space_id, use_unlogged=space_impl.use_unlogged)
 
@@ -670,8 +670,7 @@ def _extract_limit_offset(pattern) -> dict:
 
 
 async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: str, 
-                                 sparql_query: str, term_cache: Optional[PostgreSQLCacheTerm] = None,
-                                 graph_cache: Optional[Dict] = None) -> List[Dict[str, Any]]:
+                                 sparql_query: str, graph_cache: Optional[Dict] = None) -> List[Dict[str, Any]]:
     """
     Orchestrate SPARQL query execution by coordinating parsing, translation, and execution.
     
@@ -679,7 +678,6 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         space_impl: PostgreSQL space implementation
         space_id: Space identifier
         sparql_query: SPARQL query string
-        term_cache: Optional term cache for performance
         graph_cache: Optional graph cache for performance
         
     Returns:
@@ -687,21 +685,30 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         or List of RDF triple dictionaries (CONSTRUCT/DESCRIBE)
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"Orchestrating SPARQL query for space '{space_id}'")
+    # print(f"🚀 ORCHESTRATOR PRINT: Called for space '{space_id}'")
+    # print(f"📝 ORCHESTRATOR PRINT: Query preview: {sparql_query[:100]}...")
+    logger.info(f"🚀 ORCHESTRATOR CALLED: Orchestrating SPARQL query for space '{space_id}'")
+    logger.info(f"📝 Query preview: {sparql_query[:100]}...")
     
     try:
+        # print(f"🔍 ORCHESTRATOR PRINT: Starting to parse SPARQL query...")
         # Parse SPARQL query using RDFLib
         from rdflib.plugins.sparql import prepareQuery
         from rdflib import Variable
         prepared_query = prepareQuery(sparql_query)
         query_algebra = prepared_query.algebra
+        # print(f"🔍 ORCHESTRATOR PRINT: Successfully parsed SPARQL query")
         
         # Determine query type
         query_type = query_algebra.name
-        logger.debug(f"Query type: {query_type}")
+        # print(f"🎯 ORCHESTRATOR PRINT: Query type detected: {query_type}")
+        logger.info(f"🎯 Query type detected: {query_type}")
         
         # Get table configuration
         table_config = create_table_config(space_impl, space_id)
+        
+        # Get term cache from space implementation
+        term_cache = space_impl.get_term_cache()
         
         # Use datatype cache from space implementation
         datatype_cache = space_impl.get_datatype_cache(space_id)
@@ -732,47 +739,30 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             has_distinct = _has_distinct_pattern(pattern)
             limit_info = _extract_limit_offset(pattern)
             
-            # Extract and translate the main pattern - this returns (from_clause, where_conditions, joins, variable_mappings)
-            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projection_vars)
+            # Translate the main pattern to get SQLComponents with ORDER BY support
+            sql_components = await translate_algebra_pattern_to_components(pattern, context, projection_vars)
             
-            # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
-            select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, variable_mappings, has_distinct)
+            # Build case mapping for SELECT variables
+            case_mapping = {}
+            for var in projection_vars:
+                var_name = str(var).replace('?', '')
+                case_mapping[var_name.lower()] = var_name
             
-            # Build complete SQL query - exact logic from original implementation
-            sql_parts = [select_clause]
-            sql_parts.append(from_clause)
-            
-            if joins:
-                sql_parts.extend(joins)
-            
-            # Check if this is a UNION-derived table - if so, don't apply outer WHERE conditions
-            # UNION patterns are self-contained and all conditions are already within subqueries
-            is_union_derived = "union_" in from_clause and "FROM (" in from_clause
-            
-            if where_conditions and not is_union_derived:
-                sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
-            elif where_conditions and is_union_derived:
-                logger.debug(f"Skipping {len(where_conditions)} WHERE conditions for UNION-derived table")
-            
-            # Add GROUP BY clause if present
-            if group_by_clause:
-                sql_parts.append(group_by_clause)
-            
-            # CRITICAL: Add HAVING clause AFTER GROUP BY (this is the fix for HAVING clause support)
-            if having_clause:
-                sql_parts.append(having_clause)
-            
-            # Add LIMIT and OFFSET if present
-            if limit_info['offset'] is not None:
-                sql_parts.append(f"OFFSET {limit_info['offset']}")
-            if limit_info['limit'] is not None:
-                sql_parts.append(f"LIMIT {limit_info['limit']}")
-                
-            sql_query = '\n'.join(sql_parts)
+            # Use the proper query builder that includes ORDER BY support
+            sql_query = build_select_query(
+                sql_components=sql_components,
+                projection_vars=projection_vars,
+                distinct=has_distinct,
+                limit_offset=(limit_info['limit'], limit_info['offset'])
+            )
             
         elif query_type == "ConstructQuery":
             # Extract construct template
             construct_template = getattr(query_algebra, 'template', [])
+            
+            # DEBUG: Log the query algebra structure
+            logger.info(f"🔍 CONSTRUCT query algebra structure: {query_algebra}")
+            logger.info(f"🔍 Query algebra attributes: {dir(query_algebra)}")
             
             # CRITICAL FIX: Extract variables from CONSTRUCT template to ensure proper mappings
             # This ensures that variables used in the CONSTRUCT template are included in projected_vars
@@ -788,8 +778,16 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             projected_vars = list(construct_vars) if construct_vars else None
             logger.debug(f"CONSTRUCT projected_vars: {projected_vars}")
             
-            # Translate the WHERE clause pattern to get variable bindings
+            # Extract LIMIT/OFFSET for CONSTRUCT queries - try multiple approaches
             pattern = query_algebra.p
+            limit_info = _extract_limit_offset(pattern)
+            logger.info(f"🔍 CONSTRUCT LIMIT/OFFSET from pattern: {limit_info}")
+            
+            # Also try extracting from the top-level query algebra
+            top_level_limit = _extract_limit_offset(query_algebra)
+            logger.info(f"🔍 CONSTRUCT LIMIT/OFFSET from top-level: {top_level_limit}")
+            
+            # Translate the WHERE clause pattern to get variable bindings
             from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projected_vars)
             
             # Build case mapping for CONSTRUCT variables with unique alias handling
@@ -809,11 +807,42 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                 case_mapping[unique_alias] = var_name
             
             # Build CONSTRUCT query from components
+            # Note: Don't apply LIMIT/OFFSET to SQL query for CONSTRUCT queries
+            # because we need to apply it to the final RDF triples instead
             sql_query = build_construct_query_from_components(from_clause, where_conditions, joins, variable_mappings, construct_template)
         elif query_type == "AskQuery":
-            sql_query = await _translate_ask_query(query_algebra, table_config, context)
+            # Extract LIMIT/OFFSET for ASK queries
+            pattern = query_algebra.p
+            limit_info = _extract_limit_offset(pattern)
+            logger.debug(f"ASK LIMIT/OFFSET info: {limit_info}")
+            
+            base_sql_query = await _translate_ask_query(query_algebra, table_config, context)
+            
+            # Apply LIMIT/OFFSET to ASK queries
+            sql_parts = [base_sql_query]
+            if limit_info['offset'] is not None:
+                sql_parts.append(f"OFFSET {limit_info['offset']}")
+            if limit_info['limit'] is not None:
+                sql_parts.append(f"LIMIT {limit_info['limit']}")
+            
+            sql_query = '\n'.join(sql_parts)
+            
         elif query_type == "DescribeQuery":
-            sql_query = await _translate_describe_query(query_algebra, table_config, context)
+            # Extract LIMIT/OFFSET for DESCRIBE queries
+            pattern = query_algebra.p
+            limit_info = _extract_limit_offset(pattern)
+            logger.debug(f"DESCRIBE LIMIT/OFFSET info: {limit_info}")
+            
+            base_sql_query = await _translate_describe_query(query_algebra, table_config, context)
+            
+            # Apply LIMIT/OFFSET to DESCRIBE queries
+            sql_parts = [base_sql_query]
+            if limit_info['offset'] is not None:
+                sql_parts.append(f"OFFSET {limit_info['offset']}")
+            if limit_info['limit'] is not None:
+                sql_parts.append(f"LIMIT {limit_info['limit']}")
+            
+            sql_query = '\n'.join(sql_parts)
         else:
             raise NotImplementedError(f"Unsupported query type: {query_type}")
         
@@ -839,7 +868,70 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         elif query_type == "ConstructQuery":
             # Convert SQL results to RDF triples for CONSTRUCT queries
             construct_template = getattr(query_algebra, 'template', [])
+            
+            # Check if we need to apply SQL-level optimization for CONSTRUCT pagination
+            # This is more efficient than retrieving all rows and filtering RDF triples
+            limit_info = None
+            if hasattr(query_algebra, 'p'):
+                limit_info = _extract_limit_offset(query_algebra.p)
+            if (not limit_info or (limit_info['limit'] is None and limit_info['offset'] is None)):
+                limit_info = _extract_limit_offset(query_algebra)
+            
+            # If we have LIMIT/OFFSET and didn't apply it at SQL level, we might need to re-execute
+            # with optimized SQL limits for better performance
+            if limit_info and (limit_info['offset'] is not None or limit_info['limit'] is not None):
+                # Estimate triples per SQL row based on CONSTRUCT template
+                estimated_triples_per_row = len(construct_template) if construct_template else 1
+                
+                # Calculate optimized SQL limits
+                sql_offset = None
+                sql_limit = None
+                
+                if limit_info['offset'] is not None and estimated_triples_per_row > 0:
+                    # Estimate SQL offset (conservative - start a bit earlier)
+                    sql_offset = max(0, (limit_info['offset'] // estimated_triples_per_row) - 1)
+                
+                if limit_info['limit'] is not None and estimated_triples_per_row > 0:
+                    # Estimate SQL limit with buffer (get extra rows to ensure we have enough triples)
+                    buffer_multiplier = 1.5  # 50% buffer
+                    estimated_sql_limit = int((limit_info['limit'] / estimated_triples_per_row) * buffer_multiplier) + 10
+                    sql_limit = max(estimated_sql_limit, limit_info['limit'])  # At least as many as requested
+                
+                # print(f"🚀 ORCHESTRATOR PRINT: CONSTRUCT optimization - estimated {estimated_triples_per_row} triples/row")
+                # print(f"🚀 ORCHESTRATOR PRINT: RDF LIMIT/OFFSET: {limit_info['limit']}/{limit_info['offset']}")
+                # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL LIMIT/OFFSET: {sql_limit}/{sql_offset}")
+                
+                # Apply SQL-level optimization if we have limits and it's likely to be more efficient
+                # Only optimize if we're requesting a reasonable subset of data
+                original_row_count = len(sql_results)
+                should_optimize = (
+                    sql_limit is not None and 
+                    sql_limit < original_row_count and 
+                    sql_limit < 1000  # Only optimize for reasonably small result sets
+                )
+                
+                if should_optimize:
+                    # print(f"🚀 ORCHESTRATOR PRINT: Re-executing SQL with optimized limits for better performance")
+                    
+                    # Add LIMIT/OFFSET to the SQL query
+                    optimized_sql = sql_query
+                    if sql_limit is not None:
+                        optimized_sql += f" LIMIT {sql_limit}"
+                    if sql_offset is not None:
+                        optimized_sql += f" OFFSET {sql_offset}"
+                    
+                    # Re-execute with optimized query
+                    optimized_sql_results = await _execute_sql_query_with_space_impl(space_impl, optimized_sql)
+                    # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL returned {len(optimized_sql_results)} rows (vs {original_row_count} original)")
+                    sql_results = optimized_sql_results
+            
             rdf_triples = await _convert_sql_results_to_rdf_triples(sql_results, construct_template, variable_mappings, term_cache)
+            
+            # With SQL-level optimization, we should already have approximately the right number of triples
+            # No need for additional RDF-level LIMIT/OFFSET filtering
+            original_count = len(rdf_triples)
+            # print(f"📊 ORCHESTRATOR PRINT: Final RDF triples count: {original_count}")
+            
             return rdf_triples
         elif query_type == "AskQuery":
             # Return boolean result for ASK queries
@@ -865,8 +957,7 @@ execute_sparql_query = orchestrate_sparql_query
 
 
 async def execute_sparql_update(space_impl: PostgreSQLSpaceImpl, space_id: str, 
-                               sparql_update: str, term_cache: Optional[PostgreSQLCacheTerm] = None,
-                               graph_cache: Optional[Dict] = None) -> bool:
+                               sparql_update: str, graph_cache: Optional[Dict] = None) -> bool:
     """
     Execute SPARQL UPDATE operations.
     
@@ -874,7 +965,6 @@ async def execute_sparql_update(space_impl: PostgreSQLSpaceImpl, space_id: str,
         space_impl: PostgreSQL space implementation
         space_id: Space identifier
         sparql_update: SPARQL UPDATE string
-        term_cache: Optional term cache for performance
         graph_cache: Optional graph cache for performance
         
     Returns:
@@ -885,6 +975,9 @@ async def execute_sparql_update(space_impl: PostgreSQLSpaceImpl, space_id: str,
     logger.debug(f"UPDATE query: {sparql_update}")
     
     try:
+        # Get term cache from space implementation
+        term_cache = space_impl.get_term_cache()
+        
         # Detect update operation type
         update_type = _detect_update_type(sparql_update)
         logger.debug(f"Detected update type: {update_type}")
@@ -1031,7 +1124,7 @@ async def _execute_insert_data(space_impl: PostgreSQLSpaceImpl, space_id: str, s
             quads.append((subject, predicate, obj, graph))
             unique_graphs.add(str(graph))
         
-        # Use the existing working space implementation method
+        # Use the PostgreSQL space implementation method for batch insertion
         await space_impl.add_rdf_quads_batch(space_id, quads)
         
         logger.info(f"Successfully inserted {len(quads)} quads")

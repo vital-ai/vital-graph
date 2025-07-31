@@ -215,6 +215,7 @@ class SQLComponents:
     where_conditions: List[str]
     joins: List[str]
     variable_mappings: Dict[Variable, str]
+    order_by: str = ""
     
     def __post_init__(self):
         """Ensure all fields are properly initialized."""
@@ -224,6 +225,8 @@ class SQLComponents:
             self.joins = []
         if self.variable_mappings is None:
             self.variable_mappings = {}
+        if self.order_by is None:
+            self.order_by = ""
 
 
 class AliasGenerator:

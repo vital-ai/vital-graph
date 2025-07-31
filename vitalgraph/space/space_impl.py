@@ -10,8 +10,9 @@ class SpaceImpl:
     """
     Space implementation that provides database access methods for RDF operations.
     
-    This class acts as the bridge between the space record in the databse and the set of postgresql tables implenting the space
-    
+    This class acts as a lightweight wrapper that delegates to database-specific implementations
+    (e.g., PostgreSQLSpaceImpl) for actual per-space table management. This separation allows
+    for future support of other database backends while maintaining a consistent interface.
     """
     
     def __init__(self, *, space_id: str, db_impl):
@@ -29,7 +30,14 @@ class SpaceImpl:
         self.logger.info(f"Initializing SpaceImpl for space_id='{space_id}'")
         self.logger.debug(f"Database implementation: {type(db_impl).__name__}")
         
-        # TODO: Initialize space-specific database tables/schema if needed
+        # Get the database-specific space implementation (currently PostgreSQL only)
+        self._space_impl = None
+        if hasattr(db_impl, 'get_space_impl'):
+            self._space_impl = db_impl.get_space_impl()
+            self.logger.debug(f"Using database-specific space implementation: {type(self._space_impl).__name__}")
+        else:
+            self.logger.warning(f"Database implementation does not provide space_impl - operations will be limited")
+        
         self.logger.debug(f"SpaceImpl initialization completed for space '{space_id}'")
     
     def create(self) -> bool:
@@ -42,20 +50,17 @@ class SpaceImpl:
         self.logger.info(f"create() called for space '{self.space_id}'")
         
         try:
-            # TODO: Implement actual database schema creation
-            # This would involve:
-            # 1. Creating space-specific tables 
-            # 2. Setting up any space-specific configuration
-            
-            if self.db_impl:
-                self.logger.debug(f"Using database implementation: {type(self.db_impl).__name__}")
-                # TODO: Call db_impl methods to create schema
-                # Example: self.db_impl.create_space_schema(self.space_id)
+            if self._space_impl:
+                # Delegate to PostgreSQL implementation
+                success = self._space_impl.create_space_tables(self.space_id)
+                if success:
+                    self.logger.info(f"✅ Successfully created tables for space '{self.space_id}'")
+                else:
+                    self.logger.error(f"❌ Failed to create tables for space '{self.space_id}'")
+                return success
             else:
-                self.logger.warning("No database implementation available - schema creation skipped")
-            
-            self.logger.info(f"create() completed successfully for space '{self.space_id}' (stub implementation)")
-            return True
+                self.logger.warning("No database-specific space implementation available - schema creation skipped")
+                return False
             
         except Exception as e:
             self.logger.error(f"create() failed for space '{self.space_id}': {e}")
@@ -71,23 +76,18 @@ class SpaceImpl:
         self.logger.info(f"open() called for space '{self.space_id}'")
         
         try:
-            # TODO: Implement actual space opening logic
-            # This would involve:
-            # 1. Connecting to the database for this space
-            # 2. Verifying the space exists and is accessible
-            # 3. Loading any necessary metadata or configuration
-            # 4. Setting up connection pools or caches
-            # 5. Validating schema integrity
-            
-            if self.db_impl:
-                self.logger.debug(f"Using database implementation: {type(self.db_impl).__name__}")
-                # TODO: Call db_impl methods to open space connection
-                # Example: self.db_impl.open_space_connection(self.space_id)
+            if self._space_impl:
+                # Check if space tables exist
+                exists = self._space_impl.space_exists(self.space_id)
+                if exists:
+                    self.logger.info(f"✅ Space '{self.space_id}' opened successfully - tables exist")
+                    return True
+                else:
+                    self.logger.error(f"❌ Space '{self.space_id}' cannot be opened - tables do not exist")
+                    return False
             else:
-                self.logger.warning("No database implementation available - space opening skipped")
-            
-            self.logger.info(f"open() completed successfully for space '{self.space_id}' (stub implementation)")
-            return True
+                self.logger.warning("No database-specific space implementation available - space opening skipped")
+                return False
             
         except Exception as e:
             self.logger.error(f"open() failed for space '{self.space_id}': {e}")
@@ -103,28 +103,39 @@ class SpaceImpl:
         self.logger.info(f"destroy() called for space '{self.space_id}'")
         
         try:
-            # TODO: Implement actual space destruction logic
-            # This would involve:
-            # 1. Dropping all space-specific tables and data
-            # 2. Removing metadata entries for this space
-            # 3. Cleaning up any space-specific indexes or constraints
-            # 4. Removing any cached or temporary data
-            # 5. Logging the destruction for audit purposes
-            
-            if self.db_impl:
-                self.logger.debug(f"Using database implementation: {type(self.db_impl).__name__}")
-                # TODO: Call db_impl methods to destroy space
-                # Example: self.db_impl.destroy_space(self.space_id)
+            if self._space_impl:
+                # Delegate to PostgreSQL implementation to delete all tables
+                success = self._space_impl.delete_space_tables(self.space_id)
+                if success:
+                    self.logger.info(f"✅ Successfully destroyed tables for space '{self.space_id}'")
+                else:
+                    self.logger.error(f"❌ Failed to destroy tables for space '{self.space_id}'")
+                return success
             else:
-                self.logger.warning("No database implementation available - space destruction skipped")
-            
-            self.logger.info(f"destroy() completed successfully for space '{self.space_id}' (stub implementation)")
-            return True
+                self.logger.warning("No database-specific space implementation available - space destruction skipped")
+                return False
             
         except Exception as e:
             self.logger.error(f"destroy() failed for space '{self.space_id}': {e}")
             return False
         
+    def exists(self) -> bool:
+        """
+        Check if this space's tables exist in the database.
+        
+        Returns:
+            True if space tables exist, False otherwise
+        """
+        try:
+            if self._space_impl:
+                return self._space_impl.space_exists(self.space_id)
+            else:
+                self.logger.warning("No database-specific space implementation available - cannot check existence")
+                return False
+        except Exception as e:
+            self.logger.error(f"exists() failed for space '{self.space_id}': {e}")
+            return False
+    
     def close(self) -> None:
         """
         Close this space and clean up resources.
@@ -132,15 +143,24 @@ class SpaceImpl:
         self.logger.info(f"close() called for space '{self.space_id}'")
         
         try:
-            # TODO: Implement space cleanup
-            # This might involve:
+            # For now, just log the close operation
+            # Future implementations might need to:
             # 1. Flush any pending operations
             # 2. Close space-specific database connections
             # 3. Clean up temporary resources
             
-            self.logger.debug(f"close() completed for space '{self.space_id}' (stub implementation)")
+            self.logger.debug(f"close() completed for space '{self.space_id}'")
             
         except Exception as e:
             self.logger.error(f"close() failed for space '{self.space_id}': {e}")
     
+    def get_db_space_impl(self):
+        """
+        Get the underlying database-specific space implementation.
+        
+        Returns:
+            The database-specific space implementation (e.g., PostgreSQLSpaceImpl)
+            or None if not available
+        """
+        return self._space_impl
     

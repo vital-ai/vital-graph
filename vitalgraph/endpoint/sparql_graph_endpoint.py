@@ -83,10 +83,10 @@ class GraphInfo(BaseModel):
 
 
 class SPARQLGraphEndpoint:
-    """SPARQL Graph Management endpoint handler."""
+    """SPARQL Graph endpoint handler."""
     
-    def __init__(self, db_impl, auth_dependency):
-        self.db_impl = db_impl
+    def __init__(self, space_manager, auth_dependency):
+        self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.logger = logging.getLogger(f"{__name__}.SPARQLGraphEndpoint")
         self.router = APIRouter()
@@ -188,36 +188,89 @@ class SPARQLGraphEndpoint:
         """Execute a SPARQL graph operation."""
         
         try:
-            self.logger.info(f"Executing SPARQL graph operation '{request.operation}' in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
+            self.logger.info(f"Executing graph operation '{request.operation}' in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             
-            # Validate database connection
-            if not self.db_impl:
+            # Validate space manager
+            if self.space_manager is None:
                 raise HTTPException(
                     status_code=500,
-                    detail="Database not configured"
+                    detail="Space manager not available"
                 )
             
-            # Get space implementation
-            space_impl = self.db_impl.get_space_impl()
-            if not space_impl:
+            # Validate space exists
+            if not self.space_manager.has_space(space_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not found"
+                )
+            
+            # Get space record
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not available"
+                )
+            
+            space_impl = space_record.space_impl
+            
+            # Get the database-specific PostgreSQL implementation for graph operations
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
                 raise HTTPException(
                     status_code=500,
-                    detail="Space implementation not available"
+                    detail="Database-specific space implementation not available"
                 )
             
-            # Get cached SPARQL implementation (preserves term cache across requests)
-            sparql_impl = space_impl.get_sparql_impl(space_id)
-            
-            # Build SPARQL update query based on operation
-            sparql_query = self._build_graph_operation_query(request)
-            
-            self.logger.debug(f"Generated SPARQL: {sparql_query}")
-            
-            # Execute the operation
+            # Execute the operation using PostgreSQLSpaceGraphs
             import time
             start_time = time.time()
             
-            success = await sparql_impl.execute_sparql_update(space_id, sparql_query)
+            operation = request.operation.upper()
+            success = False
+            
+            if operation == "CREATE":
+                if not request.target_graph_uri:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="target_graph_uri required for CREATE operation"
+                    )
+                success = await db_space_impl.graphs.create_graph(space_id, request.target_graph_uri)
+                
+            elif operation == "DROP":
+                if not request.target_graph_uri:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="target_graph_uri required for DROP operation"
+                    )
+                success = await db_space_impl.graphs.drop_graph(space_id, request.target_graph_uri)
+                
+            elif operation == "CLEAR":
+                if not request.target_graph_uri:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="target_graph_uri required for CLEAR operation"
+                    )
+                success = await db_space_impl.graphs.clear_graph(space_id, request.target_graph_uri)
+                
+            elif operation in ["COPY", "MOVE", "ADD"]:
+                # For complex operations, fall back to SPARQL update
+                sparql_query = self._build_graph_operation_query(request)
+                
+                # Import the orchestrator function
+                from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
+                
+                # Use PostgreSQL implementation for SPARQL update (orchestrator handles term cache)
+                success = await execute_sparql_update(
+                    space_impl=db_space_impl,
+                    space_id=space_id,
+                    sparql_update=sparql_query
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported graph operation: {operation}"
+                )
             
             operation_time = time.time() - start_time
             
@@ -226,7 +279,7 @@ class SPARQLGraphEndpoint:
                     success=True,
                     operation=request.operation,
                     graph_uri=request.target_graph_uri or request.source_graph_uri,
-                    message=f"{request.operation} operation executed successfully",
+                    message=f"{request.operation} operation completed successfully",
                     operation_time=operation_time
                 )
             else:
@@ -242,7 +295,7 @@ class SPARQLGraphEndpoint:
         except HTTPException:
             raise
         except Exception as e:
-            self.logger.error(f"Error executing SPARQL graph operation: {e}")
+            self.logger.error(f"Error executing graph operation: {e}")
             return SPARQLGraphResponse(
                 success=False,
                 operation=request.operation,
@@ -293,20 +346,58 @@ class SPARQLGraphEndpoint:
         """List all graphs in the space."""
         
         try:
-            # This would typically query the graph metadata table
-            # For now, return a placeholder implementation
             self.logger.info(f"Listing graphs in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             
-            # TODO: Implement actual graph listing from database
-            return [
-                GraphInfo(
-                    graph_uri="urn:___GLOBAL",
-                    triple_count=0,
-                    created_time="2025-01-01T00:00:00Z",
-                    updated_time="2025-01-01T00:00:00Z"
+            # Validate space manager
+            if self.space_manager is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Space manager not available"
                 )
-            ]
         
+            # Validate space exists
+            if not self.space_manager.has_space(space_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not found"
+                )
+        
+            # Get space record
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not available"
+                )
+        
+            space_impl = space_record.space_impl
+        
+            # Get the database-specific PostgreSQL implementation for graph operations
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Database-specific space implementation not available"
+                )
+        
+            # Get graphs using PostgreSQLSpaceGraphs
+            graphs_data = await db_space_impl.graphs.list_graphs(space_id)
+            
+            # Convert to GraphInfo objects
+            graph_infos = []
+            for graph_data in graphs_data:
+                graph_info = GraphInfo(
+                    graph_uri=graph_data['graph_uri'],
+                    triple_count=graph_data.get('triple_count', 0),
+                    created_time=graph_data.get('created_time', '').isoformat() if graph_data.get('created_time') else None,
+                    updated_time=graph_data.get('updated_time', '').isoformat() if graph_data.get('updated_time') else None
+                )
+                graph_infos.append(graph_info)
+            
+            return graph_infos
+        
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error listing graphs: {e}")
             raise HTTPException(
@@ -320,14 +411,56 @@ class SPARQLGraphEndpoint:
         try:
             self.logger.info(f"Getting info for graph '{graph_uri}' in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             
-            # TODO: Implement actual graph info retrieval from database
+            # Validate space manager
+            if self.space_manager is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Space manager not available"
+                )
+        
+            # Validate space exists
+            if not self.space_manager.has_space(space_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not found"
+                )
+        
+            # Get space record
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not available"
+                )
+        
+            space_impl = space_record.space_impl
+        
+            # Get the database-specific PostgreSQL implementation for graph operations
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Database-specific space implementation not available"
+                )
+        
+            # Get graph info using PostgreSQLSpaceGraphs
+            graph_data = await db_space_impl.graphs.get_graph_info(space_id, graph_uri)
+            
+            if not graph_data:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Graph '{graph_uri}' not found in space '{space_id}'"
+                )
+            
             return GraphInfo(
-                graph_uri=graph_uri,
-                triple_count=0,
-                created_time="2025-01-01T00:00:00Z",
-                updated_time="2025-01-01T00:00:00Z"
+                graph_uri=graph_data['graph_uri'],
+                triple_count=graph_data.get('triple_count', 0),
+                created_time=graph_data.get('created_time', '').isoformat() if graph_data.get('created_time') else None,
+                updated_time=graph_data.get('updated_time', '').isoformat() if graph_data.get('updated_time') else None
             )
         
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting graph info: {e}")
             raise HTTPException(
@@ -336,7 +469,7 @@ class SPARQLGraphEndpoint:
             )
 
 
-def create_sparql_graph_router(db_impl, auth_dependency) -> APIRouter:
-    """Create and return the SPARQL graph management router."""
-    endpoint = SPARQLGraphEndpoint(db_impl, auth_dependency)
+def create_sparql_graph_router(space_manager, auth_dependency) -> APIRouter:
+    """Create and return the SPARQL graph router."""
+    endpoint = SPARQLGraphEndpoint(space_manager, auth_dependency)
     return endpoint.router

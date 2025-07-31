@@ -4,9 +4,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 
 class VitalGraphAPI:
-    def __init__(self, auth_handler, db_impl=None):
+    def __init__(self, auth_handler, db_impl=None, space_manager=None):
         self.auth = auth_handler
         self.db = db_impl
+        self.space_manager = space_manager
     
     async def health(self):
         """Health check endpoint"""
@@ -77,30 +78,43 @@ class VitalGraphAPI:
             )
     
     async def add_space(self, space_data: Dict[str, Any], current_user: Dict) -> Dict[str, Any]:
-        """Add a new space."""
+        """Add a new space with full lifecycle management (database record + tables)."""
         print(f"➕ API add_space called:")
         print(f"   User: {current_user.get('username', 'unknown')}")
         print(f"   Incoming space_data: {space_data}")
         
-        if not self.db:
+        if self.space_manager is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database not configured"
+                detail="Space Manager not configured"
             )
         
         try:
-            created_space = await self.db.add_space(space_data)
+            # Extract parameters for Space Manager method
+            space_id = space_data.get('space')
+            space_name = space_data.get('space_name')
+            space_description = space_data.get('space_description')
+            
+            # Use Space Manager for full lifecycle management (record + tables)
+            success = await self.space_manager.create_space_with_tables(space_id, space_name, space_description)
+            
+            if success:
+                # Return the created space data by querying the database
+                spaces = await self.db.list_spaces()
+                created_space = next((s for s in spaces if s.get('space') == space_id), None)
+            else:
+                created_space = None
             if created_space:
-                print(f"   ✅ Created space result: {created_space}")
+                print(f"   ✅ Created space with tables result: {created_space}")
                 return created_space  # Return the created space data directly
             else:
-                print(f"   ❌ Add failed - could not create space")
+                print(f"   ❌ Add failed - could not create space with tables")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Failed to add space"
+                    detail="Failed to add space with tables"
                 )
         except ValueError as e:
-            # Handle uniqueness constraint violations
+            # Handle validation errors (e.g., space ID too long, uniqueness violations)
             print(f"   ❌ Validation error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -152,24 +166,41 @@ class VitalGraphAPI:
             )
     
     async def delete_space(self, space_id: str, current_user: Dict) -> Dict[str, Any]:
-        """Delete a space."""
+        """Delete a space with full lifecycle management (tables + database record)."""
         print(f"🗑️ API delete_space called:")
         print(f"   Space ID: {space_id}")
         print(f"   User: {current_user.get('username', 'unknown')}")
         
-        if not self.db:
+        if self.space_manager is None:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database not configured"
+                detail="Space Manager not configured"
             )
         
         try:
-            print(f"   📋 Calling db.remove_space({space_id})...")
-            success = await self.db.remove_space(space_id)
-            print(f"   📋 Database remove_space result: {success}")
+            # First, convert database ID to space identifier if needed
+            # Check if space_id is a database ID (numeric) or space identifier (string)
+            actual_space_id = space_id
+            if isinstance(space_id, int) or (isinstance(space_id, str) and space_id.isdigit()):
+                # It's a database ID, need to look up the space identifier
+                db_spaces = await self.space_manager.db_impl.list_spaces()
+                space_record = next((s for s in db_spaces if str(s.get('id')) == str(space_id)), None)
+                if space_record:
+                    actual_space_id = space_record.get('space')
+                    print(f"   🔄 Converted database ID {space_id} to space identifier '{actual_space_id}'")
+                else:
+                    print(f"   ❌ No space found with database ID {space_id}")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Space with ID {space_id} not found"
+                    )
+            
+            print(f"   📋 Calling space_manager.delete_space_with_tables({actual_space_id})...")
+            success = await self.space_manager.delete_space_with_tables(actual_space_id)
+            print(f"   📋 Space Manager delete result: {success}")
             
             if success:
-                result = {"message": "space deleted successfully", "id": int(space_id)}
+                result = {"message": "space deleted successfully with tables", "id": space_id}
                 print(f"   ✅ Delete successful: {result}")
                 return result
             else:

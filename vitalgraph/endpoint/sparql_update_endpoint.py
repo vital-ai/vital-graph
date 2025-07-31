@@ -57,8 +57,8 @@ class SPARQLUpdateResponse(BaseModel):
 class SPARQLUpdateEndpoint:
     """SPARQL Update endpoint handler."""
     
-    def __init__(self, db_impl, auth_dependency):
-        self.db_impl = db_impl
+    def __init__(self, space_manager, auth_dependency):
+        self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.logger = logging.getLogger(f"{__name__}.SPARQLUpdateEndpoint")
         self.router = APIRouter()
@@ -109,29 +109,45 @@ class SPARQLUpdateEndpoint:
             self.logger.info(f"Executing SPARQL update in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             self.logger.debug(f"Update: {update[:200]}{'...' if len(update) > 200 else ''}")
             
-            # Validate database connection
-            if not self.db_impl:
+            # Validate space manager
+            if self.space_manager is None:
                 raise HTTPException(
                     status_code=500,
-                    detail="Database not configured"
+                    detail="Space manager not available"
                 )
             
-            # Get space implementation
-            space_impl = self.db_impl.get_space_impl()
-            if not space_impl:
+            # Validate space exists
+            if not self.space_manager.has_space(space_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not found"
+                )
+            
+            # Get space record
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not available"
+                )
+            
+            space_impl = space_record.space_impl
+            
+            # Get the database-specific PostgreSQL implementation for the orchestrator
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
                 raise HTTPException(
                     status_code=500,
-                    detail="Space implementation not available"
+                    detail="Database-specific space implementation not available"
                 )
             
-            # Get cached SPARQL implementation (preserves term cache across requests)
-            sparql_impl = space_impl.get_sparql_impl(space_id)
-            
-            # Execute the update
+            # Execute SPARQL update using orchestrator with PostgreSQL implementation
             import time
             start_time = time.time()
             
-            success = await sparql_impl.execute_sparql_update(space_id, update)
+            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
+            
+            success = await execute_sparql_update(db_space_impl, space_id, update)
             
             update_time = time.time() - start_time
             
@@ -159,7 +175,7 @@ class SPARQLUpdateEndpoint:
             )
 
 
-def create_sparql_update_router(db_impl, auth_dependency) -> APIRouter:
+def create_sparql_update_router(space_manager, auth_dependency) -> APIRouter:
     """Create and return the SPARQL update router."""
-    endpoint = SPARQLUpdateEndpoint(db_impl, auth_dependency)
+    endpoint = SPARQLUpdateEndpoint(space_manager, auth_dependency)
     return endpoint.router

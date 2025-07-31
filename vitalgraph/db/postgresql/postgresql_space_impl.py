@@ -109,6 +109,9 @@ class PostgreSQLSpaceImpl:
         # Cache of graph caches by space_id - each space has its own graph cache
         self._graph_caches = {}
         
+        # Global term cache for all spaces (shared for performance)
+        self._term_cache = PostgreSQLCacheTerm()
+        
         # Flag to track if datatype cache has been loaded
         self._datatype_cache_loaded = False
     
@@ -129,6 +132,15 @@ class PostgreSQLSpaceImpl:
                 use_unlogged=self.use_unlogged
             )
         return self._schema_cache[space_id]
+    
+    def get_term_cache(self):
+        """
+        Get the term cache for this PostgreSQL space implementation.
+        
+        Returns:
+            PostgreSQLCacheTerm: The term cache instance
+        """
+        return self._term_cache
     
     def get_manager_info(self) -> Dict[str, Any]:
         """

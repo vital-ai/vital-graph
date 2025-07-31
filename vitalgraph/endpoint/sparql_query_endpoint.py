@@ -66,8 +66,8 @@ class SPARQLQueryResponse(BaseModel):
 class SPARQLQueryEndpoint:
     """SPARQL Query endpoint handler."""
     
-    def __init__(self, db_impl, auth_dependency):
-        self.db_impl = db_impl
+    def __init__(self, space_manager, auth_dependency):
+        self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.logger = logging.getLogger(f"{__name__}.SPARQLQueryEndpoint")
         self.router = APIRouter()
@@ -123,29 +123,48 @@ class SPARQLQueryEndpoint:
             self.logger.info(f"Executing SPARQL query in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             self.logger.debug(f"Query: {query[:200]}{'...' if len(query) > 200 else ''}")
             
-            # Validate database connection
-            if not self.db_impl:
+            # Validate space manager with more detailed error information
+            if self.space_manager is None:
                 raise HTTPException(
                     status_code=500,
-                    detail="Database not configured"
+                    detail="Space manager not available - server may need restart after recent updates. Please restart the VitalGraph server."
                 )
             
-            # Get space implementation
-            space_impl = self.db_impl.get_space_impl()
-            if not space_impl:
+            # Validate space exists
+            if not self.space_manager.has_space(space_id):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not found"
+                )
+            
+            # Get space record
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Space '{space_id}' not available"
+                )
+            
+            space_impl = space_record.space_impl
+            
+            # Get the database-specific PostgreSQL implementation for the orchestrator
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
                 raise HTTPException(
                     status_code=500,
-                    detail="Space implementation not available"
+                    detail="Database-specific space implementation not available"
                 )
             
-            # Get cached SPARQL implementation (preserves term cache across requests)
-            sparql_impl = space_impl.get_sparql_impl(space_id)
-            
-            # Execute the query
+            # Execute SPARQL query using orchestrator with PostgreSQL implementation
             import time
             start_time = time.time()
             
-            results = await sparql_impl.execute_sparql_query(space_id, query)
+            # print(f" ENDPOINT PRINT: About to call orchestrator with query: {query[:100]}...")
+            self.logger.info(f" ENDPOINT: About to call orchestrator with query: {query[:100]}...")
+            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import orchestrate_sparql_query
+            results = await orchestrate_sparql_query(db_space_impl, space_id, query)
+            # print(f" ENDPOINT PRINT: Orchestrator returned {len(results) if results else 0} results")
+            self.logger.info(f" ENDPOINT: Orchestrator returned {len(results) if results else 0} results")
             
             query_time = time.time() - start_time
             
@@ -189,7 +208,7 @@ class SPARQLQueryEndpoint:
             )
 
 
-def create_sparql_query_router(db_impl, auth_dependency) -> APIRouter:
+def create_sparql_query_router(space_manager, auth_dependency) -> APIRouter:
     """Create and return the SPARQL query router."""
-    endpoint = SPARQLQueryEndpoint(db_impl, auth_dependency)
+    endpoint = SPARQLQueryEndpoint(space_manager, auth_dependency)
     return endpoint.router

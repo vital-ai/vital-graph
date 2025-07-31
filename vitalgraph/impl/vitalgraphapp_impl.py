@@ -164,8 +164,11 @@ class VitalGraphAppImpl:
         # Initialize authentication
         self.auth = VitalGraphAuth()
         
-        # Initialize VitalGraph API with auth handler and database implementation
-        self.api = VitalGraphAPI(self.auth, db_impl=self.db_impl)
+        # Get Space Manager from VitalGraphImpl
+        self.space_manager = self.vital_graph_impl.get_space_manager()
+        
+        # Initialize VitalGraph API with auth handler, database implementation, and space manager
+        self.api = VitalGraphAPI(self.auth, db_impl=self.db_impl, space_manager=self.space_manager)
         
         # Add dependency for getting current user (needed before route setup)
         self.get_current_user = self.auth.create_get_current_user_dependency()
@@ -215,6 +218,29 @@ class VitalGraphAppImpl:
                 try:
                     await self.db_impl.connect()
                     print("✅ Connected to database successfully")
+                    
+                    # Ensure SpaceManager is initialized from database after connection
+                    print(f"🔍 DEBUG: Checking SpaceManager for initialization...")
+                    print(f"🔍 DEBUG: self.space_manager exists: {self.space_manager is not None}")
+                    print(f"🔍 DEBUG: SpaceManager class: {type(self.space_manager)}")
+                    print(f"🔍 DEBUG: SpaceManager module: {type(self.space_manager).__module__}")
+                    if self.space_manager is not None:
+                        print(f"🔍 DEBUG: Available methods: {[m for m in dir(self.space_manager) if not m.startswith('_')]}")
+                        print(f"🔍 DEBUG: has initialize_from_database: {hasattr(self.space_manager, 'initialize_from_database')}")
+                    
+                    if self.space_manager is not None and hasattr(self.space_manager, 'initialize_from_database'):
+                        print(f"🔍 DEBUG: Calling initialize_from_database()...")
+                        await self.space_manager.initialize_from_database()
+                        print(f"✅ SpaceManager initialized with {len(self.space_manager)} spaces")
+                        print(f"🔍 DEBUG: Available spaces: {list(self.space_manager._spaces.keys()) if hasattr(self.space_manager, '_spaces') else 'N/A'}")
+                    else:
+                        print(f"⚠️ WARNING: SpaceManager initialization skipped - conditions not met")
+                    
+                    # Setup SPARQL endpoints after database connection is established
+                    # This ensures SpaceManager is fully initialized and connected
+                    self._setup_sparql_endpoints()
+                    print("✅ SPARQL endpoints initialized after database connection")
+                    
                 except Exception as e:
                     print(f"❌ Failed to connect to database: {e}")
 
@@ -366,19 +392,6 @@ class VitalGraphAppImpl:
         self.app.get(
             "/api/users/filter/{name_filter}",
             tags=["Users"],
-            summary="Filter Users by Name",
-            description="Search for users whose usernames contain the specified filter text",
-            response_model=List[User]
-        )(filter_users_wrapper)
-
-        # Include SPARQL 1.1 endpoints
-        self._setup_sparql_endpoints()
-
-        # System routes
-        self.app.get(
-            "/health",
-            tags=["System"],
-            summary="Health Check",
             description="Check the health status of the VitalGraph server and database connection"
         )(self.health)
         
@@ -398,12 +411,22 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.sparql_delete_endpoint import create_sparql_delete_router
         from vitalgraph.endpoint.sparql_graph_endpoint import create_sparql_graph_router
         
-        # Create routers with database implementation and auth dependency
-        query_router = create_sparql_query_router(self.db_impl, self.get_current_user)
-        update_router = create_sparql_update_router(self.db_impl, self.get_current_user)
-        insert_router = create_sparql_insert_router(self.db_impl, self.get_current_user)
-        delete_router = create_sparql_delete_router(self.db_impl, self.get_current_user)
-        graph_router = create_sparql_graph_router(self.db_impl, self.get_current_user)
+        # Debug: Check SpaceManager state before creating endpoints
+        print(f"🔍 DEBUG: SpaceManager state: {self.space_manager}")
+        print(f"🔍 DEBUG: SpaceManager type: {type(self.space_manager)}")
+        print(f"🔍 DEBUG: SpaceManager id: {id(self.space_manager)}")
+        if self.space_manager:
+            print(f"🔍 DEBUG: SpaceManager has spaces: {hasattr(self.space_manager, 'has_space')}")
+            print(f"🔍 DEBUG: SpaceManager._initialized: {getattr(self.space_manager, '_initialized', 'N/A')}")
+            print(f"🔍 DEBUG: SpaceManager space count: {len(self.space_manager)}")
+            print(f"🔍 DEBUG: Available spaces: {list(self.space_manager._spaces.keys()) if hasattr(self.space_manager, '_spaces') else 'N/A'}")
+        
+        # Create routers with space manager and auth dependency (endpoints should only use space manager)
+        query_router = create_sparql_query_router(self.space_manager, self.get_current_user)
+        update_router = create_sparql_update_router(self.space_manager, self.get_current_user)
+        insert_router = create_sparql_insert_router(self.space_manager, self.get_current_user)
+        delete_router = create_sparql_delete_router(self.space_manager, self.get_current_user)
+        graph_router = create_sparql_graph_router(self.space_manager, self.get_current_user)
         
         # Include routers in the FastAPI app with /api/graphs/sparql prefix
         self.app.include_router(query_router, prefix="/api/graphs/sparql", tags=["SPARQL"])

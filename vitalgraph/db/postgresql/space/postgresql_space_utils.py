@@ -21,13 +21,13 @@ class PostgreSQLSpaceUtils:
     @staticmethod
     def validate_space_id(space_id: str) -> None:
         """
-        Validate space ID format.
+        Validate space ID format and PostgreSQL identifier length constraints.
         
         Args:
             space_id: Space identifier to validate
             
         Raises:
-            ValueError: If space_id is invalid
+            ValueError: If space_id is invalid or would cause PostgreSQL identifier length issues
         """
         if not space_id or not isinstance(space_id, str):
             raise ValueError("Space ID must be a non-empty string")
@@ -35,6 +35,35 @@ class PostgreSQLSpaceUtils:
             raise ValueError("Space ID cannot contain double underscores '__'")
         if not space_id.replace('_', '').replace('-', '').isalnum():
             raise ValueError("Space ID must contain only alphanumeric characters, hyphens, and underscores")
+        
+        # Check PostgreSQL identifier length constraints
+        # PostgreSQL has a 63-character limit for identifiers
+        # The longest generated identifier is an index name like:
+        # idx_{global_prefix}__{space_id}___unlogged_term_text_gist_trgm
+        # For global_prefix="vitalgraph1", this becomes:
+        # idx_vitalgraph1__{space_id}___unlogged_term_text_gist_trgm
+        # = "idx_vitalgraph1__" + space_id + "___unlogged_term_text_gist_trgm"
+        # = 17 + len(space_id) + 42 = 59 + len(space_id)
+        
+        # Calculate actual maximum safe space_id length
+        # Using actual measured components:
+        # "idx_vitalgraph1__" = 17 chars
+        # "___unlogged_term_text_gist_trgm" = 32 chars  
+        # Total fixed: 17 + 32 = 49 chars
+        # Remaining for space_id: 63 - 49 = 14 chars
+        
+        fixed_prefix = "idx_vitalgraph1__"  # 17 chars (worst case common prefix)
+        fixed_suffix = "___unlogged_term_text_gist_trgm"  # 32 chars (longest suffix)
+        max_space_id_len = 63 - len(fixed_prefix) - len(fixed_suffix)
+        # 63 - 17 - 32 = 14 characters
+        
+        if len(space_id) > max_space_id_len:
+            raise ValueError(
+                f"Space ID '{space_id}' is too long ({len(space_id)} characters). "
+                f"Maximum length is {max_space_id_len} characters to avoid PostgreSQL "
+                f"identifier length limits (63 chars). Generated index names would be truncated "
+                f"and cause conflicts. Use a shorter space ID."
+            )
     
     @staticmethod
     def get_table_prefix(global_prefix: str, space_id: str) -> str:

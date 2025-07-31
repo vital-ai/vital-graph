@@ -58,6 +58,10 @@ def build_select_query(sql_components: SQLComponents, projection_vars: List,
     if having_clause:
         sql_parts.append(having_clause)
     
+    # Add ORDER BY clause if present
+    if sql_components.order_by:
+        sql_parts.append(sql_components.order_by)
+    
     # Add LIMIT and OFFSET if present - exact logic from original
     if limit_offset:
         limit, offset = limit_offset
@@ -191,6 +195,10 @@ def build_construct_query(sql_components: SQLComponents, construct_template: Lis
     
     if sql_components.where_conditions:
         query_parts.append(f"WHERE {' AND '.join(sql_components.where_conditions)}")
+    
+    # Add ORDER BY clause if present
+    if sql_components.order_by:
+        query_parts.append(sql_components.order_by)
     
     return " ".join(query_parts)
 
@@ -340,6 +348,10 @@ def build_aggregation_query(sql_components: SQLComponents, projection_vars: List
     # Add HAVING clause
     if having_conditions:
         query_parts.append(f"HAVING {' AND '.join(having_conditions)}")
+    
+    # Add ORDER BY clause if present
+    if sql_components.order_by:
+        query_parts.append(sql_components.order_by)
     
     return " ".join(query_parts)
 
