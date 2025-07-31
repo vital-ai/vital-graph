@@ -9,6 +9,7 @@ import logging
 from typing import Dict, List, Tuple, Optional, Any
 from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql.algebra import Path, MulPath, SequencePath, AlternativePath, InvPath, NegatedPath
+import psycopg
 
 from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils
 from ..postgresql_cache_term import PostgreSQLCacheTerm
@@ -110,8 +111,10 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
             
             # Execute batch query using space_impl connection - exact logic from original _execute_sql_query
             try:
-                # Use the space_impl's get_connection method exactly like the original
-                with space_impl.get_connection() as conn:
+                # Use async context manager with pooled connection
+                async with space_impl.get_db_connection() as conn:
+                    # Set row factory to return dict-like rows for SPARQL result compatibility
+                    conn.row_factory = psycopg.rows.dict_row
                     with conn.cursor() as cursor:
                         cursor.execute(batch_query)
                         
@@ -147,6 +150,7 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
                             term_cache.put_batch(missing_results)
                             term_uuid_mappings.update(missing_results)
                             logger.debug(f"Cached {len(missing_results)} terms from database lookup")
+                        # Connection automatically returned to pool when context exits
                     
             except Exception as e:
                 logger.error(f"Error in batch database lookup: {e}")
@@ -359,31 +363,57 @@ def _generate_shared_variable_conditions(triples, quad_aliases):
     This allows PostgreSQL to optimize CROSS JOINs by understanding the relationships.
     """
     from rdflib.term import Variable
+    import logging
+    logger = logging.getLogger(__name__)
     
     # Build a mapping of variables to their positions in triples
     var_to_positions = {}  # variable -> list of (triple_idx, position)
     
+    logger.debug(f"🔍 Analyzing {len(triples)} triples for shared variables:")
     for i, triple in enumerate(triples):
-        for pos, term in enumerate(["subject", "predicate", "object"]):
-            if isinstance(triple[pos], Variable):
-                var = triple[pos]
-                if var not in var_to_positions:
-                    var_to_positions[var] = []
-                var_to_positions[var].append((i, ["subject", "predicate", "object"][pos]))
+        subject, predicate, obj = triple
+        logger.debug(f"  Triple {i}: subject={subject}, predicate={predicate}, object={obj}")
+        
+        # Check subject position
+        if isinstance(subject, Variable):
+            if subject not in var_to_positions:
+                var_to_positions[subject] = []
+            var_to_positions[subject].append((i, "subject"))
+            logger.debug(f"    Variable {subject} found at position (triple {i}, subject)")
+        
+        # Check predicate position
+        if isinstance(predicate, Variable):
+            if predicate not in var_to_positions:
+                var_to_positions[predicate] = []
+            var_to_positions[predicate].append((i, "predicate"))
+            logger.debug(f"    Variable {predicate} found at position (triple {i}, predicate)")
+        
+        # Check object position
+        if isinstance(obj, Variable):
+            if obj not in var_to_positions:
+                var_to_positions[obj] = []
+            var_to_positions[obj].append((i, "object"))
+            logger.debug(f"    Variable {obj} found at position (triple {i}, object)")
+    
+    logger.debug(f"🔍 Variable position mapping: {var_to_positions}")
     
     # Generate WHERE conditions for variables that appear in multiple triples
     where_conditions = []
     
     for var, positions in var_to_positions.items():
         if len(positions) > 1:
+            logger.debug(f"🔗 Variable {var} appears in {len(positions)} positions: {positions}")
             # This variable appears in multiple triples - create equality conditions
             first_triple_idx, first_pos = positions[0]
             first_col = f"{quad_aliases[first_triple_idx]}.{first_pos}_uuid"
             
             for triple_idx, pos in positions[1:]:
                 other_col = f"{quad_aliases[triple_idx]}.{pos}_uuid"
-                where_conditions.append(f"{first_col} = {other_col}")
+                condition = f"{first_col} = {other_col}"
+                where_conditions.append(condition)
+                logger.debug(f"    Generated condition: {condition}")
     
+    logger.debug(f"🔧 Final shared variable conditions: {where_conditions}")
     return where_conditions
 
 
@@ -449,8 +479,10 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
             """
         
         # Execute batch query using space_impl
-        # Use the space_impl's connection method to execute SQL
-        with space_impl.get_connection() as conn:
+        # Use async context manager with pooled connection
+        async with space_impl.get_db_connection() as conn:
+            # Set row factory to return dict-like rows for SPARQL result compatibility
+            conn.row_factory = psycopg.rows.dict_row
             with conn.cursor() as cursor:
                 cursor.execute(batch_query)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
@@ -465,6 +497,7 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
                             if i < len(columns):
                                 result_dict[columns[i]] = value
                         db_results.append(result_dict)
+                # Connection automatically returned to pool when context exits
         
         # Process database results
         db_mappings = {}

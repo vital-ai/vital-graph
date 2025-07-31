@@ -712,7 +712,10 @@ async def test_consistency_checks():
     table_names = space_impl._get_table_names(SPACE_ID)
     quad_table_name = table_names.get('rdf_quad')
     
-    with space_impl.get_connection() as conn:
+    # Use async context manager with pooled connection
+    async with space_impl.get_db_connection() as conn:
+        # Configure row factory for dict results
+        conn.row_factory = psycopg.rows.dict_row
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) as null_count FROM {quad_table_name} WHERE quad_uuid IS NULL")
         result = cursor.fetchone()
@@ -724,7 +727,10 @@ async def test_consistency_checks():
             print(f"    ❌ Found {null_count} null quad_uuid values")
     
     # Verify UUID uniqueness
-    with space_impl.get_connection() as conn:
+    # Use async context manager with pooled connection
+    async with space_impl.get_db_connection() as conn:
+        # Configure row factory for dict results
+        conn.row_factory = psycopg.rows.dict_row
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT 
@@ -763,10 +769,10 @@ async def reset_test_environment():
         
         # Delete the test space if it exists (following unload_test_data.py pattern)
         print(f"🗑️  Deleting test space '{SPACE_ID}'...")
-        if space_impl.space_exists(SPACE_ID):
+        if await space_impl.space_exists(SPACE_ID):
             quad_count = await space_impl.get_quad_count(SPACE_ID)
             print(f"   📊 Found space with {quad_count:,} quads")
-            success = space_impl.delete_space_tables(SPACE_ID)
+            success = await space_impl.delete_space_tables(SPACE_ID)
             if success:
                 print(f"✅ Successfully deleted space '{SPACE_ID}'")
                 print(f"   📈 Freed: {quad_count:,} quads")
@@ -816,7 +822,7 @@ async def main():
         
         # Check if space exists and get initial count
         try:
-            if space_impl.space_exists(SPACE_ID):
+            if await space_impl.space_exists(SPACE_ID):
                 initial_count = await space_impl.get_quad_count(SPACE_ID)
                 print(f"    📊 Initial quad count: {initial_count}")
             else:
@@ -839,7 +845,7 @@ async def main():
     finally:
         # Performance summary
         try:
-            if space_impl.space_exists(SPACE_ID):
+            if await space_impl.space_exists(SPACE_ID):
                 final_count = await space_impl.get_quad_count(SPACE_ID)
                 print(f"\n📊 Final quad count: {final_count}")
                 print(f"📊 Net change: {final_count - initial_count} quads")

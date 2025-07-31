@@ -55,16 +55,13 @@ class PostgreSQLSpaceDBOps:
             table_names = self.space_impl._get_table_names(space_id)
             quad_table_name = table_names.get('rdf_quad')
             
-            # Use provided transaction or get a connection directly if None
-            should_close_conn = transaction is None
+            # Use provided transaction or get a pooled connection if None
             if transaction is not None:
                 conn = transaction.get_connection()
                 if conn is None:
                     raise RuntimeError("Transaction object does not provide a valid connection")
-            else:
-                conn = self.space_impl.get_connection()
-        
-            try:
+                
+                # Use transaction connection directly
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
@@ -81,26 +78,42 @@ class PostgreSQLSpaceDBOps:
                 result = cursor.fetchone()
                 quad_uuid = result['quad_uuid']
                 
-                # Update transaction statistics if transaction is provided
-                if transaction is not None:
-                    transaction.increment_quads_added(1)
-                
-                # Only commit if auto_commit is True and no transaction is provided
-                if auto_commit and transaction is None:
-                    conn.commit()
-                    self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
-                elif transaction is None:
-                    # If auto_commit is False but no transaction, still commit for consistency
-                    conn.commit()
-                    self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid} (auto_commit=False)")
-                else:
-                    self.logger.debug(f"Prepared quad for space '{space_id}' with UUID: {quad_uuid} (will commit with transaction)")
+                # Update transaction statistics
+                transaction.increment_quads_added(1)
+                self.logger.debug(f"Prepared quad for space '{space_id}' with UUID: {quad_uuid} (will commit with transaction)")
                 
                 return True
-            finally:
-                if should_close_conn and conn:
-                    conn.close()
-                
+            else:
+                # Use async context manager with pooled connection
+                async with self.space_impl.get_db_connection() as conn:
+                    conn.row_factory = psycopg.rows.dict_row
+                    cursor = conn.cursor()
+                    
+                    # Insert quad (duplicates allowed, quad_uuid auto-generated)
+                    cursor.execute(
+                        f"""
+                        INSERT INTO {quad_table_name} 
+                        (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING quad_uuid
+                        """,
+                        (subject_uuid, predicate_uuid, object_uuid, context_uuid, datetime.utcnow())
+                    )
+                    result = cursor.fetchone()
+                    quad_uuid = result['quad_uuid']
+                    
+                    # Commit based on auto_commit flag
+                    if auto_commit:
+                        conn.commit()
+                        self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid}")
+                    else:
+                        # If auto_commit is False but no transaction, still commit for consistency
+                        conn.commit()
+                        self.logger.debug(f"Added quad to space '{space_id}' with UUID: {quad_uuid} (auto_commit=False)")
+                    
+                    return True
+                    # Connection automatically returned to pool when context exits
+                    
         except Exception as e:
             self.logger.error(f"Error adding quad to space '{space_id}': {e}")
             return False
@@ -130,16 +143,13 @@ class PostgreSQLSpaceDBOps:
             table_names = self.space_impl._get_table_names(space_id)
             quad_table_name = table_names.get('rdf_quad')
             
-            # Use provided transaction or get a connection directly if None
-            should_close_conn = transaction is None
+            # Use provided transaction or get a pooled connection if None
             if transaction is not None:
                 conn = transaction.get_connection()
                 if conn is None:
                     raise RuntimeError("Transaction object does not provide a valid connection")
-            else:
-                conn = self.space_impl.get_connection()
-            
-            try:
+                
+                # Use transaction connection directly
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
@@ -159,17 +169,9 @@ class PostgreSQLSpaceDBOps:
                 
                 removed_count = cursor.rowcount
                 
-                # Update transaction statistics if transaction is provided
-                if transaction is not None and removed_count > 0:
+                # Update transaction statistics
+                if removed_count > 0:
                     transaction.increment_quads_removed(1)
-                
-                # Only commit if auto_commit is True and no transaction is provided
-                if auto_commit and transaction is None:
-                    conn.commit()
-                elif transaction is None:
-                    # If auto_commit is False but no transaction, still commit for consistency
-                    conn.commit()
-                # If transaction is provided, don't commit (will be handled by transaction)
                 
                 if removed_count > 0:
                     self.logger.debug(f"Removed one quad instance from space '{space_id}'")
@@ -177,9 +179,42 @@ class PostgreSQLSpaceDBOps:
                 else:
                     self.logger.debug(f"No quad was actually removed from space '{space_id}'")
                     return False
-            finally:
-                if should_close_conn and conn:
-                    conn.close()
+            else:
+                # Use async context manager with pooled connection
+                async with self.space_impl.get_db_connection() as conn:
+                    conn.row_factory = psycopg.rows.dict_row
+                    cursor = conn.cursor()
+                    
+                    # Delete exactly one instance using ctid (handles duplicates properly)
+                    cursor.execute(
+                        f"""
+                        DELETE FROM {quad_table_name} 
+                        WHERE ctid IN (
+                            SELECT ctid FROM {quad_table_name}
+                            WHERE subject_uuid = %s AND predicate_uuid = %s 
+                                  AND object_uuid = %s AND context_uuid = %s
+                            LIMIT 1
+                        )
+                        """,
+                        (subject_uuid, predicate_uuid, object_uuid, context_uuid)
+                    )
+                    
+                    removed_count = cursor.rowcount
+                    
+                    # Commit based on auto_commit flag
+                    if auto_commit:
+                        conn.commit()
+                    else:
+                        # If auto_commit is False but no transaction, still commit for consistency
+                        conn.commit()
+                    
+                    if removed_count > 0:
+                        self.logger.debug(f"Removed one quad instance from space '{space_id}'")
+                        return True
+                    else:
+                        self.logger.debug(f"No quad was actually removed from space '{space_id}'")
+                        return False
+                    # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"Error removing quad from space '{space_id}': {e}")
@@ -312,16 +347,13 @@ class PostgreSQLSpaceDBOps:
         # Get table names for this space (already includes unlogged suffix if configured)
         table_names = self.space_impl._get_table_names(space_id)
         
-        # Use provided transaction or get a connection directly if None
-        should_close_conn = transaction is None
+        # Use provided transaction or get a pooled connection if None
         if transaction is not None:
             connection = transaction.get_connection()
             if connection is None:
                 raise RuntimeError("Transaction object does not provide a valid connection")
-        else:
-            connection = self.space_impl.get_connection()
-        
-        try:
+            
+            # Use transaction connection directly
             connection.row_factory = psycopg.rows.dict_row
             cursor = connection.cursor()
             
@@ -369,36 +401,87 @@ class PostgreSQLSpaceDBOps:
             
             inserted_count = cursor.rowcount
             
-            # Update transaction statistics if transaction is provided
-            if transaction is not None:
-                transaction.increment_quads_added(inserted_count)
-                transaction.increment_terms_added(len(unique_terms_final))
+            # Update transaction statistics
+            transaction.increment_quads_added(inserted_count)
+            transaction.increment_terms_added(len(unique_terms_final))
             
-            if auto_commit:
-                connection.commit()
-                self.logger.info(f"✅ Successfully inserted {inserted_count} quads")
-            else:
-                self.logger.info(f"✅ Prepared {inserted_count} quads for insertion (not committed)")
-            
+            self.logger.info(f"✅ Prepared {inserted_count} quads for insertion (will commit with transaction)")
             return inserted_count
-            
-        except Exception as e:
-            error_msg = str(e)
-            # Clean up verbose PostgreSQL error messages for invalid spaces
-            if "does not exist" in error_msg and "relation" in error_msg:
-                if "invalid_space" in error_msg:
-                    self.logger.error(f"❌ Error in batch quad insertion: Invalid space '{space_id}' does not exist")
-                else:
-                    self.logger.error(f"❌ Error in batch quad insertion: Space '{space_id}' tables not found")
-            else:
-                self.logger.error(f"❌ Error in batch quad insertion: {error_msg}")
-            
-            if auto_commit:
-                connection.rollback()
-            return 0
-        finally:
-            if should_close_conn and connection:
-                connection.close()
+        else:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as connection:
+                try:
+                    connection.row_factory = psycopg.rows.dict_row
+                    cursor = connection.cursor()
+                    
+                    # Insert all unique terms first
+                    if unique_terms_final:
+                        term_insert_data = []
+                        for term_info in unique_terms_final:
+                            term_text, term_type, lang, datatype_id = term_info
+                            term_uuid = term_to_uuid[term_info]
+                            term_insert_data.append((str(term_uuid), term_text, term_type, lang, datatype_id, datetime.utcnow()))
+                        
+                        # Batch insert terms
+                        cursor.executemany(
+                            f"""
+                            INSERT INTO {table_names['term']} 
+                            (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (term_uuid) DO NOTHING
+                            """,
+                            term_insert_data
+                        )
+                        
+                        self.logger.info(f"📝 Inserted/updated {len(term_insert_data)} unique terms")
+                    
+                    # Insert all quads
+                    quad_insert_data = []
+                    for quad_terms in quad_term_data_final:
+                        s_info, p_info, o_info, g_info = quad_terms
+                        s_uuid = str(term_to_uuid[s_info])
+                        p_uuid = str(term_to_uuid[p_info])
+                        o_uuid = str(term_to_uuid[o_info])
+                        g_uuid = str(term_to_uuid[g_info])
+                        
+                        quad_insert_data.append((s_uuid, p_uuid, o_uuid, g_uuid, datetime.utcnow()))
+                    
+                    # Batch insert quads
+                    cursor.executemany(
+                        f"""
+                        INSERT INTO {table_names['rdf_quad']} 
+                        (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        quad_insert_data
+                    )
+                    
+                    inserted_count = cursor.rowcount
+                    
+                    # Commit based on auto_commit flag
+                    if auto_commit:
+                        connection.commit()
+                        self.logger.info(f"✅ Successfully inserted {inserted_count} quads")
+                    else:
+                        self.logger.info(f"✅ Prepared {inserted_count} quads for insertion (not committed)")
+                    
+                    return inserted_count
+                    # Connection automatically returned to pool when context exits
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    # Clean up verbose PostgreSQL error messages for invalid spaces
+                    if "does not exist" in error_msg and "relation" in error_msg:
+                        if "invalid_space" in error_msg:
+                            self.logger.error(f"❌ Error in batch quad insertion: Invalid space '{space_id}' does not exist")
+                        else:
+                            self.logger.error(f"❌ Error in batch quad insertion: Space '{space_id}' tables not found")
+                    else:
+                        self.logger.error(f"❌ Error in batch quad insertion: {error_msg}")
+                    
+                    if auto_commit:
+                        connection.rollback()
+                    return 0
     
     async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple], transaction=None) -> int:
         """
@@ -485,16 +568,13 @@ class PostgreSQLSpaceDBOps:
             if quad_uuids:
                 table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
                 
-                # Use provided transaction or get a connection directly if None
-                should_close_conn = transaction is None
+                # Use provided transaction or get a pooled connection if None
                 if transaction is not None:
                     conn = transaction.get_connection()
                     if conn is None:
                         raise RuntimeError("Transaction object does not provide a valid connection")
-                else:
-                    conn = self.space_impl.get_connection()
-                
-                try:
+                    
+                    # Use transaction connection directly
                     cursor = conn.cursor()
                     
                     removed_count = 0
@@ -520,37 +600,68 @@ class PostgreSQLSpaceDBOps:
                             
                             self.logger.debug(f"🗑️ Batch {i//batch_size + 1}: Removed {batch_removed} quads")
                     
-                    # Update transaction statistics if transaction is provided
-                    if transaction is not None:
-                        transaction.increment_quads_removed(removed_count)
-                    
-                    if transaction is None:
-                        conn.commit()
+                    # Update transaction statistics
+                    transaction.increment_quads_removed(removed_count)
                     
                     if removed_count > 0:
-                        self.logger.info(f"✅ Successfully removed {removed_count} quads")
+                        self.logger.info(f"✅ Successfully removed {removed_count} quads (will commit with transaction)")
                         return removed_count
                     else:
                         self.logger.info("No matching quads found to remove")
                         return 0
-                        
-                except Exception as e:
-                    error_msg = str(e)
-                    # Clean up verbose PostgreSQL error messages for invalid spaces
-                    if "does not exist" in error_msg and "relation" in error_msg:
-                        if "invalid_space" in error_msg:
-                            self.logger.error(f"❌ Error in batch quad removal: Invalid space '{space_id}' does not exist")
-                        else:
-                            self.logger.error(f"❌ Error in batch quad removal: Space '{space_id}' tables not found")
-                    else:
-                        self.logger.error(f"❌ Error in batch quad removal: {error_msg}")
-                    
-                    if transaction is None:
-                        conn.rollback()
-                    return 0
-                finally:
-                    if should_close_conn and conn:
-                        conn.close()
+                else:
+                    # Use async context manager with pooled connection
+                    async with self.space_impl.get_db_connection() as conn:
+                        try:
+                            cursor = conn.cursor()
+                            
+                            removed_count = 0
+                            batch_size = 1000
+                            
+                            for i in range(0, len(quad_uuids), batch_size):
+                                batch_uuids = quad_uuids[i:i + batch_size]
+                                
+                                # Build parameterized query for batch removal
+                                placeholders = []
+                                params = []
+                                
+                                for s_uuid, p_uuid, o_uuid, g_uuid in batch_uuids:
+                                    placeholders.append("(subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s)")
+                                    params.extend([s_uuid, p_uuid, o_uuid, g_uuid])
+                                
+                                if placeholders:
+                                    query = f"DELETE FROM {table_names['rdf_quad']} WHERE {' OR '.join(placeholders)}"
+                                    
+                                    cursor.execute(query, params)
+                                    batch_removed = cursor.rowcount
+                                    removed_count += batch_removed
+                                    
+                                    self.logger.debug(f"🗑️ Batch {i//batch_size + 1}: Removed {batch_removed} quads")
+                            
+                            # Commit the transaction
+                            conn.commit()
+                            
+                            if removed_count > 0:
+                                self.logger.info(f"✅ Successfully removed {removed_count} quads")
+                                return removed_count
+                            else:
+                                self.logger.info("No matching quads found to remove")
+                                return 0
+                                # Connection automatically returned to pool when context exits
+                                
+                        except Exception as e:
+                            error_msg = str(e)
+                            # Clean up verbose PostgreSQL error messages for invalid spaces
+                            if "does not exist" in error_msg and "relation" in error_msg:
+                                if "invalid_space" in error_msg:
+                                    self.logger.error(f"❌ Error in batch quad removal: Invalid space '{space_id}' does not exist")
+                                else:
+                                    self.logger.error(f"❌ Error in batch quad removal: Space '{space_id}' tables not found")
+                            else:
+                                self.logger.error(f"❌ Error in batch quad removal: {error_msg}")
+                            
+                            conn.rollback()
+                            return 0
             else:
                 self.logger.info("No quads to remove")
                 return 0
@@ -649,12 +760,17 @@ class PostgreSQLSpaceDBOps:
                     elif role == 'graph':
                         graph_uuid = str(term_uuid)
                 
-                # Insert terms into database using sync connection (same as batch operations)
+                # Insert terms into database using async pooled connection
                 try:
-                    with self.space_impl.get_connection() as conn:
+                    if transaction is not None:
+                        # Use transaction connection if provided
+                        conn = transaction.get_connection()
+                        if conn is None:
+                            raise RuntimeError("Transaction object does not provide a valid connection")
+                        
                         conn.row_factory = psycopg.rows.dict_row
                         cursor = conn.cursor()
-                        self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']}")
+                        self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']} (using transaction)")
                         
                         # Use executemany for batch insert
                         cursor.executemany(
@@ -667,9 +783,7 @@ class PostgreSQLSpaceDBOps:
                         
                         rows_affected = cursor.rowcount
                         self.logger.debug(f"🔧 DEBUG: Term insertion rowcount: {rows_affected}")
-                        
-                        # Don't commit yet - let add_quad handle the commit for the entire transaction
-                        self.logger.debug(f"🔧 DEBUG: Term insertion prepared (will commit with quad)")
+                        self.logger.debug(f"🔧 DEBUG: Term insertion prepared (will commit with transaction)")
                         
                         # Verify terms were actually inserted
                         for term_uuid, term_text, term_type, lang, datatype_id, created_time in term_inserts:
@@ -678,12 +792,37 @@ class PostgreSQLSpaceDBOps:
                             count = result['count'] if result else 0
                             self.logger.debug(f"🔧 DEBUG: Term {term_text[:30]} exists after insert: {count > 0}")
                         
-                        # Only commit if no transaction is provided (for transaction isolation)
-                        if transaction is None:
+                        self.logger.debug(f"✅ Prepared {len(term_inserts)} new terms (will commit with transaction)")
+                    else:
+                        # Use async context manager with pooled connection
+                        async with self.space_impl.get_db_connection() as conn:
+                            conn.row_factory = psycopg.rows.dict_row
+                            cursor = conn.cursor()
+                            self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']} (using pooled connection)")
+                            
+                            # Use executemany for batch insert
+                            cursor.executemany(
+                                f"""INSERT INTO {table_names['term']} 
+                                     (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
+                                     VALUES (%s, %s, %s, %s, %s, %s)
+                                     ON CONFLICT (term_uuid) DO NOTHING""",
+                                term_inserts
+                            )
+                            
+                            rows_affected = cursor.rowcount
+                            self.logger.debug(f"🔧 DEBUG: Term insertion rowcount: {rows_affected}")
+                            
+                            # Verify terms were actually inserted
+                            for term_uuid, term_text, term_type, lang, datatype_id, created_time in term_inserts:
+                                cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['term']} WHERE term_uuid = %s", [str(term_uuid)])
+                                result = cursor.fetchone()
+                                count = result['count'] if result else 0
+                                self.logger.debug(f"🔧 DEBUG: Term {term_text[:30]} exists after insert: {count > 0}")
+                            
+                            # Commit the transaction
                             conn.commit()
                             self.logger.debug(f"✅ Successfully inserted {len(term_inserts)} new terms")
-                        else:
-                            self.logger.debug(f"✅ Prepared {len(term_inserts)} new terms (will commit with transaction)")
+                            # Connection automatically returned to pool when context exits
                         
                 except Exception as term_insert_error:
                     self.logger.error(f"❌ ERROR during term insertion: {term_insert_error}")

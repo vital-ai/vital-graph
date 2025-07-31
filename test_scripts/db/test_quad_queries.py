@@ -20,6 +20,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+import psycopg.rows
 
 # Add project root directory for vitalgraph imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -92,7 +93,10 @@ async def run_sql_query(name, sql_query, params=None, limit_results=10):
     try:
         start_time = time.time()
         
-        with space_impl.get_connection() as conn:
+        # Use async context manager with pooled connection
+        async with space_impl.get_db_connection() as conn:
+            # Configure row factory for dict results
+            conn.row_factory = psycopg.rows.dict_row
             cursor = conn.cursor()
             cursor.execute(sql_query, params or [])
             results = cursor.fetchall()
@@ -438,7 +442,10 @@ async def test_insert_duplicate_quad():
             
             # Insert duplicate (should succeed with new quad_uuid)
             try:
-                with space_impl.get_connection() as conn:
+                # Use async context manager with pooled connection
+                async with space_impl.get_db_connection() as conn:
+                    # Configure row factory for dict results
+                    conn.row_factory = psycopg.rows.dict_row
                     cursor = conn.cursor()
                     cursor.execute(f"""
                         INSERT INTO {quad_table_name} 

@@ -97,14 +97,14 @@ async def reload_test_data():
     # Delete existing space tables
     print(f"\n🗑️  Deleting existing space tables for '{SPACE_ID}'...")
     try:
-        space_impl.delete_space_tables(SPACE_ID)
+        await space_impl.delete_space_tables(SPACE_ID)
         print("✅ Existing tables deleted")
     except Exception as e:
         print(f"ℹ️  No existing tables to delete: {e}")
     
     # Create new space tables
     print(f"\n🏗️  Creating space tables for '{SPACE_ID}'...")
-    space_impl.create_space_tables(SPACE_ID)
+    await space_impl.create_space_tables(SPACE_ID)
     print("✅ Space tables created")
     
     # Create test graph
@@ -561,7 +561,7 @@ async def reload_test_data():
     # Step 4: Drop indexes before bulk loading for optimal performance
     print(f"\n4. Dropping indexes before bulk loading for optimal performance...")
     try:
-        space_impl.drop_indexes_for_bulk_load(SPACE_ID)
+        await space_impl.drop_indexes_for_bulk_load(SPACE_ID)
         print(f"✅ Indexes dropped - bulk loading will be faster")
     except Exception as e:
         print(f"⚠️  Warning: Index drop failed: {e}")
@@ -949,11 +949,11 @@ async def reload_test_data():
     print(f"\n🔧 Optimizing indexes after bulk loading...")
     try:
         # Drop indexes (in case they exist from previous runs)
-        space_impl.drop_indexes_for_bulk_load(SPACE_ID)
+        await space_impl.drop_indexes_for_bulk_load(SPACE_ID)
         print(f"✅ Indexes dropped for optimization")
         
         # Recreate all indexes for optimal performance
-        success = space_impl.recreate_indexes_after_bulk_load(SPACE_ID, concurrent=False)
+        success = await space_impl.recreate_indexes_after_bulk_load(SPACE_ID, concurrent=False)
         if success:
             print(f"✅ All indexes recreated successfully")
         else:

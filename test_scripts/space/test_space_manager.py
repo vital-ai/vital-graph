@@ -231,7 +231,7 @@ async def test_space_manager_lifecycle():
         print(f"\n1️⃣ ORPHANED SPACE DETECTION")
         print("-" * 30)
         
-        orphaned_spaces = space_manager.detect_orphaned_spaces()
+        orphaned_spaces = await space_manager.detect_orphaned_spaces()
         if orphaned_spaces:
             print(f"⚠️ Found {len(orphaned_spaces)} orphaned spaces: {orphaned_spaces}")
         else:
@@ -334,7 +334,7 @@ async def test_space_manager_lifecycle():
         
         # Check tables exist
         space_record = space_manager.get_space(TEST_SPACE_ID)
-        tables_exist = space_record.space_impl.exists() if space_record else False
+        tables_exist = await space_record.space_impl.exists() if space_record else False
         print(f"🗃️ Tables exist: {tables_exist}")
         
         validation_success = in_registry and in_database and tables_exist
@@ -400,7 +400,7 @@ async def test_space_manager_lifecycle():
         print(f"\n6️⃣ SPACE INFORMATION")
         print("-" * 30)
         
-        space_info = space_manager.get_space_info(TEST_SPACE_ID)
+        space_info = await space_manager.get_space_info(TEST_SPACE_ID)
         if space_info:
             print(f"📋 Space Info: {space_info}")
             test_results.append(("Space Information", True, "Retrieved space information"))

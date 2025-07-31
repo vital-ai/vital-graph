@@ -87,7 +87,10 @@ class PostgreSQLSpaceQueries:
             
             with self.space_impl.utils.time_operation("quads_query", f"pattern {quad_pattern} in space '{space_id}'"):
                 self.logger.debug(f"🔍 DEBUG: Starting time operation and connection")
-                with self.space_impl.get_connection() as conn:
+                # Use async context manager with pooled connection
+                async with self.space_impl.get_db_connection() as conn:
+                    # Set row factory to return dict-like rows for query result compatibility
+                    conn.row_factory = psycopg.rows.dict_row
                     self.logger.debug(f"🔍 DEBUG: Got connection: {type(conn)}")
                     with conn.cursor() as cursor:
                         self.logger.debug(f"🔍 DEBUG: Got cursor: {type(cursor)}")
@@ -304,7 +307,7 @@ class PostgreSQLSpaceQueries:
         PostgreSQLSpaceUtils.validate_space_id(space_id)
         
         # Check if space exists first - this will throw if it doesn't
-        space_exists = self.space_impl.space_exists(space_id)
+        space_exists = await self.space_impl.space_exists(space_id)
         if not space_exists:
             raise ValueError(f"Space '{space_id}' does not exist")
         
@@ -313,8 +316,8 @@ class PostgreSQLSpaceQueries:
         quad_table_name = table_names['rdf_quad']
         
         try:
-            # Use raw psycopg3 connection for UUID-based operations
-            with self.space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
@@ -328,6 +331,7 @@ class PostgreSQLSpaceQueries:
                 
                 result = cursor.fetchone()
                 return result['count'] if result else 0
+                # Connection automatically returned to pool when context exits
                     
         except Exception as e:
             self.logger.error(f"Error getting quad count from space '{space_id}': {e}")
@@ -448,12 +452,14 @@ class PostgreSQLSpaceQueries:
             # Get table names
             table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
             
-            # Use async connection for consistency
+            # Use async context manager with pooled connection
             async with self.space_impl.get_db_connection() as conn:
+                # Set row factory to return dict-like rows for query result compatibility
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 # Check if quad exists
-                await cursor.execute(
+                cursor.execute(
                     f"""
                     SELECT 1 FROM {table_names['rdf_quad']} 
                     WHERE subject_uuid = %s AND predicate_uuid = %s AND object_uuid = %s AND context_uuid = %s
@@ -461,7 +467,7 @@ class PostgreSQLSpaceQueries:
                     """,
                     (str(subject_uuid), str(predicate_uuid), str(object_uuid), str(graph_uuid))
                 )
-                result = await cursor.fetchone()
+                result = cursor.fetchone()
                 
                 exists = result is not None
                 

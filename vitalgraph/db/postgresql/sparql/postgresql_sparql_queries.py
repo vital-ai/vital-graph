@@ -184,8 +184,13 @@ def build_construct_query(sql_components: SQLComponents, construct_template: Lis
     if not select_items:
         select_items = ["*"]
     
+    # CONSTRUCT queries with CROSS JOINs need DISTINCT to eliminate duplicates
+    # Check if this query uses CROSS JOINs that require deduplication
+    needs_distinct = any('CROSS JOIN' in join for join in sql_components.joins) if sql_components.joins else False
+    distinct_keyword = "DISTINCT " if needs_distinct else ""
+    
     # Build complete query
-    query_parts = [f"SELECT {', '.join(select_items)}"]
+    query_parts = [f"SELECT {distinct_keyword}{', '.join(select_items)}"]
     
     if sql_components.from_clause:
         query_parts.append(sql_components.from_clause)

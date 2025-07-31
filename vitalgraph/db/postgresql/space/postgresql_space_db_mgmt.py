@@ -29,7 +29,7 @@ class PostgreSQLSpaceDbMgmt:
         self.space_impl = space_impl
         self.utils = PostgreSQLLogUtils()
     
-    def create_space_tables(self, space_id: str) -> bool:
+    async def create_space_tables(self, space_id: str) -> bool:
         """
         Create UUID-based RDF tables optimized for deterministic batch loading.
         
@@ -48,8 +48,8 @@ class PostgreSQLSpaceDbMgmt:
             # Get table creation SQL from the space implementation
             table_sqls = self.space_impl._get_create_table_sql(space_id)
             
-            conn = self.space_impl.core.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     # Create tables in dependency order
                     table_order = ['datatype', 'term', 'rdf_quad', 'namespace', 'graph']
@@ -67,16 +67,14 @@ class PostgreSQLSpaceDbMgmt:
                     execution_time = time.time() - start_time
                     self.logger.info(f"✅ Successfully created space tables for '{space_id}' in {execution_time:.3f}s")
                     return True
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             execution_time = time.time() - start_time
             self.logger.error(f"❌ Failed to create space tables for '{space_id}' after {execution_time:.3f}s: {e}")
             return False
     
-    def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
+    async def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
         """
         Drop all indexes before bulk loading for maximum performance.
         Keeps only primary keys and constraints.
@@ -95,8 +93,8 @@ class PostgreSQLSpaceDbMgmt:
             schema = self.space_impl._get_schema(space_id)
             drop_statements = schema.get_drop_indexes_sql()
             
-            conn = self.space_impl.core.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     dropped_count = 0
                     for drop_sql in drop_statements:
@@ -109,9 +107,7 @@ class PostgreSQLSpaceDbMgmt:
                     
                     conn.commit()
                     self.logger.info(f"Dropped {dropped_count} indexes for bulk loading")
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
             
             execution_time = time.time() - start_time
             self.logger.info(f"✅ Successfully dropped indexes for '{space_id}' in {execution_time:.3f}s")
@@ -122,7 +118,7 @@ class PostgreSQLSpaceDbMgmt:
             self.logger.error(f"❌ Failed to drop indexes for '{space_id}' after {execution_time:.3f}s: {e}")
             return False
     
-    def recreate_indexes_after_bulk_load(self, space_id: str, concurrent: bool = True) -> bool:
+    async def recreate_indexes_after_bulk_load(self, space_id: str, concurrent: bool = True) -> bool:
         """
         Recreate all indexes after bulk loading is complete.
         
@@ -141,8 +137,8 @@ class PostgreSQLSpaceDbMgmt:
             schema = self.space_impl._get_schema(space_id)
             create_statements = schema.get_recreate_indexes_sql(concurrent=concurrent)
             
-            conn = self.space_impl.core.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     created_count = 0
                     for create_sql in create_statements:
@@ -177,9 +173,7 @@ class PostgreSQLSpaceDbMgmt:
                             self.logger.warning(f"Table clustering failed (non-critical): {e}")
                     
                     self.logger.info(f"Successfully recreated {created_count} indexes after bulk loading")
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
             
             execution_time = time.time() - start_time
             self.logger.info(f"✅ Successfully recreated indexes for '{space_id}' in {execution_time:.3f}s")
@@ -190,7 +184,7 @@ class PostgreSQLSpaceDbMgmt:
             self.logger.error(f"❌ Failed to recreate indexes for '{space_id}' after {execution_time:.3f}s: {e}")
             return False
     
-    def delete_space_tables(self, space_id: str) -> bool:
+    async def delete_space_tables(self, space_id: str) -> bool:
         """
         Delete all RDF tables for a specific space.
         
@@ -207,8 +201,8 @@ class PostgreSQLSpaceDbMgmt:
             # Get table names from the space implementation
             table_names = self.space_impl._get_table_names(space_id)
             
-            conn = self.space_impl.core.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     # Drop tables in reverse dependency order to avoid foreign key issues
                     table_order = ['graph', 'namespace', 'rdf_quad', 'term', 'datatype']
@@ -228,9 +222,7 @@ class PostgreSQLSpaceDbMgmt:
                     execution_time = time.time() - start_time
                     self.logger.info(f"✅ Successfully deleted space tables for '{space_id}' in {execution_time:.3f}s")
                     return True
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             execution_time = time.time() - start_time

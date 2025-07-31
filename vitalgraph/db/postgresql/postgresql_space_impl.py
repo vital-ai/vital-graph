@@ -199,29 +199,7 @@ class PostgreSQLSpaceImpl:
             self.close()
         except Exception:
             pass  # Ignore errors during cleanup
-    
-    
-    def get_connection(self):
-        """
-        Get a database connection. 
-        
-        WARNING: This method is deprecated for pooled connections.
-        Use get_db_connection() context manager instead to ensure proper connection lifecycle.
-        
-        Returns:
-            psycopg.Connection: Database connection (direct connection only)
-        """
-        return self.core.get_connection()
-    
-    def return_connection(self, conn) -> None:
-        """
-        Return a connection to the shared psycopg3 pool or close it if direct connection.
-        
-        Args:
-            conn: Database connection to return
-        """
-        return self.core.return_connection(conn)
-    
+      
     @asynccontextmanager
     async def get_db_connection(self):
         """
@@ -324,7 +302,7 @@ class PostgreSQLSpaceImpl:
         """
         return self.datatypes.insert_standard_datatypes(space_id)
     
-    def _ensure_text_search_extensions(self) -> bool:
+    async def _ensure_text_search_extensions(self) -> bool:
         """
         Ensure that required PostgreSQL extensions for text search are enabled.
         This includes pg_trgm for trigram-based regex matching.
@@ -332,7 +310,7 @@ class PostgreSQLSpaceImpl:
         Returns:
             bool: True if extensions are available, False otherwise
         """
-        return self.core._ensure_text_search_extensions()
+        return await self.core._ensure_text_search_extensions()
     
     async def _ensure_datatype_cache_loaded(self, space_id: str) -> None:
         """
@@ -452,7 +430,7 @@ class PostgreSQLSpaceImpl:
         """
         return await self.db_ops.remove_rdf_quad(space_id, s, p, o, g)
     
-    def create_space_tables(self, space_id: str) -> bool:
+    async def create_space_tables(self, space_id: str) -> bool:
         """
         Create UUID-based RDF tables optimized for deterministic batch loading.
         
@@ -465,19 +443,19 @@ class PostgreSQLSpaceImpl:
         PostgreSQLSpaceUtils.validate_space_id(space_id)
         
         # Delegate table creation to database management class
-        success = self.db_mgmt.create_space_tables(space_id)
+        success = await self.db_mgmt.create_space_tables(space_id)
         
         if success:
             # Insert standard datatypes after table creation
-            if not self._insert_standard_datatypes(space_id):
+            if not await self._insert_standard_datatypes(space_id):
                 self.logger.warning(f"⚠️ Failed to insert standard datatypes for '{space_id}', but tables were created")
             
-            # Initialize datatype cache for this space (synchronous)
-            self._initialize_space_datatype_cache_sync(space_id)
+            # Initialize datatype cache for this space (async)
+            await self._initialize_space_datatype_cache_sync(space_id)
         
         return success
     
-    def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
+    async def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
         """
         Drop all indexes before bulk loading for maximum performance.
         Keeps only primary keys and constraints.
@@ -489,9 +467,9 @@ class PostgreSQLSpaceImpl:
             bool: True if indexes dropped successfully, False otherwise
         """
         # Delegate to database management class
-        return self.db_mgmt.drop_indexes_for_bulk_load(space_id)
+        return await self.db_mgmt.drop_indexes_for_bulk_load(space_id)
     
-    def recreate_indexes_after_bulk_load(self, space_id: str, concurrent: bool = True) -> bool:
+    async def recreate_indexes_after_bulk_load(self, space_id: str, concurrent: bool = True) -> bool:
         """
         Recreate all indexes after bulk loading is complete.
         
@@ -503,9 +481,9 @@ class PostgreSQLSpaceImpl:
             bool: True if indexes recreated successfully, False otherwise
         """
         # Delegate to database management class
-        return self.db_mgmt.recreate_indexes_after_bulk_load(space_id, concurrent)
+        return await self.db_mgmt.recreate_indexes_after_bulk_load(space_id, concurrent)
     
-    def delete_space_tables(self, space_id: str) -> bool:
+    async def delete_space_tables(self, space_id: str) -> bool:
         """
         Delete all RDF tables for a specific space.
         
@@ -518,9 +496,9 @@ class PostgreSQLSpaceImpl:
         PostgreSQLSpaceUtils.validate_space_id(space_id)
         
         # Delegate to database management class
-        return self.db_mgmt.delete_space_tables(space_id)
+        return await self.db_mgmt.delete_space_tables(space_id)
     
-    def space_exists(self, space_id: str) -> bool:
+    async def space_exists(self, space_id: str) -> bool:
         """
         Check if tables for a space exist in the database.
         
@@ -530,18 +508,18 @@ class PostgreSQLSpaceImpl:
         Returns:
             bool: True if space tables exist, False otherwise
         """
-        return self.core.space_exists(space_id, self)
+        return await self.core.space_exists(space_id, self)
     
-    def list_spaces(self) -> List[str]:
+    async def list_spaces(self) -> List[str]:
         """
         List all spaces that have tables in the database.
         
         Returns:
             list: List of space IDs
         """
-        return self.core.list_spaces()
+        return await self.core.list_spaces()
     
-    def get_space_info(self, space_id: str) -> Dict[str, Any]:
+    async def get_space_info(self, space_id: str) -> Dict[str, Any]:
         """
         Get information about a specific space.
         
@@ -551,7 +529,7 @@ class PostgreSQLSpaceImpl:
         Returns:
             dict: Space information including table details
         """
-        return self.core.get_space_info(space_id, self)
+        return await self.core.get_space_info(space_id, self)
     
     async def add_term(self, space_id: str, term_text: str, term_type: str, 
                       lang: Optional[str] = None, datatype_id: Optional[int] = None) -> Optional[str]:
@@ -737,22 +715,7 @@ class PostgreSQLSpaceImpl:
             Number of quads successfully inserted
         """
         return await self.db_ops.add_rdf_quads_batch(space_id, quads, auto_commit, verify_count, connection)
-    
-    async def commit_transaction(self, connection=None) -> bool:
-        """
-        Manually commit the current transaction.
-        
-        This is useful when using auto_commit=False in batch operations
-        to commit multiple batches in a single transaction.
-        
-        Args:
-            connection: Optional connection to commit. If None, gets a new connection.
-        
-        Returns:
-            True if commit was successful, False otherwise
-        """
-        return await self.core.commit_transaction(connection)
-    
+       
     async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
         """
         Datatype-aware batch RDF quad removal with proper datatype handling.
@@ -846,15 +809,6 @@ class PostgreSQLSpaceImpl:
         """
         return self.core.get_pool_stats()
     
-    async def health_check(self) -> bool:
-        """
-        Perform a health check on the connection pool.
-        
-        Returns:
-            bool: True if pool is healthy, False otherwise
-        """
-        return await self.core.health_check()
-
     def close_pool(self) -> None:
         """
         Close the connection pool and all connections.

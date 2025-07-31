@@ -14,6 +14,27 @@ import psycopg
 # Import PostgreSQLSpaceImpl for RDF space management
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 
+
+def safe_isoformat(dt_value):
+    """Safely convert datetime to isoformat, handling both datetime objects and strings."""
+    if dt_value is None:
+        return None
+    
+    # Debug logging to understand what type we're receiving
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if isinstance(dt_value, str):
+        logger.debug(f"safe_isoformat: Received string value: {dt_value} (type: {type(dt_value)})")
+        return dt_value  # Already a string, return as-is
+    
+    if hasattr(dt_value, 'isoformat'):
+        logger.debug(f"safe_isoformat: Received datetime object: {dt_value} (type: {type(dt_value)})")
+        return dt_value.isoformat()  # datetime object
+    
+    logger.warning(f"safe_isoformat: Received unexpected type: {dt_value} (type: {type(dt_value)})")
+    return str(dt_value)  # Fallback to string conversion
+
 # Custom connection class for psycopg-pool < 3.3 to properly integrate with SQLAlchemy
 class SharedPoolConnection(psycopg.Connection):
     """
@@ -71,8 +92,8 @@ def create_models_with_prefix(prefix: str):
             """Convert Install instance to dictionary."""
             return {
                 'id': self.id,
-                'install_datetime': self.install_datetime.isoformat() if self.install_datetime else None,
-                'update_datetime': self.update_datetime.isoformat() if self.update_datetime else None,
+                'install_datetime': safe_isoformat(self.install_datetime),
+                'update_datetime': safe_isoformat(self.update_datetime),
                 'active': self.active
             }
     
@@ -106,7 +127,7 @@ def create_models_with_prefix(prefix: str):
                 'space': self.space,
                 'space_name': self.space_name,
                 'space_description': self.space_description,
-                'update_time': self.update_time.isoformat() if self.update_time else None
+                'update_time': safe_isoformat(self.update_time)
             }
     
     class User(Base):
@@ -140,7 +161,7 @@ def create_models_with_prefix(prefix: str):
                 'username': self.username,
                 'password': self.password,
                 'email': self.email,
-                'update_time': self.update_time.isoformat() if self.update_time else None
+                'update_time': safe_isoformat(self.update_time)
             }
     
     # Cache the models before returning
@@ -252,7 +273,9 @@ class PostgreSQLDbImpl:
                 'min_size': rdf_pool_config.get('min_size', 2),
                 'max_size': rdf_pool_config.get('max_size', 10),
                 'max_idle': rdf_pool_config.get('max_idle', 300),
-                'timeout': rdf_pool_config.get('timeout', 30)
+                'timeout': rdf_pool_config.get('timeout', 30),
+                'max_lifetime': rdf_pool_config.get('max_lifetime', 7200),
+                'reconnect_failed': rdf_pool_config.get('reconnect_failed', True)
             }
             
             self.logger.info(f"Creating shared psycopg3 ConnectionPool for both ORM and RDF operations with config: {pool_config}")
@@ -266,6 +289,8 @@ class PostgreSQLDbImpl:
                 max_size=pool_config['max_size'],
                 max_idle=pool_config['max_idle'],
                 timeout=pool_config['timeout'],
+                max_lifetime=pool_config.get('max_lifetime', 7200),  # Connection lifetime limit
+                reconnect_failed=pool_config.get('reconnect_failed', True),  # Auto-reconnect
                 open=True
             )
             
@@ -331,6 +356,16 @@ class PostgreSQLDbImpl:
                 shared_pool=self.shared_pool
             )
             self.logger.info(f"PostgreSQLSpaceImpl initialized with shared psycopg3 pool")
+            
+            # Warm up connection pool to prevent initial query slowness
+            try:
+                warmup_success = await self.space_impl.core.warm_up_connections()
+                if warmup_success:
+                    self.logger.info("✅ Connection pool warmed up successfully")
+                else:
+                    self.logger.warning("⚠️ Connection pool warmup failed, initial queries may be slower")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Connection pool warmup error: {e}, initial queries may be slower")
             
             self.state = "connected"
             self.connected = True

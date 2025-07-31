@@ -94,7 +94,7 @@ class SpaceManager:
                         self._spaces[space_id] = space_record
                         
                         # Check for orphaned spaces (database record but no tables)
-                        if not space_impl.exists():
+                        if not await space_impl.exists():
                             self.logger.warning(f"⚠️ ORPHANED SPACE DETECTED: Space '{space_id}' has database record but no tables!")
                         else:
                             self.logger.debug(f"✅ Space '{space_id}' loaded successfully with tables")
@@ -279,7 +279,7 @@ class SpaceManager:
             self.logger.error(f"❌ Failed to delete space '{space_id}': {e}")
             return False
     
-    def detect_orphaned_spaces(self) -> List[str]:
+    async def detect_orphaned_spaces(self) -> List[str]:
         """
         Detect spaces that have database records but no corresponding tables.
         
@@ -292,7 +292,7 @@ class SpaceManager:
             self.logger.info("Detecting orphaned spaces...")
             
             for space_id, space_record in self._spaces.items():
-                if not space_record.space_impl.exists():
+                if not await space_record.space_impl.exists():
                     orphaned_spaces.append(space_id)
                     self.logger.error(f"⚠️ ORPHANED SPACE: '{space_id}' has database record but no tables")
                     

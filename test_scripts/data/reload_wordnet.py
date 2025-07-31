@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 from rdflib import URIRef, Literal, BNode
+import psycopg.rows
 
 # Add the project root directory to the path to import vitalgraph modules
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -117,7 +118,7 @@ async def reload_wordnet_data():
     # Step 5: Drop indexes before bulk loading for maximum performance
     print(f"\n5. Dropping indexes before bulk loading for optimal performance...")
     try:
-        success = space_impl.drop_indexes_for_bulk_load(SPACE_ID)
+        success = await space_impl.drop_indexes_for_bulk_load(SPACE_ID)
         if success:
             print(f"✅ Indexes dropped - bulk loading will be much faster")
         else:
@@ -352,7 +353,7 @@ async def reload_wordnet_data():
     # Step 7: Recreate indexes after bulk loading for optimal query performance
     print(f"\n7. Recreating indexes after bulk loading for optimal query performance...")
     try:
-        success = space_impl.recreate_indexes_after_bulk_load(SPACE_ID, concurrent=False)
+        success = await space_impl.recreate_indexes_after_bulk_load(SPACE_ID, concurrent=False)
         if success:
             print(f"✅ All indexes recreated successfully - queries will be fast")
         else:
@@ -372,8 +373,10 @@ async def reload_wordnet_data():
         table_names = space_impl._get_table_names(SPACE_ID)
         quad_table_name = table_names['rdf_quad']
         
-        # Use synchronous connection but ensure we're reading committed data
-        with space_impl.get_connection() as conn:
+        # Use async context manager with pooled connection
+        async with space_impl.get_db_connection() as conn:
+            # Configure row factory for dict results
+            conn.row_factory = psycopg.rows.dict_row
             with conn.cursor() as cursor:
                 # Ensure we read committed data
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
@@ -387,7 +390,10 @@ async def reload_wordnet_data():
             print(f"⚠️  Warning: No quads found in database - data loading may have failed")
             print(f"   Table queried: {quad_table_name}")
             # Let's also check if the table exists
-            with space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with space_impl.get_db_connection() as conn:
+                # Configure row factory for dict results
+                conn.row_factory = psycopg.rows.dict_row
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", (quad_table_name.split('.')[-1],))
                     table_exists = cursor.fetchone()['exists']

@@ -110,7 +110,6 @@ class PostgreSQLSparqlImpl:
                 space_impl=self.space_impl,
                 space_id=space_id,
                 sparql_update=sparql_update,
-                term_cache=self.term_cache,
                 graph_cache=self.graph_cache
             )
             
@@ -162,6 +161,7 @@ class PostgreSQLSparqlImpl:
             try:
                 table_names = self.space_impl._get_table_names(space_id)
                 async with self.space_impl.get_db_connection() as conn:
+                    conn.row_factory = psycopg.rows.dict_row
                     cursor = conn.cursor()
                     
                     # Build parameterized query for batch lookup with term types

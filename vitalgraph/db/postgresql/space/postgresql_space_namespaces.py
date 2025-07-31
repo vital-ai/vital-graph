@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any
 import traceback
+import psycopg
 from vitalgraph.db.postgresql.postgresql_log_utils import PostgreSQLLogUtils
 from vitalgraph.db.postgresql.space.postgresql_space_utils import PostgreSQLSpaceUtils
 
@@ -43,7 +44,8 @@ class PostgreSQLSpaceNamespaces:
             
             self.logger.debug(f"Adding namespace '{prefix}' -> '{namespace_uri}' to space '{space_id}'")
             
-            with self.space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 cursor = conn.cursor()
                 
                 # Check if prefix already exists
@@ -79,6 +81,7 @@ class PostgreSQLSpaceNamespaces:
                 
                 self.logger.info(f"Added namespace '{prefix}' -> '{namespace_uri}' to space '{space_id}' with ID: {namespace_id}")
                 return namespace_id
+                # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"Error adding namespace to space '{space_id}': {e}")
@@ -105,7 +108,8 @@ class PostgreSQLSpaceNamespaces:
             
             self.logger.debug(f"Looking up namespace URI for prefix '{prefix}' in space '{space_id}'")
             
-            with self.space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
                 cursor = conn.cursor()
                 
                 cursor.execute(
@@ -121,6 +125,7 @@ class PostgreSQLSpaceNamespaces:
                 else:
                     self.logger.debug(f"No namespace found for prefix '{prefix}' in space '{space_id}'")
                     return None
+                # Connection automatically returned to pool when context exits
                     
         except Exception as e:
             self.logger.error(f"Error getting namespace URI from space '{space_id}': {e}")
@@ -146,7 +151,10 @@ class PostgreSQLSpaceNamespaces:
             
             self.logger.debug(f"Listing all namespaces for space '{space_id}'")
             
-            with self.space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
+                # Set row factory to return dict-like rows for query result compatibility
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 cursor.execute(
@@ -166,6 +174,7 @@ class PostgreSQLSpaceNamespaces:
                 
                 self.logger.debug(f"Retrieved {len(namespaces)} namespaces from space '{space_id}'")
                 return namespaces
+                # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"Error listing namespaces from space '{space_id}': {e}")

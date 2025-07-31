@@ -53,54 +53,7 @@ class PostgreSQLSpaceCore:
         
         # Validate global prefix using utils
         PostgreSQLSpaceUtils.validate_global_prefix(global_prefix)
-    
-    def get_connection(self):
-        """
-        Get a database connection. 
         
-        WARNING: This method is deprecated for pooled connections.
-        Use get_db_connection() context manager instead to ensure proper connection lifecycle.
-        
-        Returns:
-            psycopg.Connection: Database connection (direct connection only)
-        """
-        # Always use direct connections for get_connection() to avoid leaks
-        # Pooled connections should use the context manager
-        try:
-            self.logger.debug("Creating direct connection (get_connection method)")
-            conn = psycopg.connect(self.connection_string, row_factory=dict_row)
-            self.logger.debug("Successfully created direct connection")
-            return conn
-        except Exception as e:
-            self.logger.error(f"Failed to create direct connection: {e}")
-            raise
-    
-    def return_connection(self, conn) -> None:
-        """
-        Return a connection to the shared psycopg3 pool or close it if direct connection.
-        
-        Args:
-            conn: Database connection to return
-        """
-        if self.shared_pool and conn:
-            # Return connection to shared psycopg3 pool
-            try:
-                self.shared_pool.putconn(conn)
-                self.logger.debug("Returned connection to shared psycopg3 pool")
-            except Exception as e:
-                self.logger.warning(f"Failed to return connection to pool, closing directly: {e}")
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-        elif conn:
-            # Close direct connection (fallback case)
-            try:
-                conn.close()
-                self.logger.debug("Closed direct connection")
-            except Exception as e:
-                self.logger.warning(f"Error closing connection: {e}")
-    
     @asynccontextmanager
     async def get_db_connection(self):
         """
@@ -146,8 +99,8 @@ class PostgreSQLSpaceCore:
         """
         if self.shared_pool:
             try:
-                # Get shared psycopg3 ConnectionPool statistics
-                return {
+                # Get shared psycopg3 ConnectionPool statistics with enhanced monitoring
+                stats = {
                     'pool_enabled': True,
                     'pool_type': 'shared_psycopg3',
                     'min_size': self.shared_pool.min_size,
@@ -156,12 +109,36 @@ class PostgreSQLSpaceCore:
                     'open': getattr(self.shared_pool, 'open', True),
                     'closed': getattr(self.shared_pool, 'closed', False)
                 }
+                
+                # Add runtime statistics if available
+                try:
+                    # Try to get current pool size and available connections
+                    if hasattr(self.shared_pool, 'get_stats'):
+                        pool_stats = self.shared_pool.get_stats()
+                        stats.update(pool_stats)
+                    elif hasattr(self.shared_pool, '_pool'):
+                        # Access internal pool statistics if available
+                        internal_pool = self.shared_pool._pool
+                        if hasattr(internal_pool, 'size'):
+                            stats['current_size'] = internal_pool.size
+                        if hasattr(internal_pool, 'available'):
+                            stats['available_connections'] = len(internal_pool.available)
+                        if hasattr(internal_pool, 'used'):
+                            stats['used_connections'] = len(internal_pool.used)
+                except Exception as inner_e:
+                    stats['stats_error'] = str(inner_e)
+                    self.logger.debug(f"Could not get detailed pool stats: {inner_e}")
+                
+                return stats
+                
             except Exception as e:
                 self.logger.warning(f"Failed to get shared pool stats: {e}")
+                return {'pool_enabled': True, 'pool_type': 'shared_psycopg3', 'error': str(e)}
+                
         elif self.rdf_pool:
             try:
                 # Get dedicated psycopg3 ConnectionPool statistics
-                return {
+                stats = {
                     'pool_enabled': True,
                     'pool_type': 'dedicated_rdf_psycopg3',
                     'min_size': self.rdf_pool.min_size,
@@ -170,28 +147,68 @@ class PostgreSQLSpaceCore:
                     'open': getattr(self.rdf_pool, 'open', True),
                     'closed': getattr(self.rdf_pool, 'closed', False)
                 }
+                
+                # Add runtime statistics if available
+                try:
+                    if hasattr(self.rdf_pool, 'get_stats'):
+                        pool_stats = self.rdf_pool.get_stats()
+                        stats.update(pool_stats)
+                except Exception as inner_e:
+                    stats['stats_error'] = str(inner_e)
+                    
+                return stats
+                
             except Exception as e:
                 self.logger.warning(f"Failed to get psycopg3 pool stats: {e}")
-                return {'pool_enabled': True, 'pool_type': 'shared_psycopg3', 'error': str(e)}
+                return {'pool_enabled': True, 'pool_type': 'dedicated_rdf_psycopg3', 'error': str(e)}
         else:
             return {'pool_enabled': False, 'pool_type': 'direct_connections'}
     
-    async def health_check(self) -> bool:
+    async def warm_up_connections(self, target_connections: int = None) -> bool:
         """
-        Perform a health check on the connection pool.
+        Pre-warm connection pool by creating and testing connections.
         
+        This helps avoid the initial query slowness by ensuring connections
+        are established and ready before the first query.
+        
+        Args:
+            target_connections: Number of connections to warm up (defaults to min_size)
+            
         Returns:
-            bool: True if pool is healthy, False otherwise
+            bool: True if warmup successful, False otherwise
         """
         try:
-            # Use the async context manager for health check
-            async with self.get_db_connection() as conn:
-                cursor = conn.cursor()
-                await cursor.execute('SELECT 1')
-                result = await cursor.fetchone()
-                return result is not None
+            if not target_connections:
+                # Default to warming up to min_size connections
+                if self.shared_pool:
+                    target_connections = getattr(self.shared_pool, '_min_size', 3)
+                else:
+                    target_connections = 3
+            
+            self.logger.info(f"Warming up {target_connections} database connections...")
+            
+            # Create multiple connections simultaneously to warm up the pool
+            connections = []
+            try:
+                for i in range(target_connections):
+                    async with self.get_db_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute('SELECT 1')  # Simple query to ensure connection is active
+                        result = cursor.fetchone()
+                        if result:
+                            self.logger.debug(f"Connection {i+1}/{target_connections} warmed up successfully")
+                        else:
+                            self.logger.warning(f"Connection {i+1}/{target_connections} warmup returned no result")
+                
+                self.logger.info(f"Successfully warmed up {target_connections} database connections")
+                return True
+                
+            except Exception as e:
+                self.logger.error(f"Error during connection warmup: {e}")
+                return False
+                
         except Exception as e:
-            self.logger.error(f"Health check failed: {e}")
+            self.logger.error(f"Failed to warm up connections: {e}")
             return False
     
     def close(self):
@@ -226,7 +243,7 @@ class PostgreSQLSpaceCore:
             "pool_info": pool_stats
         }
     
-    def _ensure_text_search_extensions(self) -> bool:
+    async def _ensure_text_search_extensions(self) -> bool:
         """
         Ensure that required PostgreSQL extensions for text search are enabled.
         This includes pg_trgm for trigram-based regex matching.
@@ -235,8 +252,8 @@ class PostgreSQLSpaceCore:
             bool: True if extensions are available, False otherwise
         """
         try:
-            conn = self.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     # Check if pg_trgm extension is available and create if needed
                     cursor.execute("""
@@ -255,15 +272,13 @@ class PostgreSQLSpaceCore:
                     else:
                         self.logger.warning("⚠️ pg_trgm extension test failed")
                         return False
-                        
-            finally:
-                conn.close()
+                        # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"❌ Failed to ensure text search extensions: {e}")
             return False
     
-    def space_exists(self, space_id: str, space_impl) -> bool:
+    async def space_exists(self, space_id: str, space_impl) -> bool:
         """
         Check if tables for a space exist in the database.
         
@@ -280,8 +295,8 @@ class PostgreSQLSpaceCore:
         try:
             table_names = space_impl._get_table_names(space_id)
             
-            conn = self.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.get_db_connection() as conn:
                 cursor = conn.cursor()
                 # Check if the main rdf_quad table exists
                 rdf_quad_table = table_names.get('rdf_quad')
@@ -296,7 +311,7 @@ class PostgreSQLSpaceCore:
                         SELECT FROM information_schema.tables 
                         WHERE table_name = %s
                     )
-                """, (rdf_quad_table,))
+                """,(rdf_quad_table,))
                 
                 result = cursor.fetchone()
                 self.logger.debug(f"Raw result from query: {result} (type: {type(result)})")
@@ -311,9 +326,7 @@ class PostgreSQLSpaceCore:
                     exists = False
                 self.logger.debug(f"Table '{rdf_quad_table}' exists: {exists}")
                 return exists
-                
-            finally:
-                conn.close()
+                # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             import traceback
@@ -321,7 +334,7 @@ class PostgreSQLSpaceCore:
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
     
-    def list_spaces(self) -> List[str]:
+    async def list_spaces(self) -> List[str]:
         """
         List all spaces that have tables in the database.
         
@@ -329,8 +342,8 @@ class PostgreSQLSpaceCore:
             list: List of space IDs
         """
         try:
-            conn = self.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     # Look for tables matching the pattern: {global_prefix}__{space_id}__rdf_quad
                     pattern = f"{self.global_prefix}__%%__rdf_quad"
@@ -355,15 +368,13 @@ class PostgreSQLSpaceCore:
                             spaces.append(space_id)
                     
                     return spaces
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"Error listing spaces: {e}")
             return []
     
-    def get_space_info(self, space_id: str, space_impl) -> Dict[str, Any]:
+    async def get_space_info(self, space_id: str, space_impl) -> Dict[str, Any]:
         """
         Get information about a specific space.
         
@@ -378,7 +389,7 @@ class PostgreSQLSpaceCore:
         PostgreSQLSpaceUtils.validate_space_id(space_id)
         
         try:
-            if not self.space_exists(space_id, space_impl):
+            if not await self.space_exists(space_id, space_impl):
                 return {
                     "space_id": space_id,
                     "exists": False,
@@ -387,8 +398,8 @@ class PostgreSQLSpaceCore:
             
             table_names = space_impl._get_table_names(space_id)
             
-            conn = self.get_connection()
-            try:
+            # Use async context manager with pooled connection
+            async with self.get_db_connection() as conn:
                 with conn.cursor(row_factory=dict_row) as cursor:
                     # Get table sizes and row counts
                     table_info = {}
@@ -425,9 +436,7 @@ class PostgreSQLSpaceCore:
                         "tables": table_info,
                         "global_prefix": self.global_prefix
                     }
-                    
-            finally:
-                conn.close()
+                    # Connection automatically returned to pool when context exits
                 
         except Exception as e:
             self.logger.error(f"Error getting space info for '{space_id}': {e}")
@@ -569,33 +578,6 @@ class PostgreSQLSpaceCore:
             del self.active_transactions[transaction_id]
             self.logger.debug(f"Removed transaction {transaction_id} from active list")
     
-    async def commit_transaction(self, connection=None) -> bool:
-        """
-        Manually commit the current transaction.
-        
-        This is useful when using auto_commit=False in batch operations
-        to commit multiple batches in a single transaction.
-        
-        Args:
-            connection: Optional connection to commit. If None, gets a new connection.
-        
-        Returns:
-            True if commit was successful, False otherwise
-        """
-        try:
-            if connection is not None:
-                connection.commit()
-                self.logger.debug("💾 Transaction committed successfully")
-                return True
-            else:
-                with self.get_connection() as conn:
-                    conn.commit()
-                    self.logger.debug("💾 Transaction committed successfully")
-                    return True
-        except Exception as e:
-            self.logger.error(f"Error committing transaction: {e}")
-            return False
-
     def close_pool(self) -> None:
         """
         Close the connection pool and all connections.

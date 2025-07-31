@@ -153,13 +153,13 @@ class SpaceListingValidator:
             space_record = self.space_manager.get_space(space_id)
             if space_record:
                 # Use existing space record to check tables
-                tables_exist = space_record.space_impl.exists()
+                tables_exist = await space_record.space_impl.exists()
                 return tables_exist, None
             else:
                 # Create temporary SpaceImpl to check tables
                 from vitalgraph.space.space_impl import SpaceImpl
                 temp_space_impl = SpaceImpl(space_id=space_id, db_impl=self.db_impl)
-                tables_exist = temp_space_impl.exists()
+                tables_exist = await temp_space_impl.exists()
                 return tables_exist, None
         except Exception as e:
             return False, str(e)

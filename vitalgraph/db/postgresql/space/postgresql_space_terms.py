@@ -2,6 +2,7 @@ import logging
 import uuid
 from typing import Optional, Tuple, List, Dict
 from datetime import datetime
+import psycopg.rows
 
 # RDFLib imports for term handling
 from rdflib import URIRef, Literal, BNode
@@ -134,6 +135,7 @@ class PostgreSQLSpaceTerms:
             table_names = self.space_impl._get_table_names(space_id)
             
             async with self.space_impl.get_db_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 # Check if term already exists
@@ -193,6 +195,7 @@ class PostgreSQLSpaceTerms:
             table_names = self.space_impl._get_table_names(space_id)
             
             async with self.space_impl.get_db_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 # Check if term exists
@@ -245,6 +248,7 @@ class PostgreSQLSpaceTerms:
             table_names = self.space_impl._get_table_names(space_id)
             
             async with self.space_impl.get_db_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 cursor.execute(
@@ -287,6 +291,7 @@ class PostgreSQLSpaceTerms:
             table_names = self.space_impl._get_table_names(space_id)
             
             async with self.space_impl.get_db_connection() as conn:
+                conn.row_factory = psycopg.rows.dict_row
                 cursor = conn.cursor()
                 
                 # Check if term is referenced by any quads

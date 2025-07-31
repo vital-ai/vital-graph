@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, List, Optional, Any, Union, Tuple, Set
+import psycopg.rows
 from .postgresql_space_terms import PostgreSQLSpaceTerms
 
 
@@ -96,7 +97,7 @@ class PostgreSQLSpaceDatatypes:
             ('http://www.w3.org/2001/XMLSchema#IDREF', 'IDREF')
         ]
     
-    def insert_standard_datatypes(self, space_id: str) -> bool:
+    async def insert_standard_datatypes(self, space_id: str) -> bool:
         """
         Insert standard datatype URIs into the datatype table for a space.
         
@@ -112,33 +113,36 @@ class PostgreSQLSpaceDatatypes:
             datatype_table = table_names['datatype']
             term_table = table_names['term']
             
-            conn = self.space_impl.core.get_connection()
-            try:
-                with conn.cursor() as cursor:
-                    for datatype_uri, datatype_name in standard_datatypes:
-                        # Generate UUID for the datatype term
-                        term_uuid = PostgreSQLSpaceTerms.generate_term_uuid(datatype_uri, 'U')
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
+                try:
+                    with conn.cursor() as cursor:
+                        for datatype_uri, datatype_name in standard_datatypes:
+                            # Generate UUID for the datatype term
+                            term_uuid = PostgreSQLSpaceTerms.generate_term_uuid(datatype_uri, 'U')
+                            
+                            # Insert into term table first
+                            cursor.execute(f"""
+                                INSERT INTO {term_table} (term_uuid, term_text, term_type)
+                                VALUES (%s, %s, %s)
+                                ON CONFLICT (term_uuid) DO NOTHING
+                            """, (term_uuid, datatype_uri, 'U'))
+                            
+                            # Insert into datatype table (datatype_id is auto-generated BIGSERIAL)
+                            cursor.execute(f"""
+                                INSERT INTO {datatype_table} (datatype_uri, datatype_name)
+                                VALUES (%s, %s)
+                                ON CONFLICT (datatype_uri) DO NOTHING
+                            """, (datatype_uri, datatype_name))
                         
-                        # Insert into term table first
-                        cursor.execute(f"""
-                            INSERT INTO {term_table} (term_uuid, term_text, term_type)
-                            VALUES (%s, %s, %s)
-                            ON CONFLICT (term_uuid) DO NOTHING
-                        """, (term_uuid, datatype_uri, 'U'))
+                        conn.commit()
+                        self.logger.info(f"✅ Inserted {len(standard_datatypes)} standard datatypes for space '{space_id}'")
+                        return True
+                        # Connection automatically returned to pool when context exits
                         
-                        # Insert into datatype table (datatype_id is auto-generated BIGSERIAL)
-                        cursor.execute(f"""
-                            INSERT INTO {datatype_table} (datatype_uri, datatype_name)
-                            VALUES (%s, %s)
-                            ON CONFLICT (datatype_uri) DO NOTHING
-                        """, (datatype_uri, datatype_name))
-                    
-                    conn.commit()
-                    self.logger.info(f"✅ Inserted {len(standard_datatypes)} standard datatypes for space '{space_id}'")
-                    return True
-                    
-            finally:
-                conn.close()
+                except Exception as e:
+                    conn.rollback()
+                    raise e
                 
         except Exception as e:
             self.logger.error(f"❌ Failed to insert standard datatypes for space '{space_id}': {e}")
@@ -290,21 +294,23 @@ class PostgreSQLSpaceDatatypes:
                 table_names = self.space_impl._get_table_names(space_id)
                 datatype_table = table_names['datatype']
                 
-                with self.space_impl.get_connection() as conn:
+                # Use async context manager with pooled connection
+                async with self.space_impl.get_db_connection() as conn:
+                    # Use default tuple rows for better bulk performance (no dict overhead)
                     with conn.cursor() as cursor:
                         
                         # Query for existing datatypes
-                        placeholders = ','.join(['%s'] * len(missing_uris))
+                        missing_placeholders = ','.join(['%s'] * len(missing_uris))
                         cursor.execute(
-                            f"SELECT datatype_uri, datatype_id FROM {datatype_table} WHERE datatype_uri IN ({placeholders})",
+                            f"SELECT datatype_uri, datatype_id FROM {datatype_table} WHERE datatype_uri IN ({missing_placeholders})",
                             list(missing_uris)
                         )
                         found_datatypes = cursor.fetchall()
                         still_missing = set(missing_uris)
                         
-                        # Add found datatypes to result and cache
+                        # Add found datatypes to result and cache (using tuple indexing for performance)
                         for row in found_datatypes:
-                            uri, datatype_id = row['datatype_uri'], row['datatype_id']
+                            uri, datatype_id = row[0], row[1]  # tuple access: [datatype_uri, datatype_id]
                             result[uri] = datatype_id
                             datatype_cache.put(uri, datatype_id)
                             still_missing.discard(uri)
@@ -314,24 +320,25 @@ class PostgreSQLSpaceDatatypes:
                             self.logger.info(f"Inserting {len(still_missing)} unknown datatypes: {list(still_missing)}")
                             
                             # Insert new datatypes
-                            new_datatypes = [(uri,) for uri in still_missing]
                             cursor.executemany(
                                 f"INSERT INTO {datatype_table} (datatype_uri, datatype_name) VALUES (%s, %s)",
                                 [(uri, None) for uri in still_missing]
                             )
                             
-                            # Get the newly inserted datatypes
+                            # Get the newly inserted datatypes (create placeholders for still_missing)
+                            still_missing_placeholders = ','.join(['%s'] * len(still_missing))
                             cursor.execute(
-                                f"SELECT datatype_uri, datatype_id FROM {datatype_table} WHERE datatype_uri IN ({placeholders})",
+                                f"SELECT datatype_uri, datatype_id FROM {datatype_table} WHERE datatype_uri IN ({still_missing_placeholders})",
                                 list(still_missing)
                             )
                             new_datatype_rows = cursor.fetchall()
                             for row in new_datatype_rows:
-                                uri, datatype_id = row['datatype_uri'], row['datatype_id']
+                                uri, datatype_id = row[0], row[1]  # tuple access: [datatype_uri, datatype_id]
                                 result[uri] = datatype_id
                                 datatype_cache.put(uri, datatype_id)
                             
                         conn.commit()
+                        # Connection automatically returned to pool when context exits
                         
             except Exception as e:
                 self.logger.error(f"Error resolving datatype IDs: {e}")
@@ -340,7 +347,7 @@ class PostgreSQLSpaceDatatypes:
         return result
     
 
-    def initialize_space_datatype_cache_sync(self, space_id: str) -> None:
+    async def initialize_space_datatype_cache_sync(self, space_id: str) -> None:
         """
         Initialize the datatype cache for a specific space by loading standard datatypes
         and any existing datatypes from the database (synchronous version).
@@ -367,8 +374,12 @@ class PostgreSQLSpaceDatatypes:
             standard_datatypes = self.get_standard_datatypes()
             self.logger.debug(f"DEBUG: Got {len(standard_datatypes)} standard datatypes")
             
-            with self.space_impl.get_connection() as conn:
+            # Use async context manager with pooled connection
+            async with self.space_impl.get_db_connection() as conn:
+                # Set row factory to return dict-like rows instead of tuples
+                conn.row_factory = psycopg.rows.dict_row
                 with conn.cursor() as cursor:
+                    
                     # Insert standard datatypes (will be ignored if they already exist)
                     for datatype_uri, datatype_name in standard_datatypes:
                         cursor.execute(
@@ -388,6 +399,7 @@ class PostgreSQLSpaceDatatypes:
                         datatype_cache.put(uri, datatype_id)
                     
                     self.logger.info(f"Initialized datatype cache for space '{space_id}' with {len(all_datatypes)} datatypes")
+                    # Connection automatically returned to pool when context exits
                     
         except Exception as e:
             self.logger.error(f"Error initializing datatype cache for space '{space_id}': {e}")

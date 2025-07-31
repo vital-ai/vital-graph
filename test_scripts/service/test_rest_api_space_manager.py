@@ -175,7 +175,7 @@ class RestApiSpaceManagerTester:
                 print("   ❌ Space not found in Space Manager registry")
                 return False
             
-            tables_exist = space_impl.space_impl.exists()
+            tables_exist = await space_impl.space_impl.exists()
             if not tables_exist:
                 print("   ❌ Space tables do not exist")
                 return False

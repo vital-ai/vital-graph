@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple, Optional, Any
 from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.algebra import translateQuery
+import psycopg
 
 # Import PostgreSQL space implementation and utilities
 from ..postgresql_space_impl import PostgreSQLSpaceImpl
@@ -303,8 +304,10 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
     This follows the same pattern as the original implementation.
     """
     try:
-        # Use the space_impl's get_connection method to get a database connection
-        with space_impl.get_connection() as conn:
+        # Use async context manager with pooled connection
+        async with space_impl.get_db_connection() as conn:
+            # Set row factory to return dict-like rows for SPARQL result compatibility
+            conn.row_factory = psycopg.rows.dict_row
             with conn.cursor() as cursor:
                 cursor.execute(sql_query)
                 
@@ -337,6 +340,7 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
                     # For INSERT/UPDATE/DELETE operations, return row count information
                     rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
                     return [{'operation': query_type, 'rows_affected': rows_affected}]
+                # Connection automatically returned to pool when context exits
             
     except Exception as e:
         logger = logging.getLogger(__name__)
@@ -631,8 +635,13 @@ def build_construct_query_from_components(from_clause: str, where_conditions: Li
     if not select_items:
         select_items = ["*"]
     
+    # CONSTRUCT queries with CROSS JOINs need DISTINCT to eliminate duplicates
+    # Check if this query uses CROSS JOINs that require deduplication
+    needs_distinct = any('CROSS JOIN' in join for join in joins) if joins else False
+    distinct_keyword = "DISTINCT " if needs_distinct else ""
+    
     # Build complete query
-    query_parts = [f"SELECT {', '.join(select_items)}"]
+    query_parts = [f"SELECT {distinct_keyword}{', '.join(select_items)}"]
     
     if from_clause:
         query_parts.append(from_clause)
@@ -736,7 +745,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
             # Check if we have a DISTINCT pattern and extract LIMIT/OFFSET
             pattern = query_algebra.p
-            has_distinct = _has_distinct_pattern(pattern)
+            has_explicit_distinct = _has_distinct_pattern(pattern)
             limit_info = _extract_limit_offset(pattern)
             
             # Translate the main pattern to get SQLComponents with ORDER BY support
@@ -748,11 +757,18 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                 var_name = str(var).replace('?', '')
                 case_mapping[var_name.lower()] = var_name
             
+            # SPARQL BGP queries with CROSS JOINs need DISTINCT to eliminate duplicates
+            # Check if this query uses CROSS JOINs (multiple quad tables) that require deduplication
+            needs_bgp_distinct = any('CROSS JOIN' in join for join in sql_components.joins) if sql_components.joins else False
+            
+            # Use DISTINCT if explicitly specified OR if BGP query uses CROSS JOINs
+            use_distinct = has_explicit_distinct or needs_bgp_distinct
+            
             # Use the proper query builder that includes ORDER BY support
             sql_query = build_select_query(
                 sql_components=sql_components,
                 projection_vars=projection_vars,
-                distinct=has_distinct,
+                distinct=use_distinct,
                 limit_offset=(limit_info['limit'], limit_info['offset'])
             )
             
@@ -1211,6 +1227,7 @@ async def _execute_insert_delete_pattern(space_impl: PostgreSQLSpaceImpl, space_
         
         # Execute the SQL statements
         async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1342,6 +1359,7 @@ async def _execute_copy_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, sp
         
         # Execute the SQL statements
         async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1374,6 +1392,7 @@ async def _execute_move_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, sp
         
         # Execute the SQL statements
         async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1406,6 +1425,7 @@ async def _execute_add_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, spa
         
         # Execute the SQL statements
         async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1438,6 +1458,7 @@ async def _execute_load_operation(space_impl: PostgreSQLSpaceImpl, space_id: str
         
         # Execute the SQL statements
         async with space_impl.get_db_connection() as conn:
+            conn.row_factory = psycopg.rows.dict_row
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")

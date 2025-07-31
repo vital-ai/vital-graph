@@ -119,7 +119,7 @@ class SpaceImpl:
             self.logger.error(f"destroy() failed for space '{self.space_id}': {e}")
             return False
         
-    def exists(self) -> bool:
+    async def exists(self) -> bool:
         """
         Check if this space's tables exist in the database.
         
@@ -128,7 +128,7 @@ class SpaceImpl:
         """
         try:
             if self._space_impl:
-                return self._space_impl.space_exists(self.space_id)
+                return await self._space_impl.space_exists(self.space_id)
             else:
                 self.logger.warning("No database-specific space implementation available - cannot check existence")
                 return False
