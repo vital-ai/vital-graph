@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableConfig, 
                                     alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None,
                                     term_cache: PostgreSQLCacheTerm = None, space_impl = None, 
-                                    context_constraint: str = None) -> SQLComponents:
+                                    context_constraint: str = None, *, sparql_context=None) -> SQLComponents:
     """
     Generate SQL components for Basic Graph Pattern (BGP) using exact logic from original implementation.
     This function ports the complete _translate_bgp method from PostgreSQLSparqlImpl.
@@ -34,11 +34,25 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
         term_cache: Term cache for efficient term UUID lookups
         space_impl: Space implementation for database operations
         context_constraint: Optional SQL constraint for context_uuid column (for GRAPH patterns)
+        sparql_context: SparqlContext for consistent logging and state management
         
     Returns:
         SQLComponents with FROM clause, WHERE conditions, JOINs, and variable mappings
     """
-    logger.debug(f"🔍 BGP: Generating SQL with cache for {len(triples)} triples")
+    function_name = "generate_bgp_sql_with_cache"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, triple_count=len(triples), 
+                                         has_context_constraint=bool(context_constraint))
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"{function_name}: Generating SQL with cache for {len(triples)} triples")
+    
+    # DEBUG: Log alias generator state before generating quad alias
+    logger.debug(f"🔧 BGP_ALIAS: Starting BGP with quad counter: {alias_gen.counters['quad']}")
     
     if not triples:
         return SQLComponents(
@@ -202,16 +216,18 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
     for triple_idx, triple in enumerate(triples):
         subject, predicate, obj = triple
         quad_alias = alias_gen.next_quad_alias()
+        logger.debug(f"🔧 BGP_ALIAS: Generated quad alias '{quad_alias}', counter now: {alias_gen.counters['quad']}")
         quad_aliases.append(quad_alias)
         logger.debug(f"🔍 Processing triple #{triple_idx}: ({subject}, {predicate}, {obj})")
         
-        # Handle subject - exact logic from original
+        # Handle subject - CRITICAL FIX: Map ALL variables for filter support
+        # Variables used in filters need column mappings even if not projected
         if isinstance(subject, Variable):
-            if subject not in variable_mappings and (projected_vars is None or subject in projected_vars):
+            if subject not in variable_mappings:
                 term_alias = alias_gen.next_term_alias("subject")
                 all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.subject_uuid = {term_alias}.term_uuid")
                 variable_mappings[subject] = f"{term_alias}.term_text"
-            # Variable already mapped or not projected - don't create JOIN
+            # Variable already mapped - don't create duplicate JOIN
         else:
             # Bound term - use resolved UUID
             term_text, term_type = SparqlUtils.get_term_info(subject)
@@ -232,17 +248,17 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
             
             try:
                 # Translate property path using the original implementation
-                path_from, path_where, path_joins, path_vars = await translate_property_path(
+                path_result = await translate_property_path(
                     subject, predicate, obj, table_config, alias_gen, projected_vars, term_cache, space_impl
                 )
                 
                 # Integrate property path results into BGP SQL (exact logic from original)
-                all_joins.append(f"JOIN {path_from} ON 1=1")
-                all_joins.extend(path_joins)
-                all_where_conditions.extend(path_where)
-                variable_mappings.update(path_vars)
+                all_joins.append(f"JOIN {path_result.from_clause} ON 1=1")
+                all_joins.extend(path_result.joins)
+                all_where_conditions.extend(path_result.where_conditions)
+                variable_mappings.update(path_result.variable_mappings)
                 
-                logger.info(f"✅ Property path translated successfully: {len(path_joins)} joins, {len(path_where)} conditions")
+                logger.info(f"✅ Property path translated successfully: {len(path_result.joins)} joins, {len(path_result.where_conditions)} conditions")
                 
                 # Skip normal predicate processing since this is a property path
                 continue
@@ -253,11 +269,11 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
                 continue
             
         elif isinstance(predicate, Variable):
-            if predicate not in variable_mappings and (projected_vars is None or predicate in projected_vars):
+            if predicate not in variable_mappings:
                 term_alias = alias_gen.next_term_alias("predicate")
                 all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.predicate_uuid = {term_alias}.term_uuid")
                 variable_mappings[predicate] = f"{term_alias}.term_text"
-            # Variable already mapped or not projected - don't create JOIN
+            # Variable already mapped - don't create duplicate JOIN
         else:
             # Bound term - use resolved UUID
             term_text, term_type = SparqlUtils.get_term_info(predicate)
@@ -270,17 +286,17 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
                 logger.error(f"🚨 TERM LOOKUP FAILED for predicate: {term_text} (type: {term_type}) - adding 1=0 condition")
                 all_where_conditions.append("1=0")  # Condition that never matches
         
-        # Handle object - exact logic from original
+        # Handle object - CRITICAL FIX: Map ALL variables for filter support
         if isinstance(obj, Variable):
-            logger.debug(f"🔍 Processing object variable {obj}: already_mapped={obj in variable_mappings}, projected={projected_vars is None or obj in projected_vars}")
-            if obj not in variable_mappings and (projected_vars is None or obj in projected_vars):
+            logger.debug(f"🔍 Processing object variable {obj}: already_mapped={obj in variable_mappings}")
+            if obj not in variable_mappings:
                 term_alias = alias_gen.next_term_alias("object")
                 all_joins.append(f"JOIN {table_config.term_table} {term_alias} ON {quad_alias}.object_uuid = {term_alias}.term_uuid")
                 variable_mappings[obj] = f"{term_alias}.term_text"
                 logger.debug(f"✅ Created mapping for {obj}: {variable_mappings[obj]}")
             else:
-                logger.debug(f"⏭️ Skipping mapping for {obj}: already_mapped={obj in variable_mappings}, projected={projected_vars is None or obj in projected_vars}")
-            # Variable already mapped or not projected - don't create JOIN
+                logger.debug(f"⏭️ Variable {obj} already mapped: {variable_mappings[obj]}")
+            # Variable already mapped - don't create duplicate JOIN
         else:
             # Bound term - use resolved UUID
             term_text, term_type = SparqlUtils.get_term_info(obj)
@@ -329,12 +345,22 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
     logger.debug(f"  SHARED VAR CONDITIONS: {shared_var_conditions}")
     logger.debug(f"  VARIABLE MAPPINGS: {variable_mappings}")
     
-    return SQLComponents(
+    result = SQLComponents(
         from_clause=from_clause,
         where_conditions=all_where_conditions,
         joins=combined_joins,
         variable_mappings=variable_mappings
     )
+    
+    # Log function exit
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQLComponents", 
+                                        variable_count=len(variable_mappings),
+                                        where_condition_count=len(all_where_conditions))
+    else:
+        logger.debug(f"{function_name}: Completed - generated SQLComponents with {len(variable_mappings)} variables")
+    
+    return result
 
 
 def _find_shared_variables_between_triples(triple1, triple2):
@@ -417,7 +443,7 @@ def _generate_shared_variable_conditions(triples, quad_aliases):
 
 
 async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: TableConfig, 
-                               term_cache: PostgreSQLCacheTerm, space_impl) -> Dict[Tuple[str, str], str]:
+                               term_cache: PostgreSQLCacheTerm, space_impl, *, sparql_context=None) -> Dict[Tuple[str, str], str]:
     """
     Get term UUIDs for multiple terms using cache and batch database lookup.
     Ported from original PostgreSQLSparqlImpl._get_term_uuids_batch method.
@@ -427,11 +453,25 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
         table_config: Table configuration for database queries
         term_cache: Term cache for efficient lookups
         space_impl: Space implementation for database operations
+        sparql_context: SparqlContext for consistent logging and state management
         
     Returns:
         Dictionary mapping (term_text, term_type) to term_uuid
     """
+    function_name = "get_term_uuids_batch"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, term_count=len(terms))
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"{function_name}: Looking up {len(terms)} terms")
+    
     if not terms:
+        if sparql_context:
+            sparql_context.log_function_exit(function_name, "Dict", result_count=0)
         return {}
     
     # First, check cache for all terms
@@ -509,5 +549,14 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
         if db_mappings:
             term_cache.put_batch(db_mappings)
             logger.debug(f"Cached {len(db_mappings)} terms from database lookup")
+    
+    # Log function exit
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "Dict", 
+                                        result_count=len(result),
+                                        cache_hits=len(cached_results),
+                                        db_lookups=len(uncached_terms) if uncached_terms else 0)
+    else:
+        logger.debug(f"{function_name}: Completed - returned {len(result)} term UUID mappings")
     
     return result

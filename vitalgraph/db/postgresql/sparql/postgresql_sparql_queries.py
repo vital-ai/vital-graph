@@ -11,11 +11,11 @@ from typing import Dict, List, Tuple, Set, Optional, Any, Union
 from rdflib import Variable, URIRef, Literal, BNode
 
 # Import only from core module and utilities
-from .postgresql_sparql_core import SQLComponents, TableConfig, AliasGenerator
+from .postgresql_sparql_core import SQLComponents, TableConfig, AliasGenerator, SparqlContext
 
 
 def build_select_query(sql_components: SQLComponents, projection_vars: List, 
-                      distinct: bool = False, limit_offset: tuple = None) -> str:
+                      distinct: bool = False, limit_offset: tuple = None, *, sparql_context: SparqlContext = None) -> str:
     """
     Build SELECT query from SQL components using exact logic from original implementation.
     Exact port of PostgreSQLSparqlImpl._translate_select_query method.
@@ -25,14 +25,25 @@ def build_select_query(sql_components: SQLComponents, projection_vars: List,
         projection_vars: List of variables to project in SELECT clause
         distinct: Whether to include DISTINCT modifier
         limit_offset: Optional tuple of (limit, offset) values
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         Complete SQL SELECT query string
     """
-    logger = logging.getLogger(__name__)
+    function_name = "build_select_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_projection_vars=len(projection_vars) if projection_vars else 0,
+                                         distinct=distinct,
+                                         has_limit_offset=limit_offset is not None)
+    else:
+        logger = logging.getLogger(__name__)
     
     # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
-    select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, sql_components.variable_mappings, distinct)
+    select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, sql_components.variable_mappings, distinct, sparql_context=sparql_context)
     
     # Build complete SQL query - exact logic from original implementation
     sql_parts = [select_clause]
@@ -69,20 +80,40 @@ def build_select_query(sql_components: SQLComponents, projection_vars: List,
             sql_parts.append(f"OFFSET {offset}")
         if limit is not None:
             sql_parts.append(f"LIMIT {limit}")
-        
-    return '\n'.join(sql_parts)
+    
+    result = '\n'.join(sql_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
-def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_distinct: bool = False) -> tuple:
+def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_distinct: bool = False, *, sparql_context: SparqlContext = None) -> tuple:
     """
     Build SQL SELECT clause, GROUP BY clause, and HAVING clause from SPARQL projection variables.
     Exact port from original implementation.
+    
+    Args:
+        projection_vars: List of variables to project in SELECT clause
+        variable_mappings: Variable to SQL column mappings
+        has_distinct: Whether to include DISTINCT modifier
+        sparql_context: SparqlContext for logging and configuration (optional)
     
     Returns:
         Tuple of (select_clause, group_by_clause, having_clause, case_mapping)
         where case_mapping maps lowercase column names to original SPARQL variable names
     """
-    logger = logging.getLogger(__name__)
+    function_name = "_build_select_clause"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_projection_vars=len(projection_vars) if projection_vars else 0,
+                                         has_distinct=has_distinct)
+    else:
+        logger = logging.getLogger(__name__)
     logger.debug(f"Building SELECT clause with projection_vars: {projection_vars}")
     logger.debug(f"Building SELECT clause with variable_mappings: {variable_mappings}")
     
@@ -145,20 +176,38 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
         having_clause = f"HAVING {' AND '.join(having_conditions)}"
         logger.debug(f"Built HAVING clause: {having_clause}")
     
-    return select_clause, group_by_clause, having_clause, case_mapping
+    result = (select_clause, group_by_clause, having_clause, case_mapping)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "tuple", 
+                                        select_clause_length=len(select_clause),
+                                        has_group_by=bool(group_by_clause),
+                                        has_having=bool(having_clause))
+    
+    return result
 
 
-def build_construct_query(sql_components: SQLComponents, construct_template: List[Tuple]) -> str:
+def build_construct_query(sql_components: SQLComponents, construct_template: List[Tuple], *, sparql_context: SparqlContext = None) -> str:
     """
     Build CONSTRUCT query from SQL components and template.
     
     Args:
         sql_components: SQL components for the WHERE clause
         construct_template: List of (subject, predicate, object) triples to construct
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL query string that returns data for CONSTRUCT template processing
     """
+    function_name = "build_construct_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_template_triples=len(construct_template) if construct_template else 0)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug(f"Building CONSTRUCT query with {len(construct_template)} template triples")
     
@@ -205,19 +254,33 @@ def build_construct_query(sql_components: SQLComponents, construct_template: Lis
     if sql_components.order_by:
         query_parts.append(sql_components.order_by)
     
-    return " ".join(query_parts)
+    result = " ".join(query_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
-def build_ask_query(sql_components: SQLComponents) -> str:
+def build_ask_query(sql_components: SQLComponents, *, sparql_context: SparqlContext = None) -> str:
     """
     Build ASK query from SQL components.
     
     Args:
         sql_components: SQL components for the pattern to check
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL query string that returns data if pattern exists (for boolean conversion)
     """
+    function_name = "build_ask_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug("Building ASK query")
     
@@ -236,23 +299,36 @@ def build_ask_query(sql_components: SQLComponents) -> str:
     
     query_parts.append("LIMIT 1")
     
-    return " ".join(query_parts)
+    result = " ".join(query_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
 def build_describe_query(resources: List[Union[URIRef, Variable]], table_config: TableConfig,
-                        alias_gen: AliasGenerator) -> str:
+                        alias_gen: AliasGenerator, *, sparql_context: SparqlContext = None) -> str:
     """
     Build DESCRIBE query from resources and optional WHERE clause.
     
     Args:
         resources: List of resources to describe (URIRef for specific resources, Variable for pattern-based)
         table_config: Table configuration
-        where_sql: Optional SQL components for WHERE clause (when describing variables)
+        alias_gen: Alias generator for consistent naming
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL query string that returns all triples for the described resources
     """
-    logger = logging.getLogger(__name__)
+    function_name = "build_describe_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, num_resources=len(resources) if resources else 0)
+    else:
+        logger = logging.getLogger(__name__)
     logger.debug(f"Building DESCRIBE query for {len(resources)} resources")
     
     # DESCRIBE returns all triples where the described resource(s) are subjects
@@ -298,11 +374,16 @@ def build_describe_query(resources: List[Union[URIRef, Variable]], table_config:
     if all_conditions:
         query_parts.append(f"WHERE {' AND '.join(all_conditions)}")
     
-    return " ".join(query_parts)
+    result = " ".join(query_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
 def build_aggregation_query(sql_components: SQLComponents, projection_vars: List[Variable],
-                          group_by_vars: List[Variable], having_conditions: List[str] = None) -> str:
+                          group_by_vars: List[Variable], having_conditions: List[str] = None, *, sparql_context: SparqlContext = None) -> str:
     """
     Build aggregation query with GROUP BY and HAVING clauses.
     
@@ -311,10 +392,22 @@ def build_aggregation_query(sql_components: SQLComponents, projection_vars: List
         projection_vars: Variables to project (including aggregate expressions)
         group_by_vars: Variables to group by
         having_conditions: Optional HAVING conditions
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL query string with aggregation
     """
+    function_name = "build_aggregation_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_projection_vars=len(projection_vars) if projection_vars else 0,
+                                         num_group_by_vars=len(group_by_vars) if group_by_vars else 0,
+                                         has_having_conditions=having_conditions is not None)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug(f"Building aggregation query with {len(group_by_vars)} GROUP BY variables")
     
@@ -358,20 +451,34 @@ def build_aggregation_query(sql_components: SQLComponents, projection_vars: List
     if sql_components.order_by:
         query_parts.append(sql_components.order_by)
     
-    return " ".join(query_parts)
+    result = " ".join(query_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
-def build_subquery(sql_components: SQLComponents, alias: str) -> str:
+def build_subquery(sql_components: SQLComponents, alias: str, *, sparql_context: SparqlContext = None) -> str:
     """
     Build a subquery from SQL components with the given alias.
     
     Args:
         sql_components: SQL components to wrap in subquery
         alias: Alias for the subquery
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL subquery string
     """
+    function_name = "build_subquery"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, alias=alias)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug(f"Building subquery with alias: {alias}")
     
@@ -392,7 +499,7 @@ def build_subquery(sql_components: SQLComponents, alias: str) -> str:
     return f"({inner_query}) {alias}"
 
 
-def build_union_query(left_sql: str, right_sql: str, alias: str) -> str:
+def build_union_query(left_sql: str, right_sql: str, alias: str, *, sparql_context: SparqlContext = None) -> str:
     """
     Build UNION query from left and right SQL queries.
     
@@ -400,10 +507,19 @@ def build_union_query(left_sql: str, right_sql: str, alias: str) -> str:
         left_sql: Left operand SQL query
         right_sql: Right operand SQL query
         alias: Alias for the UNION result
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL UNION query string
     """
+    function_name = "build_union_query"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, alias=alias)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug("Building UNION query")
     
@@ -415,16 +531,25 @@ def build_union_query(left_sql: str, right_sql: str, alias: str) -> str:
         return union_query
 
 
-def optimize_query_structure(query: str) -> str:
+def optimize_query_structure(query: str, *, sparql_context: SparqlContext = None) -> str:
     """
     Apply basic optimizations to the generated SQL query.
     
     Args:
         query: SQL query string to optimize
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         Optimized SQL query string
     """
+    function_name = "optimize_query_structure"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, query_length=len(query))
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug("Optimizing query structure")
     
@@ -454,16 +579,25 @@ def optimize_query_structure(query: str) -> str:
     return optimized
 
 
-def validate_query_syntax(query: str) -> bool:
+def validate_query_syntax(query: str, *, sparql_context: SparqlContext = None) -> bool:
     """
     Perform basic validation of SQL query syntax.
     
     Args:
         query: SQL query string to validate
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         True if the query appears to be syntactically valid
     """
+    function_name = "validate_query_syntax"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, query_length=len(query))
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug("Validating query syntax")
     
@@ -510,17 +644,26 @@ def validate_query_syntax(query: str) -> bool:
         return False
 
 
-def estimate_query_cost(query: str, table_config: TableConfig) -> int:
+def estimate_query_cost(query: str, table_config: TableConfig, *, sparql_context: SparqlContext = None) -> int:
     """
     Estimate the computational cost of a SQL query.
     
     Args:
         query: SQL query string
         table_config: Table configuration for cost estimation
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         Estimated cost score (higher = more expensive)
     """
+    function_name = "estimate_query_cost"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, query_length=len(query))
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug("Estimating query cost")
     
@@ -550,7 +693,7 @@ def estimate_query_cost(query: str, table_config: TableConfig) -> int:
 
 
 def add_limit_offset_clause(base_query: str, limit: Optional[int] = None, 
-                           offset: Optional[int] = None) -> str:
+                           offset: Optional[int] = None, *, sparql_context: SparqlContext = None) -> str:
     """
     Add LIMIT and OFFSET clauses to a query.
     
@@ -558,10 +701,19 @@ def add_limit_offset_clause(base_query: str, limit: Optional[int] = None,
         base_query: Base SQL query
         limit: Optional limit value
         offset: Optional offset value
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         Query with LIMIT/OFFSET clauses added
     """
+    function_name = "add_limit_offset_clause"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, limit=limit, offset=offset)
+    else:
+        logger = logging.getLogger(__name__)
     query_parts = [base_query]
     
     if limit is not None and limit > 0:
@@ -570,21 +722,35 @@ def add_limit_offset_clause(base_query: str, limit: Optional[int] = None,
     if offset is not None and offset > 0:
         query_parts.append(f"OFFSET {offset}")
     
-    return " ".join(query_parts)
+    result = " ".join(query_parts)
+    
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQL_query", query_length=len(result))
+    
+    return result
 
 
 def build_values_clause(values_data: List[Dict[Variable, str]], 
-                       variable_mappings: Dict[Variable, str]) -> str:
+                       variable_mappings: Dict[Variable, str], *, sparql_context: SparqlContext = None) -> str:
     """
     Build VALUES clause from data and variable mappings.
     
     Args:
         values_data: List of variable bindings
         variable_mappings: Variable to column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL VALUES clause
     """
+    function_name = "build_values_clause"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, num_values=len(values_data) if values_data else 0)
+    else:
+        logger = logging.getLogger(__name__)
     if not values_data:
         return ""
     

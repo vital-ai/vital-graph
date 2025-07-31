@@ -20,7 +20,7 @@ from ..postgresql_cache_datatype import PostgreSQLCacheDatatype
 
 # Import all function modules
 from .postgresql_sparql_core import (
-    SQLComponents, TableConfig, AliasGenerator, GraphConstants, TranslationContext,
+    SQLComponents, TableConfig, AliasGenerator, GraphConstants, SparqlContext,
     validate_sql_components
 )
 from .postgresql_sparql_core import generate_bgp_sql, generate_term_lookup_sql, build_join_conditions
@@ -30,7 +30,7 @@ from .postgresql_sparql_patterns import (
     translate_values_pattern, translate_join_pattern, translate_bind_pattern,
     translate_filter_pattern, translate_graph_pattern, translate_subquery_pattern,
     find_shared_variables, extract_variables_from_triples, validate_pattern_structure,
-    translate_algebra_pattern, translate_algebra_pattern_to_components
+    translate_algebra_pattern_to_components
 )
 from .postgresql_sparql_expressions import (
     translate_filter_expression, translate_bind_expression, translate_aggregate_expression,
@@ -85,7 +85,7 @@ def _extract_variables_from_pattern(pattern):
     return list(variables)
 
 
-async def _translate_ask_query(algebra, table_config: TableConfig, context: TranslationContext) -> str:
+async def _translate_ask_query(algebra, context: SparqlContext) -> str:
     """
     Translate ASK query to SQL - exact copy from original implementation.
     
@@ -94,14 +94,14 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
     
     Args:
         algebra: RDFLib AskQuery algebra object
-        table_config: Table configuration for SQL generation
-        context: Translation context
+        context: SparqlContext containing table_config and other state
         
     Returns:
         SQL query string that returns data if pattern exists (for boolean conversion)
     """
     try:
         logger = context.logger
+        table_config = context.table_config
         logger.info("Translating ASK query")
         
         # Extract WHERE clause pattern from algebra.p
@@ -126,7 +126,7 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         
         # Translate the pattern to SQL components using the new architecture
         # translate_algebra_pattern returns a tuple: (from_clause, where_conditions, joins, variable_mappings)
-        from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(where_pattern, context, all_vars)
+        sql_components = await translate_algebra_pattern_to_components(where_pattern, context, all_vars)
         
         # Build a simple SELECT query with LIMIT 1 to check existence
         # We only need to know if any results exist, not the actual data
@@ -134,13 +134,14 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         
         # Build complete SQL query
         sql_parts = [select_clause]
-        sql_parts.append(from_clause)
+        if sql_components.from_clause:
+            sql_parts.append(sql_components.from_clause)
         
-        if joins:
-            sql_parts.extend(joins)
+        if sql_components.joins:
+            sql_parts.extend(sql_components.joins)
             
-        if where_conditions:
-            sql_parts.append(f"WHERE {' AND '.join(where_conditions)}")
+        if sql_components.where_conditions:
+            sql_parts.append(f"WHERE {' AND '.join(sql_components.where_conditions)}")
         
         # Add LIMIT 1 for efficiency - we only need to know if any results exist
         sql_parts.append("LIMIT 1")
@@ -159,9 +160,10 @@ async def _translate_ask_query(algebra, table_config: TableConfig, context: Tran
         raise NotImplementedError(f"ASK query translation failed: {e}")
 
 
-async def _translate_describe_query(algebra, table_config: TableConfig, context: TranslationContext) -> str:
+async def _translate_describe_query(algebra, context: SparqlContext) -> str:
     """Translate DESCRIBE query to SQL - exact copy from original implementation."""
     logger = context.logger
+    table_config = context.table_config
     logger.info("Translating DESCRIBE query")
     
     try:
@@ -184,26 +186,27 @@ async def _translate_describe_query(algebra, table_config: TableConfig, context:
             
             # First, execute the WHERE clause to find the resources to describe
             # translate_algebra_pattern returns a tuple: (from_clause, where_conditions, joins, variable_mappings)
-            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(where_pattern, context, where_vars)
+            sql_components = await translate_algebra_pattern_to_components(where_pattern, context, where_vars)
             
             # Build SELECT query for the WHERE clause to get resource URIs - exact original logic
-            select_vars = [var for var in where_vars if var in variable_mappings]
+            select_vars = [var for var in where_vars if var in sql_components.variable_mappings]
             if not select_vars:
                 raise ValueError("No valid variables found in DESCRIBE WHERE clause")
             
             # Use the first variable as the resource to describe
             describe_var = select_vars[0]
-            describe_var_sql = variable_mappings[describe_var]
+            describe_var_sql = sql_components.variable_mappings[describe_var]
             
             # Build subquery to get the resources to describe
             subquery_parts = [f"SELECT DISTINCT {describe_var_sql} AS resource_uri"]
-            subquery_parts.append(from_clause)
+            if sql_components.from_clause:
+                subquery_parts.append(sql_components.from_clause)
             
-            if joins:
-                subquery_parts.extend(joins)
+            if sql_components.joins:
+                subquery_parts.extend(sql_components.joins)
                 
-            if where_conditions:
-                subquery_parts.append(f"WHERE {' AND '.join(where_conditions)}")
+            if sql_components.where_conditions:
+                subquery_parts.append(f"WHERE {' AND '.join(sql_components.where_conditions)}")
             
             # Add ORDER BY and LIMIT if present in the algebra
             if hasattr(algebra, 'orderBy') and algebra.orderBy:
@@ -298,10 +301,24 @@ async def _translate_describe_query(algebra, table_config: TableConfig, context:
         raise NotImplementedError(f"DESCRIBE query translation failed: {e}")
 
 
-async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sql_query: str) -> List[Dict[str, Any]]:
+async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sql_query: str, 
+                                           max_rows: int = 100000, max_memory_mb: int = 500) -> List[Dict[str, Any]]:
     """
-    Execute SQL query using the space_impl's connection method.
-    This follows the same pattern as the original implementation.
+    Execute SQL query using the space_impl's connection method with memory protection.
+    This follows the same pattern as the original implementation but adds safeguards.
+    
+    Args:
+        space_impl: PostgreSQL space implementation
+        sql_query: SQL query to execute
+        max_rows: Maximum number of rows to return (default: 100,000)
+        max_memory_mb: Maximum memory usage in MB (default: 500MB)
+        
+    Returns:
+        List of result dictionaries, limited by memory/row constraints
+        
+    Raises:
+        MemoryError: If query would exceed memory limits
+        ValueError: If query would return too many rows
     """
     try:
         # Use async context manager with dict pool for SPARQL result compatibility
@@ -317,23 +334,72 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
                     # Get column names
                     columns = [desc[0] for desc in cursor.description] if cursor.description else []
                     
-                    # Fetch all results
-                    rows = cursor.fetchall()
-                    
-                    # Convert to list of dictionaries
+                    # Memory protection: Use chunked fetching instead of fetchall()
+                    import sys
                     results = []
-                    for row in rows:
-                        if isinstance(row, dict):
-                            # Row is already a dictionary (some cursor configurations)
-                            results.append(row)
-                        else:
-                            # Row is a tuple/list - convert to dictionary
-                            result_dict = {}
-                            for i, value in enumerate(row):
-                                if i < len(columns):
-                                    result_dict[columns[i]] = value
-                            results.append(result_dict)
+                    chunk_size = 1000  # Fetch in chunks of 1000 rows
+                    total_rows = 0
+                    estimated_memory_mb = 0
                     
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"🛡️ MEMORY_PROTECTION: Starting chunked fetch (max_rows={max_rows}, max_memory={max_memory_mb}MB)")
+                    
+                    while True:
+                        # Fetch chunk of rows
+                        chunk = cursor.fetchmany(chunk_size)
+                        if not chunk:
+                            break  # No more rows
+                        
+                        # Check row count limit
+                        if total_rows + len(chunk) > max_rows:
+                            remaining_rows = max_rows - total_rows
+                            chunk = chunk[:remaining_rows]
+                            logger.warning(f"🛡️ MEMORY_PROTECTION: Row limit reached ({max_rows}), truncating results")
+                        
+                        # Convert chunk to dictionaries and estimate memory usage
+                        chunk_results = []
+                        for row in chunk:
+                            if isinstance(row, dict):
+                                # Row is already a dictionary (some cursor configurations)
+                                chunk_results.append(row)
+                            else:
+                                # Row is a tuple/list - convert to dictionary
+                                result_dict = {}
+                                for i, value in enumerate(row):
+                                    if i < len(columns):
+                                        result_dict[columns[i]] = value
+                                chunk_results.append(result_dict)
+                        
+                        # Estimate memory usage (rough approximation)
+                        if chunk_results:
+                            sample_size = sys.getsizeof(chunk_results[0]) + sum(sys.getsizeof(v) for v in chunk_results[0].values() if v is not None)
+                            chunk_memory_mb = (sample_size * len(chunk_results)) / (1024 * 1024)
+                            estimated_memory_mb += chunk_memory_mb
+                            
+                            # Check memory limit
+                            if estimated_memory_mb > max_memory_mb:
+                                logger.warning(f"🛡️ MEMORY_PROTECTION: Memory limit reached ({estimated_memory_mb:.1f}MB > {max_memory_mb}MB), truncating results")
+                                # Calculate how many rows we can safely add
+                                safe_rows = int((max_memory_mb - (estimated_memory_mb - chunk_memory_mb)) / chunk_memory_mb * len(chunk_results))
+                                if safe_rows > 0:
+                                    results.extend(chunk_results[:safe_rows])
+                                    total_rows += safe_rows
+                                break
+                        
+                        # Add chunk to results
+                        results.extend(chunk_results)
+                        total_rows += len(chunk_results)
+                        
+                        # Log progress for large result sets
+                        if total_rows % 10000 == 0:
+                            logger.debug(f"🛡️ MEMORY_PROTECTION: Fetched {total_rows} rows, estimated memory: {estimated_memory_mb:.1f}MB")
+                        
+                        # Check if we hit row limit
+                        if total_rows >= max_rows:
+                            logger.warning(f"🛡️ MEMORY_PROTECTION: Row limit reached ({max_rows}), stopping fetch")
+                            break
+                    
+                    logger.info(f"🛡️ MEMORY_PROTECTION: Query completed - {total_rows} rows, estimated memory: {estimated_memory_mb:.1f}MB")
                     return results
                 else:
                     # For INSERT/UPDATE/DELETE operations, return row count information
@@ -678,7 +744,8 @@ def _extract_limit_offset(pattern) -> dict:
 
 
 async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: str, 
-                                 sparql_query: str, graph_cache: Optional[Dict] = None) -> List[Dict[str, Any]]:
+                                 sparql_query: str, graph_cache: Optional[Dict] = None,
+                                 max_rows: int = 100000, max_memory_mb: int = 500) -> List[Dict[str, Any]]:
     """
     Orchestrate SPARQL query execution by coordinating parsing, translation, and execution.
     
@@ -687,6 +754,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         space_id: Space identifier
         sparql_query: SPARQL query string
         graph_cache: Optional graph cache for performance
+        max_rows: Maximum number of rows to return (default: 100,000)
+        max_memory_mb: Maximum memory usage in MB (default: 500MB)
         
     Returns:
         List of result dictionaries with variable bindings (SELECT)
@@ -722,7 +791,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         datatype_cache = space_impl.get_datatype_cache(space_id)
         
         # Create translation context
-        context = TranslationContext(
+        context = SparqlContext(
             alias_generator=AliasGenerator(),
             term_cache=term_cache,
             space_impl=space_impl,
@@ -802,8 +871,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             top_level_limit = _extract_limit_offset(query_algebra)
             logger.info(f"🔍 CONSTRUCT LIMIT/OFFSET from top-level: {top_level_limit}")
             
-            # Translate the WHERE clause pattern to get variable bindings
-            from_clause, where_conditions, joins, variable_mappings = await translate_algebra_pattern(pattern, context, projected_vars)
+            # Translate the WHERE clause pattern to get SQL components
+            sql_components = await translate_algebra_pattern_to_components(pattern, context, projected_vars)
             
             # Build case mapping for CONSTRUCT variables with unique alias handling
             alias_counter = {}
@@ -821,17 +890,17 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                 
                 case_mapping[unique_alias] = var_name
             
-            # Build CONSTRUCT query from components
+            # Build CONSTRUCT query using the newer SQLComponents-based function
             # Note: Don't apply LIMIT/OFFSET to SQL query for CONSTRUCT queries
             # because we need to apply it to the final RDF triples instead
-            sql_query = build_construct_query_from_components(from_clause, where_conditions, joins, variable_mappings, construct_template)
+            sql_query = build_construct_query(sql_components, construct_template)
         elif query_type == "AskQuery":
             # Extract LIMIT/OFFSET for ASK queries
             pattern = query_algebra.p
             limit_info = _extract_limit_offset(pattern)
             logger.debug(f"ASK LIMIT/OFFSET info: {limit_info}")
             
-            base_sql_query = await _translate_ask_query(query_algebra, table_config, context)
+            base_sql_query = await _translate_ask_query(query_algebra, context)
             
             # Apply LIMIT/OFFSET to ASK queries
             sql_parts = [base_sql_query]
@@ -848,7 +917,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             limit_info = _extract_limit_offset(pattern)
             logger.debug(f"DESCRIBE LIMIT/OFFSET info: {limit_info}")
             
-            base_sql_query = await _translate_describe_query(query_algebra, table_config, context)
+            base_sql_query = await _translate_describe_query(query_algebra, context)
             
             # Apply LIMIT/OFFSET to DESCRIBE queries
             sql_parts = [base_sql_query]
@@ -868,8 +937,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         logger.info(f"{'='*60}")
         
         # Execute SQL query using the space_impl's connection method (like original implementation)
-        logger.info(f"⚡ Executing SQL query...")
-        sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query)
+        logger.info(f"⚡ Executing SQL query with memory protection (max_rows={max_rows}, max_memory={max_memory_mb}MB)...")
+        sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query, max_rows, max_memory_mb)
         
         # Restore original variable case in results
         sql_results = _restore_variable_case(sql_results, case_mapping)
@@ -883,6 +952,9 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         elif query_type == "ConstructQuery":
             # Convert SQL results to RDF triples for CONSTRUCT queries
             construct_template = getattr(query_algebra, 'template', [])
+            
+            # Extract variable_mappings from sql_components (this was missing!)
+            variable_mappings = sql_components.variable_mappings
             
             # Check if we need to apply SQL-level optimization for CONSTRUCT pagination
             # This is more efficient than retrieving all rows and filtering RDF triples
@@ -936,7 +1008,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                         optimized_sql += f" OFFSET {sql_offset}"
                     
                     # Re-execute with optimized query
-                    optimized_sql_results = await _execute_sql_query_with_space_impl(space_impl, optimized_sql)
+                    optimized_sql_results = await _execute_sql_query_with_space_impl(space_impl, optimized_sql, max_rows, max_memory_mb)
                     # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL returned {len(optimized_sql_results)} rows (vs {original_row_count} original)")
                     sql_results = optimized_sql_results
             
@@ -964,6 +1036,10 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
     except Exception as e:
         logger.error(f"Error orchestrating SPARQL query: {e}")
+        logger.error(f"🔍 ORCHESTRATOR ERROR: Exception type: {type(e).__name__}")
+        logger.error(f"🔍 ORCHESTRATOR ERROR: Exception args: {e.args}")
+        import traceback
+        logger.error(f"🔍 ORCHESTRATOR ERROR: Full traceback:\n{traceback.format_exc()}")
         raise
 
 
@@ -1026,18 +1102,21 @@ async def execute_sparql_update(space_impl: PostgreSQLSpaceImpl, space_id: str,
         raise
 
 
-async def execute_sql_query(space_impl: PostgreSQLSpaceImpl, sql_query: str) -> List[Dict[str, Any]]:
+async def execute_sql_query(space_impl: PostgreSQLSpaceImpl, sql_query: str, 
+                          max_rows: int = 100000, max_memory_mb: int = 500) -> List[Dict[str, Any]]:
     """
-    Execute raw SQL query.
+    Execute raw SQL query with memory protection.
     
     Args:
         space_impl: PostgreSQL space implementation
         sql_query: Raw SQL query string
+        max_rows: Maximum number of rows to return (default: 100,000)
+        max_memory_mb: Maximum memory usage in MB (default: 500MB)
         
     Returns:
         List of result dictionaries
     """
-    return await _execute_sql_query_with_space_impl(space_impl, sql_query)
+    return await _execute_sql_query_with_space_impl(space_impl, sql_query, max_rows, max_memory_mb)
 
 
 
@@ -1219,7 +1298,7 @@ async def _execute_insert_delete_pattern(space_impl: PostgreSQLSpaceImpl, space_
         
         # Parse the MODIFY operation (this would need proper parsing implementation)
         # For now, use placeholder parsing
-        delete_template, insert_template, where_sql = _parse_modify_operation(sparql_update, table_config)
+        delete_template, insert_template, where_sql = _parse_modify_operation(sparql_update)
         
         # Use the existing translation function
         sql_statements = translate_modify_operation(delete_template, insert_template, where_sql, table_config)
@@ -1592,13 +1671,12 @@ def _parse_delete_data_query(sparql_update: str) -> Tuple[List[Tuple], Optional[
         return _parse_data_triples_fallback(sparql_update, "DELETE DATA")
 
 
-def _parse_modify_operation(sparql_update: str, table_config: TableConfig) -> Tuple[List[Tuple], List[Tuple], SQLComponents]:
+def _parse_modify_operation(sparql_update: str) -> Tuple[List[Tuple], List[Tuple], SQLComponents]:
     """
     Parse MODIFY operation (DELETE/INSERT with WHERE).
     
     Args:
         sparql_update: SPARQL MODIFY query string
-        table_config: Table configuration
         
     Returns:
         Tuple of (delete_template, insert_template, where_sql)

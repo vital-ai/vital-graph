@@ -39,7 +39,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 
-# Reduce logging chatter
+# Configure detailed logging for SPARQL debugging
+logging.basicConfig(level=logging.DEBUG, format='%(levelname)s - %(name)s - %(message)s')
+
+# Enable detailed logging for SPARQL translation modules
+logging.getLogger('vitalgraph.db.postgresql.sparql.postgresql_sparql_property_paths').setLevel(logging.DEBUG)
+logging.getLogger('vitalgraph.db.postgresql.sparql.postgresql_sparql_patterns').setLevel(logging.DEBUG)
+logging.getLogger('vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator').setLevel(logging.DEBUG)
+logging.getLogger('vitalgraph.db.postgresql.sparql.postgresql_sparql_cache_integration').setLevel(logging.DEBUG)
+logging.getLogger('vitalgraph.db.postgresql.sparql.postgresql_sparql_queries').setLevel(logging.DEBUG)
+
+# Reduce logging chatter from other modules
 logging.getLogger('vitalgraph.db.postgresql.postgresql_space_impl').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(logging.WARNING)
 logging.getLogger('vitalgraph.db.postgresql.postgresql_cache_term').setLevel(logging.WARNING)
@@ -620,19 +630,22 @@ async def test_negated_path():
     # run_query returns None on success, so we need to use a different approach
     # Let's use the direct sparql execution method
     try:
+        start_time = time.time()
         results = await sparql_impl.execute_sparql_query("space_test", query)
+        end_time = time.time()
+        execution_time = end_time - start_time
         
         # Expected: Should find pairs of people who are not directly connected by 'knows'
         # This should be a significant number since not everyone knows everyone
         expected_min_results = 5  # At least 5 pairs who don't know each other
         
         if len(results) >= expected_min_results:
-            print(f"✅ Negated path test passed: found {len(results)} pairs who don't know each other directly")
+            print(f"✅ Negated path test passed: found {len(results)} pairs who don't know each other directly in {execution_time:.3f}s")
             # Show a few examples
             for i, result in enumerate(results[:3]):
                 print(f"   Example {i+1}: {result['name1']} does NOT know {result['name2']}")
         else:
-            print(f"❌ Negated path test failed: expected at least {expected_min_results} results, got {len(results)}")
+            print(f"❌ Negated path test failed: expected at least {expected_min_results} results, got {len(results)} in {execution_time:.3f}s")
     except Exception as e:
         print(f"❌ Negated path test failed with error: {e}")
 
@@ -681,19 +694,25 @@ async def main():
         await diagnose_database_predicates()
         
         # Test basic knows relationships first
-        await run_query(sparql_impl, "Basic knows relationships", f"""
-        PREFIX ex: <http://example.org/>
+        # Test 1: Transitive Plus Path (knows+)
+        plus_query = """
+            PREFIX ex: <http://example.org/>
+            SELECT ?person ?name
+            WHERE {
+                GRAPH <urn:___GLOBAL> {
+                    ex:Alice ex:knows+ ?person .
+                    ?person ex:hasName ?name .
+                }
+            }
+            ORDER BY ?name
+        """
         
-        SELECT ?person1 ?person2 ?name1 ?name2
-        WHERE {{
-            GRAPH <{GLOBAL_GRAPH_URI}> {{
-                ?person1 ex:knows ?person2 .
-                ?person1 ex:hasName ?name1 .
-                ?person2 ex:hasName ?name2 .
-            }}
-        }}
-        ORDER BY ?name1 ?name2
-        """, debug=False)
+        print("🔍 Testing transitive plus path: ex:knows+")
+        start_time = time.time()
+        results = await sparql_impl.execute_sparql_query("space_test", plus_query)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"✅ Transitive Plus Path (knows+): {len(results)} results in {execution_time:.3f}s")
         
         print("\n🔄 TRANSITIVE PATH TESTS")
         print("-" * 40)

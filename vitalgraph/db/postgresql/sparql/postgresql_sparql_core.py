@@ -234,6 +234,8 @@ class AliasGenerator:
     
     def __init__(self, prefix: str = ""):
         """Initialize alias generator with optional prefix."""
+        import logging
+        self.logger = logging.getLogger(__name__)
         self.prefix = prefix
         self.counters = {
             'quad': 0,
@@ -243,23 +245,31 @@ class AliasGenerator:
             'union': 0,
             'values': 0
         }
+        self.instance_id = id(self)  # Unique instance identifier
+        self.logger.debug(f"🏗️ ALIAS_GEN_INIT: Created new AliasGenerator instance {self.instance_id} with prefix '{prefix}'")
     
     def next_quad_alias(self) -> str:
         """Generate next quad table alias."""
-        alias = f"{self.prefix}q{self.counters['quad']}"
+        old_counter = self.counters['quad']
+        alias = f"{self.prefix}q{old_counter}"
         self.counters['quad'] += 1
+        self.logger.debug(f"🔧 ALIAS_GEN_QUAD: Instance {self.instance_id} generated '{alias}' (counter: {old_counter} → {self.counters['quad']})")
         return alias
     
     def next_term_alias(self, position: str) -> str:
-        """Generate next term table alias for subject/predicate/object."""
-        alias = f"{self.prefix}{position[0]}_term_{self.counters['term']}"
+        """Generate next term table alias for given position."""
+        old_counter = self.counters['term']
+        alias = f"{self.prefix}{position}_term_{old_counter}"
         self.counters['term'] += 1
+        self.logger.debug(f"🔧 ALIAS_GEN_TERM: Instance {self.instance_id} generated '{alias}' (counter: {old_counter} → {self.counters['term']})")
         return alias
     
     def next_subquery_alias(self) -> str:
         """Generate next subquery alias."""
-        alias = f"{self.prefix}subquery_{self.counters['subquery']}"
+        old_counter = self.counters['subquery']
+        alias = f"{self.prefix}subquery_{old_counter}"
         self.counters['subquery'] += 1
+        self.logger.debug(f"🔧 ALIAS_GEN_SUBQUERY: Instance {self.instance_id} generated '{alias}' (counter: {old_counter} → {self.counters['subquery']})")
         return alias
     
     def next_join_alias(self) -> str:
@@ -282,7 +292,32 @@ class AliasGenerator:
     
     def create_child_generator(self, child_prefix: str) -> 'AliasGenerator':
         """Create a child generator with a different prefix to avoid conflicts."""
-        return AliasGenerator(f"{self.prefix}{child_prefix}_")
+        child_gen = AliasGenerator(f"{self.prefix}{child_prefix}_")
+        self.logger.debug(f"👶 ALIAS_GEN_CHILD: Instance {self.instance_id} created child {child_gen.instance_id} with prefix '{child_prefix}'")
+        return child_gen
+    
+    def reset_counters(self):
+        """Reset all counters to 0 - for debugging purposes."""
+        old_counters = self.counters.copy()
+        self.counters = {
+            'quad': 0,
+            'term': 0,
+            'subquery': 0,
+            'join': 0,
+            'union': 0,
+            'values': 0
+        }
+        self.logger.warning(f"🔄 ALIAS_GEN_RESET: Instance {self.instance_id} counters reset from {old_counters} to {self.counters}")
+    
+    def get_state(self) -> dict:
+        """Get current state for debugging."""
+        state = {
+            'instance_id': self.instance_id,
+            'prefix': self.prefix,
+            'counters': self.counters.copy()
+        }
+        self.logger.debug(f"📊 ALIAS_GEN_STATE: Instance {self.instance_id} state: {state}")
+        return state
 
 
 @dataclass
@@ -308,19 +343,22 @@ class TableConfig:
         return cls(quad_table=quad_table, term_table=term_table, graph_table=graph_table)
 
 
-class TranslationContext:
+class SparqlContext:
     """
-    Stateful context object that maintains shared state across all pattern translations.
+    Stateful context object that maintains shared state across all SPARQL processing.
     
     This replaces the original class-based approach where self.alias_generator and other
     state was automatically shared across all method calls. By passing this context object
-    to all pattern translation functions, we ensure perfect alias consistency and prevent
+    to all SPARQL generation functions, we ensure perfect alias consistency and prevent
     "missing FROM-clause entry" errors where context constraints reference aliases that
     don't exist in the final FROM clause.
+    
+    This context can be used by any SPARQL-related function for logging, state management,
+    and maintaining consistency across the translation pipeline.
     """
     
     def __init__(self, alias_generator: AliasGenerator, term_cache=None,
-                 space_impl=None, table_config: TableConfig = None, datatype_cache=None, space_id=None):
+                 space_impl=None, table_config: TableConfig = None, datatype_cache=None, space_id=None, logger=None):
         self.alias_generator = alias_generator
         self.term_cache = term_cache
         self.space_impl = space_impl
@@ -328,10 +366,34 @@ class TranslationContext:
         self.datatype_cache = datatype_cache
         self.space_id = space_id
         
+        # Logger for consistent function-name logging
+        import logging
+        self.logger = logger or logging.getLogger(__name__)
+        
         # Additional state that might be needed
         self.graph_cache = {}
         self.variable_counter = 0
         self.join_counter = 0
+    
+    def log_function_entry(self, function_name: str, **kwargs):
+        """Log function entry with consistent format including function name."""
+        args_str = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+        self.logger.info(f"🔍 {function_name}: Starting translation - {args_str}")
+    
+    def log_function_exit(self, function_name: str, result_type: str = None, **kwargs):
+        """Log function exit with consistent format including function name."""
+        result_str = f"result_type={result_type}" if result_type else ""
+        args_str = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+        log_parts = [part for part in [result_str, args_str] if part]
+        self.logger.info(f"✅ {function_name}: Completed translation - {', '.join(log_parts)}")
+    
+    def log_function_error(self, function_name: str, error: Exception):
+        """Log function error with consistent format including function name."""
+        self.logger.error(f"❌ {function_name}: Error during translation - {error}")
+
+
+# Backward compatibility alias
+TranslationContext = SparqlContext
 
 
 # Core SQL generation functions
@@ -368,7 +430,7 @@ def _get_variable_position_in_triple(triple, variable):
     return None
 
 
-def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None) -> SQLComponents:
+def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Generate SQL components for Basic Graph Pattern (BGP) using exact logic from original implementation.
     
@@ -377,10 +439,21 @@ def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen:
         table_config: Table configuration for SQL generation
         alias_gen: Alias generator for unique table aliases
         projected_vars: Variables to project (for optimization)
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQLComponents with FROM clause, WHERE conditions, JOINs, and variable mappings
     """
+    function_name = "generate_bgp_sql"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_triples=len(triples) if triples else 0,
+                                         has_projected_vars=projected_vars is not None)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     
     # Handle None triples
@@ -523,17 +596,26 @@ def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen:
     )
 
 
-def generate_term_lookup_sql(terms: List[Tuple[str, str]], table_config: TableConfig) -> str:
+def generate_term_lookup_sql(terms: List[Tuple[str, str]], table_config: TableConfig, *, sparql_context: SparqlContext = None) -> str:
     """
-    Generate SQL for batch term UUID lookup.
+    Generate SQL for term lookup operations.
     
     Args:
-        terms: List of (term_text, term_type) tuples
+        terms: List of (term_text, term_type) tuples to look up
         table_config: Table configuration
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL query string for term lookup
     """
+    function_name = "generate_term_lookup_sql"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, num_terms=len(terms) if terms else 0)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     logger.debug(f"Generating term lookup SQL for {len(terms)} terms")
     
@@ -605,16 +687,27 @@ def convert_rdflib_term_to_sql(term) -> str:
     return SparqlUtils.convert_rdflib_term_to_sql(term)
 
 
-def optimize_sql_components(sql_components: SQLComponents) -> SQLComponents:
+def optimize_sql_components(sql_components: SQLComponents, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Apply optimizations to SQL components.
     
     Args:
         sql_components: SQL components to optimize
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
-        Optimized SQLComponents
+        Optimized SQL components
     """
+    function_name = "optimize_sql_components"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         num_joins=len(sql_components.joins),
+                                         num_where_conditions=len(sql_components.where_conditions))
+    else:
+        logger = logging.getLogger(__name__)
     # Remove duplicate WHERE conditions
     unique_conditions = []
     seen_conditions = set()
@@ -662,17 +755,26 @@ def merge_variable_mappings(left_mappings: Dict[Variable, str],
     return merged
 
 
-def build_term_insertion_sql(terms: List[Tuple[str, str]], table_config: TableConfig) -> str:
+def build_term_insertion_sql(terms: List[Tuple[str, str]], table_config: TableConfig, *, sparql_context: SparqlContext = None) -> str:
     """
     Build SQL for inserting terms into the term table.
     
     Args:
-        terms: List of (term_text, term_type) tuples
+        terms: List of (term_text, term_type) tuples to insert
         table_config: Table configuration
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL INSERT statement
     """
+    function_name = "build_term_insertion_sql"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, num_terms=len(terms) if terms else 0)
+    else:
+        logger = logging.getLogger(__name__)
     if not terms:
         return ""
     
@@ -691,16 +793,25 @@ def build_term_insertion_sql(terms: List[Tuple[str, str]], table_config: TableCo
     """
 
 
-def validate_sql_components(sql_components: SQLComponents) -> bool:
+def validate_sql_components(sql_components: SQLComponents, *, sparql_context: SparqlContext = None) -> bool:
     """
     Validate that SQL components are well-formed.
     
     Args:
-        sql_components: SQL components to validate
+        sql_components: SQLComponents to validate
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         True if components are valid
     """
+    function_name = "validate_sql_components"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name)
+    else:
+        logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     
     # Check for required FROM clause if there are WHERE conditions or JOINs
@@ -717,16 +828,25 @@ def validate_sql_components(sql_components: SQLComponents) -> bool:
     return True
 
 
-def estimate_sql_complexity(sql_components: SQLComponents) -> int:
+def estimate_sql_complexity(sql_components: SQLComponents, *, sparql_context: SparqlContext = None) -> int:
     """
     Estimate the complexity of SQL components.
     
     Args:
         sql_components: SQL components to analyze
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         Complexity score (higher = more complex)
     """
+    function_name = "estimate_sql_complexity"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name)
+    else:
+        logger = logging.getLogger(__name__)
     complexity = 1
     
     # Add complexity for variables

@@ -48,10 +48,9 @@ class PostgreSQLSparqlImpl:
         
         # Initialize components that maintain compatibility with original API
         self.alias_generator = AliasGenerator()
-        self.term_cache = PostgreSQLCacheTerm()
         self.graph_cache = {}
         
-        self.logger.info("New PostgreSQL SPARQL implementation initialized with orchestrator functions")
+        self.logger.info("New PostgreSQL SPARQL implementation initialized")
     
     async def execute_sparql_query(self, space_id: str, sparql_query: str) -> List[Dict[str, Any]]:
         """

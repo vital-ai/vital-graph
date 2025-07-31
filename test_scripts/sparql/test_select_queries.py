@@ -400,7 +400,7 @@ async def test_subquery_patterns():
                 print(f"   • {result.get('query_name', 'Unknown')}: {result.get('error_msg', 'Unknown error')}")
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.space_impl._term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ Sub-SELECT Query Tests Complete!")

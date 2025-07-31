@@ -11,14 +11,14 @@ from typing import Dict, List, Tuple, Set, Optional, Any, Union
 from rdflib import Variable, URIRef, Literal, BNode
 
 # Import only from core module and utilities
-from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils, TranslationContext
+from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlContext, SparqlUtils
 from .postgresql_sparql_cache_integration import generate_bgp_sql_with_cache
 
 logger = logging.getLogger(__name__)
 
 
 async def translate_union_pattern(left_sql: SQLComponents, right_sql: SQLComponents, 
-                          alias_gen: AliasGenerator) -> SQLComponents:
+                          alias_gen: AliasGenerator, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Translate UNION pattern to SQL UNION operations - exact logic ported from original implementation.
     
@@ -29,11 +29,24 @@ async def translate_union_pattern(left_sql: SQLComponents, right_sql: SQLCompone
         left_sql: SQL components for left operand
         right_sql: SQL components for right operand
         alias_gen: Alias generator for consistent naming
+        sparql_context: Optional SparqlContext for logging and state
         
     Returns:
         SQLComponents with UNION SQL structure
     """
-    logger.info(f"🔗 TRANSLATING UNION PATTERN with exact original logic")
+    function_name = "translate_union_pattern"
+    
+    # Use SparqlContext for logging if available, otherwise fallback
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         left_vars=list(left_sql.variable_mappings.keys()),
+                                         right_vars=list(right_sql.variable_mappings.keys()))
+    else:
+        # Import logger for fallback
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔗 {function_name}: Starting UNION pattern translation")
     
     # Determine all variables that appear in either branch - exact logic from original
     all_variables = set(left_sql.variable_mappings.keys()) | set(right_sql.variable_mappings.keys())
@@ -260,16 +273,24 @@ async def translate_union_pattern(left_sql: SQLComponents, right_sql: SQLCompone
         logger.info(f"Successfully translated UNION with {len(variable_list)} variables")
         logger.debug(f"UNION SQL generated: {len(union_sql)} characters")
         
-        return SQLComponents(
+        result = SQLComponents(
             from_clause=union_from_clause,
             where_conditions=[],
             joins=[],
             variable_mappings=union_variable_mappings
         )
+        
+        # Log function exit
+        if sparql_context:
+            sparql_context.log_function_exit(function_name, "SQLComponents", 
+                                            variable_count=len(variable_list),
+                                            sql_length=len(union_sql))
+        
+        return result
 
 
 async def translate_optional_pattern(required_sql: SQLComponents, optional_sql: SQLComponents, 
-                                   alias_gen: AliasGenerator) -> SQLComponents:
+                                   alias_gen: AliasGenerator, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Translate OPTIONAL (LeftJoin) pattern to SQL LEFT JOIN operations.
     Exact port from PostgreSQLSparqlImpl._translate_optional method.
@@ -278,13 +299,25 @@ async def translate_optional_pattern(required_sql: SQLComponents, optional_sql: 
         required_sql: SQL components for required part
         optional_sql: SQL components for optional part
         alias_gen: Alias generator for unique aliases
+        sparql_context: Optional SparqlContext for logging and state
         
     Returns:
         SQLComponents with LEFT JOIN logic
     """
     import re
-    logger = logging.getLogger(__name__)
-    logger.info(f"🔗 TRANSLATING OPTIONAL PATTERN - exact port from original")
+    function_name = "translate_optional_pattern"
+    
+    # Use SparqlContext for logging if available, otherwise fallback
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         required_vars=list(required_sql.variable_mappings.keys()),
+                                         optional_vars=list(optional_sql.variable_mappings.keys()))
+    else:
+        # Import logger for fallback
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔗 {function_name}: Starting OPTIONAL pattern translation")
     
     # Start with required part as the main FROM clause - exact logic from original
     main_from = required_sql.from_clause
@@ -407,12 +440,20 @@ async def translate_optional_pattern(required_sql: SQLComponents, optional_sql: 
     logger.debug(f"OPTIONAL returning JOINs: {main_joins}")
     logger.debug(f"OPTIONAL returning variables: {list(combined_vars.keys())}")
     
-    return SQLComponents(
+    result = SQLComponents(
         from_clause=main_from,
         where_conditions=main_where,
         joins=main_joins,
         variable_mappings=combined_vars
     )
+    
+    # Log function exit
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQLComponents", 
+                                        variable_count=len(combined_vars),
+                                        join_count=len(main_joins))
+    
+    return result
 
 
 def translate_minus_pattern(main_sql: SQLComponents, exclude_sql: SQLComponents,
@@ -515,7 +556,7 @@ def translate_minus_pattern(main_sql: SQLComponents, exclude_sql: SQLComponents,
     )
 
 
-async def translate_values_pattern(values_pattern, table_config: TableConfig, alias_gen: AliasGenerator, projected_vars: List[Variable] = None) -> SQLComponents:
+async def translate_values_pattern(values_pattern, projected_vars: List[Variable] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """Translate VALUES pattern to SQL.
     
     VALUES patterns provide inline data binding for variables.
@@ -525,7 +566,25 @@ async def translate_values_pattern(values_pattern, table_config: TableConfig, al
     
     This generates a subquery with UNION ALL for each data row.
     """
+    function_name = "translate_values_pattern"
+    
+    # Handle backward compatibility - sparql_context might be None
+    if sparql_context:
+        sparql_context.log_function_entry(function_name, pattern_type=type(values_pattern).__name__)
+        table_config = sparql_context.table_config
+        alias_gen = sparql_context.alias_generator
+        logger = sparql_context.logger
+    else:
+        # Fallback for functions that don't provide context yet
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"{function_name}: No SparqlContext provided - using fallback logging")
+        # These will need to be provided by caller if no context
+        table_config = None
+        alias_gen = None
+    
     try:
+        
         logger.debug(f"Translating VALUES pattern: {values_pattern}")
         logger.debug(f"Pattern type: {type(values_pattern)}")
         logger.debug(f"Pattern name: {getattr(values_pattern, 'name', 'NO_NAME')}")
@@ -586,7 +645,17 @@ async def translate_values_pattern(values_pattern, table_config: TableConfig, al
         
         if not variables or not data_rows:
             logger.warning("Empty VALUES pattern")
-            return f"FROM {table_config.quad_table} q0", [], [], {}
+            # Use alias generator instead of hardcoded q0
+            quad_alias = sparql_context.alias_generator.next_quad_alias()
+            result = SQLComponents(
+                from_clause=f"FROM {table_config.quad_table} {quad_alias}",
+                where_conditions=[],
+                joins=[],
+                variable_mappings={}
+            )
+            if sparql_context:
+                sparql_context.log_function_exit(function_name, "SQLComponents", variables=0, data_rows=0)
+            return result
         
         # Generate alias for VALUES subquery
         if not hasattr(translate_values_pattern, '_values_counter'):
@@ -634,23 +703,25 @@ async def translate_values_pattern(values_pattern, table_config: TableConfig, al
         logger.debug(f"Generated VALUES SQL: {from_clause}")
         logger.debug(f"Variable mappings: {variable_mappings}")
         
-        return SQLComponents(
+        result = SQLComponents(
             from_clause=from_clause,
             where_conditions=[],
             joins=[],
             variable_mappings=variable_mappings
         )
+        if sparql_context:
+            sparql_context.log_function_exit(function_name, "SQLComponents", variables=len(variable_mappings), data_rows=len(data_rows))
+        return result
         
     except Exception as e:
-        logger.error(f"Error translating VALUES pattern: {e}")
-        # Fallback to basic quad table using alias generator
-        fallback_alias = alias_gen.next_quad_alias()
-        return SQLComponents(
-            from_clause=f"FROM {table_config.quad_table} {fallback_alias}",
-            where_conditions=[],
-            joins=[],
-            variable_mappings={}
-        )
+        if sparql_context:
+            sparql_context.log_function_error(function_name, e)
+        else:
+            logger.error(f"Error in {function_name}: {e}")
+        
+        # Re-raise the exception instead of returning fallback SQLComponents
+        # This allows proper error handling at the appropriate level
+        raise
 
 
 def _convert_rdflib_term_to_sql(term):
@@ -688,7 +759,7 @@ def _convert_rdflib_term_to_sql(term):
 
 
 async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponents, 
-                               alias_gen: AliasGenerator) -> SQLComponents:
+                               alias_gen: AliasGenerator, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Translate JOIN pattern by combining left and right operands.
     Uses the exact original implementation logic from postgresql_sparql_impl.py.
@@ -697,11 +768,24 @@ async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponen
         left_sql: SQL components from left operand
         right_sql: SQL components from right operand
         alias_gen: Alias generator for consistent naming
+        sparql_context: Optional SparqlContext for logging and state
         
     Returns:
         SQLComponents with combined JOIN SQL structure
     """
-    logger.debug(f"🔗 TRANSLATING JOIN PATTERN")
+    function_name = "translate_join_pattern"
+    
+    # Use SparqlContext for logging if available, otherwise fallback
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, 
+                                         left_vars=list(left_sql.variable_mappings.keys()),
+                                         right_vars=list(right_sql.variable_mappings.keys()))
+    else:
+        # Import logger for fallback
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f" {function_name}: Starting JOIN pattern translation")
     
     # Find shared variables between left and right patterns
     left_vars = set(left_sql.variable_mappings.keys())
@@ -718,17 +802,42 @@ async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponen
     # Combine WHERE conditions
     combined_where = left_sql.where_conditions + right_sql.where_conditions
     
-    # MATCH ORIGINAL BEHAVIOR: Use pure CROSS JOIN like the original implementation
-    # Analysis of original PostgreSQLSparqlImpl._translate_join shows it uses:
-    # combined_from = f"FROM {left_tables} CROSS JOIN {right_tables}"
-    # with NO equality conditions for shared variables.
-    # 
-    # The original achieves correct results through other mechanisms, not explicit
-    # equality conditions in the JOIN logic. Our previous attempts to add selective
-    # equality conditions were causing overly restrictive filtering.
+    # CRITICAL FIX: Add equality conditions for shared variables to avoid cartesian products
+    # While the original used pure CROSS JOIN, we need explicit equality conditions
+    # to connect shared variables across patterns and prevent massive cartesian products.
     
     logger.debug(f"Shared variables found: {[str(v) for v in shared_vars]}")
-    logger.debug("Using pure CROSS JOIN to match original implementation behavior")
+    
+    # Generate equality conditions for shared variables
+    shared_var_conditions = []
+    if shared_vars:
+        logger.debug("Adding equality conditions for shared variables to avoid cartesian product")
+        for var in shared_vars:
+            left_mapping = left_sql.variable_mappings.get(var)
+            right_mapping = right_sql.variable_mappings.get(var)
+            
+            if left_mapping and right_mapping:
+                # Extract table aliases from the mappings (e.g., "subject_term_0.term_text" -> "subject_term_0")
+                import re
+                left_table_match = re.search(r'(\w+)\.', left_mapping)
+                right_table_match = re.search(r'(\w+)\.', right_mapping)
+                
+                if left_table_match and right_table_match:
+                    left_table = left_table_match.group(1)
+                    right_table = right_table_match.group(1)
+                    
+                    # For term tables, connect via term_uuid
+                    if 'term' in left_table and 'term' in right_table:
+                        condition = f"{left_table}.term_uuid = {right_table}.term_uuid"
+                        shared_var_conditions.append(condition)
+                        logger.debug(f"🔗 Added shared variable condition for {var}: {condition}")
+                    else:
+                        # Fallback: connect via the actual column values
+                        condition = f"{left_mapping} = {right_mapping}"
+                        shared_var_conditions.append(condition)
+                        logger.debug(f"🔗 Added shared variable condition for {var}: {condition}")
+    else:
+        logger.debug("No shared variables - using pure CROSS JOIN")
     
     # Combine JOINs
     combined_joins = left_sql.joins + right_sql.joins
@@ -737,6 +846,43 @@ async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponen
     # Extract table references from both FROM clauses (only remove leading FROM)
     left_tables = left_sql.from_clause[5:].strip() if left_sql.from_clause.startswith("FROM ") else left_sql.from_clause.strip()
     right_tables = right_sql.from_clause[5:].strip() if right_sql.from_clause.startswith("FROM ") else right_sql.from_clause.strip()
+    
+    # CRITICAL FIX: Check for duplicate table aliases and generate new ones if needed
+    import re
+    left_alias_match = re.search(r'\b(q\d+)\b', left_tables)
+    right_alias_match = re.search(r'\b(q\d+)\b', right_tables)
+    
+    if (left_alias_match and right_alias_match and 
+        left_alias_match.group(1) == right_alias_match.group(1)):
+        # Duplicate alias detected - generate new alias for right side
+        old_alias = right_alias_match.group(1)
+        new_alias = alias_gen.next_quad_alias()
+        right_tables = right_tables.replace(old_alias, new_alias)
+        
+        # Update right side joins to use new alias
+        updated_right_joins = []
+        for join in right_sql.joins:
+            updated_join = join.replace(f"{old_alias}.", f"{new_alias}.")
+            updated_right_joins.append(updated_join)
+        
+        # Update right side WHERE conditions to use new alias
+        updated_right_where = []
+        for where in right_sql.where_conditions:
+            updated_where = where.replace(f"{old_alias}.", f"{new_alias}.")
+            updated_right_where.append(updated_where)
+        
+        # Use updated components
+        combined_joins = left_sql.joins + updated_right_joins
+        combined_where = left_sql.where_conditions + updated_right_where
+        
+        logger.debug(f"🔧 JOIN_FIX: Detected duplicate alias '{old_alias}', replaced with '{new_alias}' on right side")
+    else:
+        # No duplicate aliases - use original logic
+        combined_joins = left_sql.joins + right_sql.joins
+        combined_where = left_sql.where_conditions + right_sql.where_conditions
+    
+    # Add shared variable equality conditions to WHERE clause
+    combined_where.extend(shared_var_conditions)
     
     # Create combined FROM clause with CROSS JOIN
     combined_from = f"FROM {left_tables} CROSS JOIN {right_tables}"
@@ -759,12 +905,20 @@ async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponen
     
     logger.debug(f"✅ JOIN pattern translated with {len(combined_vars)} variables")
     
-    return SQLComponents(
+    result = SQLComponents(
         from_clause=combined_from,
         where_conditions=combined_where,
         joins=combined_joins,
         variable_mappings=combined_vars
     )
+    
+    # Log function exit
+    if sparql_context:
+        sparql_context.log_function_exit(function_name, "SQLComponents", 
+                                        variable_count=len(combined_vars),
+                                        shared_vars=len(shared_vars))
+    
+    return result
 
 
 def translate_bind_pattern(nested_sql: SQLComponents, bind_var: Variable, 
@@ -891,7 +1045,7 @@ def translate_filter_pattern(nested_sql: SQLComponents, filter_expr: str) -> SQL
 
 
 async def translate_graph_pattern(nested_sql: SQLComponents, graph_uri: Optional[str],
-                          table_config: TableConfig, context: TranslationContext) -> SQLComponents:
+                          *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
     Translate GRAPH pattern to SQL with graph context constraints - FIXED to use original approach.
     
@@ -902,13 +1056,25 @@ async def translate_graph_pattern(nested_sql: SQLComponents, graph_uri: Optional
     Args:
         nested_sql: SQL components from nested pattern
         graph_uri: Graph URI to constrain to (None for variable graphs)
-        table_config: Table configuration
-        context: Translation context with term cache
+        sparql_context: SparqlContext containing table_config and other state
         
     Returns:
         SQLComponents with graph constraint added
     """
-    logger.debug(f"🔗 Translating GRAPH pattern for graph: {graph_uri}")
+    function_name = "translate_graph_pattern"
+    
+    # Use SparqlContext for logging and table_config
+    if sparql_context:
+        logger = sparql_context.logger
+        table_config = sparql_context.table_config
+        sparql_context.log_function_entry(function_name, graph_uri=graph_uri)
+    else:
+        # Fallback logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"🔗 {function_name}: Translating GRAPH pattern for graph: {graph_uri}")
+        # This shouldn't happen in practice since sparql_context should always be provided
+        raise ValueError("SparqlContext is required for translate_graph_pattern")
     
     if graph_uri:
         # Named graph - resolve URI to UUID and add context constraint
@@ -926,7 +1092,8 @@ async def translate_graph_pattern(nested_sql: SQLComponents, graph_uri: Optional
         # Get UUID for the graph term
         from vitalgraph.db.postgresql.sparql.postgresql_sparql_cache_integration import get_term_uuids_batch
         graph_uuid_mappings = await get_term_uuids_batch(
-            graph_terms, table_config, context.term_cache, context.space_impl
+            graph_terms, table_config, sparql_context.term_cache, sparql_context.space_impl,
+            sparql_context=sparql_context
         )
         
         graph_key = (graph_text, graph_type)
@@ -939,20 +1106,33 @@ async def translate_graph_pattern(nested_sql: SQLComponents, graph_uri: Optional
             # Applying them after complex SQL structures are built causes scope issues with table aliases
             # The GRAPH pattern translation now passes context constraints down to BGP via translate_algebra_pattern
             logger.debug(f"Context constraint handled at BGP level during pattern translation")
+            
+            # Log function exit
+            if sparql_context:
+                sparql_context.log_function_exit(function_name, "SQLComponents", graph_found=True)
             return nested_sql
         else:
             # Graph not found - return empty result set
             logger.warning(f"Graph not found: {graph_text}")
             # Return empty result by using impossible constraint - context constraints should be handled at BGP level
-            return SQLComponents(
+            result = SQLComponents(
                 from_clause=f"FROM {table_config.quad_table} q_empty WHERE 1=0",
                 where_conditions=[],
                 joins=[],
                 variable_mappings={}
             )
+            
+            # Log function exit
+            if sparql_context:
+                sparql_context.log_function_exit(function_name, "SQLComponents", graph_found=False)
+            return result
     else:
         # Variable graph - no additional constraints needed
         logger.debug(f"Variable graph - no constraints added")
+        
+        # Log function exit
+        if sparql_context:
+            sparql_context.log_function_exit(function_name, "SQLComponents", variable_graph=True)
         return nested_sql
 
 
@@ -1282,7 +1462,7 @@ def merge_sql_components(components_list: List[SQLComponents]) -> SQLComponents:
     return merged
 
 
-async def translate_algebra_pattern_to_components(pattern, context: TranslationContext, projected_vars: List[Variable] = None, context_constraint: str = None) -> SQLComponents:
+async def translate_algebra_pattern_to_components(pattern, context: SparqlContext, projected_vars: List[Variable] = None, context_constraint: str = None) -> SQLComponents:
     """
     Translate a SPARQL algebra pattern to SQL components.
     This is the main entry point for pattern translation in the refactored architecture.
@@ -1290,15 +1470,22 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
     Args:
         pattern: SPARQL pattern from algebra
         context: Translation context with logger, space_impl, etc.
-        projected_vars: Variables to project in SELECT clause
-        context_constraint: Optional SQL constraint for context_uuid column (for GRAPH patterns)
+        projected_vars: List of variables that should be projected in the final query
+        context_constraint: Optional context constraint for graph-specific queries
         
     Returns:
-        SQLComponents with SQL structure
+        SQLComponents object containing SQL components
     """
+    # Extract context components first
     logger = context.logger
     table_config = context.table_config
     alias_gen = context.alias_generator
+    
+    # DEBUG: Log alias generator state for synchronization debugging
+    logger.debug(f"🔧 ALIAS_GEN: Starting pattern translation with quad counter: {alias_gen.counters['quad']}")
+    
+    logger.info(f"🔍 TRANSLATE_PATTERN: Starting translation for pattern type: {type(pattern).__name__}")
+    logger.info(f"🔍 TRANSLATE_PATTERN: Pattern name: {getattr(pattern, 'name', 'NO_NAME')}")
     
     logger.debug(f"Translating pattern type: {pattern.name}")
     pattern_name = pattern.name
@@ -1313,10 +1500,12 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         if not triples:
             # Empty BGP - return minimal structure with context constraint applied directly to FROM clause
             # Context constraints should not be propagated as WHERE conditions to avoid scope errors in UNION
+            # Use alias generator instead of hardcoded q0
+            quad_alias = context.alias_generator.next_quad_alias()
             if context_constraint:
-                from_clause = f"FROM {table_config.quad_table} q0 WHERE q0.{context_constraint}"
+                from_clause = f"FROM {table_config.quad_table} {quad_alias} WHERE {quad_alias}.{context_constraint}"
             else:
-                from_clause = f"FROM {table_config.quad_table} q0"
+                from_clause = f"FROM {table_config.quad_table} {quad_alias}"
             return SQLComponents(
                 from_clause=from_clause,
                 where_conditions=[],
@@ -1325,28 +1514,15 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
             )
         
         # Call the cache-enabled BGP function that supports context constraints
-        try:
-            # Use the cache-enabled function that properly handles context constraints
-            sql_components = await generate_bgp_sql_with_cache(
-                triples, table_config, alias_gen, projected_vars, 
-                context.term_cache, context.space_impl, context_constraint
-            )
-            
-            return sql_components
-        except Exception as e:
-            logger.warning(f"Error in generate_bgp_sql: {e}, falling back to basic BGP")
-            # Fallback to basic structure with context constraint applied directly to FROM clause
-            # Context constraints should not be propagated as WHERE conditions to avoid scope errors in UNION
-            if context_constraint:
-                from_clause = f"FROM {table_config.quad_table} q0 WHERE q0.{context_constraint}"
-            else:
-                from_clause = f"FROM {table_config.quad_table} q0"
-            return SQLComponents(
-                from_clause=from_clause,
-                where_conditions=[],
-                joins=[],
-                variable_mappings={}
-            )
+        # Use the cache-enabled function that properly handles context constraints
+        # CRITICAL: Use alias generator from context to ensure synchronization
+        sql_components = await generate_bgp_sql_with_cache(
+            triples, table_config, context.alias_generator, projected_vars, 
+            context.term_cache, context.space_impl, context_constraint,
+            sparql_context=context
+        )
+        
+        return sql_components
     elif pattern_name == "Filter":
         # Translate nested pattern first
         nested_sql = await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
@@ -1356,16 +1532,22 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         
         filter_expr = pattern.expr if hasattr(pattern, 'expr') else None
         if filter_expr:
-            logger.debug(f"Translating filter expression: {filter_expr}")
-            try:
-                filter_sql = await translate_filter_expression(filter_expr, nested_sql.variable_mappings, context)
-                logger.debug(f"Filter SQL result: {filter_sql}")
-                
-                if filter_sql and filter_sql != "1=1":  # Only add meaningful filters
-                    # Use the HAVING clause detection logic from translate_filter_pattern
-                    return translate_filter_pattern(nested_sql, filter_sql)
-            except Exception as e:
-                logger.warning(f"Error translating filter expression: {e}, skipping filter")
+            logger.debug(f"🔍 FILTER: Translating filter expression: {filter_expr}")
+            logger.debug(f"🔍 FILTER: Expression type: {type(filter_expr).__name__}")
+            logger.debug(f"🔍 FILTER: Expression name: {getattr(filter_expr, 'name', 'NO_NAME')}")
+            logger.debug(f"🔍 FILTER: Variable mappings: {nested_sql.variable_mappings}")
+            
+            filter_sql = await translate_filter_expression(filter_expr, nested_sql.variable_mappings, sparql_context=context)
+            logger.debug(f"🔍 FILTER: Generated SQL: {filter_sql}")
+            
+            if filter_sql and filter_sql != "1=1":  # Only add meaningful filters
+                logger.debug(f"🔍 FILTER: Applying filter to nested SQL")
+                # Use the HAVING clause detection logic from translate_filter_pattern
+                filtered_sql = translate_filter_pattern(nested_sql, filter_sql)
+                logger.debug(f"🔍 FILTER: Result WHERE conditions: {filtered_sql.where_conditions}")
+                return filtered_sql
+            else:
+                logger.warning(f"🔍 FILTER: Filter SQL was empty or trivial: '{filter_sql}'")
         
         return nested_sql
     elif pattern_name == "Union":
@@ -1378,7 +1560,9 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         right_sql = await translate_algebra_pattern_to_components(pattern.p2, context, projected_vars, None)
         
         # Get the UNION result
+        logger.info(f"🔍 UNION: left_sql type: {type(left_sql)}, right_sql type: {type(right_sql)}")
         union_sql = await translate_union_pattern(left_sql, right_sql, alias_gen)
+        logger.info(f"🔍 UNION: union_sql type: {type(union_sql)}, has variable_mappings: {hasattr(union_sql, 'variable_mappings')}")
         
         # Apply context constraints AFTER UNION translation (matching original _translate_pattern_with_context)
         if context_constraint:
@@ -1456,7 +1640,7 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
         if order_expressions:
             from .postgresql_sparql_expressions import translate_order_by_expressions
             try:
-                order_by_clause = await translate_order_by_expressions(order_expressions, nested_sql.variable_mappings, context)
+                order_by_clause = await translate_order_by_expressions(order_expressions, nested_sql.variable_mappings, sparql_context=context)
                 if order_by_clause:
                     nested_sql.order_by = order_by_clause
                     logger.debug(f"Added ORDER BY clause: {order_by_clause}")
@@ -1484,7 +1668,8 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
             # Get UUID for the graph term
             from vitalgraph.db.postgresql.sparql.postgresql_sparql_cache_integration import get_term_uuids_batch
             graph_uuid_mappings = await get_term_uuids_batch(
-                graph_terms, table_config, context.term_cache, context.space_impl
+                graph_terms, table_config, context.term_cache, context.space_impl,
+                sparql_context=context
             )
             
             graph_key = (graph_text, graph_type)
@@ -1596,7 +1781,7 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
                         updated_mappings[bind_var] = f"'SKIPPED_ORDER_CONDITION_{bind_var}'"
                     else:
                         # Use the comprehensive BIND expression translator
-                        sql_expr = translate_bind_expression(bind_expr, updated_mappings, context)
+                        sql_expr = translate_bind_expression(bind_expr, updated_mappings, sparql_context=context)
                         updated_mappings[bind_var] = sql_expr
                         logger.debug(f"Translated BIND expression for {bind_var}: {sql_expr}")
                     
@@ -1625,42 +1810,63 @@ async def translate_algebra_pattern_to_components(pattern, context: TranslationC
     elif pattern_name == "SelectQuery":  # Sub-SELECT (subquery)
         return translate_subquery_pattern(pattern, table_config, alias_gen)
     elif pattern_name == "Join":  # JOIN patterns
-        # Translate both operands
+        # Translate both operands using the shared alias generator from context
         left_sql = await translate_algebra_pattern_to_components(pattern.p1, context, projected_vars, context_constraint)
         right_sql = await translate_algebra_pattern_to_components(pattern.p2, context, projected_vars, context_constraint)
-        return await translate_join_pattern(left_sql, right_sql, alias_gen)
+        # Use the alias generator from context to ensure synchronization
+        return await translate_join_pattern(left_sql, right_sql, context.alias_generator, sparql_context=context)
     elif pattern_name == "Values":  # VALUES clauses
-        return await translate_values_pattern(pattern, table_config, alias_gen, projected_vars)
-    elif pattern_name == "ToMultiSet":  # VALUES clauses (RDFLib uses ToMultiSet)
-        return await translate_values_pattern(pattern, table_config, alias_gen, projected_vars)
+        return await translate_values_pattern(pattern, projected_vars, sparql_context=context)
+    elif pattern_name == "ToMultiSet":  # ToMultiSet can contain VALUES or nested patterns
+        # Check if this is a VALUES pattern or a nested pattern wrapper
+        if hasattr(pattern, 'p') and pattern.p is not None:
+            # ToMultiSet wraps another pattern - drill down to the nested pattern
+            logger.debug(f"🔍 ToMultiSet contains nested pattern: {pattern.p}")
+            return await translate_algebra_pattern_to_components(pattern.p, context, projected_vars, context_constraint)
+        else:
+            # This is a VALUES pattern
+            logger.debug(f"🔍 ToMultiSet is a VALUES pattern")
+            return await translate_values_pattern(pattern, projected_vars, sparql_context=context)
     elif pattern_name == "AggregateJoin":  # Aggregate functions
         # Port the exact original implementation logic
-        return await translate_aggregate_join_original(pattern, table_config, projected_vars, context)
+        return await translate_aggregate_join_original(pattern, projected_vars, sparql_context=context)
     elif pattern_name == "Group":  # GROUP BY patterns
         # Port the exact original implementation logic
-        return await translate_group_original(pattern, table_config, projected_vars, context)
+        return await translate_group_original(pattern, projected_vars, sparql_context=context)
     else:
         logger.warning(f"Pattern type {pattern_name} not fully implemented")
         # Return basic SQL components for unsupported patterns
+        # Use alias generator instead of hardcoded q0
+        quad_alias = context.alias_generator.next_quad_alias()
         return SQLComponents(
-            from_clause=f"FROM {table_config.quad_table} q0",
+            from_clause=f"FROM {table_config.quad_table} {quad_alias}",
             where_conditions=[],
             joins=[],
             variable_mappings={}
         )
 
 
-async def translate_aggregate_join_original(agg_pattern, table_config: TableConfig, projected_vars: List[Variable] = None, context: TranslationContext = None) -> SQLComponents:
+async def translate_aggregate_join_original(agg_pattern, projected_vars: List[Variable] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """Translate AggregateJoin pattern (aggregate functions) to SQL - exact port from original implementation.
     
     AggregateJoin patterns have:
     - A: Array of aggregate functions (Aggregate_Count_, Aggregate_Sum_, etc.)
     - p: The nested pattern (usually Group)
     """
+    function_name = "translate_aggregate_join_original"
+    
     try:
-        logger = context.logger if context else None
-        if logger:
-            logger.debug(f"Translating AggregateJoin pattern")
+        # Use SparqlContext for logging and table_config
+        if sparql_context:
+            logger = sparql_context.logger
+            table_config = sparql_context.table_config
+            sparql_context.log_function_entry(function_name, pattern_type="AggregateJoin")
+        else:
+            # Fallback logging and error
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"{function_name}: Starting AggregateJoin pattern translation")
+            raise ValueError("SparqlContext is required for translate_aggregate_join_original")
         
         # Get the nested pattern (usually Group)
         nested_pattern = agg_pattern.p
@@ -1702,23 +1908,23 @@ async def translate_aggregate_join_original(agg_pattern, table_config: TableConf
             logger.debug(f"Extended projected_vars for aggregates: {extended_projected_vars}")
         
         # Translate the nested pattern with extended projected variables
-        nested_result = await translate_algebra_pattern(
-            nested_pattern, context, extended_projected_vars
+        nested_result = await translate_algebra_pattern_to_components(
+            nested_pattern, sparql_context, extended_projected_vars
         )
         
         # Check if nested pattern translation failed
         if nested_result is None:
-            if logger:
-                logger.error(f"Nested pattern translation returned None in AggregateJoin pattern")
-            # Return basic structure on error
-            return SQLComponents(
-                from_clause=f"FROM {table_config.quad_table} q0",
-                where_conditions=[],
-                joins=[],
-                variable_mappings={}
-            )
+            error_msg = "Nested pattern translation returned None in AggregateJoin pattern"
+            if sparql_context:
+                sparql_context.log_function_error(function_name, error_msg)
+            else:
+                logger.error(f"{function_name}: {error_msg}")
+            raise ValueError(error_msg)
         
-        from_clause, where_conditions, joins, variable_mappings = nested_result
+        from_clause = nested_result.from_clause
+        where_conditions = nested_result.where_conditions
+        joins = nested_result.joins
+        variable_mappings = nested_result.variable_mappings
         
         if logger:
             logger.debug(f"AggregateJoin variable mappings from nested pattern: {variable_mappings}")
@@ -1801,28 +2007,35 @@ async def translate_aggregate_join_original(agg_pattern, table_config: TableConf
         )
         
     except Exception as e:
-        if logger:
-            logger.error(f"Error translating AggregateJoin pattern: {e}")
-        # Return basic structure on error
-        return SQLComponents(
-            from_clause=f"FROM {table_config.quad_table} q0",
-            where_conditions=[],
-            joins=[],
-            variable_mappings={}
-        )
+        if sparql_context:
+            sparql_context.log_function_error(function_name, e)
+        else:
+            logger.error(f"{function_name}: Error translating AggregateJoin pattern: {e}")
+        # Re-raise the exception instead of returning fallback SQLComponents
+        raise
 
 
-async def translate_group_original(group_pattern, table_config: TableConfig, projected_vars: List[Variable] = None, context: TranslationContext = None) -> SQLComponents:
+async def translate_group_original(group_pattern, projected_vars: List[Variable] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """Translate Group pattern (GROUP BY) to SQL - exact port from original implementation.
     
     Group patterns have:
     - p: The nested pattern to translate
     - expr: The grouping expression (list of variables for GROUP BY)
     """
+    function_name = "translate_group_original"
+    
     try:
-        logger = context.logger if context else None
-        if logger:
-            logger.debug(f"Translating Group pattern")
+        # Use SparqlContext for logging and table_config
+        if sparql_context:
+            logger = sparql_context.logger
+            table_config = sparql_context.table_config
+            sparql_context.log_function_entry(function_name, pattern_type="Group")
+        else:
+            # Fallback logging and error
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"{function_name}: Starting Group pattern translation")
+            raise ValueError("SparqlContext is required for translate_group_original")
         
         # Get the nested pattern
         nested_pattern = group_pattern.p
@@ -1836,23 +2049,23 @@ async def translate_group_original(group_pattern, table_config: TableConfig, pro
                 logger.debug("No GROUP BY variables (aggregate without grouping)")
         
         # Translate the nested pattern
-        nested_result = await translate_algebra_pattern(
-            nested_pattern, context, projected_vars
+        nested_result = await translate_algebra_pattern_to_components(
+            nested_pattern, sparql_context, projected_vars
         )
         
         # Check if nested pattern translation failed
         if nested_result is None:
-            if logger:
-                logger.error(f"Nested pattern translation returned None in Group pattern")
-            # Return basic structure on error
-            return SQLComponents(
-                from_clause=f"FROM {table_config.quad_table} q0",
-                where_conditions=[],
-                joins=[],
-                variable_mappings={}
-            )
+            error_msg = "Nested pattern translation returned None in Group pattern"
+            if sparql_context:
+                sparql_context.log_function_error(function_name, error_msg)
+            else:
+                logger.error(f"{function_name}: {error_msg}")
+            raise ValueError(error_msg)
         
-        from_clause, where_conditions, joins, variable_mappings = nested_result
+        from_clause = nested_result.from_clause
+        where_conditions = nested_result.where_conditions
+        joins = nested_result.joins
+        variable_mappings = nested_result.variable_mappings
         
         # Store GROUP BY information in variable_mappings for later use
         # We'll use this in _build_select_clause to add GROUP BY clause
@@ -1870,56 +2083,16 @@ async def translate_group_original(group_pattern, table_config: TableConfig, pro
         )
         
     except Exception as e:
-        if logger:
-            logger.error(f"Error translating Group pattern: {e}")
-        # Return basic structure on error
-        return SQLComponents(
-            from_clause=f"FROM {table_config.quad_table} q0",
-            where_conditions=[],
-            joins=[],
-            variable_mappings={}
-        )
+        if sparql_context:
+            sparql_context.log_function_error(function_name, e)
+        else:
+            logger.error(f"{function_name}: Error translating Group pattern: {e}")
+        # Re-raise the exception instead of returning fallback SQLComponents
+        raise
 
 
-async def translate_algebra_pattern(pattern, context: TranslationContext, projected_vars: List[Variable] = None, context_constraint: str = None) -> tuple:
-    """
-    Translate a SPARQL algebra pattern to SQL components in original format.
-    This function maintains compatibility with the original implementation by returning
-    a tuple of (from_clause, where_conditions, joins, variable_mappings).
-    
-    Args:
-        pattern: RDFLib algebra pattern object
-        context: Translation context with table config, alias generator, etc.
-        projected_vars: List of variables to project (for optimization)
-        context_constraint: Additional constraint to apply
-        
-    Returns:
-        Tuple of (from_clause, where_conditions, joins, variable_mappings)
-    """
-    # Use the components version and convert to tuple format
-    sql_components = await translate_algebra_pattern_to_components(pattern, context, projected_vars, context_constraint)
-    
-    # Check if translation failed
-    if sql_components is None:
-        logger = context.logger if context else None
-        if logger:
-            logger.error(f"translate_algebra_pattern_to_components returned None for pattern: {pattern}")
-        # Return basic structure on error
-        table_config = context.table_config if context else None
-        quad_table = table_config.quad_table if table_config else "rdf_quad"
-        return (
-            f"FROM {quad_table} q0",
-            [],
-            [],
-            {}
-        )
-    
-    return (
-        sql_components.from_clause,
-        sql_components.where_conditions,
-        sql_components.joins,
-        sql_components.variable_mappings
-    )
+# translate_algebra_pattern wrapper function removed - redundant with translate_algebra_pattern_to_components
+# All active code paths use translate_algebra_pattern_to_components directly
 
 
 def get_pattern_complexity(pattern) -> int:

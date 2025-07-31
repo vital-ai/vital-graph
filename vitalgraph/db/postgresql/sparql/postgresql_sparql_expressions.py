@@ -16,17 +16,36 @@ from rdflib.plugins.sparql.parserutils import CompValue
 logger = logging.getLogger(__name__)
 
 
-async def translate_filter_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate a SPARQL filter expression to SQL."""
+async def translate_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate a SPARQL filter expression to SQL.
+    
+    Args:
+        expr: SPARQL filter expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL WHERE condition string
+    """
+    function_name = "translate_filter_expression"
+    
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+        sparql_context.log_function_entry(function_name, expr_type=type(expr).__name__)
+    else:
+        # Fallback to module logger
+        import logging
+        logger = logging.getLogger(__name__)
     # Handle case where expr is a list (multiple filter expressions)
     if isinstance(expr, list):
         if len(expr) == 1:
-            return await translate_filter_expression(expr[0], variable_mappings, context)
+            return await translate_filter_expression(expr[0], variable_mappings, sparql_context=sparql_context)
         else:
             # Multiple expressions - combine with AND
             conditions = []
             for sub_expr in expr:
-                condition = await translate_filter_expression(sub_expr, variable_mappings, context)
+                condition = await translate_filter_expression(sub_expr, variable_mappings, sparql_context=sparql_context)
                 conditions.append(condition)
             return f"({' AND '.join(conditions)})"
     
@@ -39,11 +58,11 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
     logger.debug(f"Processing filter expression: {expr_name}")
     
     if expr_name == "RelationalExpression":
-        return await _translate_relational_expression(expr, variable_mappings, context)
+        return await _translate_relational_expression(expr, variable_mappings, sparql_context=sparql_context)
     elif expr_name == "ConditionalAndExpression":
-        return await _translate_and_expression(expr, variable_mappings, context)
+        return await _translate_and_expression(expr, variable_mappings, sparql_context=sparql_context)
     elif expr_name == "ConditionalOrExpression":
-        return await _translate_or_expression(expr, variable_mappings, context)
+        return await _translate_or_expression(expr, variable_mappings, sparql_context=sparql_context)
     elif expr_name == "Builtin_REGEX":
         return _translate_regex_expression(expr, variable_mappings)
     elif expr_name == "Builtin_CONTAINS":
@@ -59,7 +78,7 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
     elif expr_name == "Builtin_LANG":
         return _translate_lang_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_DATATYPE":
-        return _translate_datatype_filter_expression(expr, variable_mappings, context)
+        return _translate_datatype_filter_expression(expr, variable_mappings, sparql_context=sparql_context)
     elif expr_name in ["Builtin_URI", "Builtin_IRI"]:
         return _translate_uri_filter_expression(expr, variable_mappings)
     elif expr_name == "Builtin_BNODE":
@@ -92,7 +111,7 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
             else:
                 # For complex expressions, try to translate them
                 try:
-                    return await translate_filter_expression(order_expr, variable_mappings, context)
+                    return await translate_filter_expression(order_expr, variable_mappings, sparql_context=context)
                 except:
                     return str(order_expr)
         else:
@@ -104,20 +123,29 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
         return "1=1"  # No-op condition
 
 
-async def _translate_relational_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate relational expression (=, !=, <, >, etc.)."""
+async def _translate_relational_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate relational expression (=, !=, <, >, etc.).
+    
+    Args:
+        expr: Relational expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL condition string
+    """
     operator = expr['op']
     left = expr['expr']
     right = expr['other']
     
     # Handle IN operator specially
     if operator == 'IN':
-        left_sql = await _translate_expression_operand(left, variable_mappings, context=context)
+        left_sql = await _translate_expression_operand(left, variable_mappings, sparql_context=sparql_context)
         if isinstance(right, list):
             # Multiple values for IN
             values = []
             for value in right:
-                value_sql = await _translate_expression_operand(value, variable_mappings, context=context)
+                value_sql = await _translate_expression_operand(value, variable_mappings, sparql_context=sparql_context)
                 values.append(value_sql)
             if values:
                 return f"({left_sql} IN ({', '.join(values)}))"
@@ -125,7 +153,7 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
                 return "FALSE"  # Empty IN list is always false
         else:
             # Single value case (shouldn't happen with IN but handle gracefully)
-            right_sql = await _translate_expression_operand(right, variable_mappings, context=context)
+            right_sql = await _translate_expression_operand(right, variable_mappings, sparql_context=sparql_context)
             return f"({left_sql} = {right_sql})"
     
     # Determine if this is a numeric comparison
@@ -133,8 +161,8 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
     is_numeric = operator in numeric_operators
     
     try:
-        left_sql = await _translate_expression_operand(left, variable_mappings, cast_numeric=is_numeric, context=context)
-        right_sql = await _translate_expression_operand(right, variable_mappings, cast_numeric=is_numeric, context=context)
+        left_sql = await _translate_expression_operand(left, variable_mappings, cast_numeric=is_numeric, sparql_context=sparql_context)
+        right_sql = await _translate_expression_operand(right, variable_mappings, cast_numeric=is_numeric, sparql_context=sparql_context)
         
         # Ensure we got string SQL representations, not dict objects
         if not isinstance(left_sql, str):
@@ -164,22 +192,57 @@ async def _translate_relational_expression(expr, variable_mappings: Dict[Variabl
         return "1=1"
 
 
-async def _translate_and_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate AND expression."""
-    left = await translate_filter_expression(expr['expr'], variable_mappings, context)
-    right = await translate_filter_expression(expr['other'], variable_mappings, context)
+async def _translate_and_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate AND expression.
+    
+    Args:
+        expr: AND expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL AND condition string
+    """
+    left = await translate_filter_expression(expr['expr'], variable_mappings, sparql_context=sparql_context)
+    right = await translate_filter_expression(expr['other'], variable_mappings, sparql_context=sparql_context)
     return f"({left} AND {right})"
 
 
-async def _translate_or_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate OR expression."""
-    left = await translate_filter_expression(expr['expr'], variable_mappings, context)
-    right = await translate_filter_expression(expr['other'], variable_mappings, context)
+async def _translate_or_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate OR expression.
+    
+    Args:
+        expr: OR expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL OR condition string
+    """
+    left = await translate_filter_expression(expr['expr'], variable_mappings, sparql_context=sparql_context)
+    right = await translate_filter_expression(expr['other'], variable_mappings, sparql_context=sparql_context)
     return f"({left} OR {right})"
 
 
-async def _translate_expression_operand(operand, variable_mappings: Dict[Variable, str], cast_numeric: bool = False, context=None) -> str:
-    """Translate an expression operand (variable or literal)."""
+async def _translate_expression_operand(operand, variable_mappings: Dict[Variable, str], cast_numeric: bool = False, *, sparql_context=None) -> str:
+    """Translate an expression operand (variable or literal).
+    
+    Args:
+        operand: Variable, Literal, URIRef, or expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        cast_numeric: Whether to cast result to numeric type for operations
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL expression string
+    """
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        # Fallback to module logger
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug(f"Translating operand: {operand}, type: {type(operand)}, is Variable: {isinstance(operand, Variable)}")
     if isinstance(operand, Variable):
         logger.debug(f"Variable {operand} in mappings: {operand in variable_mappings}")
@@ -209,7 +272,7 @@ async def _translate_expression_operand(operand, variable_mappings: Dict[Variabl
     # Handle function expressions or other complex operands
     if hasattr(operand, 'name'):
         # This might be a function call like STRLEN
-        return await _translate_function_expression(operand, variable_mappings, context)
+        return await _translate_function_expression(operand, variable_mappings, sparql_context=sparql_context)
     
     # Direct value fallback
     if operand is None:
@@ -220,8 +283,24 @@ async def _translate_expression_operand(operand, variable_mappings: Dict[Variabl
         return str(operand)
 
 
-async def _translate_function_expression(func_expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate function expressions in FILTER operands."""
+async def _translate_function_expression(func_expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate function expressions in FILTER operands.
+    
+    Args:
+        func_expr: Function expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL function expression string
+    """
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        # Fallback to module logger
+        import logging
+        logger = logging.getLogger(__name__)
     func_name = func_expr.name
     
     # Handle STRLEN function (can be 'STRLEN' or 'Builtin_STRLEN')
@@ -229,12 +308,12 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
         # Try 'arg' first (most common for STRLEN), then 'expr'
         if hasattr(func_expr, 'arg') and func_expr.arg:
             logger.debug(f"STRLEN arg: {func_expr.arg}, type: {type(func_expr.arg)}")
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             logger.debug(f"STRLEN translated to: LENGTH({arg_sql})")
             return f"LENGTH({arg_sql})"
         elif hasattr(func_expr, 'expr') and func_expr.expr:
             logger.debug(f"STRLEN expr: {func_expr.expr}, type: {type(func_expr.expr)}")
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, sparql_context=sparql_context)
             logger.debug(f"STRLEN translated to: LENGTH({arg_sql})")
             return f"LENGTH({arg_sql})"
         else:
@@ -244,24 +323,24 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # Handle other common SPARQL functions
     elif func_name == 'UCASE':
         if hasattr(func_expr, 'expr') and func_expr.expr:
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, sparql_context=sparql_context)
             return f"UPPER({arg_sql})"
         else:
             return "NULL"
     
     elif func_name == 'LCASE':
         if hasattr(func_expr, 'expr') and func_expr.expr:
-            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, sparql_context=sparql_context)
             return f"LOWER({arg_sql})"
         else:
             return "NULL"
     
     elif func_name == 'SUBSTR':
         if hasattr(func_expr, 'expr') and hasattr(func_expr, 'start'):
-            str_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, context=context)
-            start_sql = await _translate_expression_operand(func_expr.start, variable_mappings, context=context)
+            str_sql = await _translate_expression_operand(func_expr.expr, variable_mappings, sparql_context=sparql_context)
+            start_sql = await _translate_expression_operand(func_expr.start, variable_mappings, sparql_context=sparql_context)
             if hasattr(func_expr, 'length') and func_expr.length:
-                length_sql = await _translate_expression_operand(func_expr.length, variable_mappings, context=context)
+                length_sql = await _translate_expression_operand(func_expr.length, variable_mappings, sparql_context=sparql_context)
                 return f"SUBSTRING({str_sql} FROM {start_sql} FOR {length_sql})"
             else:
                 return f"SUBSTRING({str_sql} FROM {start_sql})"
@@ -271,7 +350,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # DATATYPE and LANG functions - Previously missing
     elif func_name == 'Builtin_DATATYPE':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # Use the same logic as _translate_datatype_filter_expression
             if '.term_text' in arg_sql:
                 # Extract the table alias from the arg_sql
@@ -319,7 +398,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     
     elif func_name == 'Builtin_LANG':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # For variables, we need to look up the language from the term table
             if '.term_text' in arg_sql:
                 # Replace term_text with lang column
@@ -333,7 +412,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # URI and IRI functions
     elif func_name in ['Builtin_URI', 'Builtin_IRI']:
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # URI/IRI just returns the string value for SQL purposes
             return arg_sql
         return "NULL"
@@ -341,7 +420,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # Type checking functions
     elif func_name == 'Builtin_isURI':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # Check if the value looks like a URI using regex pattern matching
             uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
             return f"({arg_sql} ~ {uri_pattern})"
@@ -349,7 +428,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     
     elif func_name == 'Builtin_isLITERAL':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # Check if the value is NOT a URI (inverse of isURI check)
             uri_pattern = "'^(https?|ftp|file|mailto|urn|ldap|news|gopher|telnet):[^\\s]*$'"
             return f"NOT ({arg_sql} ~ {uri_pattern})"
@@ -357,7 +436,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     
     elif func_name == 'Builtin_isNUMERIC':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # Use PostgreSQL's improved numeric pattern matching
             numeric_pattern = "'^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'"
             return f"({arg_sql} ~ {numeric_pattern})"
@@ -365,7 +444,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     
     elif func_name == 'Builtin_isBLANK':
         if hasattr(func_expr, 'arg'):
-            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, context=context)
+            arg_sql = await _translate_expression_operand(func_expr.arg, variable_mappings, sparql_context=sparql_context)
             # For variables, check the term_type in the database
             if '.term_text' in arg_sql:
                 # Replace term_text with term_type and check for 'B' (Blank Node)
@@ -386,7 +465,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # This handles cases where builtin functions are used in filter expressions
     try:
         logger.debug(f"Attempting to translate function {func_name} using translate_bind_expression")
-        result = translate_bind_expression(func_expr, variable_mappings, context)
+        result = translate_bind_expression(func_expr, variable_mappings, sparql_context=context)
         if result and result != "1=1" and not result.startswith("'MISSING") and not result.startswith("'PARSE_ERROR"):
             return result
     except Exception as e:
@@ -445,7 +524,7 @@ def _translate_expression_operand_sync(operand, variable_mappings: Dict[Variable
         return str(operand)
 
 
-def translate_bind_arg(arg, variable_mappings: Dict) -> str:
+def translate_bind_arg(arg, variable_mappings: Dict, *, sparql_context=None) -> str:
     """Translate a single argument in a BIND expression.
     Uses exact original implementation from postgresql_sparql_impl.py.
     
@@ -562,17 +641,26 @@ def translate_bind_arg(arg, variable_mappings: Dict) -> str:
         return "NULL"  # Return NULL instead of string that might cause SQL errors
 
 
-def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) -> str:
-    """Translate a SPARQL BIND expression to PostgreSQL SQL.
+def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_context=None) -> str:
+    """
+    Translate a SPARQL BIND expression to PostgreSQL SQL.
     Uses exact original implementation from postgresql_sparql_impl.py.
     
     Args:
         bind_expr: RDFLib expression object from BIND statement
         variable_mappings: Current variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
         
     Returns:
         SQL expression string
     """
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        # Fallback to module logger
+        import logging
+        logger = logging.getLogger(__name__)
     from rdflib.plugins.sparql.parserutils import CompValue
     from rdflib import Variable, Literal, URIRef
     
@@ -618,8 +706,8 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
             # CRITICAL FIX: This was missing from refactored implementation
             try:
                 if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
-                    left = translate_bind_expression(bind_expr.expr, variable_mappings, context)
-                    right = translate_bind_expression(bind_expr.other, variable_mappings, context)
+                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
+                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=context)
                     
                     # Handle operator - it might be a list or a string
                     op_raw = bind_expr.op
@@ -700,8 +788,8 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
             # CRITICAL FIX: This was missing from refactored implementation
             try:
                 if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
-                    left = translate_bind_expression(bind_expr.expr, variable_mappings, context)
-                    right = translate_bind_expression(bind_expr.other, variable_mappings, context)
+                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
+                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=context)
                     
                     # Handle operator - it might be a list or a string
                     op_raw = bind_expr.op
@@ -881,7 +969,7 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
         elif expr_name == 'Builtin_DATATYPE':
             # DATATYPE(?var) -> get datatype URI for the variable
             # Use the proper _translate_builtin_datatype function instead of placeholder
-            return _translate_builtin_datatype(bind_expr, variable_mappings, context)
+            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=context)
         elif expr_name == 'Builtin_LANG':
             # LANG(?var) -> get language tag for the variable
             if hasattr(bind_expr, 'arg'):
@@ -981,13 +1069,13 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
             
         elif expr_name == 'Builtin_DATATYPE':
             # DATATYPE(literal) -> Return datatype URI
-            return _translate_builtin_datatype(bind_expr, variable_mappings, context)
+            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=context)
             
         # UNARY EXPRESSIONS - Handle unary operators
         elif expr_name == 'UnaryMinus':
             # Handle unary minus like -?age
             if hasattr(bind_expr, 'expr'):
-                operand = translate_bind_expression(bind_expr.expr, variable_mappings, context)
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
                 # Cast to numeric for unary operations - use proper unary minus syntax
                 return f"(-CAST({operand} AS DECIMAL))"
             else:
@@ -996,7 +1084,7 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
         elif expr_name == 'UnaryPlus':
             # Handle unary plus like +?age
             if hasattr(bind_expr, 'expr'):
-                operand = translate_bind_expression(bind_expr.expr, variable_mappings, context)
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
                 # Cast to numeric for unary operations
                 return f"(+CAST({operand} AS DECIMAL))"
             else:
@@ -1101,7 +1189,7 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, context=None) 
         return "'UNKNOWN_BIND'"
 
 
-def translate_aggregate_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def translate_aggregate_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """
     Translate SPARQL aggregate expression to SQL aggregate function.
     
@@ -1166,7 +1254,7 @@ def extract_variables_from_expression(expr) -> Set[Variable]:
 
 
 # Helper functions for simple built-in expressions
-def _translate_regex_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_regex_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate REGEX() function to PostgreSQL regex operator with error handling."""
     text_expr = expr['text']
     pattern_expr = expr['pattern']
@@ -1211,7 +1299,7 @@ def _validate_regex_pattern(pattern: str) -> bool:
         return False
 
 
-def _translate_contains_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_contains_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate CONTAINS() function to SQL LIKE."""
     text_expr = expr['arg1']
     search_expr = expr['arg2']
@@ -1224,7 +1312,7 @@ def _translate_contains_expression(expr, variable_mappings: Dict[Variable, str])
     return f"{text_sql} LIKE '%{search_term}%'"
 
 
-def _translate_strstarts_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_strstarts_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRSTARTS() function to SQL LIKE."""
     text_expr = expr['arg1']
     prefix_expr = expr['arg2']
@@ -1236,7 +1324,7 @@ def _translate_strstarts_expression(expr, variable_mappings: Dict[Variable, str]
     return f"({text_sql} LIKE {prefix_sql} || '%')"
 
 
-def _translate_strends_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_strends_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRENDS() function to SQL LIKE."""
     text_expr = expr['arg1']
     suffix_expr = expr['arg2']
@@ -1249,7 +1337,7 @@ def _translate_strends_expression(expr, variable_mappings: Dict[Variable, str]) 
 
 
 # EXISTS/NOT EXISTS expression translators
-async def _translate_exists_expression(expr, variable_mappings: Dict[Variable, str], is_not_exists: bool = False) -> str:
+async def _translate_exists_expression(expr, variable_mappings: Dict[Variable, str], is_not_exists: bool = False, *, sparql_context=None) -> str:
     """Translate EXISTS() or NOT EXISTS() function expressions."""
     logger.debug(f"Translating {'NOT EXISTS' if is_not_exists else 'EXISTS'} expression")
     # TODO: Implement EXISTS/NOT EXISTS translation
@@ -1257,7 +1345,7 @@ async def _translate_exists_expression(expr, variable_mappings: Dict[Variable, s
 
 
 # LANG/DATATYPE filter expression translators
-def _translate_lang_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_lang_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate LANG() filter expression."""
     logger.debug("Translating LANG filter expression")
     if hasattr(expr, 'arg'):
@@ -1278,8 +1366,24 @@ def _translate_lang_filter_expression(expr, variable_mappings: Dict[Variable, st
     return "''"
 
 
-def _translate_datatype_filter_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
-    """Translate DATATYPE() filter expression using the datatype table."""
+def _translate_datatype_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
+    """Translate DATATYPE() filter expression using the datatype table.
+    
+    Args:
+        expr: DATATYPE expression from RDFLib algebra
+        variable_mappings: Variable to SQL column mappings
+        sparql_context: SparqlContext for logging and configuration (optional)
+        
+    Returns:
+        SQL expression for datatype checking
+    """
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        # Fallback to module logger
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating DATATYPE filter expression")
     if hasattr(expr, 'arg'):
         arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
@@ -1341,20 +1445,32 @@ def _translate_datatype_filter_expression(expr, variable_mappings: Dict[Variable
 
 
 # URI/BNODE filter expression translators
-def _translate_uri_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_uri_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate URI()/IRI() filter expression."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating URI/IRI filter expression")
     return "1=1"  # Placeholder
 
 
-def _translate_bnode_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_bnode_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate BNODE() filter expression."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating BNODE filter expression")
     return "1=1"  # Placeholder
 
 
 # Type checking filter expression translators
-def _translate_isuri_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_isuri_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isURI() filter expression."""
     logger.debug("Translating isURI filter expression")
     if hasattr(expr, 'arg'):
@@ -1373,7 +1489,7 @@ def _translate_isuri_filter_expression(expr, variable_mappings: Dict[Variable, s
     return "FALSE"
 
 
-def _translate_isliteral_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_isliteral_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isLITERAL() filter expression."""
     logger.debug("Translating isLITERAL filter expression")
     if hasattr(expr, 'arg'):
@@ -1392,8 +1508,14 @@ def _translate_isliteral_filter_expression(expr, variable_mappings: Dict[Variabl
     return "FALSE"
 
 
-def _translate_isblank_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_isblank_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isBLANK() filter expression."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating isBLANK filter expression")
     if hasattr(expr, 'arg'):
         arg_sql = _translate_expression_operand_sync(expr.arg, variable_mappings)
@@ -1402,7 +1524,7 @@ def _translate_isblank_filter_expression(expr, variable_mappings: Dict[Variable,
     return "FALSE"
 
 
-def _translate_isnumeric_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_isnumeric_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isNUMERIC() filter expression."""
     logger.debug("Translating isNUMERIC filter expression")
     if hasattr(expr, 'arg'):
@@ -1421,8 +1543,14 @@ def _translate_isnumeric_filter_expression(expr, variable_mappings: Dict[Variabl
     return "FALSE"
 
 
-def _translate_bound_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_bound_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate BOUND() filter expression."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating BOUND filter expression")
     if hasattr(expr, 'arg') and isinstance(expr.arg, Variable):
         var_sql = _get_variable_sql_column(expr.arg, variable_mappings)
@@ -1430,8 +1558,14 @@ def _translate_bound_filter_expression(expr, variable_mappings: Dict[Variable, s
     return "1=0"
 
 
-def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate sameTerm() filter expression."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
     logger.debug("Translating sameTerm filter expression")
     if hasattr(expr, 'arg1') and hasattr(expr, 'arg2'):
         arg1_sql = _translate_expression_operand_sync(expr.arg1, variable_mappings)
@@ -1441,8 +1575,15 @@ def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable
 
 
 # Math built-in function translators
-def _translate_builtin_ceil(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_ceil(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate CEIL() built-in to SQL CEIL()."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1451,13 +1592,20 @@ def _translate_builtin_ceil(expr, variable_mappings: Dict[Variable, str]) -> str
         arg = expr.args[0]
     
     if arg is not None:
-        value_sql = translate_bind_arg(arg, variable_mappings)
+        value_sql = translate_bind_arg(arg, variable_mappings, sparql_context=sparql_context)
         return f"CEIL({value_sql})"
     return "0"
 
 
-def _translate_builtin_floor(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_floor(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate FLOOR() built-in to SQL FLOOR()."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1466,12 +1614,12 @@ def _translate_builtin_floor(expr, variable_mappings: Dict[Variable, str]) -> st
         arg = expr.args[0]
     
     if arg is not None:
-        value_sql = translate_bind_arg(arg, variable_mappings)
+        value_sql = translate_bind_arg(arg, variable_mappings, sparql_context=sparql_context)
         return f"FLOOR({value_sql})"
     return "0"
 
 
-def _translate_builtin_replace(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_replace(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate REPLACE() built-in to string replacement."""
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
@@ -1490,8 +1638,15 @@ def _translate_builtin_replace(expr, variable_mappings: Dict[Variable, str]) -> 
         return "''"
 
 
-def _translate_builtin_contains(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_contains(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate CONTAINS() built-in to string containment check."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1500,13 +1655,13 @@ def _translate_builtin_contains(expr, variable_mappings: Dict[Variable, str]) ->
         args = expr.args
     
     if len(args) >= 2:
-        string_sql = translate_bind_arg(args[0], variable_mappings)
-        substring_sql = translate_bind_arg(args[1], variable_mappings)
+        string_sql = translate_bind_arg(args[0], variable_mappings, sparql_context=sparql_context)
+        substring_sql = translate_bind_arg(args[1], variable_mappings, sparql_context=sparql_context)
         return f"({string_sql} LIKE '%' || {substring_sql} || '%')"
     return "FALSE"
 
 
-def _translate_builtin_strstarts(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_strstarts(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRSTARTS() built-in to string prefix check."""
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
@@ -1522,7 +1677,7 @@ def _translate_builtin_strstarts(expr, variable_mappings: Dict[Variable, str]) -
     return "FALSE"
 
 
-def _translate_builtin_strends(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_strends(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRENDS() built-in to string suffix check."""
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
@@ -1538,7 +1693,7 @@ def _translate_builtin_strends(expr, variable_mappings: Dict[Variable, str]) -> 
     return "FALSE"
 
 
-def _translate_builtin_strbefore(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_strbefore(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRBEFORE() built-in to substring before delimiter."""
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
@@ -1554,7 +1709,7 @@ def _translate_builtin_strbefore(expr, variable_mappings: Dict[Variable, str]) -
     return "''"
 
 
-def _translate_builtin_strafter(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_strafter(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STRAFTER() built-in to substring after delimiter."""
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     args = []
@@ -1571,12 +1726,12 @@ def _translate_builtin_strafter(expr, variable_mappings: Dict[Variable, str]) ->
 
 
 # Date/Time built-in function translators
-def _translate_builtin_now(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_now(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate NOW() built-in to SQL NOW()."""
     return "NOW()"
 
 
-def _translate_builtin_year(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_year(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate YEAR() built-in to SQL EXTRACT(YEAR FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         date_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1584,7 +1739,7 @@ def _translate_builtin_year(expr, variable_mappings: Dict[Variable, str]) -> str
     return "0"
 
 
-def _translate_builtin_month(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_month(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate MONTH() built-in to SQL EXTRACT(MONTH FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         date_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1592,7 +1747,7 @@ def _translate_builtin_month(expr, variable_mappings: Dict[Variable, str]) -> st
     return "0"
 
 
-def _translate_builtin_day(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_day(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate DAY() built-in to SQL EXTRACT(DAY FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         date_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1600,7 +1755,7 @@ def _translate_builtin_day(expr, variable_mappings: Dict[Variable, str]) -> str:
     return "0"
 
 
-def _translate_builtin_hours(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_hours(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate HOURS() built-in to SQL EXTRACT(HOUR FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         time_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1608,7 +1763,7 @@ def _translate_builtin_hours(expr, variable_mappings: Dict[Variable, str]) -> st
     return "0"
 
 
-def _translate_builtin_minutes(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_minutes(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate MINUTES() built-in to SQL EXTRACT(MINUTE FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         time_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1616,7 +1771,7 @@ def _translate_builtin_minutes(expr, variable_mappings: Dict[Variable, str]) -> 
     return "0"
 
 
-def _translate_builtin_seconds(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_seconds(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate SECONDS() built-in to SQL EXTRACT(SECOND FROM ...)."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         time_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1625,7 +1780,7 @@ def _translate_builtin_seconds(expr, variable_mappings: Dict[Variable, str]) -> 
 
 
 # Type/Casting built-in function translators
-def _translate_builtin_datatype(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
+def _translate_builtin_datatype(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate DATATYPE() built-in function using the datatype table."""
     logger.debug("Translating DATATYPE builtin function")
     if hasattr(expr, 'arg'):
@@ -1687,7 +1842,7 @@ def _translate_builtin_datatype(expr, variable_mappings: Dict[Variable, str], co
     return "'http://www.w3.org/2001/XMLSchema#string'"
 
 
-def _translate_builtin_lang(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_lang(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate LANG() built-in - returns language tag of literal."""
     if hasattr(expr, 'arg'):
         # Handle both single argument and list of arguments
@@ -1717,7 +1872,7 @@ def _translate_builtin_lang(expr, variable_mappings: Dict[Variable, str]) -> str
     return "''"
 
 
-def _translate_builtin_str(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_str(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate STR() built-in to string conversion."""
     if hasattr(expr, 'args') and len(expr.args) >= 1:
         value_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1725,7 +1880,7 @@ def _translate_builtin_str(expr, variable_mappings: Dict[Variable, str]) -> str:
     return "''"
 
 
-def _translate_builtin_langmatches(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_langmatches(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate LANGMATCHES() built-in for language tag matching."""
     if hasattr(expr, 'args') and len(expr.args) >= 2:
         lang_sql = _translate_expression_operand_sync(expr.args[0], variable_mappings)
@@ -1735,8 +1890,15 @@ def _translate_builtin_langmatches(expr, variable_mappings: Dict[Variable, str])
     return "1=0"
 
 
-def _translate_builtin_bound(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_bound(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate BOUND() built-in to check if variable is bound."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1750,8 +1912,15 @@ def _translate_builtin_bound(expr, variable_mappings: Dict[Variable, str]) -> st
     return "FALSE"
 
 
-def _translate_builtin_isuri(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_isuri(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isURI() built-in to check if term is a URI."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1760,14 +1929,21 @@ def _translate_builtin_isuri(expr, variable_mappings: Dict[Variable, str]) -> st
         arg = expr.args[0]
     
     if arg is not None:
-        arg_sql = translate_bind_arg(arg, variable_mappings)
+        arg_sql = translate_bind_arg(arg, variable_mappings, sparql_context=sparql_context)
         # Check if the value looks like a URI using SQL pattern matching
         return f"CASE WHEN ({arg_sql} ~ '^(https?|ftp|urn):') THEN TRUE ELSE FALSE END"
     return "FALSE"
 
 
-def _translate_builtin_isliteral(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_isliteral(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isLITERAL() built-in to check if term is a literal."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1776,14 +1952,21 @@ def _translate_builtin_isliteral(expr, variable_mappings: Dict[Variable, str]) -
         arg = expr.args[0]
     
     if arg is not None:
-        arg_sql = translate_bind_arg(arg, variable_mappings)
+        arg_sql = translate_bind_arg(arg, variable_mappings, sparql_context=sparql_context)
         # Check if the value is NOT a URI (inverse of isURI check)
         return f"CASE WHEN NOT ({arg_sql} ~ '^(https?|ftp|urn):') THEN TRUE ELSE FALSE END"
     return "FALSE"
 
 
-def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate isBLANK() built-in to check if term is a blank node."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     # Handle both expr.arg (from translate_bind_expression) and expr.args (from filter expressions)
     arg = None
     if hasattr(expr, 'arg') and expr.arg is not None:
@@ -1792,13 +1975,13 @@ def _translate_builtin_isblank(expr, variable_mappings: Dict[Variable, str]) -> 
         arg = expr.args[0]
     
     if arg is not None:
-        arg_sql = translate_bind_arg(arg, variable_mappings)
+        arg_sql = translate_bind_arg(arg, variable_mappings, sparql_context=sparql_context)
         # Check if the term looks like a blank node (starts with _:)
         return f"({arg_sql} LIKE '_:%')"
     return "FALSE"
 
 
-def _translate_builtin_bnode(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_bnode(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate BNODE() built-in to generate blank node identifiers with proper SPARQL semantics.
     
     Per SPARQL spec:
@@ -1822,8 +2005,15 @@ def _translate_builtin_bnode(expr, variable_mappings: Dict[Variable, str]) -> st
         return "('_:' || MD5(CONCAT('__BNODE_NO_ARG__', COALESCE(ROW_NUMBER() OVER (), 1)::text)))"
 
 
-def _translate_builtin_uuid(expr, variable_mappings: Dict[Variable, str]) -> str:
+def _translate_builtin_uuid(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate UUID() built-in to generate unique UUID."""
+    # Use SparqlContext for logging if available
+    if sparql_context:
+        logger = sparql_context.logger
+    else:
+        import logging
+        logger = logging.getLogger(__name__)
+    
     return "gen_random_uuid()::text"
 
 
@@ -1879,7 +2069,7 @@ def _translate_lang_expression(expr, variable_mappings: Dict[Variable, str]) -> 
     return "''"
 
 
-def _translate_datatype_expression(expr, variable_mappings: Dict[Variable, str], context=None) -> str:
+def _translate_datatype_expression(expr, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """Translate DATATYPE() function expressions."""
     logger.debug("Translating DATATYPE expression")
     if hasattr(expr, 'arg'):
@@ -2312,7 +2502,7 @@ def _translate_sameterm_filter_expression(expr, variable_mappings: Dict[Variable
     return "FALSE"
 
 
-async def translate_order_by_expressions(order_expressions, variable_mappings: Dict[Variable, str], context=None) -> str:
+async def translate_order_by_expressions(order_expressions, variable_mappings: Dict[Variable, str], *, sparql_context=None) -> str:
     """
     Translate SPARQL ORDER BY expressions to PostgreSQL ORDER BY clause.
     

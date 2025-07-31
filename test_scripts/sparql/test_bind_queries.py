@@ -250,7 +250,7 @@ async def test_bind_queries():
     """)
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.space_impl._term_cache.size()} terms")
     
     # 5. NESTED BIND EXPRESSIONS (using test data space)
     print("\n5. NESTED BIND EXPRESSIONS:")
@@ -414,7 +414,7 @@ async def test_bind_queries():
     except Exception as e:
         print(f"    ❌ Error: {e}")
 
-    print("\n📊 Cache:", sparql_impl.term_cache.size(), "terms")
+    print("\n📊 Cache:", sparql_impl.space_impl._term_cache.size(), "terms")
     
     print("\n✅ BIND Query Tests Complete!")
     print("💡 BIND expressions are now implemented with PostgreSQL SQL translation")

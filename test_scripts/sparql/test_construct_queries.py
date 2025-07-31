@@ -285,7 +285,7 @@ async def test_construct_queries():
     """)
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.space_impl._term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ CONSTRUCT Query Tests Complete!")

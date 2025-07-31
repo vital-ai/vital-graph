@@ -580,7 +580,7 @@ async def test_values_queries():
     TestToolUtils.print_test_summary(test_results)
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    print(f"\n📊 Cache: {sparql_impl.space_impl._term_cache.size()} terms")
     
     await impl.db_impl.disconnect()
     print("\n✅ VALUES Query Tests Complete!")
