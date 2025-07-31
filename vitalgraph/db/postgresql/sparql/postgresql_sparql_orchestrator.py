@@ -304,10 +304,9 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
     This follows the same pattern as the original implementation.
     """
     try:
-        # Use async context manager with pooled connection
-        async with space_impl.get_db_connection() as conn:
-            # Set row factory to return dict-like rows for SPARQL result compatibility
-            conn.row_factory = psycopg.rows.dict_row
+        # Use async context manager with dict pool for SPARQL result compatibility
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             with conn.cursor() as cursor:
                 cursor.execute(sql_query)
                 
@@ -1226,8 +1225,8 @@ async def _execute_insert_delete_pattern(space_impl: PostgreSQLSpaceImpl, space_
         sql_statements = translate_modify_operation(delete_template, insert_template, where_sql, table_config)
         
         # Execute the SQL statements
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1358,8 +1357,8 @@ async def _execute_copy_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, sp
         sql_statements = translate_copy_operation(source_graph, target_graph, table_config)
         
         # Execute the SQL statements
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1391,8 +1390,8 @@ async def _execute_move_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, sp
         sql_statements = translate_move_operation(source_graph, target_graph, table_config)
         
         # Execute the SQL statements
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1424,8 +1423,8 @@ async def _execute_add_graph(space_impl: PostgreSQLSpaceImpl, space_id: str, spa
         sql_statements = translate_add_operation(source_graph, target_graph, table_config)
         
         # Execute the SQL statements
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
@@ -1457,8 +1456,8 @@ async def _execute_load_operation(space_impl: PostgreSQLSpaceImpl, space_id: str
         sql_statements = translate_load_operation(source_uri, target_graph, table_config)
         
         # Execute the SQL statements
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             async with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")

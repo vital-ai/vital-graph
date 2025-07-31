@@ -95,8 +95,8 @@ async def debug_term_storage(quad: Tuple) -> None:
         print(f"      Context: {repr(context)} -> {str(context)}")
         
         # Check what terms actually exist in the database
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             cursor = conn.cursor()
             
             # Look for terms that might match our quad terms
@@ -125,8 +125,8 @@ async def debug_term_insertion_process(quad: Tuple, operation: str = "unknown") 
         
         print(f"    🔧 DEBUG [{operation}]: Checking term insertion process:")
         
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             cursor = conn.cursor()
             
             # Count total terms before
@@ -166,8 +166,8 @@ async def debug_quad_terms(quad: Tuple, operation: str = "unknown") -> None:
         print(f"      O: {repr(obj)} -> '{str(obj)}'")
         print(f"      G: {repr(context)} -> '{str(context)}'")
         
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             cursor = conn.cursor()
             
             # Check if terms exist in database
@@ -226,9 +226,9 @@ async def verify_quad_exists_db(quad: Tuple, should_exist: bool = True) -> bool:
         quad_table_name = table_names.get('rdf_quad')
         term_table_name = table_names.get('term')
         
-        # Use async connection with synchronous cursor operations (like debug_quad_terms)
-        async with space_impl.get_db_connection() as conn:
-            conn.row_factory = psycopg.rows.dict_row
+        # Use async connection with dict pool for dictionary results
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             cursor = conn.cursor()
             
             # Find term UUIDs using complete term characteristics (same as insertion logic)
@@ -712,10 +712,9 @@ async def test_consistency_checks():
     table_names = space_impl._get_table_names(SPACE_ID)
     quad_table_name = table_names.get('rdf_quad')
     
-    # Use async context manager with pooled connection
-    async with space_impl.get_db_connection() as conn:
-        # Configure row factory for dict results
-        conn.row_factory = psycopg.rows.dict_row
+    # Use async context manager with dict pool for dict results
+    async with space_impl.core.get_dict_connection() as conn:
+        # Connection already configured with dict_row factory
         cursor = conn.cursor()
         cursor.execute(f"SELECT COUNT(*) as null_count FROM {quad_table_name} WHERE quad_uuid IS NULL")
         result = cursor.fetchone()
@@ -728,9 +727,8 @@ async def test_consistency_checks():
     
     # Verify UUID uniqueness
     # Use async context manager with pooled connection
-    async with space_impl.get_db_connection() as conn:
-        # Configure row factory for dict results
-        conn.row_factory = psycopg.rows.dict_row
+    async with space_impl.core.get_dict_connection() as conn:
+        # Connection already configured with dict_row factory
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT 

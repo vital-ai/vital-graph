@@ -61,17 +61,18 @@ class PostgreSQLSpaceDBOps:
                 if conn is None:
                     raise RuntimeError("Transaction object does not provide a valid connection")
                 
-                # Use transaction connection directly
-                conn.row_factory = psycopg.rows.dict_row
-                cursor = conn.cursor()
-                
-                # Insert quad (duplicates allowed, quad_uuid auto-generated)
-                cursor.execute(
-                    f"""
-                    INSERT INTO {quad_table_name} 
-                    (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING quad_uuid
+                # Use dict pool for RETURNING clause access instead of transaction connection
+                async with self.space_impl.core.get_dict_connection() as dict_conn:
+                    # Connection already configured with dict_row factory
+                    cursor = dict_conn.cursor()
+                    
+                    # Insert quad (duplicates allowed, quad_uuid auto-generated)
+                    cursor.execute(
+                        f"""
+                        INSERT INTO {quad_table_name} 
+                        (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time) 
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING quad_uuid
                     """,
                     (subject_uuid, predicate_uuid, object_uuid, context_uuid, datetime.utcnow())
                 )
@@ -84,9 +85,9 @@ class PostgreSQLSpaceDBOps:
                 
                 return True
             else:
-                # Use async context manager with pooled connection
-                async with self.space_impl.get_db_connection() as conn:
-                    conn.row_factory = psycopg.rows.dict_row
+                # Use async context manager with dict pool for dictionary results
+                async with self.space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     cursor = conn.cursor()
                     
                     # Insert quad (duplicates allowed, quad_uuid auto-generated)
@@ -149,15 +150,16 @@ class PostgreSQLSpaceDBOps:
                 if conn is None:
                     raise RuntimeError("Transaction object does not provide a valid connection")
                 
-                # Use transaction connection directly
-                conn.row_factory = psycopg.rows.dict_row
-                cursor = conn.cursor()
-                
-                # Delete exactly one instance using ctid (handles duplicates properly)
-                cursor.execute(
-                    f"""
-                    DELETE FROM {quad_table_name} 
-                    WHERE ctid IN (
+                # Use dict pool for result access instead of transaction connection
+                async with self.space_impl.core.get_dict_connection() as dict_conn:
+                    # Connection already configured with dict_row factory
+                    cursor = dict_conn.cursor()
+                    
+                    # Delete exactly one instance using ctid (handles duplicates properly)
+                    cursor.execute(
+                        f"""
+                        DELETE FROM {quad_table_name} 
+                        WHERE ctid IN (
                         SELECT ctid FROM {quad_table_name}
                         WHERE subject_uuid = %s AND predicate_uuid = %s 
                               AND object_uuid = %s AND context_uuid = %s
@@ -180,9 +182,9 @@ class PostgreSQLSpaceDBOps:
                     self.logger.debug(f"No quad was actually removed from space '{space_id}'")
                     return False
             else:
-                # Use async context manager with pooled connection
-                async with self.space_impl.get_db_connection() as conn:
-                    conn.row_factory = psycopg.rows.dict_row
+                # Use async context manager with dict pool for dictionary results
+                async with self.space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     cursor = conn.cursor()
                     
                     # Delete exactly one instance using ctid (handles duplicates properly)
@@ -353,8 +355,7 @@ class PostgreSQLSpaceDBOps:
             if connection is None:
                 raise RuntimeError("Transaction object does not provide a valid connection")
             
-            # Use transaction connection directly
-            connection.row_factory = psycopg.rows.dict_row
+            # Use transaction connection with tuple results for batch performance
             cursor = connection.cursor()
             
             # Insert all unique terms first
@@ -408,10 +409,10 @@ class PostgreSQLSpaceDBOps:
             self.logger.info(f"✅ Prepared {inserted_count} quads for insertion (will commit with transaction)")
             return inserted_count
         else:
-            # Use async context manager with pooled connection
+            # Use async context manager with pooled connection (tuple results for batch performance)
             async with self.space_impl.get_db_connection() as connection:
                 try:
-                    connection.row_factory = psycopg.rows.dict_row
+                    # Use tuple results for batch performance
                     cursor = connection.cursor()
                     
                     # Insert all unique terms first
@@ -768,7 +769,7 @@ class PostgreSQLSpaceDBOps:
                         if conn is None:
                             raise RuntimeError("Transaction object does not provide a valid connection")
                         
-                        conn.row_factory = psycopg.rows.dict_row
+                        # Use transaction connection with tuple results for batch performance
                         cursor = conn.cursor()
                         self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']} (using transaction)")
                         
@@ -785,18 +786,18 @@ class PostgreSQLSpaceDBOps:
                         self.logger.debug(f"🔧 DEBUG: Term insertion rowcount: {rows_affected}")
                         self.logger.debug(f"🔧 DEBUG: Term insertion prepared (will commit with transaction)")
                         
-                        # Verify terms were actually inserted
+                        # Verify terms were actually inserted (using tuple results for performance)
                         for term_uuid, term_text, term_type, lang, datatype_id, created_time in term_inserts:
-                            cursor.execute(f"SELECT COUNT(*) as count FROM {table_names['term']} WHERE term_uuid = %s", [str(term_uuid)])
+                            cursor.execute(f"SELECT COUNT(*) FROM {table_names['term']} WHERE term_uuid = %s", [str(term_uuid)])
                             result = cursor.fetchone()
-                            count = result['count'] if result else 0
+                            count = result[0] if result else 0
                             self.logger.debug(f"🔧 DEBUG: Term {term_text[:30]} exists after insert: {count > 0}")
                         
                         self.logger.debug(f"✅ Prepared {len(term_inserts)} new terms (will commit with transaction)")
                     else:
-                        # Use async context manager with pooled connection
-                        async with self.space_impl.get_db_connection() as conn:
-                            conn.row_factory = psycopg.rows.dict_row
+                        # Use async context manager with dict pool for dictionary results
+                        async with self.space_impl.core.get_dict_connection() as conn:
+                            # Connection already configured with dict_row factory
                             cursor = conn.cursor()
                             self.logger.debug(f"🔧 DEBUG: About to insert {len(term_inserts)} terms into {table_names['term']} (using pooled connection)")
                             

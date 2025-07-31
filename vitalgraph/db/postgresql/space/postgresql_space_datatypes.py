@@ -374,10 +374,9 @@ class PostgreSQLSpaceDatatypes:
             standard_datatypes = self.get_standard_datatypes()
             self.logger.debug(f"DEBUG: Got {len(standard_datatypes)} standard datatypes")
             
-            # Use async context manager with pooled connection
-            async with self.space_impl.get_db_connection() as conn:
-                # Set row factory to return dict-like rows instead of tuples
-                conn.row_factory = psycopg.rows.dict_row
+            # Use async context manager with dict pool for dict-like rows
+            async with self.space_impl.core.get_dict_connection() as conn:
+                # Connection already configured with dict_row factory
                 with conn.cursor() as cursor:
                     
                     # Insert standard datatypes (will be ignored if they already exist)

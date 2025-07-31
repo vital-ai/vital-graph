@@ -160,8 +160,8 @@ class PostgreSQLSparqlImpl:
         if remaining_terms:
             try:
                 table_names = self.space_impl._get_table_names(space_id)
-                async with self.space_impl.get_db_connection() as conn:
-                    conn.row_factory = psycopg.rows.dict_row
+                async with self.space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     cursor = conn.cursor()
                     
                     # Build parameterized query for batch lookup with term types

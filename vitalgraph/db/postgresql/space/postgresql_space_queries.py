@@ -87,10 +87,9 @@ class PostgreSQLSpaceQueries:
             
             with self.space_impl.utils.time_operation("quads_query", f"pattern {quad_pattern} in space '{space_id}'"):
                 self.logger.debug(f"🔍 DEBUG: Starting time operation and connection")
-                # Use async context manager with pooled connection
-                async with self.space_impl.get_db_connection() as conn:
-                    # Set row factory to return dict-like rows for query result compatibility
-                    conn.row_factory = psycopg.rows.dict_row
+                # Use async context manager with dict pool for query result compatibility
+                async with self.space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     self.logger.debug(f"🔍 DEBUG: Got connection: {type(conn)}")
                     with conn.cursor() as cursor:
                         self.logger.debug(f"🔍 DEBUG: Got cursor: {type(cursor)}")
@@ -317,8 +316,8 @@ class PostgreSQLSpaceQueries:
         
         try:
             # Use async context manager with pooled connection
-            async with self.space_impl.get_db_connection() as conn:
-                conn.row_factory = psycopg.rows.dict_row
+            async with self.space_impl.core.get_dict_connection() as conn:
+                # Connection already configured with dict_row factory
                 cursor = conn.cursor()
                 
                 if context_uuid:
@@ -453,9 +452,8 @@ class PostgreSQLSpaceQueries:
             table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
             
             # Use async context manager with pooled connection
-            async with self.space_impl.get_db_connection() as conn:
-                # Set row factory to return dict-like rows for query result compatibility
-                conn.row_factory = psycopg.rows.dict_row
+            async with self.space_impl.core.get_dict_connection() as conn:
+                # Connection already configured with dict_row factory
                 cursor = conn.cursor()
                 
                 # Check if quad exists

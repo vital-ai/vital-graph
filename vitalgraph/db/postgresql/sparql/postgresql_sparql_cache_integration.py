@@ -111,10 +111,9 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
             
             # Execute batch query using space_impl connection - exact logic from original _execute_sql_query
             try:
-                # Use async context manager with pooled connection
-                async with space_impl.get_db_connection() as conn:
-                    # Set row factory to return dict-like rows for SPARQL result compatibility
-                    conn.row_factory = psycopg.rows.dict_row
+                # Use async context manager with dict pool for SPARQL result compatibility
+                async with space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     with conn.cursor() as cursor:
                         cursor.execute(batch_query)
                         
@@ -479,10 +478,9 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
             """
         
         # Execute batch query using space_impl
-        # Use async context manager with pooled connection
-        async with space_impl.get_db_connection() as conn:
-            # Set row factory to return dict-like rows for SPARQL result compatibility
-            conn.row_factory = psycopg.rows.dict_row
+        # Use async context manager with dict pool for SPARQL result compatibility
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             with conn.cursor() as cursor:
                 cursor.execute(batch_query)
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []

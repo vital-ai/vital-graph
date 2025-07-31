@@ -93,10 +93,9 @@ async def run_sql_query(name, sql_query, params=None, limit_results=10):
     try:
         start_time = time.time()
         
-        # Use async context manager with pooled connection
-        async with space_impl.get_db_connection() as conn:
-            # Configure row factory for dict results
-            conn.row_factory = psycopg.rows.dict_row
+        # Use async context manager with dict pool for dict results
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             cursor = conn.cursor()
             cursor.execute(sql_query, params or [])
             results = cursor.fetchall()
@@ -443,9 +442,8 @@ async def test_insert_duplicate_quad():
             # Insert duplicate (should succeed with new quad_uuid)
             try:
                 # Use async context manager with pooled connection
-                async with space_impl.get_db_connection() as conn:
-                    # Configure row factory for dict results
-                    conn.row_factory = psycopg.rows.dict_row
+                async with space_impl.core.get_dict_connection() as conn:
+                    # Connection already configured with dict_row factory
                     cursor = conn.cursor()
                     cursor.execute(f"""
                         INSERT INTO {quad_table_name} 

@@ -277,7 +277,7 @@ class VitalGraphAppImpl:
             return await self.api.add_user(user_data.dict(), current_user)
         
         async def get_user_wrapper(user_id: int, current_user: Dict = Depends(self.get_current_user)) -> User:
-            return await self.api.get_user(user_id, current_user)
+            return await self.api.get_user_by_id(user_id, current_user)
         
         async def update_user_wrapper(user_id: int, user_data: User, current_user: Dict = Depends(self.get_current_user)) -> User:
             return await self.api.update_user(user_id, user_data.dict(), current_user)

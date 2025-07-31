@@ -44,7 +44,7 @@ class PostgreSQLSpaceImpl:
     Table names are prefixed with global_prefix__space_id__ format.
     """
     
-    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None):
+    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None):
         """
         Initialize PostgreSQL space implementation with shared or dedicated psycopg3 ConnectionPool.
         
@@ -53,7 +53,8 @@ class PostgreSQLSpaceImpl:
             global_prefix: Global prefix for table names
             use_unlogged: Whether to use unlogged tables for better performance
             pool_config: Optional connection pool configuration
-            shared_pool: Optional shared psycopg3 ConnectionPool instance
+            shared_pool: Optional shared psycopg3 ConnectionPool instance (for tuple results)
+            dict_pool: Optional dict psycopg3 ConnectionPool instance (for dictionary results)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
@@ -62,7 +63,8 @@ class PostgreSQLSpaceImpl:
             connection_string=connection_string,
             global_prefix=global_prefix,
             pool_config=pool_config,
-            shared_pool=shared_pool
+            shared_pool=shared_pool,
+            dict_pool=dict_pool
         )
         
         # Keep these attributes for backward compatibility and space-specific functionality

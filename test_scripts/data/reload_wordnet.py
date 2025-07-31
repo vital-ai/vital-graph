@@ -373,10 +373,9 @@ async def reload_wordnet_data():
         table_names = space_impl._get_table_names(SPACE_ID)
         quad_table_name = table_names['rdf_quad']
         
-        # Use async context manager with pooled connection
-        async with space_impl.get_db_connection() as conn:
-            # Configure row factory for dict results
-            conn.row_factory = psycopg.rows.dict_row
+        # Use async context manager with dict pool for dict results
+        async with space_impl.core.get_dict_connection() as conn:
+            # Connection already configured with dict_row factory
             with conn.cursor() as cursor:
                 # Ensure we read committed data
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
@@ -390,10 +389,9 @@ async def reload_wordnet_data():
             print(f"⚠️  Warning: No quads found in database - data loading may have failed")
             print(f"   Table queried: {quad_table_name}")
             # Let's also check if the table exists
-            # Use async context manager with pooled connection
-            async with space_impl.get_db_connection() as conn:
-                # Configure row factory for dict results
-                conn.row_factory = psycopg.rows.dict_row
+            # Use async context manager with dict pool for dict results
+            async with space_impl.core.get_dict_connection() as conn:
+                # Connection already configured with dict_row factory
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", (quad_table_name.split('.')[-1],))
                     table_exists = cursor.fetchone()['exists']

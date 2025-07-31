@@ -15,26 +15,6 @@ import psycopg
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 
 
-def safe_isoformat(dt_value):
-    """Safely convert datetime to isoformat, handling both datetime objects and strings."""
-    if dt_value is None:
-        return None
-    
-    # Debug logging to understand what type we're receiving
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    if isinstance(dt_value, str):
-        logger.debug(f"safe_isoformat: Received string value: {dt_value} (type: {type(dt_value)})")
-        return dt_value  # Already a string, return as-is
-    
-    if hasattr(dt_value, 'isoformat'):
-        logger.debug(f"safe_isoformat: Received datetime object: {dt_value} (type: {type(dt_value)})")
-        return dt_value.isoformat()  # datetime object
-    
-    logger.warning(f"safe_isoformat: Received unexpected type: {dt_value} (type: {type(dt_value)})")
-    return str(dt_value)  # Fallback to string conversion
-
 # Custom connection class for psycopg-pool < 3.3 to properly integrate with SQLAlchemy
 class SharedPoolConnection(psycopg.Connection):
     """
@@ -92,8 +72,8 @@ def create_models_with_prefix(prefix: str):
             """Convert Install instance to dictionary."""
             return {
                 'id': self.id,
-                'install_datetime': safe_isoformat(self.install_datetime),
-                'update_datetime': safe_isoformat(self.update_datetime),
+                'install_datetime': self.install_datetime.isoformat() if self.install_datetime else None,
+                'update_datetime': self.update_datetime.isoformat() if self.update_datetime else None,
                 'active': self.active
             }
     
@@ -127,7 +107,7 @@ def create_models_with_prefix(prefix: str):
                 'space': self.space,
                 'space_name': self.space_name,
                 'space_description': self.space_description,
-                'update_time': safe_isoformat(self.update_time)
+                'update_time': self.update_time.isoformat() if self.update_time else None
             }
     
     class User(Base):
@@ -161,7 +141,7 @@ def create_models_with_prefix(prefix: str):
                 'username': self.username,
                 'password': self.password,
                 'email': self.email,
-                'update_time': safe_isoformat(self.update_time)
+                'update_time': self.update_time.isoformat() if self.update_time else None
             }
     
     # Cache the models before returning
@@ -201,7 +181,8 @@ class PostgreSQLDbImpl:
         self.config_loader = config_loader
         
         # Shared psycopg3 connection pool for both ORM and RDF operations
-        self.shared_pool = None
+        self.orm_pool = None  # Pool for SQLAlchemy operations
+        self.rdf_pool = None  # Pool for RDF/raw SQL operations
         
         # Database connection components
         self.engine = None
@@ -267,47 +248,64 @@ class PostgreSQLDbImpl:
                 rdf_pool_config = self.config_loader.get_rdf_pool_config()
                 self.logger.info(f"RDF pool config: {rdf_pool_config}")
             
-            # Create shared psycopg3 ConnectionPool for both SQLAlchemy and RDF operations
+            # Create separate connection pools for different usage patterns
             connection_string = str(db_url).replace('+psycopg', '')
-            pool_config = {
-                'min_size': rdf_pool_config.get('min_size', 2),
-                'max_size': rdf_pool_config.get('max_size', 10),
-                'max_idle': rdf_pool_config.get('max_idle', 300),
-                'timeout': rdf_pool_config.get('timeout', 30),
-                'max_lifetime': rdf_pool_config.get('max_lifetime', 7200),
-                'reconnect_failed': rdf_pool_config.get('reconnect_failed', True)
-            }
             
-            self.logger.info(f"Creating shared psycopg3 ConnectionPool for both ORM and RDF operations with config: {pool_config}")
-            
-            # Create the shared psycopg3 connection pool with custom connection class for SQLAlchemy integration
-            # Note: Do not use dict_row here as it breaks SQLAlchemy compatibility
-            self.shared_pool = ConnectionPool(
+            # ORM Pool: For SQLAlchemy operations (spaces, users)
+            # No row_factory to maintain SQLAlchemy compatibility
+            self.orm_pool = ConnectionPool(
                 conninfo=connection_string,
-                connection_class=SharedPoolConnection,  # Use custom connection class for SQLAlchemy integration
-                min_size=pool_config['min_size'],
-                max_size=pool_config['max_size'],
-                max_idle=pool_config['max_idle'],
-                timeout=pool_config['timeout'],
-                max_lifetime=pool_config.get('max_lifetime', 7200),  # Connection lifetime limit
-                reconnect_failed=pool_config.get('reconnect_failed', True),  # Auto-reconnect
-                open=True
+                connection_class=SharedPoolConnection,
+                min_size=3,  # Smaller pool for ORM operations
+                max_size=10,
+                max_idle=300,
+                timeout=30,
+                max_lifetime=3600
             )
             
-            # Test the shared pool
-            with self.shared_pool.connection() as test_conn:
+            # RDF Pool: For raw SQL operations (RDF/SPARQL)
+            # Individual functions will set row_factory as needed
+            self.rdf_pool = ConnectionPool(
+                conninfo=connection_string,
+                min_size=rdf_pool_config.get('min_size', 5),
+                max_size=rdf_pool_config.get('max_size', 20),
+                max_waiting=rdf_pool_config.get('max_waiting', 0),
+                max_lifetime=rdf_pool_config.get('max_lifetime', 3600),
+                max_idle=rdf_pool_config.get('max_idle', 600),
+                reconnect_timeout=rdf_pool_config.get('reconnect_timeout', 5),
+                reconnect_failed=rdf_pool_config.get('reconnect_failed', None)
+                # No row_factory for high-performance tuple results
+            )
+            
+            # Create Dict pool for operations requiring dictionary results
+            self.dict_pool = ConnectionPool(
+                conninfo=connection_string,
+                connection_class=SharedPoolConnection,
+                configure=lambda conn: setattr(conn, 'row_factory', psycopg.rows.dict_row),
+                min_size=rdf_pool_config.get('min_size', 3),
+                max_size=rdf_pool_config.get('max_size', 15),
+                max_waiting=rdf_pool_config.get('max_waiting', 0),
+                max_lifetime=rdf_pool_config.get('max_lifetime', 3600),
+                max_idle=rdf_pool_config.get('max_idle', 600),
+                reconnect_timeout=rdf_pool_config.get('reconnect_timeout', 5),
+                reconnect_failed=rdf_pool_config.get('reconnect_failed', None)
+                # Pre-configured with dict_row factory
+            )
+            
+            # Test the ORM pool
+            with self.orm_pool.connection() as test_conn:
                 cursor = test_conn.cursor()
                 cursor.execute('SELECT 1')
                 result = cursor.fetchone()
-                self.logger.info(f"Shared pool connection test successful: {result}")
+                self.logger.info(f"ORM pool connection test successful: {result}")
             
-            # Create SQLAlchemy sync engine with NullPool and shared psycopg3 pool
-            self.logger.info("Creating SQLAlchemy engine with NullPool using shared psycopg3 pool")
+            # Create SQLAlchemy sync engine with NullPool and dedicated ORM pool
+            self.logger.info("Creating SQLAlchemy engine with NullPool using dedicated ORM pool")
             
             self.engine = create_engine(
                 "postgresql+psycopg://",  # note: dialect+driver without connection details
                 poolclass=NullPool,       # disable SQLAlchemy's own pool
-                creator=self.shared_pool.getconn,  # use shared psycopg3 pool to obtain connections
+                creator=self.orm_pool.getconn,  # use dedicated ORM pool to obtain connections
                 echo=False
             )
             
@@ -343,7 +341,7 @@ class PostgreSQLDbImpl:
                 result = conn.execute(text("SELECT 2"))
                 self.logger.info(f"SQLAlchemy shared pool test successful: {result.scalar()}")
             
-            # Initialize PostgreSQLSpaceImpl for RDF space management with shared pool
+            # Initialize PostgreSQLSpaceImpl for RDF space management with dedicated RDF pool
             # Read use_unlogged from tables section in config
             tables_config = self.config.get('tables', {})
             use_unlogged = tables_config.get('use_unlogged', True)
@@ -353,9 +351,10 @@ class PostgreSQLDbImpl:
                 global_prefix=self.global_prefix, 
                 use_unlogged=use_unlogged,
                 pool_config=rdf_pool_config,
-                shared_pool=self.shared_pool
+                shared_pool=self.rdf_pool,
+                dict_pool=self.dict_pool
             )
-            self.logger.info(f"PostgreSQLSpaceImpl initialized with shared psycopg3 pool")
+            self.logger.info(f"PostgreSQLSpaceImpl initialized with dedicated RDF pool")
             
             # Warm up connection pool to prevent initial query slowness
             try:
@@ -451,6 +450,19 @@ class PostgreSQLDbImpl:
             if self.space_impl:
                 self.space_impl.close()
                 self.space_impl = None
+            
+            # Close connection pools
+            if hasattr(self, 'orm_pool') and self.orm_pool:
+                self.orm_pool.close()
+                self.orm_pool = None
+            
+            if hasattr(self, 'rdf_pool') and self.rdf_pool:
+                self.rdf_pool.close()
+                self.rdf_pool = None
+                
+            if hasattr(self, 'dict_pool') and self.dict_pool:
+                self.dict_pool.close()
+                self.dict_pool = None
             
             self.session_factory = None
             self.metadata = None

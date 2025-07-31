@@ -27,7 +27,7 @@ class PostgreSQLSpaceCore:
 
 
     def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", 
-                 pool_config: Optional[Dict[str, Any]] = None, shared_pool=None):
+                 pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None):
         """
         Initialize PostgreSQL space core with connection management.
         
@@ -35,7 +35,8 @@ class PostgreSQLSpaceCore:
             connection_string: PostgreSQL connection string
             global_prefix: Global prefix for table names
             pool_config: Optional connection pool configuration
-            shared_pool: Optional shared psycopg3 ConnectionPool instance
+            shared_pool: Optional shared psycopg3 ConnectionPool instance (for tuple results)
+            dict_pool: Optional dict psycopg3 ConnectionPool instance (for dictionary results)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
@@ -44,6 +45,7 @@ class PostgreSQLSpaceCore:
         
         self.rdf_pool = None
         self.shared_pool = shared_pool
+        self.dict_pool = dict_pool
         
         # Initialize utils instance for timing operations
         self.utils = PostgreSQLLogUtils()
@@ -58,6 +60,7 @@ class PostgreSQLSpaceCore:
     async def get_db_connection(self):
         """
         Async context manager for automatic connection management using shared or dedicated psycopg3 pool.
+        Returns tuple results for high-performance operations.
         
         Usage:
             async with self.get_db_connection() as conn:
@@ -89,6 +92,38 @@ class PostgreSQLSpaceCore:
                         self.logger.debug("Closed direct connection")
                     except Exception as e:
                         self.logger.warning(f"Error closing connection: {e}")
+    
+    @asynccontextmanager
+    async def get_dict_connection(self):
+        """
+        Async context manager for dictionary result operations using dict_pool.
+        Returns dictionary results for SPARQL and operations requiring structured data.
+        
+        Usage:
+            async with self.get_dict_connection() as conn:
+                # Use connection - already configured with dict_row factory
+                cursor = conn.cursor()
+                # ... database operations
+        """
+        if self.dict_pool:
+            # Use dedicated dict psycopg3 ConnectionPool
+            with self.dict_pool.connection() as conn:
+                self.logger.debug("Using dedicated dict psycopg3 ConnectionPool connection")
+                yield conn
+        else:
+            # Fallback to direct connection with dict_row
+            conn = None
+            try:
+                self.logger.debug("Creating direct dict connection (fallback)")
+                conn = psycopg.connect(self.connection_string, row_factory=dict_row)
+                yield conn
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                        self.logger.debug("Closed direct dict connection")
+                    except Exception as e:
+                        self.logger.warning(f"Error closing dict connection: {e}")
     
     def get_pool_stats(self) -> dict:
         """
