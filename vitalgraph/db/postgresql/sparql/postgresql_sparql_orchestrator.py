@@ -320,11 +320,14 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
         MemoryError: If query would exceed memory limits
         ValueError: If query would return too many rows
     """
+    logger = logging.getLogger(__name__)
     try:
         # Use async context manager with dict pool for SPARQL result compatibility
         async with space_impl.core.get_dict_connection() as conn:
             # Connection already configured with dict_row factory
-            with conn.cursor() as cursor:
+            cursor = None
+            try:
+                cursor = conn.cursor()
                 cursor.execute(sql_query)
                 
                 # Check if this is a SELECT query that returns results
@@ -405,6 +408,17 @@ async def _execute_sql_query_with_space_impl(space_impl: PostgreSQLSpaceImpl, sq
                     # For INSERT/UPDATE/DELETE operations, return row count information
                     rows_affected = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
                     return [{'operation': query_type, 'rows_affected': rows_affected}]
+            except Exception as cursor_error:
+                logger.error(f"Error during cursor operations: {cursor_error}")
+                raise
+            finally:
+                # Ensure cursor is properly closed
+                if cursor and not cursor.closed:
+                    try:
+                        cursor.close()
+                        logger.debug("Cursor closed successfully")
+                    except Exception as close_error:
+                        logger.warning(f"Error closing cursor: {close_error}")
                 # Connection automatically returned to pool when context exits
             
     except Exception as e:
@@ -938,7 +952,13 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         
         # Execute SQL query using the space_impl's connection method (like original implementation)
         logger.info(f"⚡ Executing SQL query with memory protection (max_rows={max_rows}, max_memory={max_memory_mb}MB)...")
-        sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query, max_rows, max_memory_mb)
+        sql_results = None
+        try:
+            sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query, max_rows, max_memory_mb)
+        except Exception as sql_error:
+            logger.error(f"❌ SQL execution failed: {sql_error}")
+            # Ensure any held connections are released before re-raising
+            raise
         
         # Restore original variable case in results
         sql_results = _restore_variable_case(sql_results, case_mapping)
@@ -1007,10 +1027,14 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                     if sql_offset is not None:
                         optimized_sql += f" OFFSET {sql_offset}"
                     
-                    # Re-execute with optimized query
-                    optimized_sql_results = await _execute_sql_query_with_space_impl(space_impl, optimized_sql, max_rows, max_memory_mb)
-                    # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL returned {len(optimized_sql_results)} rows (vs {original_row_count} original)")
-                    sql_results = optimized_sql_results
+                    # Re-execute with optimized query - ensure connection is released between executions
+                    try:
+                        optimized_sql_results = await _execute_sql_query_with_space_impl(space_impl, optimized_sql, max_rows, max_memory_mb)
+                        # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL returned {len(optimized_sql_results)} rows (vs {original_row_count} original)")
+                        sql_results = optimized_sql_results
+                    except Exception as opt_error:
+                        logger.error(f"❌ Optimized SQL execution failed, using original results: {opt_error}")
+                        # Continue with original sql_results if optimization fails
             
             rdf_triples = await _convert_sql_results_to_rdf_triples(sql_results, construct_template, variable_mappings, term_cache)
             

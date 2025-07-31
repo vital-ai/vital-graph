@@ -85,10 +85,15 @@ class PostgreSQLSpaceCore:
                 self.logger.debug("Creating direct connection for RDF operation (fallback)")
                 conn = psycopg.connect(self.connection_string, row_factory=dict_row)
                 yield conn
+            except Exception as e:
+                self.logger.error(f"Error in direct connection: {e}")
+                raise
             finally:
                 if conn:
                     try:
-                        conn.close()
+                        # Ensure connection is properly closed even if an exception occurred
+                        if not conn.closed:
+                            conn.close()
                         self.logger.debug("Closed direct connection")
                     except Exception as e:
                         self.logger.warning(f"Error closing connection: {e}")
@@ -117,10 +122,15 @@ class PostgreSQLSpaceCore:
                 self.logger.debug("Creating direct dict connection (fallback)")
                 conn = psycopg.connect(self.connection_string, row_factory=dict_row)
                 yield conn
+            except Exception as e:
+                self.logger.error(f"Error in direct dict connection: {e}")
+                raise
             finally:
                 if conn:
                     try:
-                        conn.close()
+                        # Ensure connection is properly closed even if an exception occurred
+                        if not conn.closed:
+                            conn.close()
                         self.logger.debug("Closed direct dict connection")
                     except Exception as e:
                         self.logger.warning(f"Error closing dict connection: {e}")
