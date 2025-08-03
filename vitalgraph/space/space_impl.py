@@ -40,7 +40,7 @@ class SpaceImpl:
         
         self.logger.debug(f"SpaceImpl initialization completed for space '{space_id}'")
     
-    def create(self) -> bool:
+    async def create(self) -> bool:
         """
         Create the database schema and tables for this space.
         
@@ -52,7 +52,7 @@ class SpaceImpl:
         try:
             if self._space_impl:
                 # Delegate to PostgreSQL implementation
-                success = self._space_impl.create_space_tables(self.space_id)
+                success = await self._space_impl.create_space_tables(self.space_id)
                 if success:
                     self.logger.info(f"✅ Successfully created tables for space '{self.space_id}'")
                 else:
@@ -93,7 +93,7 @@ class SpaceImpl:
             self.logger.error(f"open() failed for space '{self.space_id}': {e}")
             return False
     
-    def destroy(self) -> bool:
+    async def destroy(self) -> bool:
         """
         Destroy this space and all its data permanently.
         
@@ -105,7 +105,7 @@ class SpaceImpl:
         try:
             if self._space_impl:
                 # Delegate to PostgreSQL implementation to delete all tables
-                success = self._space_impl.delete_space_tables(self.space_id)
+                success = await self._space_impl.delete_space_tables(self.space_id)
                 if success:
                     self.logger.info(f"✅ Successfully destroyed tables for space '{self.space_id}'")
                 else:
@@ -163,4 +163,37 @@ class SpaceImpl:
             or None if not available
         """
         return self._space_impl
+    
+    async def initialize_default_namespaces(self) -> None:
+        """
+        Initialize default RDF namespaces for this space.
+        
+        Adds standard namespace prefixes (rdf, rdfs, owl, xsd) to the namespace table.
+        These are commonly used in most RDF applications.
+        """
+        self.logger.info(f"Initializing default namespaces for space '{self.space_id}'")
+        
+        try:
+            if self._space_impl and hasattr(self._space_impl, 'namespaces'):
+                # Define standard RDF namespaces
+                default_namespaces = {
+                    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+                    'rdfs': 'http://www.w3.org/2000/01/rdf-schema#',
+                    'owl': 'http://www.w3.org/2002/07/owl#',
+                    'xsd': 'http://www.w3.org/2001/XMLSchema#'
+                }
+                
+                # Add each namespace
+                for prefix, uri in default_namespaces.items():
+                    namespace_id = await self._space_impl.add_namespace(self.space_id, prefix, uri)
+                    if namespace_id:
+                        self.logger.debug(f"Added default namespace '{prefix}' -> '{uri}' with ID: {namespace_id}")
+                    else:
+                        self.logger.warning(f"Failed to add default namespace '{prefix}' -> '{uri}'")
+                
+                self.logger.info(f"Default namespaces initialized for space '{self.space_id}'")
+            else:
+                self.logger.warning("Cannot initialize default namespaces - no namespace support available")
+        except Exception as e:
+            self.logger.error(f"Error initializing default namespaces for space '{self.space_id}': {e}")
     

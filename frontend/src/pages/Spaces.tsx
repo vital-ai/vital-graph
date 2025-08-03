@@ -44,7 +44,12 @@ const Spaces: React.FC = () => {
   // Filter spaces by name
   const filterSpaces = useCallback(async (nameFilter: string) => {
     if (!nameFilter.trim()) {
-      // If filter is empty, fetch all spaces
+      // If filter is empty and not already loading data, fetch all spaces
+      // This prevents duplicate API calls on initial page load
+      if (loading) {
+        // Don't trigger another fetch if we're already loading data
+        return;
+      }
       await fetchSpaces();
       return;
     }
@@ -180,13 +185,15 @@ const Spaces: React.FC = () => {
           <div className="hidden md:block overflow-x-auto">
             <Table striped>
               <TableHead>
-                <TableHeadCell>ID</TableHeadCell>
-                <TableHeadCell>Name</TableHeadCell>
-                <TableHeadCell>Space ID</TableHeadCell>
-                <TableHeadCell>Tenant</TableHeadCell>
-                <TableHeadCell>Description</TableHeadCell>
-                <TableHeadCell>Last Updated</TableHeadCell>
-                <TableHeadCell>Actions</TableHeadCell>
+                <TableRow>
+                  <TableHeadCell>ID</TableHeadCell>
+                  <TableHeadCell>Name</TableHeadCell>
+                  <TableHeadCell>Space ID</TableHeadCell>
+                  <TableHeadCell>Tenant</TableHeadCell>
+                  <TableHeadCell>Description</TableHeadCell>
+                  <TableHeadCell>Last Updated</TableHeadCell>
+                  <TableHeadCell>Actions</TableHeadCell>
+                </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {spaces.map((space) => (

@@ -29,9 +29,10 @@ logging.basicConfig(
     format='%(name)s - %(levelname)s - %(message)s'
 )
 
+
 # Configuration
-SPACE_ID = "wordnet_space"
-GRAPH_URI = "http://vital.ai/graph/wordnet"  # Standard graph URI used by most scripts
+SPACE_ID = "wordnet_frames"
+GRAPH_URI = "http://vital.ai/graph/kgwordnetframes"
 TARGET_TRIPLE_COUNT = None  # Load all triples (set to number for testing with subset)
 BATCH_SIZE = 50000  # Larger batch size for better performance
 
@@ -128,11 +129,11 @@ async def reload_wordnet_data():
         return False
     
     # Step 6: Load WordNet data using batch insert with UUID-based approach
-    print(f"\n6. Loading WordNet data using optimized batch insert (no index overhead)...")
+    print(f"\n6. Loading WordNet Frames data using optimized batch insert (no index overhead)...")
     try:
         # Find the WordNet data file
         project_root = Path(__file__).parent.parent.parent  # Go up two levels from test_scripts/data
-        test_data_file = project_root / "test_data" / "kgentity_wordnet.nt"
+        test_data_file = project_root / "test_data" / "kgframe-wordnet-0.0.1.nt"
         
         if not test_data_file.exists():
             print(f"❌ WordNet data file not found: {test_data_file}")
@@ -292,49 +293,7 @@ async def reload_wordnet_data():
         print(f"WordNet quads inserted: {total_inserted:,}")
         print(f"Loading time: {total_batch_time:.1f}s")
         print(f"Average rate: {quads_per_second:,.0f} quads/sec")
-        
-        # Add sample triples with NO graph URI to test global graph assignment
-        print(f"\n📝 Adding sample triples to global graph (no graph URI specified)...")
-        sample_triples = [
-            # Some sample entities and relationships for testing
-            (URIRef("http://example.org/person/alice"), URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), URIRef("http://example.org/Person")),
-            (URIRef("http://example.org/person/alice"), URIRef("http://example.org/hasName"), Literal("Alice Smith")),
-            (URIRef("http://example.org/person/alice"), URIRef("http://example.org/hasAge"), Literal("30", datatype=URIRef("http://www.w3.org/2001/XMLSchema#integer"))),
-            
-            (URIRef("http://example.org/person/bob"), URIRef("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"), URIRef("http://example.org/Person")),
-            (URIRef("http://example.org/person/bob"), URIRef("http://example.org/hasName"), Literal("Bob Jones")),
-            (URIRef("http://example.org/person/bob"), URIRef("http://example.org/hasAge"), Literal("25", datatype=URIRef("http://www.w3.org/2001/XMLSchema#integer"))),
-            
-            # Relationship between them
-            (URIRef("http://example.org/person/alice"), URIRef("http://example.org/knows"), URIRef("http://example.org/person/bob")),
-            
-            # Some test data that should be findable in default graph queries
-            (URIRef("http://example.org/test/entity1"), URIRef("http://example.org/hasProperty"), Literal("global_test_value")),
-            (URIRef("http://example.org/test/entity2"), URIRef("http://example.org/hasProperty"), Literal("another_global_value")),
-        ]
-        
-        # Convert triples to quads with None as graph (should trigger global graph assignment)
-        sample_quads = [(s, p, o, None) for s, p, o in sample_triples]
-        
-        # Create a new transaction for sample data (previous transaction was committed)
-        sample_transaction = await space_impl.core.create_transaction(space_impl)
-        
-        # Insert sample quads using the new transaction
-        sample_start = time.time()
-        sample_inserted = await space_impl.db_ops.add_rdf_quads_batch(SPACE_ID, sample_quads, 
-                                                                     auto_commit=False, transaction=sample_transaction)
-        sample_time = time.time() - sample_start
-        
-        # Commit the sample transaction
-        sample_commit_success = await space_impl.core.commit_transaction_object(sample_transaction)
-        
-        print(f"✅ Sample global graph data inserted: {sample_inserted} quads in {sample_time:.3f}s")
-        
-        # Update totals
-        total_inserted += sample_inserted
-        total_batch_time += sample_time
-        quads_per_second = total_inserted / total_batch_time if total_batch_time > 0 else 0
-        
+         
     except Exception as e:
         print(f"❌ Error loading WordNet data: {e}")
         import traceback

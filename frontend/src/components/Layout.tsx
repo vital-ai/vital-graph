@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, Link } from 'react-router-dom';
 import { 
   Avatar,
   DarkThemeToggle,
@@ -7,9 +7,7 @@ import {
   DropdownHeader,
   DropdownItem,
   Navbar,
-  NavbarBrand, 
   NavbarCollapse, 
-  NavbarLink, 
   NavbarToggle,
   Sidebar,
   SidebarItem,
@@ -51,10 +49,12 @@ const Layout: React.FC = () => {
           >
             <HiMenu className="h-6 w-6" />
           </button>
-          <NavbarBrand href="/">
-            <img src="/flowbite-react.svg" className="mr-3 h-6 sm:h-9" alt="Flowbite Logo" />
-            <span className="self-center whitespace-nowrap text-xl font-semibold dark:text-white">VitalGraph</span>
-          </NavbarBrand>
+          <Link to="/">
+            <span className="flex items-center">
+              <img src="/flowbite-react.svg" className="mr-3 h-6 sm:h-9" alt="Flowbite Logo" />
+              <span className="self-center whitespace-nowrap text-xl font-semibold dark:text-white">VitalGraph</span>
+            </span>
+          </Link>
         </div>
         <div className="flex md:order-2 items-center">
           <DarkThemeToggle className="mr-2" />
@@ -84,18 +84,26 @@ const Layout: React.FC = () => {
           <NavbarToggle className="ml-2" />
         </div>
         <NavbarCollapse>
-          <NavbarLink href="/" active={location.pathname === '/'}>
-            Home
-          </NavbarLink>
-          <NavbarLink href="/spaces" active={location.pathname === '/spaces'}>
-            Spaces
-          </NavbarLink>
-          <NavbarLink href="/users" active={location.pathname === '/users'}>
-            Users
-          </NavbarLink>
-          <NavbarLink href="/sparql" active={location.pathname === '/sparql'}>
-            SPARQL
-          </NavbarLink>
+          <Link to="/" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Home
+            </span>
+          </Link>
+          <Link to="/spaces" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/spaces' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Spaces
+            </span>
+          </Link>
+          <Link to="/users" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/users' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Users
+            </span>
+          </Link>
+          <Link to="/sparql" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/sparql' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              SPARQL
+            </span>
+          </Link>
         </NavbarCollapse>
       </Navbar>
 
@@ -120,18 +128,26 @@ const Layout: React.FC = () => {
         >
           <SidebarItems>
             <SidebarItemGroup>
-              <SidebarItem href="/" icon={HiHome} active={location.pathname === '/'}>
-                Home
-              </SidebarItem>
-              <SidebarItem href="/spaces" icon={HiViewBoards} active={location.pathname === '/spaces'}>
-                Spaces
-              </SidebarItem>
-              <SidebarItem href="/users" icon={HiUser} active={location.pathname === '/users'}>
-                Users
-              </SidebarItem>
-              <SidebarItem href="/sparql" icon={HiSearch} active={location.pathname === '/sparql'}>
-                SPARQL
-              </SidebarItem>
+              <Link to="/" style={{display: 'block'}}>
+                <SidebarItem icon={HiHome} active={location.pathname === '/'} as="div">
+                  Home
+                </SidebarItem>
+              </Link>
+              <Link to="/spaces" style={{display: 'block'}}>
+                <SidebarItem icon={HiViewBoards} active={location.pathname === '/spaces'} as="div">
+                  Spaces
+                </SidebarItem>
+              </Link>
+              <Link to="/users" style={{display: 'block'}}>
+                <SidebarItem icon={HiUser} active={location.pathname === '/users'} as="div">
+                  Users
+                </SidebarItem>
+              </Link>
+              <Link to="/sparql" style={{display: 'block'}}>
+                <SidebarItem icon={HiSearch} active={location.pathname === '/sparql'} as="div">
+                  SPARQL
+                </SidebarItem>
+              </Link>
             </SidebarItemGroup>
           </SidebarItems>
         </Sidebar>

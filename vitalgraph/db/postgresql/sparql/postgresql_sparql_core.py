@@ -374,6 +374,8 @@ class SparqlContext:
         self.graph_cache = {}
         self.variable_counter = 0
         self.join_counter = 0
+        
+
     
     def log_function_entry(self, function_name: str, **kwargs):
         """Log function entry with consistent format including function name."""
@@ -430,9 +432,13 @@ def _get_variable_position_in_triple(triple, variable):
     return None
 
 
-def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
+async def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen: AliasGenerator, projected_vars: Optional[List[Variable]] = None, *, sparql_context: SparqlContext = None) -> SQLComponents:
     """
-    Generate SQL components for Basic Graph Pattern (BGP) using exact logic from original implementation.
+    Generate SQL components for Basic Graph Pattern (BGP) with optimization for shared variables.
+    
+    OPTIMIZATION: This version reuses table aliases when variables are shared across triples,
+    dramatically reducing the number of table joins. Instead of creating separate aliases
+    for each triple, we track variable usage and reuse aliases where possible.
     
     Args:
         triples: List of RDF triples (subject, predicate, object)
@@ -470,19 +476,131 @@ def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen:
             variable_mappings={}
         )
     
-    # Port exact logic from original implementation
+    # GLOBAL OPTIMIZATION: Check if we have global optimization state in SparqlContext
+
+    
+    # OPTIMIZATION: Track variable-to-alias mappings to reuse aliases for shared variables
     all_joins = []
     quad_joins = []  # JOINs for additional quad tables
     all_where_conditions = []
     variable_mappings = {}
     quad_aliases = []
     
-    # Process each triple pattern - exact logic from original
+    # OPTIMIZATION: Comprehensive variable usage analysis for maximum alias reuse
+    variable_positions = {}  # var -> [(triple_idx, position), ...]
+    quad_alias_for_variable = {}  # var -> quad_alias (for reuse)
+    variable_connectivity = {}  # var -> set of connected variables
+    
+    # First pass: analyze variable usage patterns and connectivity
     for triple_idx, triple in enumerate(triples):
         subject, predicate, obj = triple
-        quad_alias = alias_gen.next_quad_alias()
+        triple_vars = []
+        
+        # Track variable positions for optimization
+        if isinstance(subject, Variable):
+            if subject not in variable_positions:
+                variable_positions[subject] = []
+            variable_positions[subject].append((triple_idx, 'subject'))
+            triple_vars.append(subject)
+            
+        if isinstance(predicate, Variable):
+            if predicate not in variable_positions:
+                variable_positions[predicate] = []
+            variable_positions[predicate].append((triple_idx, 'predicate'))
+            triple_vars.append(predicate)
+            
+        if isinstance(obj, Variable):
+            if obj not in variable_positions:
+                variable_positions[obj] = []
+            variable_positions[obj].append((triple_idx, 'object'))
+            triple_vars.append(obj)
+        
+        # Build connectivity graph: variables in the same triple are connected
+        for var1 in triple_vars:
+            if var1 not in variable_connectivity:
+                variable_connectivity[var1] = set()
+            for var2 in triple_vars:
+                if var1 != var2:
+                    variable_connectivity[var1].add(var2)
+    
+    logger.warning(f"🔧 BGP OPTIMIZATION: Processing {len(triples)} triples with {len(variable_positions)} unique variables")
+    logger.debug(f"Variable usage analysis: {len(variable_positions)} unique variables across {len(triples)} triples")
+    logger.debug(f"Variable connectivity: {[(str(k), [str(v) for v in vs]) for k, vs in variable_connectivity.items()]}")
+    
+    # OPTIMIZATION: Direct variable-based alias reuse (simplified approach)
+    # For each variable, assign it to the first quad alias that uses it
+    # This ensures that all triples sharing a variable use the same alias
+    
+    # Build a mapping of which variables appear in which triples
+    variable_to_triples = {}  # var -> [triple_indices]
+    for triple_idx, triple in enumerate(triples):
+        subject, predicate, obj = triple
+        for var in [subject, predicate, obj]:
+            if isinstance(var, Variable):
+                if var not in variable_to_triples:
+                    variable_to_triples[var] = []
+                variable_to_triples[var].append(triple_idx)
+    
+    # Find the most connected variable (appears in most triples) to start with
+    most_connected_vars = sorted(variable_to_triples.items(), key=lambda x: len(x[1]), reverse=True)
+    logger.debug(f"🔍 Most connected variables: {[(str(var), len(triples)) for var, triples in most_connected_vars[:5]]}")
+    
+    # Assign aliases based on variable usage
+    triple_to_alias = {}  # triple_idx -> quad_alias
+    alias_usage_count = {}  # alias -> count of triples using it
+    
+    for var, triple_indices in most_connected_vars:
+        # Check if any of these triples already have an alias assigned
+        existing_alias = None
+        for triple_idx in triple_indices:
+            if triple_idx in triple_to_alias:
+                existing_alias = triple_to_alias[triple_idx]
+                break
+        
+        if existing_alias:
+            # Reuse existing alias for all triples with this variable
+            alias_to_use = existing_alias
+            logger.debug(f"🔄 Reusing alias {alias_to_use} for variable {var} across {len(triple_indices)} triples")
+        else:
+            # Create new alias for this variable
+            alias_to_use = alias_gen.next_quad_alias()
+            logger.debug(f"🆕 Created new alias {alias_to_use} for variable {var} across {len(triple_indices)} triples")
+        
+        # Assign this alias to all triples that use this variable
+        for triple_idx in triple_indices:
+            if triple_idx not in triple_to_alias:
+                triple_to_alias[triple_idx] = alias_to_use
+                alias_usage_count[alias_to_use] = alias_usage_count.get(alias_to_use, 0) + 1
+        
+        # Track this alias for the variable
+        quad_alias_for_variable[var] = alias_to_use
+    
+    # Handle any remaining triples without aliases (shouldn't happen)
+    for triple_idx in range(len(triples)):
+        if triple_idx not in triple_to_alias:
+            fallback_alias = alias_gen.next_quad_alias()
+            triple_to_alias[triple_idx] = fallback_alias
+            logger.warning(f"⚠️ Created fallback alias {fallback_alias} for triple {triple_idx}")
+    
+    unique_aliases = len(set(triple_to_alias.values()))
+    logger.warning(f"🎯 BGP OPTIMIZATION RESULT: Reduced {len(triples)} triples to {unique_aliases} unique aliases")
+    logger.warning(f"📊 Alias usage: {[(alias, count) for alias, count in sorted(alias_usage_count.items())]}")
+    
+    # Second pass: generate SQL with pre-computed alias assignments
+    for triple_idx, triple in enumerate(triples):
+        subject, predicate, obj = triple
+        
+        # Use the pre-computed alias for this triple
+        quad_alias = triple_to_alias.get(triple_idx)
+        reused_alias = quad_alias in alias_usage_count and alias_usage_count[quad_alias] > 1
+        
+        # Safety fallback (shouldn't happen)
+        if quad_alias is None:
+            quad_alias = alias_gen.next_quad_alias()
+            logger.error(f"❌ CRITICAL: No alias found for triple {triple_idx} - this should not happen!")
+        
         quad_aliases.append(quad_alias)
-        logger.debug(f"Processing triple #{triple_idx}: ({subject}, {predicate}, {obj})")
+        logger.debug(f"Processing triple #{triple_idx}: ({subject}, {predicate}, {obj}) -> {quad_alias} (reused: {reused_alias})")
         
         # Handle subject - exact logic from original
         if isinstance(subject, Variable):
@@ -529,71 +647,131 @@ def generate_bgp_sql(triples: List[Tuple], table_config: TableConfig, alias_gen:
 
 
     
-    # Build FROM clause with first quad table - exact logic from original
-    from_clause = f"FROM {table_config.quad_table} {quad_aliases[0]}"
+    # OPTIMIZATION: Build FROM clause with unique quad aliases only
+    # Remove duplicate aliases that were reused for shared variables
+    unique_quad_aliases = []
+    seen_aliases = set()
+    for alias in quad_aliases:
+        if alias not in seen_aliases:
+            unique_quad_aliases.append(alias)
+            seen_aliases.add(alias)
     
-    # Add additional quad tables as JOINs if multiple triples - exact logic from original
-    if len(quad_aliases) > 1:
-        for i in range(1, len(quad_aliases)):
-            # Find shared variables between current triple and ANY previous triple
-            current_triple = triples[i]
-            current_vars = {var for var in current_triple if isinstance(var, Variable)}
+    logger.debug(f"Reduced {len(quad_aliases)} total aliases to {len(unique_quad_aliases)} unique aliases")
+    
+    if not unique_quad_aliases:
+        # No quad tables needed - this shouldn't happen but handle gracefully
+        from_clause = ""
+    else:
+        # Build FROM clause with first unique quad table
+        from_clause = f"FROM {table_config.quad_table} {unique_quad_aliases[0]}"
+        
+        # Add additional unique quad tables as JOINs if multiple unique aliases
+        if len(unique_quad_aliases) > 1:
+            # OPTIMIZATION: Only create JOINs for truly unique aliases
+            # Build a mapping from unique aliases back to their original triples for JOIN logic
+            alias_to_triple_indices = {}
+            for idx, alias in enumerate(quad_aliases):
+                if alias not in alias_to_triple_indices:
+                    alias_to_triple_indices[alias] = []
+                alias_to_triple_indices[alias].append(idx)
             
-            best_join_conditions = []
-            best_reference_idx = 0
-            
-            # Check against all previous triples to find the best join
-            for ref_idx in range(i):
-                ref_triple = triples[ref_idx]
-                ref_vars = {var for var in ref_triple if isinstance(var, Variable)}
-                shared_vars = current_vars & ref_vars
+            for i in range(1, len(unique_quad_aliases)):
+                current_alias = unique_quad_aliases[i]
+                # Get the first triple index that uses this alias
+                current_triple_indices = alias_to_triple_indices[current_alias]
+                current_triple_idx = current_triple_indices[0]
+                current_triple = triples[current_triple_idx]
+                current_vars = {var for var in current_triple if isinstance(var, Variable)}
                 
-                if shared_vars:
-                    join_conditions = []
-                    for var in shared_vars:
-                        # Find the position of this variable in both triples
-                        current_position = None
-                        ref_position = None
-                        
-                        # Find variable position in current triple
-                        if current_triple[0] == var:
-                            current_position = "subject_uuid"
-                        elif current_triple[1] == var:
-                            current_position = "predicate_uuid"
-                        elif current_triple[2] == var:
-                            current_position = "object_uuid"
-                        
-                        # Find variable position in reference triple
-                        if ref_triple[0] == var:
-                            ref_position = "subject_uuid"
-                        elif ref_triple[1] == var:
-                            ref_position = "predicate_uuid"
-                        elif ref_triple[2] == var:
-                            ref_position = "object_uuid"
-                        
-                        # Create JOIN condition based on positions
-                        if current_position and ref_position:
-                            join_conditions.append(f"{quad_aliases[i]}.{current_position} = {quad_aliases[ref_idx]}.{ref_position}")
+                best_join_conditions = []
+                best_reference_alias = None
+                
+                # Check against all previous unique aliases to find the best join
+                for j in range(i):
+                    ref_alias = unique_quad_aliases[j]
+                    ref_triple_indices = alias_to_triple_indices[ref_alias]
                     
-                    if len(join_conditions) > len(best_join_conditions):
-                        best_join_conditions = join_conditions
-                        best_reference_idx = ref_idx
-            
-            if best_join_conditions:
-                quad_joins.append(f"JOIN {table_config.quad_table} {quad_aliases[i]} ON {' AND '.join(best_join_conditions)}")
-            else:
-                # No shared variables - use CROSS JOIN
-                quad_joins.append(f"CROSS JOIN {table_config.quad_table} {quad_aliases[i]}")
+                    # Check all triples that use this reference alias
+                    for ref_triple_idx in ref_triple_indices:
+                        ref_triple = triples[ref_triple_idx]
+                        ref_vars = {var for var in ref_triple if isinstance(var, Variable)}
+                        shared_vars = current_vars & ref_vars
+                        
+                        if shared_vars:
+                            join_conditions = []
+                            for var in shared_vars:
+                                # Find the position of this variable in both triples
+                                current_position = None
+                                ref_position = None
+                                
+                                # Find variable position in current triple
+                                if current_triple[0] == var:
+                                    current_position = "subject_uuid"
+                                elif current_triple[1] == var:
+                                    current_position = "predicate_uuid"
+                                elif current_triple[2] == var:
+                                    current_position = "object_uuid"
+                                
+                                # Find variable position in reference triple
+                                if ref_triple[0] == var:
+                                    ref_position = "subject_uuid"
+                                elif ref_triple[1] == var:
+                                    ref_position = "predicate_uuid"
+                                elif ref_triple[2] == var:
+                                    ref_position = "object_uuid"
+                                
+                                # Create JOIN condition based on positions
+                                if current_position and ref_position:
+                                    join_conditions.append(f"{current_alias}.{current_position} = {ref_alias}.{ref_position}")
+                            
+                            if len(join_conditions) > len(best_join_conditions):
+                                best_join_conditions = join_conditions
+                                best_reference_alias = ref_alias
+                
+                if best_join_conditions:
+                    quad_joins.append(f"JOIN {table_config.quad_table} {current_alias} ON {' AND '.join(best_join_conditions)}")
+                    logger.debug(f"Added optimized JOIN: {current_alias} -> {best_reference_alias} on {len(best_join_conditions)} conditions")
+                else:
+                    # No shared variables - use CROSS JOIN
+                    quad_joins.append(f"CROSS JOIN {table_config.quad_table} {current_alias}")
+                    logger.debug(f"Added CROSS JOIN for {current_alias} (no shared variables)")
     
     # Combine quad JOINs first, then term JOINs - exact logic from original
     combined_joins = quad_joins + all_joins
     
     return SQLComponents(
         from_clause=from_clause,
-        where_conditions=all_where_conditions,
-        joins=combined_joins,
+        where_conditions=where_conditions,
+        joins=all_joins,
         variable_mappings=variable_mappings
     )
+
+
+async def _get_single_term_uuid(term, term_cache, space_impl, table_config):
+    """Get UUID for a single term using the batch lookup function with error handling"""
+    if not term_cache or not space_impl:
+        return None
+    
+    try:
+        # Import the batch function
+        from .postgresql_sparql_cache_integration import get_term_uuids_batch
+        
+        # Get term info
+        term_text, term_type = SparqlUtils.get_term_info(term)
+        
+        # Use batch lookup for single term
+        result = await get_term_uuids_batch([(term_text, term_type)], table_config, term_cache, space_impl)
+        
+        return result.get((term_text, term_type))
+    except Exception as e:
+        # Handle missing tables, connection errors, etc. gracefully
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"⚠️ Term UUID lookup failed for {term}: {e}")
+        return None
+
+
+
 
 
 def generate_term_lookup_sql(terms: List[Tuple[str, str]], table_config: TableConfig, *, sparql_context: SparqlContext = None) -> str:

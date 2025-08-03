@@ -49,6 +49,7 @@ from .postgresql_sparql_updates import (
 )
 
 
+
 def _extract_variables_from_pattern(pattern):
     """Extract variables from a pattern recursively.
     
@@ -757,6 +758,9 @@ def _extract_limit_offset(pattern) -> dict:
     return result
 
 
+
+
+
 async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: str, 
                                  sparql_query: str, graph_cache: Optional[Dict] = None,
                                  max_rows: int = 100000, max_memory_mb: int = 500) -> List[Dict[str, Any]]:
@@ -776,24 +780,19 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         or List of RDF triple dictionaries (CONSTRUCT/DESCRIBE)
     """
     logger = logging.getLogger(__name__)
-    # print(f"🚀 ORCHESTRATOR PRINT: Called for space '{space_id}'")
-    # print(f"📝 ORCHESTRATOR PRINT: Query preview: {sparql_query[:100]}...")
-    logger.info(f"🚀 ORCHESTRATOR CALLED: Orchestrating SPARQL query for space '{space_id}'")
-    logger.info(f"📝 Query preview: {sparql_query[:100]}...")
+    logger.info(f"Orchestrating SPARQL query for space '{space_id}'")
+    logger.info(f"Query preview: {sparql_query[:100]}...")
     
     try:
-        # print(f"🔍 ORCHESTRATOR PRINT: Starting to parse SPARQL query...")
         # Parse SPARQL query using RDFLib
         from rdflib.plugins.sparql import prepareQuery
         from rdflib import Variable
         prepared_query = prepareQuery(sparql_query)
         query_algebra = prepared_query.algebra
-        # print(f"🔍 ORCHESTRATOR PRINT: Successfully parsed SPARQL query")
         
         # Determine query type
         query_type = query_algebra.name
-        # print(f"🎯 ORCHESTRATOR PRINT: Query type detected: {query_type}")
-        logger.info(f"🎯 Query type detected: {query_type}")
+        logger.info(f"Query type detected: {query_type}")
         
         # Get table configuration
         table_config = create_table_config(space_impl, space_id)
@@ -820,6 +819,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         # Initialize case_mapping for all query types
         case_mapping = {}
         
+
+        
         # Translate query based on type - follow exact original implementation pattern
         if query_type == "SelectQuery":
             # Extract projection variables
@@ -832,6 +833,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
             # Translate the main pattern to get SQLComponents with ORDER BY support
             sql_components = await translate_algebra_pattern_to_components(pattern, context, projection_vars)
+            
+
             
             # Build case mapping for SELECT variables
             case_mapping = {}
@@ -887,6 +890,8 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
             # Translate the WHERE clause pattern to get SQL components
             sql_components = await translate_algebra_pattern_to_components(pattern, context, projected_vars)
+            
+
             
             # Build case mapping for CONSTRUCT variables with unique alias handling
             alias_counter = {}
@@ -944,14 +949,9 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         else:
             raise NotImplementedError(f"Unsupported query type: {query_type}")
         
-        # Log the generated SQL query with formatting for readability
-        logger.info(f"🔍 Generated SQL Query:")
-        logger.info(f"{'='*60}")
-        logger.info(sql_query)
-        logger.info(f"{'='*60}")
+        # Execute SQL query using the space_impl's connection method
+        logger.info(f"Executing SQL query with memory protection (max_rows={max_rows}, max_memory={max_memory_mb}MB)...")
         
-        # Execute SQL query using the space_impl's connection method (like original implementation)
-        logger.info(f"⚡ Executing SQL query with memory protection (max_rows={max_rows}, max_memory={max_memory_mb}MB)...")
         sql_results = None
         try:
             sql_results = await _execute_sql_query_with_space_impl(space_impl, sql_query, max_rows, max_memory_mb)
@@ -975,6 +975,9 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
             # Extract variable_mappings from sql_components (this was missing!)
             variable_mappings = sql_components.variable_mappings
+            
+            # 🌍 NOTE: Master variable mappings coordination is handled earlier in the CONSTRUCT path
+            # at line ~1084 before SQL generation, so no need to coordinate again here
             
             # Check if we need to apply SQL-level optimization for CONSTRUCT pagination
             # This is more efficient than retrieving all rows and filtering RDF triples
@@ -1004,9 +1007,7 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
                     estimated_sql_limit = int((limit_info['limit'] / estimated_triples_per_row) * buffer_multiplier) + 10
                     sql_limit = max(estimated_sql_limit, limit_info['limit'])  # At least as many as requested
                 
-                # print(f"🚀 ORCHESTRATOR PRINT: CONSTRUCT optimization - estimated {estimated_triples_per_row} triples/row")
-                # print(f"🚀 ORCHESTRATOR PRINT: RDF LIMIT/OFFSET: {limit_info['limit']}/{limit_info['offset']}")
-                # print(f"🚀 ORCHESTRATOR PRINT: Optimized SQL LIMIT/OFFSET: {sql_limit}/{sql_offset}")
+
                 
                 # Apply SQL-level optimization if we have limits and it's likely to be more efficient
                 # Only optimize if we're requesting a reasonable subset of data

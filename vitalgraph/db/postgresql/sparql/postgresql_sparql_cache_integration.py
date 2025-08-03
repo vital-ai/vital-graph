@@ -11,7 +11,7 @@ from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql.algebra import Path, MulPath, SequencePath, AlternativePath, InvPath, NegatedPath
 import psycopg
 
-from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils
+from .postgresql_sparql_core import SQLComponents, AliasGenerator, TableConfig, SparqlUtils, generate_bgp_sql
 from ..postgresql_cache_term import PostgreSQLCacheTerm
 from .postgresql_sparql_property_paths import translate_property_path
 
@@ -50,6 +50,8 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
         import logging
         logger = logging.getLogger(__name__)
         logger.debug(f"{function_name}: Generating SQL with cache for {len(triples)} triples")
+    
+
     
     # DEBUG: Log alias generator state before generating quad alias
     logger.debug(f"🔧 BGP_ALIAS: Starting BGP with quad counter: {alias_gen.counters['quad']}")
@@ -499,7 +501,7 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
             escaped_text = term_text.replace("'", "''")
             batch_query = f"""
                 SELECT term_text, term_type, term_uuid 
-                FROM {table_config.term_table} 
+                FROM "{table_config.term_table}" 
                 WHERE term_text = '{escaped_text}' AND term_type = '{term_type}'
             """
         else:
@@ -512,7 +514,7 @@ async def get_term_uuids_batch(terms: List[Tuple[str, str]], table_config: Table
             
             batch_query = f"""
                 SELECT t.term_text, t.term_type, t.term_uuid 
-                FROM {table_config.term_table} t
+                FROM "{table_config.term_table}" t
                 INNER JOIN (VALUES {', '.join(values_list)}) AS v(term_text, term_type)
                     ON t.term_text = v.term_text AND t.term_type = v.term_type
             """

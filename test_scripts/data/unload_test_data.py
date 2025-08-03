@@ -34,8 +34,9 @@ logging.basicConfig(
 
 # Default spaces to unload (matches the reload scripts)
 DEFAULT_SPACES = [
-    "space_test",      # From reload_test_data.py
-    "wordnet_space"    # From reload_wordnet.py
+    #"space_test",      # From reload_test_data.py
+    #"wordnet_space"    # From reload_wordnet.py
+    "wordnet_frames"
 ]
 
 async def unload_space_data(space_impl, space_id):

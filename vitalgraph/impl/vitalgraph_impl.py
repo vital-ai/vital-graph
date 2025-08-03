@@ -1,6 +1,7 @@
 from vitalgraph.config.config_loader import get_config, ConfigurationError
 from vitalgraph.db.postgresql.postgresql_db_impl import PostgreSQLDbImpl
 from vitalgraph.space.space_manager import SpaceManager
+from vitalgraph.signal.signal_manager import SignalManager
 import asyncio
 
 
@@ -28,25 +29,12 @@ class VitalGraphImpl:
                 print(f"Warning: Could not initialize database: {e}")
                 self.db_impl = None
         
-        # Initialize SpaceManager with database implementation
         self.space_manager = SpaceManager(db_impl=self.db_impl)
         print(f"✅ Initialized SpaceManager successfully")
         
-        # Auto-initialize SpaceManager from database if already connected
-        if self.db_impl and self.db_impl.is_connected():
-            import asyncio
-            try:
-                # Run the async initialization in a new event loop if needed
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If we're already in an async context, we can't run this here
-                    print("⚠️ Database already connected - SpaceManager will be initialized on first async access")
-                else:
-                    loop.run_until_complete(self.space_manager.initialize_from_database())
-                    print(f"✅ SpaceManager auto-initialized from database with {len(self.space_manager)} spaces")
-            except Exception as e:
-                print(f"⚠️ Could not auto-initialize SpaceManager: {e}")
-    
+        # Initialize SignalManager (will be fully initialized after DB connection)
+        self.signal_manager = None
+            
     def get_db_impl(self):
         """Return the PostgreSQL database implementation instance."""
         return self.db_impl
@@ -59,6 +47,10 @@ class VitalGraphImpl:
         """Return the SpaceManager instance."""
         return self.space_manager
         
+    def get_signal_manager(self):
+        """Return the SignalManager instance."""
+        return self.signal_manager
+        
     async def ensure_space_manager_initialized(self):
         """Ensure SpaceManager is initialized from database if not already done."""
         if (self.space_manager and 
@@ -70,19 +62,36 @@ class VitalGraphImpl:
     
     async def connect_database(self):
         """Connect to database and automatically initialize SpaceManager."""
+        print("🔍 TRACE: VitalGraphImpl.connect_database() called")
         if not self.db_impl:
             print("⚠️ No database implementation available")
             return False
             
         # Connect to database
+        print(f"🔍 DEBUG: Starting database connection in VitalGraphImpl.connect_database()")
         connected = await self.db_impl.connect()
         if not connected:
             print("❌ Failed to connect to database")
             return False
+        print(f"✅ DEBUG: Database connected successfully")
             
-        # Automatically initialize SpaceManager from database
+        try:
+            print(f"🔍 DEBUG: Creating SignalManager in VitalGraphImpl")
+            self.signal_manager = SignalManager(db_impl=self.db_impl)
+            print(f"✅ DEBUG: SignalManager created: {self.signal_manager}")
+        
+            print(f"🔍 DEBUG: Setting SignalManager on db_impl")
+            self.db_impl.set_signal_manager(self.signal_manager)
+            print(f"✅ DEBUG: SignalManager set on db_impl")
+            print(f"🔍 DEBUG: Verifying get_signal_manager: {self.db_impl.get_signal_manager()}")
+        except Exception as e:
+            print(f"❌ ERROR creating/setting SignalManager: {e}")
+            import traceback
+            print(traceback.format_exc())
+
         await self.space_manager.initialize_from_database()
         print(f"✅ SpaceManager automatically initialized from database with {len(self.space_manager)} spaces")
+                
         return True
     
     async def initialize_space_manager(self):
@@ -90,5 +99,6 @@ class VitalGraphImpl:
         if self.space_manager and self.db_impl and self.db_impl.is_connected():
             await self.space_manager.initialize_from_database()
             print(f"✅ SpaceManager initialized from database with {len(self.space_manager)} spaces")
+        
         else:
             print(f"⚠️ Cannot initialize SpaceManager: db_impl connected={self.db_impl.is_connected() if self.db_impl else False}")

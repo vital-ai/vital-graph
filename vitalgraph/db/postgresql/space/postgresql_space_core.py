@@ -27,7 +27,7 @@ class PostgreSQLSpaceCore:
 
 
     def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", 
-                 pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None):
+                 pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None, db_impl=None):
         """
         Initialize PostgreSQL space core with connection management.
         
@@ -37,6 +37,7 @@ class PostgreSQLSpaceCore:
             pool_config: Optional connection pool configuration
             shared_pool: Optional shared psycopg3 ConnectionPool instance (for tuple results)
             dict_pool: Optional dict psycopg3 ConnectionPool instance (for dictionary results)
+            db_impl: Database implementation instance for signal manager access
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
@@ -46,6 +47,9 @@ class PostgreSQLSpaceCore:
         self.rdf_pool = None
         self.shared_pool = shared_pool
         self.dict_pool = dict_pool
+        
+        # Store reference to db_impl for signal manager access
+        self.db_impl = db_impl
         
         # Initialize utils instance for timing operations
         self.utils = PostgreSQLLogUtils()

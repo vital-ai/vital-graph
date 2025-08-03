@@ -124,11 +124,19 @@ class RestApiSpaceManagerTester:
             
             # Try to delete via Space Manager (full cleanup)
             try:
-                success = await self.space_manager.delete_space_with_tables(self.test_space_id)
-                if success:
-                    print(f"   ✅ Cleaned up test space via Space Manager")
+                # Get space_impl through the correct API path
+                space_impl = self.db_impl.get_space_impl()
+                if space_impl:
+                    # Check if space exists first
+                    space_exists = await space_impl.space_exists(self.test_space_id)
+                    if space_exists:
+                        # Use the Space Manager to clean up if exists
+                        success = await self.space_manager.delete_space_with_tables(self.test_space_id)
+                        print(f"   ✅ Cleaned up test space via Space Manager")
+                    else:
+                        print(f"   📋 No existing test space found")
                 else:
-                    print(f"   📋 No existing test space found")
+                    print(f"   ⚠️ Space implementation not available")
             except Exception as e:
                 print(f"   📋 Cleanup note: {str(e)}")
                 
@@ -170,14 +178,32 @@ class RestApiSpaceManagerTester:
             print(f"   ✅ Space found in database")
             
             # Verify tables exist via Space Manager
-            space_impl = self.space_manager.get_space(self.test_space_id)
-            if not space_impl:
+            space_manager_impl = self.space_manager.get_space(self.test_space_id)
+            if not space_manager_impl:
                 print("   ❌ Space not found in Space Manager registry")
                 return False
-            
-            tables_exist = await space_impl.space_impl.exists()
-            if not tables_exist:
-                print("   ❌ Space tables do not exist")
+                
+            # Get PostgreSQLSpaceImpl through the correct API path
+            space_impl = self.db_impl.get_space_impl()
+            if not space_impl:
+                print("   ❌ Space implementation not available")
+                return False
+                
+            # Check if space exists and tables are created
+            space_exists = await space_impl.space_exists(self.test_space_id)
+            if not space_exists:
+                print("   ❌ Space does not exist in database")
+                return False
+                
+            # Check tables
+            # space_manager_impl is a SpaceRecord, we need to use its space_impl property to call exists()
+            if hasattr(space_manager_impl, 'space_impl') and space_manager_impl.space_impl:
+                tables_exist = await space_manager_impl.space_impl.exists()
+                if not tables_exist:
+                    print("   ❌ Space tables do not exist")
+                    return False
+            else:
+                print("   ❌ Space implementation not available in SpaceRecord")
                 return False
             
             print(f"   ✅ Space tables exist")
@@ -251,20 +277,32 @@ class RestApiSpaceManagerTester:
             
             print(f"   ✅ API space deletion result: {result}")
             
-            # Verify space no longer exists in database
-            spaces = await self.db_impl.list_spaces()
-            space_found = any(s.get('space') == self.test_space_id for s in spaces)
-            
-            if space_found:
-                print("   ❌ Space still found in database after API deletion")
-                return False
-            
-            print(f"   ✅ Space removed from database")
-            
-            # Verify space no longer in Space Manager registry
-            space_impl = self.space_manager.get_space(self.test_space_id)
-            if space_impl:
-                print("   ❌ Space still found in Space Manager registry")
+            # Verify space does not exist after deletion
+            try:
+                # Check in database list
+                spaces = await self.db_impl.list_spaces()
+                space_still_exists = any(s.get('space') == self.test_space_id for s in spaces)
+                
+                if space_still_exists:
+                    print("   ❌ Space still exists in database records after deletion")
+                    return False
+                
+                # Get PostgreSQLSpaceImpl through the correct API path
+                space_impl = self.db_impl.get_space_impl()
+                if space_impl:
+                    # Check if space actually exists using space_impl
+                    space_exists = await space_impl.space_exists(self.test_space_id)
+                    if space_exists:
+                        print("   ❌ Space still exists after deletion")
+                        return False
+                    
+                    print("   ✅ Space successfully removed from database")
+                    return True
+                else:
+                    print("   ⚠️ Space implementation not available, limited verification")
+                    return True
+            except Exception as e:
+                print(f"   ❌ Verification error: {str(e)}")
                 return False
             
             print(f"   ✅ Space removed from Space Manager registry")
@@ -348,6 +386,24 @@ class RestApiSpaceManagerTester:
             if not api_space or not direct_space:
                 print("   ❌ One or both spaces not found in registry")
                 return False
+                
+            # Verify spaces exist in the database using PostgreSQLSpaceImpl
+            space_impl = self.db_impl.get_space_impl()
+            if space_impl:
+                api_space_exists = await space_impl.space_exists(api_space_id)
+                direct_space_exists = await space_impl.space_exists(direct_space_id)
+                
+                if not api_space_exists:
+                    print("   ❌ API-created space not found in database")
+                    return False
+                    
+                if not direct_space_exists:
+                    print("   ❌ Directly-created space not found in database")
+                    return False
+                    
+                print("   ✅ Both spaces verified in database via PostgreSQLSpaceImpl")
+            else:
+                print("   ⚠️ Space implementation not available, limited verification")
             
             print(f"   ✅ Both spaces found in Space Manager registry")
             

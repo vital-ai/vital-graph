@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { initThemeMode } from 'flowbite-react';
 import { AuthProvider } from './contexts/AuthContext';
+import { WebSocketProvider } from './contexts/WebSocketContext';
+import { ChangeNotificationProvider } from './contexts/ChangeNotificationContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -17,8 +19,10 @@ initThemeMode();
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
+      <WebSocketProvider>
+        <BrowserRouter>
+          <ChangeNotificationProvider>
+            <Routes>
           {/* Public routes */}
           <Route path="/login" element={<Login />} />
           
@@ -36,8 +40,10 @@ export default function App() {
           
           {/* Redirect any other routes to home */}
           <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </BrowserRouter>
+            </Routes>
+          </ChangeNotificationProvider>
+        </BrowserRouter>
+      </WebSocketProvider>
     </AuthProvider>
   );
 }

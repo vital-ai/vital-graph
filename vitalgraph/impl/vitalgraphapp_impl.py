@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from pathlib import Path
-from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, Form, Body
+from fastapi import FastAPI, Request, Response, HTTPException, status, Depends, Form, Body, WebSocket
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +17,8 @@ from vitalgraph.config.config_loader import get_config, ConfigurationError
 from vitalgraph.api.vitalgraph_api import VitalGraphAPI
 from vitalgraph.auth.vitalgraph_auth import VitalGraphAuth
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+from vitalgraph.websocket.websocket_handler import ConnectionManager, websocket_endpoint
+from vitalgraph.signal.notification_bridge import setup_notification_bridge
 
 
 # Pydantic Models for API Documentation
@@ -164,6 +166,9 @@ class VitalGraphAppImpl:
         # Initialize authentication
         self.auth = VitalGraphAuth()
         
+        # Initialize WebSocket connection manager
+        self.websocket_manager = ConnectionManager(self.auth)
+        
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
         
@@ -214,10 +219,12 @@ class VitalGraphAppImpl:
         @self.app.on_event("startup")
         async def startup_event():
             """Connect to database on server startup"""
-            if self.db_impl:
+            if self.vital_graph_impl:
                 try:
-                    await self.db_impl.connect()
-                    print("✅ Connected to database successfully")
+                    print(f"🔍 DEBUG: About to connect database via VitalGraphImpl")
+                    # Use VitalGraphImpl.connect_database() which handles SignalManager creation and injection
+                    success = await self.vital_graph_impl.connect_database()
+                    print(f"✅ Connected to database successfully: {success}")
                     
                     # Ensure SpaceManager is initialized from database after connection
                     print(f"🔍 DEBUG: Checking SpaceManager for initialization...")
@@ -240,6 +247,33 @@ class VitalGraphAppImpl:
                     # This ensures SpaceManager is fully initialized and connected
                     self._setup_sparql_endpoints()
                     print("✅ SPARQL endpoints initialized after database connection")
+                    
+                    # Set up notification bridge between PostgreSQL and WebSocket
+                    if self.websocket_manager is not None:
+                        try:
+                            # Debug prints to investigate references
+                            print(f"🔍 DEBUG: VitalGraphAppImpl db_impl id: {id(self.db_impl)}")
+                            print(f"🔍 DEBUG: VitalGraphImpl db_impl id: {id(self.vital_graph_impl.db_impl)}")
+                            
+                            # Try to access signal_manager from VitalGraphImpl directly
+                            signal_manager = self.vital_graph_impl.signal_manager
+                            print(f"🔍 DEBUG: Using VitalGraphImpl signal_manager: {signal_manager}")
+                            
+                            if signal_manager is None:
+                                # Fallback to db_impl.get_signal_manager() if direct access fails
+                                signal_manager = self.db_impl.get_signal_manager()
+                                print(f"🔍 DEBUG: Using db_impl.get_signal_manager(): {signal_manager}")
+                                
+                            print(f"🔍 DEBUG: Setting up notification bridge between PostgreSQL and WebSocket...")
+                            bridge = await setup_notification_bridge(signal_manager, self.websocket_manager)
+                            if bridge:
+                                print("✅ PostgreSQL notification bridge initialized successfully")
+                            else:
+                                print("⚠️ WARNING: Failed to initialize notification bridge")
+                        except Exception as e:
+                            print(f"⚠️ WARNING: Error setting up notification bridge: {e}")
+                    else:
+                        print("⚠️ WARNING: WebSocket manager not available, notification bridge skipped")
                     
                 except Exception as e:
                     print(f"❌ Failed to connect to database: {e}")
@@ -392,8 +426,24 @@ class VitalGraphAppImpl:
         self.app.get(
             "/api/users/filter/{name_filter}",
             tags=["Users"],
-            description="Check the health status of the VitalGraph server and database connection"
+            summary="Filter Users by Name",
+            description="Search for users whose names contain the specified filter text",
+            response_model=List[User]
+        )(filter_users_wrapper)
+        
+        # Health check route
+        self.app.get(
+            "/api/health",
+            tags=["Health"],
+            summary="Health Check",
+            description="Check if the VitalGraph API server is running and responsive"
         )(self.health)
+        
+        # WebSocket endpoint
+        async def websocket_wrapper(websocket: WebSocket):
+            await websocket_endpoint(websocket, self.websocket_manager)
+        
+        self.app.websocket("/api/ws")(websocket_wrapper)
         
         # Frontend serving routes
         if self.app_mode == "production":

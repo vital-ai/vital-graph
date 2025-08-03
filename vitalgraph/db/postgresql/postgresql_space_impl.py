@@ -44,7 +44,7 @@ class PostgreSQLSpaceImpl:
     Table names are prefixed with global_prefix__space_id__ format.
     """
     
-    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None):
+    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None, db_impl=None):
         """
         Initialize PostgreSQL space implementation with shared or dedicated psycopg3 ConnectionPool.
         
@@ -55,17 +55,22 @@ class PostgreSQLSpaceImpl:
             pool_config: Optional connection pool configuration
             shared_pool: Optional shared psycopg3 ConnectionPool instance (for tuple results)
             dict_pool: Optional dict psycopg3 ConnectionPool instance (for dictionary results)
+            db_impl: Database implementation instance for signal manager access
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
         # Initialize core connection management
         self.core = PostgreSQLSpaceCore(
+            db_impl=db_impl,
             connection_string=connection_string,
             global_prefix=global_prefix,
             pool_config=pool_config,
             shared_pool=shared_pool,
             dict_pool=dict_pool
         )
+        
+        # Store db_impl reference for signal manager access
+        self.db_impl = db_impl
         
         # Keep these attributes for backward compatibility and space-specific functionality
         self.connection_string = connection_string
@@ -135,6 +140,18 @@ class PostgreSQLSpaceImpl:
             )
         return self._schema_cache[space_id]
     
+    def get_signal_manager(self):
+        """
+        Get access to the SignalManager instance.
+        
+        This method provides access to the SignalManager to child components
+        like PostgreSQLSpaceGraphs without creating circular imports.
+        
+        Returns:
+            SignalManager: The application-wide SignalManager instance or None if not initialized
+        """
+        return self.db_impl.get_signal_manager()
+
     def get_term_cache(self):
         """
         Get the term cache for this PostgreSQL space implementation.
@@ -816,6 +833,6 @@ class PostgreSQLSpaceImpl:
         Close the connection pool and all connections.
         """
         self.core.close_pool()
-
+        
+     
     
-

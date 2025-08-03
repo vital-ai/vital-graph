@@ -10,25 +10,85 @@ from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.pool import NullPool
 from psycopg_pool import ConnectionPool
 import psycopg
+import traceback
 
 # Import PostgreSQLSpaceImpl for RDF space management
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 
 
 # Custom connection class for psycopg-pool < 3.3 to properly integrate with SQLAlchemy
+# Logger for connection debugging
+conn_logger = logging.getLogger('vitalgraph.db.connections')
+
 class SharedPoolConnection(psycopg.Connection):
     """
     Custom connection class that overrides close() to return connections to the pool
     instead of closing them. This is required for psycopg-pool < 3.3 to work with SQLAlchemy.
+    
+    This implementation avoids infinite recursion by making putconn use reset() instead of close().
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._conn_id = id(self)
+        self._call_stack = None
+        conn_logger.info(f"SharedPoolConnection created: {self._conn_id}")
+        
+    def reset(self):
+        """Reset the connection state without closing it."""
+        try:
+            # Call the parent class reset method if it exists
+            if hasattr(super(), 'reset'):
+                super().reset()
+            else:
+                # Fallback: rollback any pending transaction
+                if not self.closed:
+                    self.rollback()
+            conn_logger.debug(f"Connection {self._conn_id} reset successful")
+        except Exception as e:
+            conn_logger.warning(f"Connection {self._conn_id} reset failed: {e}")
+            # Don't raise the exception, just log it
+    
     def close(self):
+        # Save call stack for debugging
+        self._call_stack = traceback.format_stack()
+        conn_logger.info(f"Connection close() called on {self._conn_id}")
+        
         if pool := getattr(self, "_pool", None):
-            # Connection currently checked out from its pool;
-            # instead of closing it, return it to the pool.
-            pool.putconn(self)
+            conn_logger.info(f"Connection {self._conn_id} has pool {id(pool)}")
+            # Before returning to pool, call reset() instead of close()
+            # This avoids recursive calls to close() from pool.putconn()
+            try:
+                # Reset the connection instead of closing it
+                self.reset()
+                conn_logger.info(f"Connection {self._conn_id} reset successful")
+                
+                # This is a safe copy of the pool reference before putconn
+                tmp_pool = pool
+                pool_id = id(tmp_pool)
+                conn_logger.info(f"Connection {self._conn_id} temporarily removing _pool {pool_id}")
+                
+                # Remove _pool attribute to prevent putconn->close recursion
+                object.__setattr__(self, "_pool", None)
+                
+                # Now return connection to pool - putconn won't trigger close() recursion
+                conn_logger.info(f"Connection {self._conn_id} returning to pool {pool_id}")
+                tmp_pool.putconn(self)
+                conn_logger.info(f"Connection {self._conn_id} successfully returned to pool {pool_id}")
+            except Exception as e:
+                # Log the error and stack trace
+                conn_logger.error(f"Connection {self._conn_id} pool return error: {e}")
+                conn_logger.error("Call stack:\n" + ''.join(self._call_stack))
+                
+                # Restore _pool if something goes wrong
+                conn_logger.info(f"Connection {self._conn_id} restoring pool reference after error")
+                object.__setattr__(self, "_pool", pool)
+                
+                # If returning to pool fails, close for real
+                conn_logger.info(f"Connection {self._conn_id} closing after pool return failure")
+                super().close()
         else:
-            # Connection being removed from its pool, or not part of any pool;
-            # close the connection for real.
+            # If no pool or connection is being removed from pool, close for real
+            conn_logger.info(f"Connection {self._conn_id} has no pool, calling super().close()")
             super().close()
 
 # Create declarative base for ORM models
@@ -221,6 +281,22 @@ class PostgreSQLDbImpl:
         self.logger.info(f"Table prefix: {self.table_prefix}")
         self.logger.info(f"Global prefix for RDF spaces: {self.global_prefix}")
     
+        self.signal_manager = None
+
+
+    def set_signal_manager(self, signal_manager):
+        """Set the SignalManager instance for notification services.
+        
+        Args:
+            signal_manager: SignalManager instance
+        """
+        self.logger.info(f"Setting SignalManager: {signal_manager}")
+        self.signal_manager = signal_manager
+        
+    def get_signal_manager(self):
+        """Get the SignalManager instance for notification services."""
+        return self.signal_manager
+
     def _sanitize_config_for_logging(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Remove sensitive information from config for logging."""
         sanitized = config.copy()
@@ -251,17 +327,17 @@ class PostgreSQLDbImpl:
             # Create separate connection pools for different usage patterns
             connection_string = str(db_url).replace('+psycopg', '')
             
-            # ORM Pool: For SQLAlchemy operations (spaces, users)
-            # No row_factory to maintain SQLAlchemy compatibility
-            self.orm_pool = ConnectionPool(
-                conninfo=connection_string,
-                connection_class=SharedPoolConnection,
-                min_size=3,  # Smaller pool for ORM operations
-                max_size=10,
-                max_idle=300,
-                timeout=30,
-                max_lifetime=3600
-            )
+            # Configure SQLAlchemy's built-in pool (no longer using custom orm_pool)
+            orm_pool_config = {
+                'pool_size': 3,  # Smaller pool for ORM operations
+                'max_overflow': 7,  # max_size (10) - pool_size (3)
+                'pool_timeout': 30,
+                'pool_recycle': 3600,
+                'pool_pre_ping': True
+            }
+            
+            # Not creating a custom orm_pool anymore - will use SQLAlchemy's built-in pool
+            self.orm_pool = None
             
             # RDF Pool: For raw SQL operations (RDF/SPARQL)
             # Individual functions will set row_factory as needed
@@ -280,7 +356,7 @@ class PostgreSQLDbImpl:
             # Create Dict pool for operations requiring dictionary results
             self.dict_pool = ConnectionPool(
                 conninfo=connection_string,
-                connection_class=SharedPoolConnection,
+                connection_class=SharedPoolConnection,  # Use SharedPoolConnection for dict pool
                 configure=lambda conn: setattr(conn, 'row_factory', psycopg.rows.dict_row),
                 min_size=rdf_pool_config.get('min_size', 3),
                 max_size=rdf_pool_config.get('max_size', 15),
@@ -291,21 +367,19 @@ class PostgreSQLDbImpl:
                 reconnect_failed=rdf_pool_config.get('reconnect_failed', None)
                 # Pre-configured with dict_row factory
             )
-            
-            # Test the ORM pool
-            with self.orm_pool.connection() as test_conn:
+            # Test RDF pool to verify database connectivity
+            with self.rdf_pool.connection() as test_conn:
                 cursor = test_conn.cursor()
                 cursor.execute('SELECT 1')
                 result = cursor.fetchone()
-                self.logger.info(f"ORM pool connection test successful: {result}")
+                self.logger.info(f"RDF pool connection test successful: {result}")
             
-            # Create SQLAlchemy sync engine with NullPool and dedicated ORM pool
-            self.logger.info("Creating SQLAlchemy engine with NullPool using dedicated ORM pool")
+            # Create SQLAlchemy sync engine with its built-in QueuePool
+            self.logger.info("Creating SQLAlchemy engine with built-in QueuePool")
             
             self.engine = create_engine(
-                "postgresql+psycopg://",  # note: dialect+driver without connection details
-                poolclass=NullPool,       # disable SQLAlchemy's own pool
-                creator=self.orm_pool.getconn,  # use dedicated ORM pool to obtain connections
+                db_url,  # Use full database URL for direct connection
+                **orm_pool_config,  # Use the configured pool settings
                 echo=False
             )
             
@@ -347,6 +421,7 @@ class PostgreSQLDbImpl:
             use_unlogged = tables_config.get('use_unlogged', True)
             
             self.space_impl = PostgreSQLSpaceImpl(
+                db_impl = self,
                 connection_string=connection_string, 
                 global_prefix=self.global_prefix, 
                 use_unlogged=use_unlogged,
@@ -796,6 +871,72 @@ class PostgreSQLDbImpl:
         }
     
     # Space management methods
+    
+    async def space_record_exists(self, space_id: str) -> bool:
+        """
+        Check if a space record exists in the Space table.
+        
+        Args:
+            space_id: Space identifier to check
+            
+        Returns:
+            bool: True if space record exists in the database, False otherwise
+        """
+        try:
+            self.logger.info(f"Checking if space record '{space_id}' exists")
+            
+            if not self.connected or not self.session_factory:
+                self.logger.error("Not connected to database")
+                return False
+            
+            with self.session_factory() as session:
+                existing_space = session.query(self.Space).filter(
+                    self.Space.space == space_id
+                ).first()
+                
+                exists = existing_space is not None
+                self.logger.debug(f"Space record '{space_id}' exists: {exists}")
+                return exists
+                
+        except SQLAlchemyError as e:
+            self.logger.error(f"Database error checking space record: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error checking space record: {e}")
+            return False
+            
+    async def user_record_exists(self, username: str) -> bool:
+        """
+        Check if a user record exists in the User table.
+        
+        Args:
+            username: Username to check
+            
+        Returns:
+            bool: True if user record exists in the database, False otherwise
+        """
+        try:
+            self.logger.info(f"Checking if user record '{username}' exists")
+            
+            if not self.connected or not self.session_factory:
+                self.logger.error("Not connected to database")
+                return False
+            
+            with self.session_factory() as session:
+                existing_user = session.query(self.User).filter(
+                    self.User.username == username
+                ).first()
+                
+                exists = existing_user is not None
+                self.logger.debug(f"User record '{username}' exists: {exists}")
+                return exists
+                
+        except SQLAlchemyError as e:
+            self.logger.error(f"Database error checking user record: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Unexpected error checking user record: {e}")
+            return False
     async def list_spaces(self) -> List[Dict[str, Any]]:
         """
         List all graph spaces.
@@ -955,7 +1096,10 @@ class PostgreSQLDbImpl:
                     session.refresh(new_space)
                     
                     result = new_space.to_dict()
-                    self.logger.info(f"Space added successfully: {result}")
+                    self.logger.info(f"✅ Space added successfully: {result}")
+                    
+                    # Notifications will be handled by SpaceManager layer
+                    
                     return result
                 
         except ValueError as e:
@@ -987,7 +1131,12 @@ class PostgreSQLDbImpl:
                 self.logger.error("Not connected to database")
                 return None
             
-            with self.session_factory() as session:
+            # FIRST SESSION - validation and basic updates
+            session = None
+            try:
+                # Explicitly create session instead of context manager to have more control
+                session = self.session_factory()
+                
                 space = session.query(self.Space).filter(self.Space.id == int(space_id)).first()
                 
                 if not space:
@@ -1005,7 +1154,7 @@ class PostgreSQLDbImpl:
                         self.logger.warning(f"Space identifier {space_data['space']} already exists (excluding current space)")
                         raise ValueError(f"Space identifier '{space_data['space']}' already exists. Please choose a different space identifier.")
                 
-                # Update fields if provided (ignore id - server controlled)
+                # Update basic fields
                 if 'tenant' in space_data:
                     space.tenant = space_data['tenant']
                 if 'space' in space_data:
@@ -1014,24 +1163,59 @@ class PostgreSQLDbImpl:
                     space.space_name = space_data['space_name']
                 if 'space_description' in space_data:
                     space.space_description = space_data['space_description']
-                # Note: id and update_time are ignored - server controlled
+                    
+                # Space_data may contain additional properties/settings
+                if 'properties' in space_data:
+                    space.properties = json.dumps(space_data['properties'])
                 
+                # Settings may be user, tenant, or space specific
+                if 'settings' in space_data:
+                    space.settings = json.dumps(space_data['settings'])
+                
+                # Commit all changes in a single transaction
                 try:
                     session.commit()
-                    # Refresh to get the updated data including new update_time
-                    session.refresh(space)
+                    # Get updated space data for return value
                     result = space.to_dict()
-                    self.logger.info(f"Space {space_id} updated successfully: {result}")
-                    return result
                 except IntegrityError as e:
                     session.rollback()
-                    self.logger.error(f"Integrity constraint violation updating space: {e}")
-                    # Check if it's a uniqueness constraint violation
                     error_msg = str(e.orig).lower() if hasattr(e, 'orig') else str(e).lower()
                     if 'unique' in error_msg and 'space' in error_msg:
                         raise ValueError(f"Space identifier '{space_data.get('space', '')}' already exists. Please choose a different space identifier.")
                     else:
                         raise ValueError(f"Database constraint violation: {str(e)}")
+                
+                # Notify space updated via signal
+                try:
+                    from vitalgraph.signal.signal_manager import VitalSignalManager, SIGNAL_TYPE_UPDATED
+                    signal_manager = VitalSignalManager.get_instance()
+                    if signal_manager:
+                        # Run notification in background to avoid blocking
+                        asyncio.create_task(signal_manager.notify_space_changed(space.space, SIGNAL_TYPE_UPDATED))
+                        self.logger.debug(f"Sent notifications for space update: '{space.space}'")
+                    else:
+                        self.logger.debug(f"No SignalManager available for notifications")
+                except Exception as e:
+                    # Log but don't fail the operation if notification fails
+                    self.logger.warning(f"Failed to send notification for space update: {e}")
+                
+                return result
+                
+            except Exception as e:
+                # Handle and log exceptions
+                if isinstance(e, ValueError):
+                    # Re-raise validation errors for API layer to handle
+                    raise
+                self.logger.error(f"Error updating space: {e}")
+                return None
+            finally:
+                # Always ensure session is closed properly
+                if session:
+                    try:
+                        session.close()
+                        self.logger.debug(f"Session closed successfully in update_space for {space_id}")
+                    except Exception as close_err:
+                        self.logger.error(f"Error closing session in update_space: {close_err}")
         
         except ValueError as e:
             self.logger.error(f"Validation error updating space: {str(e)}")
@@ -1061,16 +1245,41 @@ class PostgreSQLDbImpl:
                 return False
             
             with self.session_factory() as session:
-                space = session.query(self.Space).filter(self.Space.id == int(space_id)).first()
+                # First, look up the space by string identifier
+                space = session.query(self.Space).filter(self.Space.space == space_id).first()
                 
                 if not space:
-                    self.logger.warning(f"Space with ID {space_id} not found")
+                    self.logger.warning(f"Space with identifier '{space_id}' not found")
                     return False
                 
+                # Get the numeric ID and space identifier for deletion
+                space_numeric_id = space.id
+                space_identifier = space.space
+                
+                # Perform the deletion
                 session.delete(space)
                 session.commit()
                 
                 self.logger.info(f"Space {space_id} removed successfully")
+                
+                # Send notification that spaces list has changed
+                try:
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
+                    
+                    # Get SignalManager instance
+                    signal_manager = self.get_signal_manager()
+                    
+                    if signal_manager:
+                        # Send notification asynchronously without blocking
+                        asyncio.create_task(signal_manager.notify_spaces_changed(SIGNAL_TYPE_DELETED))
+                        asyncio.create_task(signal_manager.notify_space_changed(space_identifier, SIGNAL_TYPE_DELETED))
+                        self.logger.debug(f"Sent notifications for space deletion: '{space_identifier}'")
+                    else:
+                        self.logger.debug(f"No SignalManager available for notifications")
+                except Exception as e:
+                    # Log but don't fail the operation if notification fails
+                    self.logger.warning(f"Failed to send notification for space deletion: {e}")
+                
                 return True
                 
         except ValueError as e:
@@ -1091,6 +1300,7 @@ class PostgreSQLDbImpl:
         Returns:
             List of user dictionaries (without passwords)
         """
+        session = None
         try:
             self.logger.info("Listing all users")
             
@@ -1098,12 +1308,23 @@ class PostgreSQLDbImpl:
                 self.logger.error("Not connected to database")
                 return []
             
-            with self.session_factory() as session:
+            # Explicitly create session instead of context manager to have more control
+            session = self.session_factory()
+            try:
                 users = session.query(self.User).all()
+                # Materialize the data early before closing session
                 result = [user.to_dict() for user in users]
-                
                 self.logger.info(f"Found {len(result)} users")
                 return result
+            finally:
+                # Always ensure session is closed and connection returned to pool
+                if session:
+                    try:
+                        # Clean closing of session, returning connection to pool
+                        session.close()
+                        self.logger.debug("Session closed successfully in list_users")
+                    except Exception as close_err:
+                        self.logger.error(f"Error closing session in list_users: {close_err}")
                 
         except SQLAlchemyError as e:
             self.logger.error(f"Database error listing users: {e}")
@@ -1192,6 +1413,27 @@ class PostgreSQLDbImpl:
                     # Include password in response
                     
                     self.logger.info(f"User {username} added successfully with ID: {new_user.id}")
+                    
+                    # Send notification that users list has changed
+                    try:
+                        from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+                        from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
+                        
+                        # Get SignalManager instance
+                        vitalgraph_impl = VitalGraphImpl()
+                        signal_manager = vitalgraph_impl.get_signal_manager()
+                        
+                        if signal_manager:
+                            # Send notification asynchronously without blocking
+                            asyncio.create_task(signal_manager.notify_users_changed(SIGNAL_TYPE_CREATED))
+                            asyncio.create_task(signal_manager.notify_user_changed(str(new_user.id), SIGNAL_TYPE_CREATED))
+                            self.logger.debug(f"Sent notifications for user creation: '{username}'")
+                        else:
+                            self.logger.debug(f"No SignalManager available for notifications")
+                    except Exception as e:
+                        # Log but don't fail the operation if notification fails
+                        self.logger.warning(f"Failed to send notification for user creation: {e}")
+                    
                     return result
         except ValueError as e:
             self.logger.error(f"Validation error adding user: {str(e)}")
@@ -1270,6 +1512,26 @@ class PostgreSQLDbImpl:
                     session.refresh(user)
                     result = user.to_dict()
                     self.logger.info(f"User {user_id} updated successfully: {result}")
+                    
+                    # Send notification that specific user has been updated
+                    try:
+                        from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+                        from vitalgraph.signal.signal_manager import SIGNAL_TYPE_UPDATED
+                        
+                        # Get SignalManager instance
+                        vitalgraph_impl = VitalGraphImpl()
+                        signal_manager = vitalgraph_impl.get_signal_manager()
+                        
+                        if signal_manager:
+                            # Send notification asynchronously without blocking
+                            asyncio.create_task(signal_manager.notify_user_changed(str(user_id), SIGNAL_TYPE_UPDATED))
+                            self.logger.debug(f"Sent notification for user update: '{user_id}'")
+                        else:
+                            self.logger.debug(f"No SignalManager available for notifications")
+                    except Exception as e:
+                        # Log but don't fail the operation if notification fails
+                        self.logger.warning(f"Failed to send notification for user update: {e}")
+                    
                     return result
                 except IntegrityError as e:
                     session.rollback()
@@ -1321,10 +1583,35 @@ class PostgreSQLDbImpl:
                     return False
                 
                 username = user.username
+                # Store username for notification before deletion
+                user_id_str = str(user_id)
+                
+                # Perform the deletion
                 session.delete(user)
                 session.commit()
                 
                 self.logger.info(f"User {username} (ID: {user_id}) removed successfully")
+                
+                # Send notification that users list has changed
+                try:
+                    from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
+                    
+                    # Get SignalManager instance
+                    vitalgraph_impl = VitalGraphImpl()
+                    signal_manager = vitalgraph_impl.get_signal_manager()
+                    
+                    if signal_manager:
+                        # Send notification asynchronously without blocking
+                        asyncio.create_task(signal_manager.notify_users_changed(SIGNAL_TYPE_DELETED))
+                        asyncio.create_task(signal_manager.notify_user_changed(user_id_str, SIGNAL_TYPE_DELETED))
+                        self.logger.debug(f"Sent notifications for user deletion: '{username}'")
+                    else:
+                        self.logger.debug(f"No SignalManager available for notifications")
+                except Exception as e:
+                    # Log but don't fail the operation if notification fails
+                    self.logger.warning(f"Failed to send notification for user deletion: {e}")
+                
                 return True
                 
         except ValueError as e:

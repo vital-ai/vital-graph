@@ -42,12 +42,22 @@ def build_select_query(sql_components: SQLComponents, projection_vars: List,
     else:
         logger = logging.getLogger(__name__)
     
+    # Debug: Log what we're receiving (reduced logging for performance)
+    logger.debug(f"🔍 BUILD_SELECT_QUERY: Called with {len(projection_vars) if projection_vars else 0} projection vars")
+    if projection_vars:
+        logger.debug(f"🔍 BUILD_SELECT_QUERY: Projection vars: {[str(v) for v in projection_vars]}")
+    
     # Build SELECT clause, GROUP BY clause, and HAVING clause with variable mappings
     select_clause, group_by_clause, having_clause, case_mapping = _build_select_clause(projection_vars, sql_components.variable_mappings, distinct, sparql_context=sparql_context)
     
     # Build complete SQL query - exact logic from original implementation
     sql_parts = [select_clause]
-    sql_parts.append(sql_components.from_clause)
+    if sql_components.from_clause:
+        # Add FROM keyword if not already present
+        if not sql_components.from_clause.strip().upper().startswith('FROM'):
+            sql_parts.append(f"FROM {sql_components.from_clause}")
+        else:
+            sql_parts.append(sql_components.from_clause)
     
     if sql_components.joins:
         sql_parts.extend(sql_components.joins)
@@ -142,14 +152,34 @@ def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_dis
         # Store the mapping from unique alias to original variable name
         case_mapping[unique_alias] = var_name
         
+        # Debug: Log what we're trying to look up
+        logger.debug(f"🔍 SELECT CLAUSE: Processing var={var} (type={type(var)}), var_name='{var_name}', unique_alias='{unique_alias}'")
+        
         # Get the term text for this variable using the mapping
-        if var in variable_mappings:
+        # PRIORITY ORDER: Use global optimization state first, then string keys, then Variable objects
+        term_column = None
+        
+
+        
+        # SECOND PRIORITY: Try string name lookup (these have the correct term table mappings)
+        if not term_column and var_name in variable_mappings:
+            term_column = variable_mappings[var_name]
+            logger.debug(f"🔍 FOUND MAPPING VIA STRING: {var_name} -> {term_column}")
+        
+        # LOWEST PRIORITY: Try Variable object lookup (these might have wrong alias mappings)
+        if not term_column and var in variable_mappings:
             term_column = variable_mappings[var]
+            logger.debug(f"🔍 FOUND MAPPING VIA VARIABLE OBJECT: {var} -> {term_column}")
+        
+        if term_column:
             # Use unique alias to avoid PostgreSQL case conflicts
             select_items.append(f'{term_column} AS "{unique_alias}"')
+            logger.warning(f"🔍 SELECT ITEM SUCCESS: {var} -> {term_column} AS \"{unique_alias}\"")
         else:
             # Fallback - shouldn't happen with proper mapping
             select_items.append(f"'UNMAPPED_VAR_{var_name}' AS \"{unique_alias}\"")
+            logger.warning(f"⚠️ UNMAPPED VARIABLE: {var} (tried var object, '{var_name}' string, alias lookup)")
+            logger.warning(f"⚠️ AVAILABLE MAPPINGS: {list(variable_mappings.keys())}")
         
     distinct_keyword = "DISTINCT " if has_distinct else ""
     select_clause = f"SELECT {distinct_keyword}{', '.join(select_items)}"
@@ -219,16 +249,31 @@ def build_construct_query(sql_components: SQLComponents, construct_template: Lis
             if isinstance(term, Variable):
                 construct_vars.add(term)
     
-    # Build SELECT clause for construct variables
+    # 🌍 COORDINATION FIX: Use consistent sorted variable ordering to match UNION pattern translation
+    # This ensures variable indexing matches between UNION subqueries and final CONSTRUCT query
+    construct_vars_sorted = sorted(construct_vars, key=str)  # Same ordering as UNION pattern
+    logger.debug(f"CONSTRUCT variables (sorted): {[str(v) for v in construct_vars_sorted]}")
+    
+    # Build SELECT clause for construct variables using consistent ordering
     select_items = []
-    for var in construct_vars:
+    for var in construct_vars_sorted:
         if var in sql_components.variable_mappings:
             var_mapping = sql_components.variable_mappings[var]
             var_name = str(var).replace('?', '')
             select_items.append(f"{var_mapping} AS {var_name}")
         else:
+            # 🌍 COORDINATION FIX: Check master variable mappings before UNMAPPED fallback
+            # This completes the two-phase coordination fix for CONSTRUCT queries
             var_name = str(var).replace('?', '')
-            select_items.append(f"'UNMAPPED_{var_name}' AS {var_name}")
+            master_mapping = None
+            
+            if var_name in variable_mappings:
+                select_items.append(f"{variable_mappings[var_name]} AS {var_name}")
+            elif var in variable_mappings:
+                select_items.append(f"{variable_mappings[var]} AS {var_name}")
+            else:
+                logger.warning(f"No mapping found for {var}, using UNMAPPED fallback")
+                select_items.append(f"'UNMAPPED_{var_name}' AS {var_name}")
     
     if not select_items:
         select_items = ["*"]

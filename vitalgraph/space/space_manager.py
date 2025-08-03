@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+import asyncio
 from .space_impl import SpaceImpl
 
 
@@ -32,6 +33,11 @@ class SpaceRecord:
             'space_id': self.space_id,
             'space_impl_type': type(self.space_impl).__name__,
         }
+    
+    @property
+    def exists(self) -> bool:
+        """Flag to indicate that this space exists (always True for a SpaceRecord instance)"""
+        return True
 
 
 class SpaceManager:
@@ -53,6 +59,7 @@ class SpaceManager:
         self.db_impl = db_impl
         self._spaces: Dict[str, SpaceRecord] = {}
         self._initialized = False
+        self.signal_manager = None
         self.logger.info(f"SpaceManager initialized with db_impl: {type(db_impl).__name__ if db_impl else 'None'}")
         
         # Note: Eager initialization will be done via async initialize_from_database() method
@@ -107,7 +114,7 @@ class SpaceManager:
             
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize SpaceManager from database: {e}")
-    
+      
     async def create_space_with_tables(self, space_id: str, space_name: str, space_description: str = None) -> bool:
         """
         Create a new space with both database record and tables.
@@ -115,81 +122,118 @@ class SpaceManager:
         This method orchestrates the complete space creation process:
         1. Creates database record in Space table
         2. Creates SpaceImpl instance
-        3. Creates space tables via SpaceImpl
-        4. Adds to in-memory registry
+        3. Creates tables needed for space operation
+        4. Creates default namespace entries (rdf, rdfs, owl, xsd)
+        5. Registers space with manager
         
         Args:
             space_id: Unique identifier for the space
-            space_name: Human-readable name for the space
+            space_name: Human-readable name
             space_description: Optional description
             
         Returns:
             True if space created successfully, False otherwise
         """
-        self.logger.info(f"create_space_with_tables() called for space_id='{space_id}'")
+        self.logger.info(f"Creating space with tables: '{space_id}'")
         
-        # Validate inputs
-        if not space_id or not space_name:
-            self.logger.error("space_id and space_name are required")
-            return False
-            
         if not self.db_impl:
-            self.logger.error("No database implementation available")
+            self.logger.error(f"Cannot create space '{space_id}': No database implementation available")
             return False
             
-        # Check if space already exists
+        if not self.db_impl.is_connected():
+            self.logger.error(f"Cannot create space '{space_id}': Database not connected")
+            return False
+            
+        # Check if space already exists in the manager
         if space_id in self._spaces:
-            self.logger.warning(f"Space '{space_id}' already exists in registry")
+            self.logger.error(f"Cannot create space '{space_id}': Space already exists in manager")
+            return False
+            
+        # First check if space record exists in the Space table
+        space_record_exists = await self.db_impl.space_record_exists(space_id)
+        if space_record_exists:
+            self.logger.error(f"Cannot create space '{space_id}': Space record already exists in database")
+            return False
+            
+        # Then check if space tables exist
+        space_impl = self.db_impl.get_space_impl()
+        if space_impl:
+            tables_exist = await space_impl.space_exists(space_id)
+            if tables_exist:
+                self.logger.warning(f"Unusual state: Space '{space_id}' has tables but no record. May need cleanup.")
+                return False
+        else:
+            self.logger.error(f"Cannot create space '{space_id}': Space implementation not available")
             return False
             
         try:
-            # Create space data dictionary
+            # 1. Create space record in database
             space_data = {
-                'tenant': None,  # tenant is optional/nullable
                 'space': space_id,
                 'space_name': space_name,
-                'space_description': space_description
+                'space_description': space_description,
+                'tenant': None
             }
-            
             space_result = await self.db_impl.add_space(space_data)
             if not space_result:
-                self.logger.error(f"Failed to create database record for space '{space_id}'")
+                self.logger.error(f"Failed to create space record in database: '{space_id}'")
                 return False
                 
-            self.logger.debug(f"✅ Created database record for space '{space_id}'")
+            self.logger.info(f"Created space record in database: '{space_id}'")
             
-            # Step 2: Create SpaceImpl instance
-            space_impl = SpaceImpl(space_id=space_id, db_impl=self.db_impl)
-            
-            # Step 3: Create space tables
-            if not space_impl.create():
+            # 2. Create SpaceImpl instance
+            space_impl = self.create_space(space_id)
+            if not space_impl:
+                self.logger.error(f"Failed to create SpaceImpl for '{space_id}'")
+                return False
+                
+            # 3. Create tables for space
+            tables_created = await space_impl.create()
+            if not tables_created:
                 self.logger.error(f"Failed to create tables for space '{space_id}'")
-                # Cleanup: remove database record
-                try:
-                    # Look up space integer ID for removal
-                    db_spaces = await self.db_impl.list_spaces()
-                    space_record = next((s for s in db_spaces if s.get('space') == space_id), None)
-                    if space_record:
-                        space_db_id = space_record.get('id')
-                        await self.db_impl.remove_space(str(space_db_id))
-                        self.logger.debug(f"Cleaned up database record for failed space '{space_id}'")
-                except Exception as cleanup_e:
-                    self.logger.error(f"Failed to cleanup database record for '{space_id}': {cleanup_e}")
+                # Rollback space creation in database
+                await self.db_impl.remove_space(space_id)
                 return False
                 
-            self.logger.debug(f"✅ Created tables for space '{space_id}'")
+            # 4. Initialize default namespaces
+            await space_impl.initialize_default_namespaces()
             
-            # Step 4: Add to registry
+            # 5. Register space with manager
             space_record = SpaceRecord(space_id=space_id, space_impl=space_impl)
             self._spaces[space_id] = space_record
             
-            self.logger.info(f"✅ Successfully created space '{space_id}' with tables and database record")
+            # Send notifications for space creation
+            try:
+                from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
+                
+                # Get SignalManager instance from db_impl
+                signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                
+                if signal_manager:
+                    # Send notification asynchronously without blocking
+                    asyncio.create_task(signal_manager.notify_spaces_changed(SIGNAL_TYPE_CREATED))
+                    asyncio.create_task(signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_CREATED))
+                    self.logger.info(f"📤 Sent notifications for space creation: '{space_id}'")
+                else:
+                    self.logger.warning(f"No SignalManager available for notifications")
+            except Exception as e:
+                # Log but don't fail the operation if notification fails
+                self.logger.warning(f"Failed to send notification for space creation: {e}")
+                import traceback
+                self.logger.warning(f"Notification error traceback: {traceback.format_exc()}")
+            
+            self.logger.info(f"✅ Successfully created space with tables: '{space_id}'")
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Failed to create space '{space_id}': {e}")
+            self.logger.error(f"Error creating space '{space_id}' with tables: {e}")
+            # Attempt to clean up partially created space
+            try:
+                await self.db_impl.remove_space(space_id)
+            except Exception as cleanup_error:
+                self.logger.warning(f"Error cleaning up failed space creation for '{space_id}': {cleanup_error}")
             return False
-    
+                
     async def delete_space_with_tables(self, space_id: str) -> bool:
         """
         Delete a space with complete cleanup of tables and database record.
@@ -197,7 +241,7 @@ class SpaceManager:
         This method orchestrates the complete space deletion process:
         1. Removes space tables via SpaceImpl
         2. Removes database record from Space table
-        3. Removes from in-memory registry
+        3. Removes space from manager registry
         
         Args:
             space_id: Unique identifier of the space to delete
@@ -205,75 +249,99 @@ class SpaceManager:
         Returns:
             True if space deleted successfully, False otherwise
         """
-        self.logger.info(f"delete_space_with_cleanup() called for space_id='{space_id}'")
+        self.logger.info(f"Deleting space with tables: '{space_id}'")
         
         if not self.db_impl:
-            self.logger.error("No database implementation available")
+            self.logger.error(f"Cannot delete space '{space_id}': No database implementation available")
             return False
             
-        # Check if space exists in registry
-        if space_id not in self._spaces:
-            self.logger.warning(f"Space '{space_id}' not found in registry")
-            # Still try to cleanup database record if it exists
+        if not self.db_impl.is_connected():
+            self.logger.error(f"Cannot delete space '{space_id}': Database not connected")
+            return False
             
-        success = True
-        
+        # Check if space exists in the manager
+        space_record = self._spaces.get(space_id)
+        if not space_record:
+            # Check if either space record or tables exist
+            # First check the space record
+            space_record_exists = await self.db_impl.space_record_exists(space_id)
+            
+            # Then check the space tables
+            space_impl = self.db_impl.get_space_impl()
+            if not space_impl:
+                self.logger.error(f"Cannot delete space '{space_id}': Space implementation not available")
+                return False
+                
+            tables_exist = await space_impl.space_exists(space_id)
+            
+            # If neither record nor tables exist, space doesn't exist at all
+            if not space_record_exists and not tables_exist:
+                self.logger.error(f"Cannot delete space '{space_id}': Space does not exist (no record or tables)")
+                return False
+                
+            # Log warning about inconsistent state if needed
+            if space_record_exists and not tables_exist:
+                self.logger.warning(f"Space '{space_id}' has record but no tables (inconsistent state)")
+            elif not space_record_exists and tables_exist:
+                self.logger.warning(f"Space '{space_id}' has tables but no record (inconsistent state)")
+                
+            # We'll proceed with deletion even in inconsistent state to clean up
+                
+            # Space exists in database but not in manager, create temporary SpaceImpl
+            space_impl = self.create_space(space_id)
+        else:
+            # Get the existing SpaceImpl
+            space_impl = space_record.space_impl
+            
         try:
-            # Step 1: Delete space tables
+            # 1. Delete tables for space
+            tables_deleted = await space_impl.destroy()
+            if not tables_deleted:
+                self.logger.error(f"Failed to delete tables for space '{space_id}'")
+                return False
+                
+            # 2. Delete space record from database
+            space_deleted = await self.db_impl.remove_space(space_id)
+            if not space_deleted:
+                self.logger.error(f"Failed to delete space record for '{space_id}' from database")
+                return False
+                
+            # 3. Remove space from manager registry
             if space_id in self._spaces:
-                # Use existing SpaceImpl from registry
-                space_record = self._spaces[space_id]
-                if not space_record.space_impl.destroy():
-                    self.logger.error(f"Failed to delete tables for space '{space_id}'")
-                    success = False
-                else:
-                    self.logger.debug(f"✅ Deleted tables for space '{space_id}'")
-            else:
-                # Space not in registry, create temporary SpaceImpl for table deletion
-                try:
-                    temp_space_impl = SpaceImpl(space_id=space_id, db_impl=self.db_impl)
-                    if not temp_space_impl.destroy():
-                        self.logger.error(f"Failed to delete tables for space '{space_id}'")
-                        success = False
-                    else:
-                        self.logger.debug(f"✅ Deleted tables for space '{space_id}' (via temporary SpaceImpl)")
-                except Exception as e:
-                    self.logger.error(f"Failed to create temporary SpaceImpl for table deletion: {e}")
-                    success = False
-            
-            # Step 2: Delete database record
-            # First get the space to find its integer ID (remove_space expects integer ID)
-            db_spaces = await self.db_impl.list_spaces()
-            space_record = next((s for s in db_spaces if s.get('space') == space_id), None)
-            
-            if space_record:
-                space_db_id = space_record.get('id')
-                if not await self.db_impl.remove_space(str(space_db_id)):
-                    self.logger.error(f"Failed to delete database record for space '{space_id}'")
-                    success = False
-                else:
-                    self.logger.debug(f"✅ Deleted database record for space '{space_id}'")
-            else:
-                self.logger.warning(f"Space '{space_id}' not found in database records")
-                # Don't mark as failure since space might already be deleted
-            
-            # Step 3: Remove from registry
-            if space_id in self._spaces:
-                # Close the space before removing
+                # Close the space before removing from registry
                 try:
                     self._spaces[space_id].space_impl.close()
                 except Exception as close_e:
                     self.logger.warning(f"Error closing space '{space_id}': {close_e}")
-                    
-                del self._spaces[space_id]
-                self.logger.debug(f"✅ Removed space '{space_id}' from registry")
-            
-            if success:
-                self.logger.info(f"✅ Successfully deleted space '{space_id}' with complete cleanup")
-            else:
-                self.logger.error(f"❌ Partial failure deleting space '{space_id}'")
                 
-            return success
+                # Now remove from registry
+                del self._spaces[space_id]
+                self.logger.debug(f"\u2705 Removed space '{space_id}' from registry")
+            else:
+                self.logger.debug(f"Space '{space_id}' was not in registry (already removed)")    
+                
+            # Send notifications for space deletion
+            try:
+                from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
+                
+                # Get SignalManager instance from db_impl
+                signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                
+                if signal_manager:
+                    # Send notification asynchronously without blocking
+                    asyncio.create_task(signal_manager.notify_spaces_changed(SIGNAL_TYPE_DELETED))
+                    asyncio.create_task(signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_DELETED))
+                    self.logger.info(f"📤 Sent notifications for space deletion: '{space_id}'")
+                else:
+                    self.logger.warning(f"No SignalManager available for notifications")
+            except Exception as e:
+                # Log but don't fail the operation if notification fails
+                self.logger.warning(f"Failed to send notification for space deletion: {e}")
+                import traceback
+                self.logger.warning(f"Notification error traceback: {traceback.format_exc()}")
+        
+            self.logger.info(f"✅ Successfully deleted space '{space_id}' with complete cleanup")
+            return True
             
         except Exception as e:
             self.logger.error(f"❌ Failed to delete space '{space_id}': {e}")
@@ -555,4 +623,6 @@ class SpaceManager:
         return iter(self._spaces.keys())
     
     def __repr__(self) -> str:
-        return f"SpaceManager(spaces={len(self._spaces)}, space_ids={list(self._spaces.keys())})"
+        return f"SpaceManager(spaces={len(self._spaces)}, space_ids={list(self._spaces.keys())})"    
+    
+    

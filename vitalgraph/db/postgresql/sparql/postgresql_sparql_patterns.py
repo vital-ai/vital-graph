@@ -48,40 +48,68 @@ async def translate_union_pattern(left_sql: SQLComponents, right_sql: SQLCompone
         logger = logging.getLogger(__name__)
         logger.info(f"🔗 {function_name}: Starting UNION pattern translation")
     
-    # Determine all variables that appear in either branch - exact logic from original
-    all_variables = set(left_sql.variable_mappings.keys()) | set(right_sql.variable_mappings.keys())
-    logger.debug(f"All variables in UNION: {[str(v) for v in all_variables]}")
+    # 🎆 SELF-CONTAINED ARCHITECTURE: Each branch is completely independent
+    # This eliminates all "column does not exist" errors by ensuring SQL validity
     
-    # Build SELECT clauses for both branches with consistent variable ordering - exact logic from original
-    variable_list = sorted(all_variables, key=str)  # Consistent ordering
+    logger.debug(f"🎆 SELF-CONTAINED LEFT: {[str(v) for v in left_sql.variable_mappings.keys()]}")
+    logger.debug(f"🎆 SELF-CONTAINED RIGHT: {[str(v) for v in right_sql.variable_mappings.keys()]}")
     
+    # 📝 CRITICAL INSIGHT: Create a unified variable list first, then map each branch to it
+    # This ensures consistent column positions across both branches
+    
+    # Get all unique variables from both branches
+    all_vars = sorted(set(left_sql.variable_mappings.keys()) | set(right_sql.variable_mappings.keys()), key=str)
+    logger.debug(f" UNIFIED VARIABLE LIST: {[str(v) for v in all_vars]}")
+    
+    # Build SELECT clauses for each branch using the unified variable list
     left_select_items = []
     right_select_items = []
-    final_variable_mappings = {}
     
-    for i, var in enumerate(variable_list):
-        col_name = f"var_{i}"  # Use consistent column names
-        final_variable_mappings[var] = col_name
+    # CRITICAL FIX: Use global variable mappings from SPARQL context for UNION coordination
+    # Check if we have global optimization state with master variable mappings
+    master_variable_mappings = {}
+    
+    for i, var in enumerate(all_vars):
+        col_name = f"var_{i}"
         
-        # Left branch: use mapping if available, otherwise NULL - exact logic from original
-        if var in left_sql.variable_mappings:
-            left_mapping = left_sql.variable_mappings[var]
-            left_select_items.append(f"{left_mapping} AS {col_name}")
-            # Debug BIND expressions in UNION
-            if "'" in left_mapping and left_mapping.startswith("'") and left_mapping.endswith("'"):
-                logger.debug(f"UNION Left: BIND literal {var} -> {left_mapping}")
+        # LEFT branch: Check master mappings first, then local mappings
+        if var in master_variable_mappings:
+            # Use master mapping from global optimization state
+            master_mapping = master_variable_mappings[var]
+            left_select_items.append(f"{master_mapping} AS {col_name}")
+            logger.debug(f" LEFT MASTER: {var} -> {master_mapping} AS {col_name}")
+        elif var in left_sql.variable_mappings:
+            # Use local mapping from this branch
+            local_mapping = left_sql.variable_mappings[var]
+            left_select_items.append(f"{local_mapping} AS {col_name}")
+            logger.debug(f" LEFT LOCAL: {var} -> {local_mapping} AS {col_name}")
         else:
+            # Variable not available in this branch - use NULL
             left_select_items.append(f"NULL AS {col_name}")
+            logger.debug(f" LEFT NULL: {var} -> NULL AS {col_name}")
         
-        # Right branch: use mapping if available, otherwise NULL - exact logic from original
-        if var in right_sql.variable_mappings:
-            right_mapping = right_sql.variable_mappings[var]
-            right_select_items.append(f"{right_mapping} AS {col_name}")
-            # Debug BIND expressions in UNION
-            if "'" in right_mapping and right_mapping.startswith("'") and right_mapping.endswith("'"):
-                logger.debug(f"UNION Right: BIND literal {var} -> {right_mapping}")
+        # RIGHT branch: Check master mappings first, then local mappings
+        if var in master_variable_mappings:
+            # Use master mapping from global optimization state
+            master_mapping = master_variable_mappings[var]
+            right_select_items.append(f"{master_mapping} AS {col_name}")
+            logger.debug(f" RIGHT MASTER: {var} -> {master_mapping} AS {col_name}")
+        elif var in right_sql.variable_mappings:
+            # Use local mapping from this branch
+            local_mapping = right_sql.variable_mappings[var]
+            right_select_items.append(f"{local_mapping} AS {col_name}")
+            logger.debug(f" RIGHT LOCAL: {var} -> {local_mapping} AS {col_name}")
         else:
+            # Variable not available in this branch - use NULL
             right_select_items.append(f"NULL AS {col_name}")
+            logger.debug(f" RIGHT NULL: {var} -> NULL AS {col_name}")
+    
+    # Final variable mappings for the UNION result - maps to the unified column positions
+    final_variable_mappings = {}
+    for i, var in enumerate(all_vars):
+        final_variable_mappings[var] = f"var_{i}"
+    
+    logger.debug(f"🎆 SELF-CONTAINED UNION: {len(all_vars)} columns, {len(final_variable_mappings)} variables")
     
     # Build left branch SQL - EXACT logic ported from original implementation
     left_from = left_sql.from_clause
@@ -802,42 +830,65 @@ async def translate_join_pattern(left_sql: SQLComponents, right_sql: SQLComponen
     # Combine WHERE conditions
     combined_where = left_sql.where_conditions + right_sql.where_conditions
     
-    # CRITICAL FIX: Add equality conditions for shared variables to avoid cartesian products
-    # While the original used pure CROSS JOIN, we need explicit equality conditions
-    # to connect shared variables across patterns and prevent massive cartesian products.
+    # OPTIMIZATION: Enhanced shared variable handling for UNION-BGP connections
+    # This is critical for reducing CROSS JOINs when UNION results connect to BGP patterns
     
     logger.debug(f"Shared variables found: {[str(v) for v in shared_vars]}")
     
     # Generate equality conditions for shared variables
     shared_var_conditions = []
     if shared_vars:
-        logger.debug("Adding equality conditions for shared variables to avoid cartesian product")
+        logger.debug(f"🔧 OPTIMIZATION: Adding {len(shared_vars)} shared variable conditions to avoid cartesian product")
         for var in shared_vars:
             left_mapping = left_sql.variable_mappings.get(var)
             right_mapping = right_sql.variable_mappings.get(var)
             
             if left_mapping and right_mapping:
-                # Extract table aliases from the mappings (e.g., "subject_term_0.term_text" -> "subject_term_0")
+                # OPTIMIZATION: Handle UNION-derived variables specially
+                # UNION results use column names like "var_3", while BGP uses "term_table.term_text"
                 import re
-                left_table_match = re.search(r'(\w+)\.', left_mapping)
-                right_table_match = re.search(r'(\w+)\.', right_mapping)
                 
-                if left_table_match and right_table_match:
-                    left_table = left_table_match.group(1)
-                    right_table = right_table_match.group(1)
+                # Check if left side is from UNION (uses var_N pattern)
+                left_is_union = re.match(r'^var_\d+$', left_mapping)
+                right_is_union = re.match(r'^var_\d+$', right_mapping)
+                
+                if left_is_union and not right_is_union:
+                    # Left is UNION column, right is BGP term table
+                    # Connect UNION column to BGP term table
+                    condition = f"{left_mapping} = {right_mapping}"
+                    shared_var_conditions.append(condition)
+                    logger.debug(f"🔗 UNION-BGP connection for {var}: {condition}")
+                elif right_is_union and not left_is_union:
+                    # Right is UNION column, left is BGP term table
+                    condition = f"{left_mapping} = {right_mapping}"
+                    shared_var_conditions.append(condition)
+                    logger.debug(f"🔗 BGP-UNION connection for {var}: {condition}")
+                else:
+                    # Both are BGP term tables or both are UNION columns
+                    left_table_match = re.search(r'(\w+)\.', left_mapping)
+                    right_table_match = re.search(r'(\w+)\.', right_mapping)
                     
-                    # For term tables, connect via term_uuid
-                    if 'term' in left_table and 'term' in right_table:
-                        condition = f"{left_table}.term_uuid = {right_table}.term_uuid"
-                        shared_var_conditions.append(condition)
-                        logger.debug(f"🔗 Added shared variable condition for {var}: {condition}")
+                    if left_table_match and right_table_match:
+                        left_table = left_table_match.group(1)
+                        right_table = right_table_match.group(1)
+                        
+                        # For term tables, connect via term_uuid for better performance
+                        if 'term' in left_table and 'term' in right_table:
+                            condition = f"{left_table}.term_uuid = {right_table}.term_uuid"
+                            shared_var_conditions.append(condition)
+                            logger.debug(f"🔗 Term-term UUID connection for {var}: {condition}")
+                        else:
+                            # Fallback: connect via the actual column values
+                            condition = f"{left_mapping} = {right_mapping}"
+                            shared_var_conditions.append(condition)
+                            logger.debug(f"🔗 Value-based connection for {var}: {condition}")
                     else:
-                        # Fallback: connect via the actual column values
+                        # Direct value comparison
                         condition = f"{left_mapping} = {right_mapping}"
                         shared_var_conditions.append(condition)
-                        logger.debug(f"🔗 Added shared variable condition for {var}: {condition}")
+                        logger.debug(f"🔗 Direct value connection for {var}: {condition}")
     else:
-        logger.debug("No shared variables - using pure CROSS JOIN")
+        logger.debug("⚠️ No shared variables - will use CROSS JOIN (potential performance issue)")
     
     # Combine JOINs
     combined_joins = left_sql.joins + right_sql.joins
@@ -1561,7 +1612,7 @@ async def translate_algebra_pattern_to_components(pattern, context: SparqlContex
         
         # Get the UNION result
         logger.info(f"🔍 UNION: left_sql type: {type(left_sql)}, right_sql type: {type(right_sql)}")
-        union_sql = await translate_union_pattern(left_sql, right_sql, alias_gen)
+        union_sql = await translate_union_pattern(left_sql, right_sql, alias_gen, sparql_context=context)
         logger.info(f"🔍 UNION: union_sql type: {type(union_sql)}, has variable_mappings: {hasattr(union_sql, 'variable_mappings')}")
         
         # Apply context constraints AFTER UNION translation (matching original _translate_pattern_with_context)

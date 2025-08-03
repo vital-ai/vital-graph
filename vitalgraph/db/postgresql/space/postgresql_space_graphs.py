@@ -1,10 +1,10 @@
 import logging
 from typing import Optional, List, Dict, Set
 from datetime import datetime
+import asyncio
 
 # RDFLib imports for graph handling
 from rdflib import URIRef
-
 
 class PostgreSQLSpaceGraphs:
     """
@@ -55,6 +55,27 @@ class PostgreSQLSpaceGraphs:
                 cursor.execute(sql, (graph_uri, graph_name, 0, now, now))
                 
             self.logger.debug(f"Created graph: {graph_uri} in space {space_id}")
+            
+            # Send notification for graph creation
+            try:
+                
+                # Signal manager notification constants
+                from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED, SIGNAL_TYPE_UPDATED, SIGNAL_TYPE_DELETED
+
+                # Get SignalManager instance from space_impl
+                signal_manager = self.space_impl.get_signal_manager()
+                
+                if signal_manager:
+                    # Notify both collection-level and individual graph changes
+                    asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_CREATED))
+                    asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED))
+                    self.logger.debug(f"Sent notifications for graph creation: {graph_uri} in space {space_id}")
+                else:
+                    self.logger.warning(f"No SignalManager available for notifications")
+            except Exception as e:
+                # Log but don't fail the operation if notification fails
+                self.logger.warning(f"Failed to send notification for graph creation: {e}")
+            
             return True
             
         except Exception as e:
@@ -150,7 +171,7 @@ class PostgreSQLSpaceGraphs:
             space_id: Space identifier
             graph_uri: URI of the graph to update
             count_delta: Change in triple count (ignored if absolute_count is provided)
-            absolute_count: Absolute triple count to set (overrides count_delta)
+            absolute_count: Absolute triple count (overrides count_delta if provided)
             
         Returns:
             bool: True if successful, False otherwise
@@ -160,26 +181,48 @@ class PostgreSQLSpaceGraphs:
             
             async with self.space_impl.get_db_connection() as conn:
                 cursor = conn.cursor()
+                
+                # Different SQL based on whether we're doing a delta update or absolute count
                 if absolute_count is not None:
-                    # Set absolute count
                     sql = f"""
                         UPDATE {table_names['graph']}
                         SET triple_count = %s, updated_time = %s
                         WHERE graph_uri = %s
                     """
-                    now = datetime.now()
-                    cursor.execute(sql, (absolute_count, now, graph_uri))
+                    cursor.execute(sql, (absolute_count, datetime.now(), graph_uri))
                 else:
-                    # Update by delta
                     sql = f"""
                         UPDATE {table_names['graph']}
                         SET triple_count = triple_count + %s, updated_time = %s
                         WHERE graph_uri = %s
                     """
-                    now = datetime.now()
-                    cursor.execute(sql, (count_delta, now, graph_uri))
-                    return cursor.rowcount > 0
+                    cursor.execute(sql, (count_delta, datetime.now(), graph_uri))
                     
+            self.logger.debug(f"Updated triple count for graph {graph_uri} in space {space_id}")
+            
+            # Send notification for graph update (triple count change)
+            # Only send if the change is significant (e.g. adding or removing triples)
+            if count_delta != 0 or absolute_count is not None:
+                try:
+                    
+                    # Signal manager notification constants
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED, SIGNAL_TYPE_UPDATED, SIGNAL_TYPE_DELETED
+
+                    # Get SignalManager instance from space_impl
+                    signal_manager = self.space_impl.get_signal_manager()
+               
+                    if signal_manager:
+                        # Notify only the specific graph that changed
+                        asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED))
+                        self.logger.debug(f"Sent notification for graph update: {graph_uri} in space {space_id}")
+                    else:
+                        self.logger.warning(f"No SignalManager available for notifications")
+                except Exception as e:
+                    # Log but don't fail the operation if notification fails
+                    self.logger.warning(f"Failed to send notification for graph update: {e}")
+            
+            return True
+            
         except Exception as e:
             self.logger.error(f"Error updating triple count for graph {graph_uri} in space {space_id}: {e}")
             return False
@@ -191,7 +234,8 @@ class PostgreSQLSpaceGraphs:
         SPARQL Semantics:
         - Removes all triples (quads) from the specified graph
         - Keeps the graph in the registry (graph table entry remains)
-        - Graph still exists but is empty
+        - Triple count is reset to 0
+        - Last update time is modified
         
         Args:
             space_id: Space identifier
@@ -205,28 +249,45 @@ class PostgreSQLSpaceGraphs:
             
             async with self.space_impl.get_db_connection() as conn:
                 cursor = conn.cursor()
-                # Remove all triples from the graph but keep the graph entry
-                sql = f"""
-                    DELETE FROM {table_names['rdf_quad']}
-                    WHERE context_uuid = (
-                        SELECT term_uuid FROM {table_names['term']}
-                        WHERE term_text = %s
-                    )
-                """
                 
-                cursor.execute(sql, (graph_uri,))
+                # Delete all triples from the graph
+                delete_sql = f"""
+                    DELETE FROM {table_names['rdf_quad']}
+                    WHERE context_uuid = (SELECT term_uuid FROM {table_names['term']} WHERE term_text = %s)
+                """
+                cursor.execute(delete_sql, (graph_uri,))
                 deleted_count = cursor.rowcount
                 
-                # Update graph triple count to 0 in the same connection
+                # Update graph metadata
                 update_sql = f"""
                     UPDATE {table_names['graph']}
                     SET triple_count = 0, updated_time = %s
                     WHERE graph_uri = %s
                 """
-                now = datetime.now()
-                cursor.execute(update_sql, (now, graph_uri))
-                        
+                cursor.execute(update_sql, (datetime.now(), graph_uri))
+                    
             self.logger.info(f"Cleared {deleted_count} triples from graph {graph_uri} in space {space_id}")
+            
+            # Send notification for graph update (cleared)
+            try:
+                
+                # Signal manager notification constants
+                from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED, SIGNAL_TYPE_UPDATED, SIGNAL_TYPE_DELETED
+
+                # Get SignalManager instance from space_impl
+                signal_manager = self.space_impl.get_signal_manager()
+                
+                if signal_manager:
+                    # Notify both collection-level and individual graph changes
+                    asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_UPDATED))
+                    asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED))
+                    self.logger.debug(f"Sent notifications for graph clear: {graph_uri} in space {space_id}")
+                else:
+                    self.logger.warning(f"No SignalManager available for notifications")
+            except Exception as e:
+                # Log but don't fail the operation if notification fails
+                self.logger.warning(f"Failed to send notification for graph clear: {e}")
+                
             return True
             
         except Exception as e:
@@ -240,7 +301,8 @@ class PostgreSQLSpaceGraphs:
         SPARQL Semantics:
         - Removes all triples (quads) from the specified graph
         - Removes the graph from the registry (deletes graph table entry)
-        - Graph no longer exists in the system
+        - Contrast with CLEAR GRAPH which keeps the graph registry entry
+        - Cannot access the graph after this operation without re-creating it
         
         Args:
             space_id: Space identifier
@@ -258,10 +320,7 @@ class PostgreSQLSpaceGraphs:
                 # First, remove all triples from the graph
                 delete_triples_sql = f"""
                     DELETE FROM {table_names['rdf_quad']}
-                    WHERE context_uuid = (
-                        SELECT term_uuid FROM {table_names['term']}
-                        WHERE term_text = %s
-                    )
+                    WHERE context_uuid = (SELECT term_uuid FROM {table_names['term']} WHERE term_text = %s)
                 """
                 cursor.execute(delete_triples_sql, (graph_uri,))
                 deleted_count = cursor.rowcount
@@ -274,6 +333,27 @@ class PostgreSQLSpaceGraphs:
                 cursor.execute(delete_graph_sql, (graph_uri,))
                     
             self.logger.info(f"Dropped graph {graph_uri} from space {space_id}")
+            
+            # Send notification for graph deletion
+            try:
+                
+                # Signal manager notification constants
+                from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED, SIGNAL_TYPE_UPDATED, SIGNAL_TYPE_DELETED
+
+                # Get SignalManager instance from space_impl
+                signal_manager = self.space_impl.get_signal_manager()
+               
+                if signal_manager:
+                    # Notify both collection-level and individual graph changes
+                    asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_DELETED))
+                    asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED))
+                    self.logger.debug(f"Sent notifications for graph deletion: {graph_uri} in space {space_id}")
+                else:
+                    self.logger.warning(f"No SignalManager available for notifications")
+            except Exception as e:
+                # Log but don't fail the operation if notification fails
+                self.logger.warning(f"Failed to send notification for graph deletion: {e}")
+                
             return True
             
         except Exception as e:

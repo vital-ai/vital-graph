@@ -43,7 +43,12 @@ const Users: React.FC = () => {
   // Filter users by name
   const filterUsers = useCallback(async (nameFilter: string) => {
     if (!nameFilter.trim()) {
-      // If filter is empty, fetch all users
+      // If filter is empty and not already loading data, fetch all users
+      // This prevents duplicate API calls on initial page load
+      if (loading) {
+        // Don't trigger another fetch if we're already loading data
+        return;
+      }
       await fetchUsers();
       return;
     }
@@ -179,12 +184,14 @@ const Users: React.FC = () => {
           <div className="hidden md:block overflow-x-auto">
             <Table striped>
               <TableHead>
-                <TableHeadCell>ID</TableHeadCell>
-                <TableHeadCell>Username</TableHeadCell>
-                <TableHeadCell>Email</TableHeadCell>
-                <TableHeadCell>Tenant</TableHeadCell>
-                <TableHeadCell>Last Updated</TableHeadCell>
-                <TableHeadCell>Actions</TableHeadCell>
+                <TableRow>
+                  <TableHeadCell>ID</TableHeadCell>
+                  <TableHeadCell>Username</TableHeadCell>
+                  <TableHeadCell>Email</TableHeadCell>
+                  <TableHeadCell>Tenant</TableHeadCell>
+                  <TableHeadCell>Last Updated</TableHeadCell>
+                  <TableHeadCell>Actions</TableHeadCell>
+                </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {users.map((user) => (

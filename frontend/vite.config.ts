@@ -13,6 +13,7 @@ export default defineConfig({
         target: 'http://localhost:8001',
         changeOrigin: true,
         secure: false,
+        ws: true,  // Enable WebSocket proxy support
       },
       // Images are now served directly from frontend/images directory
     },
