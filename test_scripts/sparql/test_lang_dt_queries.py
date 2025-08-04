@@ -17,7 +17,8 @@ import time
 from pathlib import Path
 
 # Add project root directory for vitalgraph imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
@@ -101,7 +102,7 @@ async def setup_connection():
     
     print("🔌 Setting up database connection...")
     
-    config_path = Path(__file__).parent.parent.parent / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
+    config_path = project_root / "vitalgraphdb_config" / "vitalgraphdb-config.yaml"
     
     from vitalgraph.config.config_loader import get_config
     config = get_config(str(config_path))
@@ -117,10 +118,10 @@ async def setup_connection():
 async def cleanup_connection():
     """Clean up database connection."""
     global impl
+    
     if impl:
-        if impl.db_impl:
-            await impl.db_impl.disconnect()
-    print("🔌 Database connection closed")
+        await impl.db_impl.disconnect()
+    print("🔌 Database connection closed.")
 
 async def test_lang_function_basic():
     """Test basic LANG() function with language-tagged literals."""
@@ -422,9 +423,6 @@ async def main():
         # await test_lang_datatype_debug()
         
     finally:
-        # Performance summary
-        print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
-        
         # Cleanup
         await cleanup_connection()
         print("\n✅ LANG() and DATATYPE() Filter Functions Test Complete!")

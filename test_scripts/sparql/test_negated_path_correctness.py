@@ -156,7 +156,7 @@ async def main():
     finally:
         # Disconnect
         try:
-            await space_manager.disconnect()
+            await vital_graph.db_impl.disconnect()
             print("\n🔌 Disconnected")
         except Exception as e:
             print(f"❌ Error during disconnect: {e}")

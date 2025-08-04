@@ -344,7 +344,7 @@ async def test_order_by_queries():
                 print(f"   • {result.get('query_name', 'Unknown')}: {result.get('order_error', 'Unknown order error')}")
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    # Note: term_cache no longer available in refactored PostgreSQLSparqlImpl
     
     await impl.db_impl.disconnect()
     print("\n✅ ORDER BY Query Tests Complete!")

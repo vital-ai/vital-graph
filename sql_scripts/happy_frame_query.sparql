@@ -1,0 +1,52 @@
+PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+PREFIX vital: <http://vital.ai/ontology/vital#>
+PREFIX vital-aimp: <http://vital.ai/ontology/vital-aimp#>
+PREFIX haley: <http://vital.ai/ontology/haley>
+PREFIX haley-ai-question: <http://vital.ai/ontology/haley-ai-question#>
+PREFIX haley-ai-kg: <http://vital.ai/ontology/haley-ai-kg#>
+
+CONSTRUCT {
+  _:bnode1 <urn:hasEntity> ?entity .
+  _:bnode1 <urn:hasFrame> ?frame .
+  _:bnode1 <urn:hasSourceSlot> ?sourceSlot .
+  _:bnode1 <urn:hasDestinationSlot> ?destinationSlot .
+  _:bnode1 <urn:hasSourceSlotEntity> ?sourceSlotEntity .
+  _:bnode1 <urn:hasDestinationSlotEntity> ?destinationSlotEntity .
+}
+WHERE {
+  GRAPH <http://vital.ai/graph/kgwordnetframes> {
+    SELECT ?entity ?frame ?sourceSlot ?destinationSlot ?sourceSlotEntity ?destinationSlotEntity WHERE {
+      {
+        ?sourceSlotEntity a haley-ai-kg:KGEntity .
+        ?sourceSlotEntity haley-ai-kg:hasKGraphDescription ?description1 .
+        FILTER(CONTAINS(LCASE(STR(?description1)), "happy"))
+        BIND(?sourceSlotEntity AS ?entity)
+      }
+      UNION
+      {
+        ?destinationSlotEntity a haley-ai-kg:KGEntity .
+        ?destinationSlotEntity haley-ai-kg:hasKGraphDescription ?description2 .
+        FILTER(CONTAINS(LCASE(STR(?description2)), "happy"))
+        BIND(?destinationSlotEntity AS ?entity)
+      }
+      ?frame a haley-ai-kg:KGFrame .
+      
+      ?sourceEdge a haley-ai-kg:Edge_hasKGSlot .
+      ?sourceEdge vital-core:hasEdgeSource ?frame .
+      ?sourceEdge vital-core:hasEdgeDestination ?sourceSlot .
+      ?sourceSlot a haley-ai-kg:KGEntitySlot .
+      ?sourceSlot haley-ai-kg:hasEntitySlotValue ?sourceSlotEntity .
+      ?sourceSlot haley-ai-kg:hasKGSlotType <urn:hasSourceEntity> .
+      
+      ?destinationEdge a haley-ai-kg:Edge_hasKGSlot .
+      ?destinationEdge vital-core:hasEdgeSource ?frame .
+      ?destinationEdge vital-core:hasEdgeDestination ?destinationSlot .
+      ?destinationSlot a haley-ai-kg:KGEntitySlot .
+      ?destinationSlot haley-ai-kg:hasEntitySlotValue ?destinationSlotEntity .
+      ?destinationSlot haley-ai-kg:hasKGSlotType <urn:hasDestinationEntity> .
+    }
+  }
+}
+ORDER BY ?entity
+LIMIT 10
+OFFSET 0

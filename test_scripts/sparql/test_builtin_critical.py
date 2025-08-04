@@ -81,7 +81,7 @@ async def test_critical_builtins():
                 print(f"   • {result.get('query_name', 'Unknown')}: {result.get('error_msg', 'Unknown error')}")
     
     # Performance summary
-    print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+    # Note: term_cache no longer available in refactored PostgreSQLSparqlImpl
     
     await impl.db_impl.disconnect()
     print("\n✅ Critical Built-in Functions Tests Complete!")

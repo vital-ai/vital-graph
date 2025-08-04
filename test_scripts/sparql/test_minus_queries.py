@@ -513,7 +513,7 @@ async def main():
         
     finally:
         # Performance summary
-        print(f"\n📊 Cache: {sparql_impl.term_cache.size()} terms")
+        # Note: term_cache no longer available in refactored PostgreSQLSparqlImpl
         
         # Cleanup
         await cleanup_connection()

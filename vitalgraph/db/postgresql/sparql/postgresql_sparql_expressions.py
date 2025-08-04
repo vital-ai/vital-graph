@@ -111,7 +111,7 @@ async def translate_filter_expression(expr, variable_mappings: Dict[Variable, st
             else:
                 # For complex expressions, try to translate them
                 try:
-                    return await translate_filter_expression(order_expr, variable_mappings, sparql_context=context)
+                    return await translate_filter_expression(order_expr, variable_mappings, sparql_context=sparql_context)
                 except:
                     return str(order_expr)
         else:
@@ -465,7 +465,7 @@ async def _translate_function_expression(func_expr, variable_mappings: Dict[Vari
     # This handles cases where builtin functions are used in filter expressions
     try:
         logger.debug(f"Attempting to translate function {func_name} using translate_bind_expression")
-        result = translate_bind_expression(func_expr, variable_mappings, sparql_context=context)
+        result = translate_bind_expression(func_expr, variable_mappings, sparql_context=sparql_context)
         if result and result != "1=1" and not result.startswith("'MISSING") and not result.startswith("'PARSE_ERROR"):
             return result
     except Exception as e:
@@ -706,8 +706,8 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_cont
             # CRITICAL FIX: This was missing from refactored implementation
             try:
                 if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
-                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
-                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=context)
+                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=sparql_context)
+                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=sparql_context)
                     
                     # Handle operator - it might be a list or a string
                     op_raw = bind_expr.op
@@ -788,8 +788,8 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_cont
             # CRITICAL FIX: This was missing from refactored implementation
             try:
                 if hasattr(bind_expr, 'expr') and hasattr(bind_expr, 'other') and hasattr(bind_expr, 'op'):
-                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
-                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=context)
+                    left = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=sparql_context)
+                    right = translate_bind_expression(bind_expr.other, variable_mappings, sparql_context=sparql_context)
                     
                     # Handle operator - it might be a list or a string
                     op_raw = bind_expr.op
@@ -969,7 +969,7 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_cont
         elif expr_name == 'Builtin_DATATYPE':
             # DATATYPE(?var) -> get datatype URI for the variable
             # Use the proper _translate_builtin_datatype function instead of placeholder
-            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=context)
+            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=sparql_context)
         elif expr_name == 'Builtin_LANG':
             # LANG(?var) -> get language tag for the variable
             if hasattr(bind_expr, 'arg'):
@@ -1069,13 +1069,13 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_cont
             
         elif expr_name == 'Builtin_DATATYPE':
             # DATATYPE(literal) -> Return datatype URI
-            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=context)
+            return _translate_builtin_datatype(bind_expr, variable_mappings, sparql_context=sparql_context)
             
         # UNARY EXPRESSIONS - Handle unary operators
         elif expr_name == 'UnaryMinus':
             # Handle unary minus like -?age
             if hasattr(bind_expr, 'expr'):
-                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=sparql_context)
                 # Cast to numeric for unary operations - use proper unary minus syntax
                 return f"(-CAST({operand} AS DECIMAL))"
             else:
@@ -1084,7 +1084,7 @@ def translate_bind_expression(bind_expr, variable_mappings: Dict, *, sparql_cont
         elif expr_name == 'UnaryPlus':
             # Handle unary plus like +?age
             if hasattr(bind_expr, 'expr'):
-                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=context)
+                operand = translate_bind_expression(bind_expr.expr, variable_mappings, sparql_context=sparql_context)
                 # Cast to numeric for unary operations
                 return f"(+CAST({operand} AS DECIMAL))"
             else:
@@ -1795,11 +1795,11 @@ def _translate_builtin_datatype(expr, variable_mappings: Dict[Variable, str], *,
             
             # Get the datatype table name from context
             datatype_table = None
-            if context and context.space_impl and context.space_id:
+            if sparql_context and sparql_context.space_impl and sparql_context.space_id:
                 # Get all table names using the proper method with the actual space_id
-                table_names = context.space_impl._get_table_names(context.space_id)
+                table_names = sparql_context.space_impl._get_table_names(sparql_context.space_id)
                 datatype_table = table_names.get('datatype')
-                logger.debug(f"DATATYPE builtin using space_id: {context.space_id}, datatype_table: {datatype_table}")
+                logger.debug(f"DATATYPE builtin using space_id: {sparql_context.space_id}, datatype_table: {datatype_table}")
             
             if datatype_table:
                 # Use the datatype table to resolve datatype URIs
