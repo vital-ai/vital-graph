@@ -65,7 +65,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
                     GRAPH <{graph_id}> {{
                         ?subject a <{kgframe_vitaltype}> .
                         ?subject ?predicate ?object .
-                        ?subject vital:name ?name .
+                        ?subject vital:hasName ?name .
                         FILTER(CONTAINS(LCASE(?name), LCASE("{search}")))
                     }}
                 }}

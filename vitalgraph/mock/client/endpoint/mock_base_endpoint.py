@@ -189,8 +189,6 @@ class MockBaseEndpoint:
             return f"http://www.w3.org/1999/02/22-rdf-syntax-ns#{uri_or_curie.replace('rdf:', '')}"
         elif uri_or_curie.startswith("foaf:"):
             return f"http://xmlns.com/foaf/0.1/{uri_or_curie.replace('foaf:', '')}"
-        elif uri_or_curie == "Class":  # Handle bare "Class" 
-            return "http://www.w3.org/2000/01/rdf-schema#Class"
         elif ":" not in uri_or_curie:
             # Assume it's a VitalGraph property
             return f"http://vital.ai/ontology/haley-ai-kg#{uri_or_curie}"
@@ -337,87 +335,71 @@ class MockBaseEndpoint:
             VitalSigns GraphObject instance
         """
         try:
-            # Create the appropriate VitalSigns object based on vitaltype_uri
-            if vitaltype_uri == "http://vital.ai/ontology/vital#FileNode":
-                from vital_ai_domain.model.FileNode import FileNode
-                obj = FileNode()
-            elif vitaltype_uri == "http://vital.ai/ontology/haley-ai-kg#KGEntity":
-                from ai_haley_kg_domain.model.KGEntity import KGEntity
-                obj = KGEntity()
-            elif vitaltype_uri == "http://vital.ai/ontology/haley-ai-kg#KGType":
-                from ai_haley_kg_domain.model.KGType import KGType
-                obj = KGType()
-            elif vitaltype_uri == "http://vital.ai/ontology/haley-ai-kg#KGFrame":
-                from ai_haley_kg_domain.model.KGFrame import KGFrame
-                obj = KGFrame()
-            else:
-                # Default to GraphObject for unknown types
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                obj = GraphObject()
-            
-            # Clean URI - remove angle brackets if present (including double brackets)
+            # Clean URI - remove angle brackets if present
             clean_uri = str(uri).strip('<>').strip('<>')
-            obj.URI = clean_uri
             
-            # Set properties using the VitalSigns property system
+            # Build RDF string for VitalSigns from_rdf method instead
+            rdf_lines = []
+            
+            # Add core triples in N-Triples format
+            rdf_lines.append(f'<{clean_uri}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{vitaltype_uri}> .')
+            rdf_lines.append(f'<{clean_uri}> <http://vital.ai/ontology/vital-core#vitaltype> <{vitaltype_uri}> .')
+            rdf_lines.append(f'<{clean_uri}> <http://vital.ai/ontology/vital-core#URIProp> <{clean_uri}> .')
+            
+            # Add all properties from SPARQL results as N-Triples
             for prop_uri, value in properties.items():
-                # Clean property URI (remove angle brackets including double brackets) and value (remove quotes)
+                # Clean property URI and value
                 clean_prop_uri = str(prop_uri).strip('<>').strip('<>')
                 clean_value = str(value).strip('"').strip('<>') if isinstance(value, str) else value
                 
-                # FileNode specific properties
-                if clean_prop_uri == "http://vital.ai/ontology/vital#hasFileName":
-                    if hasattr(obj, 'fileName'):
-                        obj.fileName = clean_value
-                elif clean_prop_uri == "http://vital.ai/ontology/vital#hasFileType":
-                    if hasattr(obj, 'fileType'):
-                        obj.fileType = clean_value
-                elif clean_prop_uri == "http://vital.ai/ontology/vital#hasFileLength":
-                    if hasattr(obj, 'fileLength'):
-                        try:
-                            obj.fileLength = int(clean_value) if isinstance(clean_value, str) and clean_value.isdigit() else int(clean_value)
-                        except (ValueError, TypeError):
-                            obj.fileLength = clean_value
-                #KGEntity specific properties
-                elif clean_prop_uri == "http://vital.ai/ontology/vital-core#hasName":
-                    if hasattr(obj, 'name'):
-                        obj.name = clean_value
-                # Shared haley-ai-kg properties
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription":
-                    # Both KGEntity and KGType can have this property
-                    if hasattr(obj, 'kGGraphDescription'):
-                        obj.kGGraphDescription = clean_value
-                    elif hasattr(obj, 'kGraphDescription'):
-                        obj.kGraphDescription = clean_value
+                # Skip system properties that are already handled
+                if clean_prop_uri in [
+                    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                    "http://vital.ai/ontology/vital-core#vitaltype", 
+                    "http://vital.ai/ontology/vital-core#URIProp"
+                ]:
+                    continue
                 
-                # KGEntity specific properties
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType":
-                    if hasattr(obj, 'kGEntityType'):
-                        obj.kGEntityType = clean_value
-                
-                # KGType specific properties (from schema)
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion":
-                    if hasattr(obj, 'kGModelVersion'):
-                        obj.kGModelVersion = clean_value
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasKGTypeVersion":
-                    if hasattr(obj, 'kGTypeVersion'):
-                        obj.kGTypeVersion = clean_value
-                
-                # KGFrame specific properties (from schema)
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription":
-                    if hasattr(obj, 'kGFrameTypeDescription'):
-                        obj.kGFrameTypeDescription = clean_value
-                elif clean_prop_uri == "http://vital.ai/ontology/haley-ai-kg#hasFrameSequence":
-                    if hasattr(obj, 'frameSequence'):
-                        try:
-                            obj.frameSequence = int(clean_value) if isinstance(clean_value, str) and clean_value.isdigit() else int(clean_value)
-                        except (ValueError, TypeError):
-                            obj.frameSequence = clean_value
+                # Format as N-Triple based on value type
+                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                if validate_rfc3986(clean_value, rule='URI'):
+                    # URI value
+                    rdf_lines.append(f'<{clean_uri}> <{clean_prop_uri}> <{clean_value}> .')
+                else:
+                    # Literal value - try to determine type and format properly
+                    try:
+                        # Try float first (includes int)
+                        float_val = float(clean_value)
+                        if '.' in str(clean_value):
+                            rdf_lines.append(f'<{clean_uri}> <{clean_prop_uri}> "{float_val}"^^<http://www.w3.org/2001/XMLSchema#float> .')
+                        else:
+                            rdf_lines.append(f'<{clean_uri}> <{clean_prop_uri}> "{int(float_val)}"^^<http://www.w3.org/2001/XMLSchema#int> .')
+                    except (ValueError, TypeError):
+                        # Check for datetime
+                        if 'T' in clean_value and (':' in clean_value):
+                            rdf_lines.append(f'<{clean_uri}> <{clean_prop_uri}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .')
+                        else:
+                            # Default to string
+                            rdf_lines.append(f'<{clean_uri}> <{clean_prop_uri}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#string> .')
             
-            return obj
+            # Join into RDF string
+            rdf_string = '\n'.join(rdf_lines)
+            
+            # Use VitalSigns to create object from RDF string - no hardcoded classes
+            obj = self.vitalsigns.from_rdf_list(rdf_string)
+            
+            # from_triples_list returns a list, get the first object
+            if obj and len(obj) > 0:
+                return obj[0]
+            else:
+                self.logger.warning(f"No objects created from triples for URI: {clean_uri}")
+                return None
             
         except Exception as e:
             self.logger.error(f"Error converting SPARQL to VitalSigns object: {e}")
+            self.logger.error(f"  URI: {uri}")
+            self.logger.error(f"  VitalType: {vitaltype_uri}")
+            self.logger.error(f"  Properties: {properties}")
             return None
     
     def _objects_to_jsonld_document(self, objects: List[GraphObject]) -> Dict[str, Any]:
@@ -840,16 +822,47 @@ class MockBaseEndpoint:
         Convert JSON-LD document to VitalSigns objects using native functionality.
         
         Args:
-            jsonld_document: JSON-LD document dictionary
+            jsonld_document: JSON-LD document dictionary (JsonLdDocument format)
             
         Returns:
             List of VitalSigns GraphObject instances
         """
         try:
-            # Handle @graph array format using VitalSigns from_jsonld_list
-            if "@graph" in jsonld_document:
-                # Use VitalSigns from_jsonld_list for documents with @graph
+            # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
+            # JsonLdDocument has: context, graph, id, type, and property fields
+            # Standard JSON-LD has: @context, @graph (optional), @id, @type, and property fields
+            
+            if ('graph' in jsonld_document and jsonld_document['graph'] is None) or ('@graph' in jsonld_document and jsonld_document['@graph'] is None):
+                # Single object format - convert JsonLdDocument to standard JSON-LD
+                standard_jsonld = {
+                    '@context': jsonld_document.get('context', jsonld_document.get('@context', {})),
+                    '@id': jsonld_document.get('id'),
+                    '@type': jsonld_document.get('type')
+                }
+                
+                # Add all other properties (skip JsonLdDocument metadata fields)
+                for key, value in jsonld_document.items():
+                    if key not in ['context', 'graph', 'id', 'type', '@context', '@graph']:
+                        standard_jsonld[key] = value
+                
+                # Use VitalSigns to convert from standard JSON-LD
+                obj = self.vitalsigns.from_jsonld(standard_jsonld)
+                
+                # Handle None result
+                if obj is None:
+                    self.logger.warning(f"VitalSigns returned None for converted JSON-LD: {standard_jsonld}")
+                    return []
+                
+                return [obj]
+                
+            elif "@graph" in jsonld_document and jsonld_document["@graph"] is not None:
+                # Multi-object format with @graph array
                 objects = self.vitalsigns.from_jsonld_list(jsonld_document)
+                
+                # Handle None result from VitalSigns
+                if objects is None:
+                    self.logger.warning(f"VitalSigns from_jsonld_list returned None for document: {jsonld_document}")
+                    return []
                 
                 # Ensure we return a list
                 if not isinstance(objects, list):
@@ -857,26 +870,23 @@ class MockBaseEndpoint:
                 
                 return objects
             else:
-                # Single object document
-                try:
-                    obj = self.vitalsigns.from_jsonld(jsonld_document)
-                    
-                    # Handle None result
-                    if obj is None:
-                        self.logger.warning(f"VitalSigns returned None for JSON-LD document: {jsonld_document}")
-                        return []
-                    
-                    # Ensure we return a list
-                    if not isinstance(obj, list):
-                        return [obj]
-                    else:
-                        return obj
-                except Exception as e:
-                    self.logger.error(f"Error converting single JSON-LD object: {e}")
+                # Try direct conversion (already in standard JSON-LD format)
+                obj = self.vitalsigns.from_jsonld(jsonld_document)
+                
+                # Handle None result
+                if obj is None:
+                    self.logger.warning(f"VitalSigns returned None for JSON-LD document: {jsonld_document}")
                     return []
+                
+                # Ensure we return a list
+                if not isinstance(obj, list):
+                    return [obj]
+                else:
+                    return obj
             
         except Exception as e:
             self.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
+            self.logger.error(f"Document keys: {list(jsonld_document.keys()) if jsonld_document else 'None'}")
             return []
     
     def _get_vitaltype_uri(self, obj_type: str) -> str:
@@ -914,19 +924,25 @@ class MockBaseEndpoint:
             stored_count = 0
             
             for obj in objects:
-                # Convert object to triples using the object's method
-                triples = obj.to_triples()
-                
-                # Convert triples to quads with graph_id, cleaning all URIs
-                quads = []
-                for s, p, o in triples:
-                    clean_s = str(s).strip('<>')
-                    clean_p = str(p).strip('<>')
-                    clean_o = str(o).strip('<>')
-                    clean_g = str(graph_id).strip('<>')
-                    quad = (clean_s, clean_p, clean_o, clean_g)
-                    self.logger.info(f"Inserting quad: {quad}")
-                    quads.append(quad)
+                try:
+                    # Convert object to triples using the object's method
+                    self.logger.info(f"Converting object to triples: {obj.URI} (type: {type(obj).__name__})")
+                    triples = obj.to_triples()
+                    self.logger.info(f"Object {obj.URI} generated {len(triples)} triples")
+                    
+                    # Convert triples to quads with graph_id, cleaning all URIs
+                    quads = []
+                    for s, p, o in triples:
+                        clean_s = str(s).strip('<>')
+                        clean_p = str(p).strip('<>')
+                        clean_o = str(o).strip('<>')
+                        clean_g = str(graph_id).strip('<>')
+                        quad = (clean_s, clean_p, clean_o, clean_g)
+                        self.logger.info(f"Inserting quad: {quad}")
+                        quads.append(quad)
+                except Exception as e:
+                    self.logger.error(f"Error converting object {obj.URI} to triples: {e}")
+                    continue
                 
                 # Store in pyoxigraph
                 if self._insert_quads_to_store(space, quads):

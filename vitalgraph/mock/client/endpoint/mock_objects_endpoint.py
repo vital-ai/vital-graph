@@ -62,24 +62,35 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                 
                 SELECT ?subject ?predicate ?object WHERE {{
                     GRAPH <{clean_graph_id}> {{
+                        {{
+                            SELECT DISTINCT ?subject WHERE {{
+                                GRAPH <{clean_graph_id}> {{
+                                    ?subject vital:hasName ?name .
+                                    FILTER(CONTAINS(LCASE(?name), LCASE("{search}")))
+                                }}
+                            }}
+                            LIMIT {page_size} OFFSET {offset}
+                        }}
                         ?subject ?predicate ?object .
-                        ?subject vital:name ?name .
-                        FILTER NOT EXISTS {{ ?subject a <http://www.w3.org/2000/01/rdf-schema#Class> }}
                     }}
                 }}
-                LIMIT {page_size}
-                OFFSET {offset}
                 """
             else:
-                # Query for objects in the graph
+                # Query for objects in the graph - get all triples for selected subjects
                 query = f"""
                 SELECT ?subject ?predicate ?object WHERE {{
                     GRAPH <{clean_graph_id}> {{
+                        {{
+                            SELECT DISTINCT ?subject WHERE {{
+                                GRAPH <{clean_graph_id}> {{
+                                    ?subject ?p ?o .
+                                }}
+                            }}
+                            LIMIT {page_size} OFFSET {offset}
+                        }}
                         ?subject ?predicate ?object .
-                        FILTER NOT EXISTS {{ ?subject a <http://www.w3.org/2000/01/rdf-schema#Class> }}
                     }}
                 }}
-                LIMIT {page_size} OFFSET {offset}
                 """
             
             # Log all quads in the store for debugging
@@ -119,22 +130,65 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             # Convert to VitalSigns KGEntity instances (since that's what we're storing)
             objects = []
             self.logger.info(f"Converting {len(subjects_data)} subjects to VitalSigns objects")
+            # Convert all subjects to RDF and let VitalSigns handle everything
+            all_rdf_lines = []
+            
             for subject_uri, properties in subjects_data.items():
                 self.logger.info(f"Converting subject: {subject_uri} with properties: {list(properties.keys())}")
-                # Use KGEntity for objects endpoint since that's what we create
-                obj = self._convert_sparql_to_vitalsigns_object("http://vital.ai/ontology/haley-ai-kg#KGEntity", subject_uri, properties)
-                if obj:
-                    objects.append(obj)
-                    self.logger.info(f"Successfully converted object: {obj.URI}")
-                else:
-                    self.logger.warning(f"Failed to convert object for URI: {subject_uri}")
+                
+                # Build RDF triples for this subject
+                clean_subject = str(subject_uri).strip('<>')
+                
+                for prop_uri, value in properties.items():
+                    clean_prop = str(prop_uri).strip('<>')
+                    clean_value = str(value).strip('"').strip('<>')
+                    
+                    # Format as N-Triple based on value type
+                    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                    if validate_rfc3986(clean_value, rule='URI'):
+                        # URI value
+                        all_rdf_lines.append(f'<{clean_subject}> <{clean_prop}> <{clean_value}> .')
+                    else:
+                        # Literal value - try to determine type and format properly
+                        try:
+                            # Try float first (includes int)
+                            float_val = float(clean_value)
+                            if '.' in str(clean_value):
+                                all_rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{float_val}"^^<http://www.w3.org/2001/XMLSchema#float> .')
+                            else:
+                                all_rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{int(float_val)}"^^<http://www.w3.org/2001/XMLSchema#int> .')
+                        except (ValueError, TypeError):
+                            # Check for datetime
+                            if 'T' in clean_value and (':' in clean_value):
+                                all_rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .')
+                            else:
+                                # Default to string
+                                all_rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#string> .')
+            
+            # Use VitalSigns to convert all RDF to objects - no hardcoded classes
+            if all_rdf_lines:
+                rdf_string = '\n'.join(all_rdf_lines)
+                try:
+                    objects = self.vitalsigns.from_rdf_list(rdf_string)
+                    
+                    if objects:
+                        for obj in objects:
+                            self.logger.info(f"Successfully converted object: {obj.URI}")
+                    else:
+                        self.logger.warning("VitalSigns returned no objects from RDF")
+                        objects = []
+                except Exception as e:
+                    self.logger.error(f"Error converting RDF to VitalSigns objects: {e}")
+                    self.logger.warning("Skipping objects that couldn't be converted")
+                    objects = []
+            else:
+                objects = []
             
             # Get total count (separate query)
             count_query = f"""
             SELECT (COUNT(DISTINCT ?subject) as ?count) WHERE {{
                 GRAPH <{clean_graph_id}> {{
                     ?subject ?predicate ?object .
-                    FILTER NOT EXISTS {{ ?subject a <http://www.w3.org/2000/01/rdf-schema#Class> }}
                 }}
             }}
             """
@@ -223,22 +277,55 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                 obj_value = binding.get("object", {}).get("value", "")
                 properties[predicate] = obj_value
             
-            # Convert to VitalSigns KGEntity (since that's what we're storing)
-            obj = self._convert_sparql_to_vitalsigns_object("http://vital.ai/ontology/haley-ai-kg#KGEntity", clean_uri, properties)
+            # Build RDF string and let VitalSigns handle everything
+            rdf_lines = []
+            clean_subject = str(clean_uri).strip('<>')
+            
+            for prop_uri, value in properties.items():
+                clean_prop = str(prop_uri).strip('<>')
+                clean_value = str(value).strip('"').strip('<>')
+                
+                # Format as N-Triple based on value type
+                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                if validate_rfc3986(clean_value, rule='URI'):
+                    # URI value
+                    rdf_lines.append(f'<{clean_subject}> <{clean_prop}> <{clean_value}> .')
+                else:
+                    # Literal value - try to determine type and format properly
+                    try:
+                        # Try float first (includes int)
+                        float_val = float(clean_value)
+                        if '.' in str(clean_value):
+                            rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{float_val}"^^<http://www.w3.org/2001/XMLSchema#float> .')
+                        else:
+                            rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{int(float_val)}"^^<http://www.w3.org/2001/XMLSchema#int> .')
+                    except (ValueError, TypeError):
+                        # Check for datetime
+                        if 'T' in clean_value and (':' in clean_value):
+                            rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#dateTime> .')
+                        else:
+                            # Default to string
+                            rdf_lines.append(f'<{clean_subject}> <{clean_prop}> "{clean_value}"^^<http://www.w3.org/2001/XMLSchema#string> .')
+            
+            # Use VitalSigns to convert RDF to object - no hardcoded classes
+            if rdf_lines:
+                rdf_string = '\n'.join(rdf_lines)
+                self.logger.info(f"Objects get_object - Converting RDF with {len(rdf_lines)} lines")
+                self.logger.info(f"Objects get_object - First RDF line: {rdf_lines[0] if rdf_lines else 'None'}")
+                try:
+                    objects = self.vitalsigns.from_rdf_list(rdf_string)
+                    obj = objects[0] if objects and len(objects) > 0 else None
+                    self.logger.info(f"Objects get_object - VitalSigns conversion successful: {obj is not None}")
+                except Exception as e:
+                    self.logger.error(f"Objects get_object - VitalSigns conversion failed: {e}")
+                    obj = None
+            else:
+                self.logger.warning(f"Objects get_object - No RDF lines generated for {uri}")
+                obj = None
             
             if obj:
                 # Convert to JSON-LD using VitalSigns native functionality
                 obj_jsonld = obj.to_jsonld()
-                
-                # Ensure the JSON-LD has a @graph structure that the test expects
-                if '@graph' not in obj_jsonld:
-                    # Convert single object to @graph array format
-                    single_obj = {k: v for k, v in obj_jsonld.items() if k not in ['@context']}
-                    obj_jsonld = {
-                        '@context': obj_jsonld.get('@context', {}),
-                        '@graph': [single_obj]
-                    }
-                
                 return JsonLdDocument(**obj_jsonld)
             else:
                 from vital_ai_vitalsigns.model.GraphObject import GraphObject

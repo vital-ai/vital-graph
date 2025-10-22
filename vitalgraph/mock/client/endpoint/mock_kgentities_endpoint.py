@@ -61,7 +61,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
                     GRAPH <{graph_id}> {{
                         ?subject a <{kgentity_vitaltype}> .
                         ?subject ?predicate ?object .
-                        ?subject vital:name ?name .
+                        ?subject vital:hasName ?name .
                         FILTER(CONTAINS(LCASE(?name), LCASE("{search}")))
                     }}
                 }}
