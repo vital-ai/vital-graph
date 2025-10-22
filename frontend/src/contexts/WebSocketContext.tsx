@@ -150,25 +150,25 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({ children }
     };
   }, []);
 
-  // WebSocket methods
+  // WebSocket methods (token is automatically added by WebSocketService)
   const sendMessage = (message: Omit<import('../services/WebSocketService').WebSocketMessage, 'token'>) => {
-    webSocketService.send({ ...message, token: token });
+    webSocketService.send(message);
   };
 
   const ping = () => {
-    webSocketService.send({ action: 'ping', token: token });
+    webSocketService.send({ type: 'ping', timestamp: new Date().toISOString() });
   };
 
   const echo = (message: string) => {
-    webSocketService.send({ action: 'echo', message, token: token });
+    webSocketService.send({ type: 'echo', message });
   };
 
   const broadcast = (message: string) => {
-    webSocketService.send({ action: 'broadcast', message, token: token });
+    webSocketService.send({ type: 'broadcast', message, timestamp: new Date().toISOString() });
   };
 
   const getStatus = () => {
-    webSocketService.send({ action: 'status', token: token });
+    webSocketService.send({ type: 'get_status' });
   };
 
   // Provide the WebSocket context value to children components

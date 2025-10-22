@@ -427,7 +427,9 @@ class PostgreSQLSpaceTerms:
             RDFLib term (URIRef, Literal, or BNode)
         """
         if term_type == 'U':
-            return URIRef(text)
+            # Clean URI text by removing angle brackets if present
+            clean_uri = text.strip('<>') if text.startswith('<') and text.endswith('>') else text
+            return URIRef(clean_uri)
         elif term_type == 'L':
             if lang:
                 return Literal(text, lang=lang)
@@ -439,5 +441,6 @@ class PostgreSQLSpaceTerms:
         elif term_type == 'B':
             return BNode(text)
         else:
-            # Fallback to URIRef
-            return URIRef(text)
+            # Fallback to URIRef with cleaned text
+            clean_uri = text.strip('<>') if text.startswith('<') and text.endswith('>') else text
+            return URIRef(clean_uri)

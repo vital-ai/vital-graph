@@ -110,7 +110,7 @@ class VitalGraphDBAdminREPL:
         elif command == 'disconnect':
             return self.cmd_disconnect(args)
         elif command == 'init':
-            return self.cmd_init(args)
+            return asyncio.run(self.cmd_init(args))
         elif command == 'purge':
             return self.cmd_purge(args)
         elif command == 'delete':
@@ -209,15 +209,42 @@ class VitalGraphDBAdminREPL:
         
         return True
     
-    def cmd_init(self, args: list[str]) -> bool:
+    async def cmd_init(self, args: list[str]) -> bool:
         """Initialize database tables (only if they don't exist)."""
         if not self.connected:
             print("❌ Not connected to database. Use 'connect;' first.")
             return True
+        if not self.db_impl:
+            print("Error: Not connected to database. Use 'connect' command first.")
+            return True
         
-        print("Initializing VitalGraphDB tables...")
-        # TODO: Implement table initialization logic
-        print("✅ Database tables initialized (if not already present)")
+        if not hasattr(self.db_impl, 'table_prefix') or not self.db_impl.table_prefix:
+            print("Error: Database implementation missing table_prefix configuration.")
+            return True
+        
+        print(f"Initializing database tables with prefix: {self.db_impl.table_prefix}")
+        
+        # Let the database implementation determine the proper state based on table existence
+        await self.db_impl._load_current_state()
+        print(f"Current database state: {self.db_impl.state}")
+        
+        if self.db_impl.state != "uninitialized":
+            print(f"❌ Cannot initialize - database state is '{self.db_impl.state}', must be 'uninitialized'")
+            print("   Tables may already exist for this prefix")
+            return True
+        
+        try:
+            success = await self.db_impl.init_tables()
+            if success:
+                print("Database tables initialized successfully.")
+            else:
+                print("Failed to initialize database tables.")
+                print("   Check database connection and permissions")
+                
+        except Exception as e:
+            print(f"❌ Error during initialization: {e}")
+            return True
+        
         return True
     
     def cmd_purge(self, args: list[str]) -> bool:
@@ -252,11 +279,23 @@ class VitalGraphDBAdminREPL:
         
         print("VitalGraphDB Installation Information:")
         print("=====================================")
-        # TODO: Implement info gathering logic
+        
+        # Load current state to get accurate status
+        asyncio.run(self.db_impl._load_current_state())
+        
         print("Database: PostgreSQL")
         print("Status: Connected")
+        print(f"Table Prefix: {self.db_impl.table_prefix}")
+        print(f"Initialization State: {self.db_impl.state}")
+        
+        if self.db_impl.state == "initialized":
+            print(f"Install ID: {self.db_impl.current_install.get('id', 'N/A') if self.db_impl.current_install else 'N/A'}")
+            print(f"Spaces: {len(self.db_impl.current_spaces)} configured")
+            print(f"Users: {len(self.db_impl.current_users)} configured")
+        elif self.db_impl.state == "uninitialized":
+            print("Global tables not yet created - run 'init;' to initialize")
+        
         print("Version: 1.0.0")
-        print("Tables: [To be implemented]")
         return True
     
     def cmd_list(self, args: list[str]) -> bool:

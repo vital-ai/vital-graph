@@ -1,5 +1,5 @@
 from typing import Dict, Optional, Any, List
-from fastapi import HTTPException, status, Request
+from fastapi import HTTPException, status, Request, Body
 from fastapi.security import OAuth2PasswordRequestForm
 
 
@@ -14,7 +14,7 @@ class VitalGraphAPI:
         return {"status": "ok"}
     
     async def login(self, form_data: OAuth2PasswordRequestForm):
-        """Login endpoint"""
+        """Enhanced login with JWT tokens"""
         user = self.auth.authenticate_user(form_data.username, form_data.password)
         if not user:
             raise HTTPException(
@@ -23,13 +23,11 @@ class VitalGraphAPI:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # In a production app, we would use JWT tokens here
-        # For simplicity, we're just returning a simple token
-        token = f"user-{form_data.username}-token"
+        # Create JWT tokens
+        tokens = self.auth.create_tokens(user)
         
         return {
-            "access_token": token,
-            "token_type": "bearer",
+            **tokens,
             "username": user["username"],
             "full_name": user["full_name"],
             "email": user["email"],
@@ -41,6 +39,35 @@ class VitalGraphAPI:
         """Logout endpoint"""
         request.session.clear()
         return {"status": "logged out"}
+    
+    async def refresh_token(self, refresh_token: str = Body(..., embed=True)):
+        """Refresh access token using refresh token"""
+        try:
+            payload = self.auth.jwt_auth.verify_token(refresh_token, "refresh")
+            username = payload.get("sub")
+            
+            if username not in self.auth.users_db:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User not found"
+                )
+            
+            user = self.auth.users_db[username]
+            tokens = self.auth.create_tokens(user)
+            
+            return {
+                "access_token": tokens["access_token"],
+                "token_type": "bearer",
+                "expires_in": tokens["expires_in"]
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
     
     async def refresh_database(self) -> Dict[str, Any]:
         """Refresh database connection."""
@@ -270,15 +297,22 @@ class VitalGraphAPI:
     # User management methods
     async def list_users(self, current_user: Dict) -> List[Dict[str, Any]]:
         """List users for the authenticated user."""
-        if not self.db:
+        if not self.auth:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database not configured"
+                detail="Auth system not configured"
             )
         
         try:
-            users = await self.db.list_users()
-            return users  # Return list directly, not wrapped in dict
+            # Return users from the auth system's users_db, not from database tables
+            users = []
+            for username, user_data in self.auth.users_db.items():
+                # Remove password from response for security
+                user_dict = {k: v for k, v in user_data.items() if k != 'password'}
+                # Add an ID field for consistency with frontend expectations
+                user_dict['id'] = username
+                users.append(user_dict)
+            return users
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -372,16 +406,21 @@ class VitalGraphAPI:
     
     async def get_user_by_id(self, user_id: str, current_user: Dict) -> Dict[str, Any]:
         """Get a specific user by ID."""
-        if not self.db:
+        if not self.auth:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database not configured"
+                detail="Auth system not configured"
             )
         
         try:
-            user = await self.db.get_user_by_id(user_id)
-            if user:
-                return user  # Return user object directly for FastAPI validation
+            # Look up user in auth system's users_db by username (which is the ID)
+            if user_id in self.auth.users_db:
+                user_data = self.auth.users_db[user_id]
+                # Remove password from response for security
+                user_dict = {k: v for k, v in user_data.items() if k != 'password'}
+                # Add an ID field for consistency with frontend expectations
+                user_dict['id'] = user_id
+                return user_dict
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

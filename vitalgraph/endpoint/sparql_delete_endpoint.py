@@ -10,43 +10,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
 
-
-class SPARQLDeleteRequest(BaseModel):
-    """Request model for SPARQL delete operations."""
-    delete: str = Field(
-        ...,
-        description="SPARQL delete string (DELETE DATA or DELETE WHERE)",
-        example="DELETE DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }"
-    )
-    graph_uri: Optional[str] = Field(
-        None,
-        description="Target graph URI for the delete operation",
-        example="http://example.org/graph1"
-    )
-
-
-class SPARQLDeleteResponse(BaseModel):
-    """Response model for SPARQL delete results."""
-    success: bool = Field(
-        ...,
-        description="Whether the delete operation was successful"
-    )
-    message: Optional[str] = Field(
-        None,
-        description="Success or error message"
-    )
-    delete_time: Optional[float] = Field(
-        None,
-        description="Delete execution time in seconds"
-    )
-    deleted_triples: Optional[int] = Field(
-        None,
-        description="Number of triples deleted"
-    )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if delete failed"
-    )
+from ..model.sparql_model import (
+    SPARQLDeleteRequest,
+    SPARQLDeleteResponse
+)
 
 
 class SPARQLDeleteEndpoint:
@@ -75,7 +42,7 @@ class SPARQLDeleteEndpoint:
             request: SPARQLDeleteRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            return await self._execute_delete(space_id, request.delete, current_user, request.graph_uri)
+            return await self._execute_delete(space_id, request.update, current_user, request.graph_uri)
         
         # Form-based endpoint for SPARQL deletes
         @self.router.post(
@@ -87,17 +54,17 @@ class SPARQLDeleteEndpoint:
         )
         async def sparql_delete_form(
             space_id: str,
-            delete: str = Form(..., description="SPARQL delete string"),
+            update: str = Form(..., description="SPARQL update string"),
             graph_uri: Optional[str] = Form(None, description="Target graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            return await self._execute_delete(space_id, delete, current_user, graph_uri)
+            return await self._execute_delete(space_id, update, current_user, graph_uri)
         
         # Clear graph endpoint
         @self.router.delete(
             "/{space_id}/graph",
             response_model=SPARQLDeleteResponse,
-            tags=["SPARQL"],
+            tags=["Graphs"],
             summary="Clear Graph",
             description="Clear all triples from a specific graph"
         )
@@ -114,17 +81,17 @@ class SPARQLDeleteEndpoint:
     async def _execute_delete(
         self,
         space_id: str,
-        delete: str,
+        update: str,
         current_user: Dict,
         graph_uri: Optional[str] = None
     ) -> SPARQLDeleteResponse:
-        """Execute a SPARQL delete and return results."""
+        """Execute a SPARQL update (delete) and return results."""
         
         try:
-            self.logger.info(f"Executing SPARQL delete in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
+            self.logger.info(f"Executing SPARQL update (delete) in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             if graph_uri:
                 self.logger.info(f"Target graph: {graph_uri}")
-            self.logger.debug(f"Delete: {delete[:200]}{'...' if len(delete) > 200 else ''}")
+            self.logger.debug(f"Update: {update[:200]}{'...' if len(update) > 200 else ''}")
             
             # Validate space manager
             if self.space_manager is None:
@@ -163,7 +130,7 @@ class SPARQLDeleteEndpoint:
             start_time = time.time()
         
             from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
-            success = await execute_sparql_update(db_space_impl, space_id, delete)
+            success = await execute_sparql_update(db_space_impl, space_id, update)
             
             delete_time = time.time() - start_time
             

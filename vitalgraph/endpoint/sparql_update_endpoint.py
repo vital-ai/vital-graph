@@ -10,48 +10,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
 
-
-class SPARQLUpdateRequest(BaseModel):
-    """Request model for SPARQL update operations."""
-    update: str = Field(
-        ...,
-        description="SPARQL update string (INSERT, DELETE, LOAD, CLEAR, etc.)",
-        example="INSERT DATA { <http://example.org/s> <http://example.org/p> <http://example.org/o> }"
-    )
-    using_graph_uri: Optional[List[str]] = Field(
-        None,
-        description="USING graph URIs for the update",
-        example=["http://example.org/graph1"]
-    )
-    using_named_graph_uri: Optional[List[str]] = Field(
-        None,
-        description="USING NAMED graph URIs for the update",
-        example=["http://example.org/graph2"]
-    )
-
-
-class SPARQLUpdateResponse(BaseModel):
-    """Response model for SPARQL update results."""
-    success: bool = Field(
-        ...,
-        description="Whether the update operation was successful"
-    )
-    message: Optional[str] = Field(
-        None,
-        description="Success or error message"
-    )
-    update_time: Optional[float] = Field(
-        None,
-        description="Update execution time in seconds"
-    )
-    affected_triples: Optional[int] = Field(
-        None,
-        description="Number of triples affected by the update"
-    )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if update failed"
-    )
+from ..model.sparql_model import (
+    SPARQLUpdateRequest,
+    SPARQLUpdateResponse
+)
 
 
 class SPARQLUpdateEndpoint:

@@ -1,10 +1,12 @@
 /**
- * WebSocket service for VitalGraph with authentication and reconnection logic.
+ * WebSocket service for VitalGraph with JWT authentication and reconnection logic.
  * 
  * This service manages WebSocket connections to the VitalGraph backend,
- * handles authentication using the same tokens as REST endpoints,
+ * handles JWT authentication using the same tokens as REST endpoints,
  * and provides automatic reconnection with exponential backoff.
  */
+
+import { authService } from './AuthService';
 
 export interface WebSocketMessage {
   type: string;
@@ -129,12 +131,18 @@ export class WebSocketServiceImpl implements IWebSocketService {
   }
 
   /**
-   * Connect to WebSocket with authentication token
+   * Connect to WebSocket with JWT authentication token
    */
   async connect(token: string): Promise<boolean> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       console.log('🔗 WebSocket already connected');
       return true;
+    }
+
+    // Validate JWT token format (should have 3 parts separated by dots)
+    if (!token || token.split('.').length !== 3) {
+      console.error('❌ Invalid JWT token format for WebSocket connection');
+      return false;
     }
 
     this.token = token;
@@ -165,13 +173,23 @@ export class WebSocketServiceImpl implements IWebSocketService {
             });
           }
           
-          // Send authentication message
-          const authMessage = {
-            type: 'auth',
-            token: this.token!
+          // Wait for WebSocket to be fully ready before sending
+          const sendAuthMessage = () => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              const authMessage = {
+                type: 'auth',
+                token: this.token!
+              };
+              
+              console.log('🔐 Sending authentication message...');
+              this.ws.send(JSON.stringify(authMessage));
+            } else {
+              // Retry after a short delay if not ready
+              setTimeout(sendAuthMessage, 10);
+            }
           };
           
-          this.ws!.send(JSON.stringify(authMessage));
+          sendAuthMessage();
           
           // Wait for auth response
           const authHandler = (event: MessageEvent) => {
@@ -276,7 +294,7 @@ export class WebSocketServiceImpl implements IWebSocketService {
   }
 
   /**
-   * Send data over the WebSocket connection
+   * Send data over the WebSocket connection with current JWT token
    */
   send(data: any): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -284,9 +302,21 @@ export class WebSocketServiceImpl implements IWebSocketService {
       return;
     }
     
+    // Always include current JWT access token
+    const currentToken = authService.getAccessToken();
+    if (!currentToken) {
+      console.error('❌ No valid access token available for WebSocket message');
+      return;
+    }
+    
+    const messageWithToken = {
+      ...data,
+      token: currentToken
+    };
+    
     try {
-      this.ws.send(JSON.stringify(data));
-      console.log('📤 Sent WebSocket message:', { ...data, token: data.token ? '[HIDDEN]' : undefined });
+      this.ws.send(JSON.stringify(messageWithToken));
+      console.log('📤 Sent WebSocket message:', { ...data, token: '[JWT_HIDDEN]' });
     } catch (error) {
       console.error('❌ Error sending WebSocket message:', error);
     }

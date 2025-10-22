@@ -26,23 +26,20 @@ class ConnectionManager:
     
     async def connect(self, websocket: WebSocket, token: str) -> Optional[str]:
         """
-        Connect a WebSocket with token authentication.
+        Connect a WebSocket with JWT token authentication.
         
         Args:
             websocket: The WebSocket connection
-            token: Authentication token from client
+            token: JWT authentication token from client
             
         Returns:
             Username if authentication successful, None otherwise
         """
         try:
-            # Validate token using the same logic as REST API
-            if not token.startswith("user-") or not token.endswith("-token"):
-                logger.warning(f"Invalid token format: {token}")
-                return None
+            # Verify JWT token
+            payload = self.auth.jwt_auth.verify_token(token, "access")
+            username = payload.get("sub")
             
-            # Extract username from token
-            username = token.split("-")[1]
             if username not in self.auth.users_db:
                 logger.warning(f"User not found: {username}")
                 return None
@@ -69,6 +66,9 @@ class ConnectionManager:
             logger.info(f"WebSocket connected for user: {username}")
             return username
             
+        except HTTPException as e:
+            logger.warning(f"JWT token validation failed: {e.detail}")
+            return None
         except Exception as e:
             logger.error(f"Error during WebSocket connection: {e}")
             return None
@@ -245,9 +245,12 @@ class WebSocketHandler:
     async def send_message(self, websocket: WebSocket, data: dict):
         """Send a JSON message to a WebSocket."""
         try:
+            # Check if websocket is still connected before sending
+            if websocket.client_state.name != 'CONNECTED':
+                return
             await websocket.send_text(json.dumps(data))
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.debug(f"Error sending message (connection likely closed): {e}")
 
 
 async def websocket_endpoint(websocket: WebSocket, connection_manager: ConnectionManager):
@@ -330,43 +333,73 @@ async def websocket_endpoint(websocket: WebSocket, connection_manager: Connectio
                 message_type = message_data.get("type", "unknown")
                 logger.info(f"Processing message type '{message_type}' from user '{username}'")
                 
-                # Validate token in each message for security
+                # Validate JWT token in each message for security
                 msg_token = message_data.get("token")
-                if msg_token != token:
-                    logger.warning(f"Token mismatch for user '{username}' - message rejected")
+                if not msg_token:
                     await websocket.send_text(json.dumps({
                         "type": "auth_error",
-                        "message": "Token mismatch"
+                        "message": "Token required in message"
+                    }))
+                    break
+                
+                try:
+                    payload = connection_manager.auth.jwt_auth.verify_token(msg_token, "access")
+                    token_username = payload.get("sub")
+                    
+                    if token_username != username:
+                        await websocket.send_text(json.dumps({
+                            "type": "auth_error",
+                            "message": "Token username mismatch"
+                        }))
+                        break
+                        
+                except HTTPException:
+                    await websocket.send_text(json.dumps({
+                        "type": "auth_error", 
+                        "message": "Invalid or expired token"
                     }))
                     break
                 
                 logger.debug(f"Handling message type '{message_type}' for user '{username}'")
                 await handler.handle_message(websocket, username, message_data)
                 logger.debug(f"Successfully processed message type '{message_type}' for user '{username}'")
+            except WebSocketDisconnect:
+                # Break out of the message loop on disconnect
+                logger.info(f"WebSocket disconnected for user '{username}' during message processing")
+                break
             except json.JSONDecodeError as e:
                 logger.error(f"Invalid JSON in message from '{username}': {e}")
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "message": "Invalid JSON format in message"
-                }))
+                try:
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Invalid JSON format in message"
+                        }))
+                except Exception:
+                    pass  # Connection already closed
             except Exception as e:
                 logger.error(f"Error processing message from '{username}': {e}")
-                await websocket.send_text(json.dumps({
-                    "type": "error",
-                    "message": "Error processing message"
-                }))
+                try:
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Error processing message"
+                        }))
+                except Exception:
+                    pass  # Connection already closed
             
     except WebSocketDisconnect as e:
         logger.info(f"WebSocket disconnected for user: {username or 'unknown'} from {client_host}:{client_port} - code: {e.code}")
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON received from {client_host}:{client_port}: {e}")
         try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": "Invalid JSON format"
-            }))
+            if websocket.client_state.name == 'CONNECTED':
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "Invalid JSON format"
+                }))
         except Exception:
-            logger.error(f"Failed to send error message to {client_host}:{client_port}")
+            pass  # Connection already closed
     except Exception as e:
         logger.error(f"WebSocket error for {username or 'unknown'} from {client_host}:{client_port}: {str(e)}")
     finally:

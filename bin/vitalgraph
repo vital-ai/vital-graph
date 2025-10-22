@@ -1,2 +1,2 @@
 #!/bin/bash
-python -m vitalgraph_client.cmd.vitalgraph_repl "$@"
+python -m vitalgraph.client.cmd.vitalgraph_repl "$@"

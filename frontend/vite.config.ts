@@ -7,6 +7,14 @@ import flowbiteReact from "flowbite-react/plugin/vite";
 export default defineConfig({
   plugins: [react(), tailwindcss(), flowbiteReact()],
   server: {
+    // Fix for delayed HMR updates
+    watch: {
+      usePolling: true,
+      interval: 1000,
+    },
+    hmr: {
+      overlay: true,
+    },
     proxy: {
       // Proxy API requests to FastAPI backend
       '/api': {
@@ -17,5 +25,9 @@ export default defineConfig({
       },
       // Images are now served directly from frontend/images directory
     },
+  },
+  // Force dependency pre-bundling refresh
+  optimizeDeps: {
+    force: true,
   },
 });

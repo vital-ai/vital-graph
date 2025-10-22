@@ -10,57 +10,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
 
-
-class SPARQLQueryRequest(BaseModel):
-    """Request model for SPARQL query operations."""
-    query: str = Field(
-        ...,
-        description="SPARQL query string (SELECT, CONSTRUCT, ASK, or DESCRIBE)",
-        example="SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10"
-    )
-    default_graph_uri: Optional[List[str]] = Field(
-        None,
-        description="Default graph URIs for the query",
-        example=["http://example.org/graph1"]
-    )
-    named_graph_uri: Optional[List[str]] = Field(
-        None,
-        description="Named graph URIs for the query",
-        example=["http://example.org/graph2"]
-    )
-    format: Optional[str] = Field(
-        "application/sparql-results+json",
-        description="Response format (application/sparql-results+json, text/csv, etc.)",
-        example="application/sparql-results+json"
-    )
-
-
-class SPARQLQueryResponse(BaseModel):
-    """Response model for SPARQL query results."""
-    head: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Query result metadata (variables, links)"
-    )
-    results: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Query result bindings for SELECT queries"
-    )
-    boolean: Optional[bool] = Field(
-        None,
-        description="Boolean result for ASK queries"
-    )
-    triples: Optional[List[Dict[str, str]]] = Field(
-        None,
-        description="RDF triples for CONSTRUCT/DESCRIBE queries"
-    )
-    query_time: Optional[float] = Field(
-        None,
-        description="Query execution time in seconds"
-    )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if query failed"
-    )
+from ..model.sparql_model import (
+    SPARQLQueryRequest,
+    SPARQLQueryResponse
+)
 
 
 class SPARQLQueryEndpoint:
@@ -193,11 +146,13 @@ class SPARQLQueryEndpoint:
                 if results:
                     variables = list(results[0].keys())
                 
-                return SPARQLQueryResponse(
+                response = SPARQLQueryResponse(
                     head={"vars": variables},
                     results={"bindings": results},
                     query_time=query_time
                 )
+                
+                return response
         
         except HTTPException:
             raise

@@ -5,6 +5,9 @@ SPARQL Query Endpoint Performance Test
 Performance test script for VitalGraph SPARQL query endpoints.
 Tests query performance by running the same query pattern multiple times
 with different search terms and tracking timing statistics.
+
+UPDATED: Now uses typed client methods with SPARQLQueryResponse models 
+instead of direct response handling for full type safety.
 """
 
 import sys
@@ -14,10 +17,8 @@ import random
 from pathlib import Path
 from typing import List, Dict, Any
 
-# Add the parent directory to the path so we can import vitalgraph_client
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from vitalgraph_client.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
+from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
+from vitalgraph.model.sparql_model import SPARQLQueryResponse, SPARQLQueryRequest
 
 # Test configuration
 BASE_URL = "http://localhost:8001"
@@ -43,8 +44,12 @@ class SPARQLQueryPerformanceTester:
         self.client = None
         self.query_times = []
         
-    def connect(self):
-        """Connect to VitalGraph server."""
+    def connect(self) -> bool:
+        """Connect to VitalGraph server.
+        
+        Returns:
+            bool: True if connection was successful, False otherwise
+        """
         print("🔐 Connecting to VitalGraph server...")
         try:
             self.client = VitalGraphClient(CONFIG_PATH)
@@ -55,7 +60,7 @@ class SPARQLQueryPerformanceTester:
             print(f"   ❌ Connection failed: {e}")
             return False
     
-    def disconnect(self):
+    def disconnect(self) -> None:
         """Disconnect from VitalGraph server."""
         if self.client:
             self.client.close()
@@ -102,17 +107,18 @@ class SPARQLQueryPerformanceTester:
             # Execute query and measure time
             start_time = time.time()
             try:
-                result = self.client.execute_sparql_query(SPACE_ID, query)
+                query_request = SPARQLQueryRequest(query=query, format="json")
+                result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
                 end_time = time.time()
                 
                 query_time = end_time - start_time
                 self.query_times.append(query_time)
                 successful_queries += 1
                 
-                # Count results
+                # Count results using typed response
                 result_count = 0
-                if result.get('results') and result['results'].get('bindings'):
-                    result_count = len(result['results']['bindings'])
+                if result and result.results and result.results.bindings:
+                    result_count = len(result.results.bindings)
                 
                 # Log individual query details
                 print(f"   Query {i + 1:3d}: '{search_term:12s}' -> {result_count:3d} results ({query_time:.3f}s)")
@@ -156,10 +162,11 @@ class SPARQLQueryPerformanceTester:
         
         return stats
     
-    def print_performance_report(self, stats: Dict[str, Any]):
+    def print_performance_report(self, stats: Dict[str, Any]) -> None:
         """Print a detailed performance report."""
         print("\n" + "=" * 60)
         print("📊 SPARQL QUERY PERFORMANCE REPORT")
+        print("   Using typed SPARQLQueryResponse models for full type safety")
         print("=" * 60)
         
         print(f"\n🎯 Test Summary:")
@@ -213,9 +220,14 @@ class SPARQLQueryPerformanceTester:
         
         print("\n" + "=" * 60)
 
-def main():
-    """Main function to run the performance test."""
+def main() -> int:
+    """Main function to run the performance test.
+    
+    Returns:
+        int: Exit code (0 for success, 1 for failure)
+    """
     print("🧪 VitalGraph SPARQL Query Endpoint Performance Test")
+    print("   Using typed SPARQLQueryResponse models for full type safety")
     print("=" * 60)
     
     # Use constant N for number of queries
@@ -239,7 +251,8 @@ def main():
         # Disconnect
         tester.disconnect()
         
-        print("\n✅ Performance test completed successfully!")
+        print("\n✅ Performance test completed successfully with typed client methods!")
+        print("   Used SPARQLQueryResponse models for full type safety.")
         return 0
         
     except KeyboardInterrupt:

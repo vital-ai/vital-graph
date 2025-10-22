@@ -18,7 +18,6 @@ from rdflib.term import Identifier
 # Import PostgreSQL utilities
 from .postgresql_log_utils import PostgreSQLLogUtils
 from .space.postgresql_space_utils import PostgreSQLSpaceUtils
-from .original.postgresql_utils import PostgreSQLUtils
 from .postgresql_cache_term import PostgreSQLCacheTerm
 from .postgresql_cache_graph import PostgreSQLCacheGraph
 from .space.postgresql_space_core import PostgreSQLSpaceCore
@@ -29,7 +28,9 @@ from .space.postgresql_space_datatypes import PostgreSQLSpaceDatatypes
 from .space.postgresql_space_terms import PostgreSQLSpaceTerms
 from .space.postgresql_space_queries import PostgreSQLSpaceQueries
 from .space.postgresql_space_db_ops import PostgreSQLSpaceDBOps
+from .space.postgresql_space_db_objects import PostgreSQLSpaceDBObjects
 from .space.postgresql_space_graphs import PostgreSQLSpaceGraphs
+from .space.postgresql_space_db_import import PostgreSQLSpaceDBImport
 
 class PostgreSQLSpaceImpl:
     """
@@ -44,14 +45,13 @@ class PostgreSQLSpaceImpl:
     Table names are prefixed with global_prefix__space_id__ format.
     """
     
-    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", use_unlogged: bool = True, pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None, db_impl=None):
+    def __init__(self, connection_string: str, global_prefix: str = "vitalgraph", pool_config: Optional[Dict[str, Any]] = None, shared_pool=None, dict_pool=None, db_impl=None):
         """
         Initialize PostgreSQL space implementation with shared or dedicated psycopg3 ConnectionPool.
         
         Args:
             connection_string: PostgreSQL connection string
             global_prefix: Global prefix for table names
-            use_unlogged: Whether to use unlogged tables for better performance
             pool_config: Optional connection pool configuration
             shared_pool: Optional shared psycopg3 ConnectionPool instance (for tuple results)
             dict_pool: Optional dict psycopg3 ConnectionPool instance (for dictionary results)
@@ -75,10 +75,7 @@ class PostgreSQLSpaceImpl:
         # Keep these attributes for backward compatibility and space-specific functionality
         self.connection_string = connection_string
         self.global_prefix = global_prefix
-        self.use_unlogged = use_unlogged
         
-        # Initialize utils instance for timing operations and table name generation
-        self.utils = PostgreSQLUtils()
         
         # Validate global prefix using utils
         PostgreSQLSpaceUtils.validate_global_prefix(global_prefix)
@@ -101,8 +98,17 @@ class PostgreSQLSpaceImpl:
         # Initialize database operations class
         self.db_ops = PostgreSQLSpaceDBOps(self)
         
+        # Initialize database objects class
+        self.db_objects = PostgreSQLSpaceDBObjects(self)
+        
         # Initialize graph management class
         self.graphs = PostgreSQLSpaceGraphs(self)
+        
+        # Initialize import management class
+        self.db_import = PostgreSQLSpaceDBImport(self)
+        
+        # Initialize PostgreSQL utilities
+        self.utils = PostgreSQLSpaceUtils()
         
         # Cache of schema instances by space_id
         self._schema_cache = {}
@@ -135,8 +141,7 @@ class PostgreSQLSpaceImpl:
         if space_id not in self._schema_cache:
             self._schema_cache[space_id] = PostgreSQLSpaceSchema(
                 global_prefix=self.global_prefix,
-                space_id=space_id,
-                use_unlogged=self.use_unlogged
+                space_id=space_id
             )
         return self._schema_cache[space_id]
     

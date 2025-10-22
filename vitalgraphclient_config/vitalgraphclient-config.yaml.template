@@ -14,4 +14,17 @@ client:
   max_retries: 3
   retry_delay: 1
   
+  # Use mock client instead of real HTTP client (default: false)
+  use_mock_client: false
+  
+  # Mock client configuration (optional)
+  mock:
+    # Use temporary storage for files (default: true)
+    # When true: Uses temporary directory with automatic cleanup
+    # When false: Uses configured filePath, throws exception if not configured
+    use_temp_storage: true
+    
+    # Path to mock file storage (optional, only used when use_temp_storage=false)
+    # If use_temp_storage=false and this is null, file operations will throw exceptions
+    filePath: null
   

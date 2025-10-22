@@ -12,7 +12,7 @@ import {
   Sidebar,
   SidebarItem,
   SidebarItems,
-  SidebarItemGroup
+  SidebarItemGroup,
 } from 'flowbite-react';
 import { 
   HiHome, 
@@ -20,9 +20,15 @@ import {
   HiUser, 
   HiViewBoards,
   HiLogout,
-  HiMenu
+  HiMenu,
+  HiDocumentDuplicate
 } from 'react-icons/hi';
 import { useAuth } from '../contexts/AuthContext';
+import GraphIcon from './icons/GraphIcon';
+import ObjectIcon from './icons/ObjectIcon';
+import TriplesIcon from './icons/TriplesIcon';
+import KGTypesIcon from './icons/KGTypesIcon';
+import DataIcon from './icons/DataIcon';
 
 const Layout: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -51,7 +57,18 @@ const Layout: React.FC = () => {
           </button>
           <Link to="/">
             <span className="flex items-center">
-              <img src="/flowbite-react.svg" className="mr-3 h-6 sm:h-9" alt="Flowbite Logo" />
+              <img 
+                src="/images/vital-logo-black.png" 
+                className="mr-3 h-6 sm:h-9 w-auto block dark:hidden" 
+                alt="VitalGraph Logo" 
+                style={{ maxWidth: '120px' }}
+              />
+              <img 
+                src="/images/vitallogo_offwhite_normal.png" 
+                className="mr-3 h-6 sm:h-9 w-auto hidden dark:block" 
+                alt="VitalGraph Logo" 
+                style={{ maxWidth: '120px' }}
+              />
               <span className="self-center whitespace-nowrap text-xl font-semibold dark:text-white">VitalGraph</span>
             </span>
           </Link>
@@ -64,10 +81,9 @@ const Layout: React.FC = () => {
               inline
               label={
                 <Avatar
-                  alt={user.full_name}
-                  img={user.profile_image || undefined}
+                  alt="User"
+                  img="/images/generic-user-avatar.svg"
                   rounded
-                  placeholderInitials={user.full_name?.charAt(0).toUpperCase() || 'U'}
                   size="sm"
                 />
               }
@@ -94,9 +110,39 @@ const Layout: React.FC = () => {
               Spaces
             </span>
           </Link>
+          <Link to="/graphs" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/graphs' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Graphs
+            </span>
+          </Link>
+          <Link to="/kg-types" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/kg-types' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              KG Types
+            </span>
+          </Link>
+          <Link to="/objects" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/objects' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Objects
+            </span>
+          </Link>
+          <Link to="/triples" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/triples' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Triples
+            </span>
+          </Link>
+          <Link to="/files" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/files' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Files
+            </span>
+          </Link>
           <Link to="/users" className="block py-2 pr-4 pl-3 md:p-0">
             <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/users' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
               Users
+            </span>
+          </Link>
+          <Link to="/data" className="block py-2 pr-4 pl-3 md:p-0">
+            <span className={`block py-2 pr-4 pl-3 md:p-0 ${location.pathname === '/data' ? 'text-blue-700 dark:text-blue-500' : 'text-gray-700 dark:text-white'}`}>
+              Data
             </span>
           </Link>
           <Link to="/sparql" className="block py-2 pr-4 pl-3 md:p-0">
@@ -138,9 +184,39 @@ const Layout: React.FC = () => {
                   Spaces
                 </SidebarItem>
               </Link>
+              <Link to="/graphs" style={{display: 'block'}}>
+                <SidebarItem icon={GraphIcon} active={location.pathname === '/graphs'} as="div">
+                  Graphs
+                </SidebarItem>
+              </Link>
+              <Link to="/kg-types" style={{display: 'block'}}>
+                <SidebarItem icon={KGTypesIcon} active={location.pathname === '/kg-types'} as="div">
+                  KG Types
+                </SidebarItem>
+              </Link>
+              <Link to="/objects" style={{display: 'block'}}>
+                <SidebarItem icon={ObjectIcon} active={location.pathname === '/objects'} as="div">
+                  Objects
+                </SidebarItem>
+              </Link>
+              <Link to="/triples" style={{display: 'block'}}>
+                <SidebarItem icon={TriplesIcon} active={location.pathname === '/triples'} as="div">
+                  Triples
+                </SidebarItem>
+              </Link>
+              <Link to="/files" style={{display: 'block'}}>
+                <SidebarItem icon={HiDocumentDuplicate} active={location.pathname === '/files'} as="div">
+                  Files
+                </SidebarItem>
+              </Link>
               <Link to="/users" style={{display: 'block'}}>
                 <SidebarItem icon={HiUser} active={location.pathname === '/users'} as="div">
                   Users
+                </SidebarItem>
+              </Link>
+              <Link to="/data" style={{display: 'block'}}>
+                <SidebarItem icon={DataIcon} active={location.pathname === '/data'} as="div">
+                  Data
                 </SidebarItem>
               </Link>
               <Link to="/sparql" style={{display: 'block'}}>

@@ -163,12 +163,13 @@ class PostgreSQLSpaceDbMgmt:
                     # Optional: Cluster tables for better performance (only for large datasets)
                     if created_count > 0:
                         try:
-                            self.logger.info("Clustering tables for optimal performance...")
-                            cluster_statements = schema.get_cluster_sql()
-                            for cluster_sql in cluster_statements:
-                                cursor.execute(cluster_sql)
-                            conn.commit()
-                            self.logger.info("Table clustering completed")
+                            self.logger.info("Disabled: Clustering tables for optimal performance...")
+                            # self.logger.info("Clustering tables for optimal performance...")
+                            # cluster_statements = schema.get_cluster_sql()
+                            # for cluster_sql in cluster_statements:
+                            #     cursor.execute(cluster_sql)
+                            # conn.commit()
+                            # self.logger.info("Table clustering completed")
                         except Exception as e:
                             self.logger.warning(f"Table clustering failed (non-critical): {e}")
                     

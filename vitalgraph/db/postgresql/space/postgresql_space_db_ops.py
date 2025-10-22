@@ -372,7 +372,7 @@ class PostgreSQLSpaceDBOps:
                     INSERT INTO {table_names['term']} 
                     (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (term_uuid) DO NOTHING
+                    ON CONFLICT (term_uuid, dataset) DO NOTHING
                     """,
                     term_insert_data
                 )
@@ -429,7 +429,7 @@ class PostgreSQLSpaceDBOps:
                             INSERT INTO {table_names['term']} 
                             (term_uuid, term_text, term_type, lang, datatype_id, created_time) 
                             VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (term_uuid) DO NOTHING
+                            ON CONFLICT (term_uuid, dataset) DO NOTHING
                             """,
                             term_insert_data
                         )
@@ -910,6 +910,82 @@ class PostgreSQLSpaceDBOps:
         except Exception as e:
             self.logger.error(f"Error removing RDF quad from space '{space_id}': {e}")
             return False
+    
+    async def remove_quads_by_subject_uris(self, space_id: str, subject_uris: List[str], graph_id: str = None, transaction=None) -> int:
+        """
+        Remove all quads for given subject URIs using text-based matching (like list operation).
+        
+        This method uses the same text-based approach as get_objects_by_uris_batch() to avoid
+        UUID generation/matching issues that can cause incomplete deletions.
+        
+        Args:
+            space_id: Space identifier
+            subject_uris: List of subject URIs to delete all quads for
+            graph_id: Optional graph identifier to filter by
+            transaction: Optional PostgreSQLSpaceTransaction object for transaction management
+            
+        Returns:
+            int: Number of quads successfully removed
+        """
+        if not subject_uris:
+            return 0
+            
+        try:
+            self.logger.info(f"🗑️ TEXT-BASED SUBJECT REMOVAL: Deleting all quads for {len(subject_uris)} subjects...")
+            
+            # Get table names
+            table_names = PostgreSQLSpaceUtils.get_table_names(self.space_impl.global_prefix, space_id)
+            quad_table = table_names['rdf_quad']
+            term_table = table_names['term']
+            
+            # Build query using text-based matching (same approach as list operation)
+            query_parts = [
+                f"DELETE FROM {quad_table}",
+                f"WHERE subject_uuid IN (",
+                f"    SELECT term_uuid FROM {term_table} WHERE term_text = ANY(%s)",
+                f")"
+            ]
+            
+            params = [subject_uris]
+            
+            # Add graph filter if specified
+            if graph_id:
+                query_parts.insert(-1, f"AND context_uuid IN (")
+                query_parts.insert(-1, f"    SELECT term_uuid FROM {term_table} WHERE term_text = %s")
+                query_parts.insert(-1, f")")
+                params.append(graph_id)
+            
+            query = " ".join(query_parts)
+            
+            # Execute deletion
+            if transaction is not None:
+                conn = transaction.get_connection()
+                if conn is None:
+                    raise RuntimeError("Transaction object does not provide a valid connection")
+                
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                removed_count = cursor.rowcount
+                
+                # Update transaction statistics
+                transaction.increment_quads_removed(removed_count)
+                
+                self.logger.info(f"✅ Successfully removed {removed_count} quads using text-based matching (will commit with transaction)")
+                return removed_count
+            else:
+                # Use async context manager with pooled connection
+                async with self.space_impl.get_db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, params)
+                    removed_count = cursor.rowcount
+                    conn.commit()
+                    
+                    self.logger.info(f"✅ Successfully removed {removed_count} quads using text-based matching")
+                    return removed_count
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Error in text-based subject removal: {e}")
+            raise
 
 
 

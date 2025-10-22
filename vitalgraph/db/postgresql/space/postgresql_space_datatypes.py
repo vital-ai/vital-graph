@@ -125,7 +125,7 @@ class PostgreSQLSpaceDatatypes:
                             cursor.execute(f"""
                                 INSERT INTO {term_table} (term_uuid, term_text, term_type)
                                 VALUES (%s, %s, %s)
-                                ON CONFLICT (term_uuid) DO NOTHING
+                                ON CONFLICT (term_uuid, dataset) DO NOTHING
                             """, (term_uuid, datatype_uri, 'U'))
                             
                             # Insert into datatype table (datatype_id is auto-generated BIGSERIAL)

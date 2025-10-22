@@ -10,76 +10,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
 
-
-class SPARQLGraphRequest(BaseModel):
-    """Request model for SPARQL graph operations."""
-    operation: str = Field(
-        ...,
-        description="Graph operation (CREATE, DROP, CLEAR, COPY, MOVE, ADD)",
-        example="CREATE"
-    )
-    source_graph_uri: Optional[str] = Field(
-        None,
-        description="Source graph URI for COPY, MOVE, ADD operations",
-        example="http://example.org/source-graph"
-    )
-    target_graph_uri: Optional[str] = Field(
-        None,
-        description="Target graph URI for the operation",
-        example="http://example.org/target-graph"
-    )
-    silent: bool = Field(
-        False,
-        description="Whether to execute operation silently (ignore errors)"
-    )
-
-
-class SPARQLGraphResponse(BaseModel):
-    """Response model for SPARQL graph operation results."""
-    success: bool = Field(
-        ...,
-        description="Whether the graph operation was successful"
-    )
-    operation: str = Field(
-        ...,
-        description="The graph operation that was executed"
-    )
-    graph_uri: Optional[str] = Field(
-        None,
-        description="Graph URI that was operated on"
-    )
-    message: Optional[str] = Field(
-        None,
-        description="Success or error message"
-    )
-    operation_time: Optional[float] = Field(
-        None,
-        description="Operation execution time in seconds"
-    )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if operation failed"
-    )
-
-
-class GraphInfo(BaseModel):
-    """Information about a graph."""
-    graph_uri: str = Field(
-        ...,
-        description="Graph URI"
-    )
-    triple_count: Optional[int] = Field(
-        None,
-        description="Number of triples in the graph"
-    )
-    created_time: Optional[str] = Field(
-        None,
-        description="Graph creation timestamp"
-    )
-    updated_time: Optional[str] = Field(
-        None,
-        description="Graph last update timestamp"
-    )
+from ..model.sparql_model import (
+    SPARQLGraphRequest,
+    SPARQLGraphResponse,
+    GraphInfo
+)
 
 
 class SPARQLGraphEndpoint:
@@ -95,11 +30,30 @@ class SPARQLGraphEndpoint:
     def _setup_routes(self):
         """Setup SPARQL graph management routes."""
         
+        self.logger.info("Setting up SPARQL graph routes...")
+        
+        # GET endpoint to list graphs (must come before catch-all graph/{graph_uri:path})
+        @self.router.get(
+            "/{space_id}/graphs",
+            response_model=List[GraphInfo],
+            tags=["Graphs"],
+            summary="List Graphs",
+            description="List all graphs in the specified space"
+        )
+        async def list_graphs(
+            space_id: str,
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            self.logger.info(f"List graphs endpoint called for space: {space_id}")
+            return await self._list_graphs(space_id, current_user)
+        
+        self.logger.info("Registered GET /{space_id}/graphs route")
+        
         # POST endpoint for graph operations
         @self.router.post(
             "/{space_id}/graph",
             response_model=SPARQLGraphResponse,
-            tags=["SPARQL"],
+            tags=["Graphs"],
             summary="Execute Graph Operation",
             description="Execute a SPARQL graph operation (CREATE, DROP, CLEAR, COPY, MOVE, ADD)"
         )
@@ -110,25 +64,11 @@ class SPARQLGraphEndpoint:
         ):
             return await self._execute_graph_operation(space_id, request, current_user)
         
-        # GET endpoint to list graphs
-        @self.router.get(
-            "/{space_id}/graphs",
-            response_model=List[GraphInfo],
-            tags=["SPARQL"],
-            summary="List Graphs",
-            description="List all graphs in the specified space"
-        )
-        async def list_graphs(
-            space_id: str,
-            current_user: Dict = Depends(self.auth_dependency)
-        ):
-            return await self._list_graphs(space_id, current_user)
-        
-        # GET endpoint to get graph info
+        # GET endpoint to get graph info (catch-all route - must come after specific routes)
         @self.router.get(
             "/{space_id}/graph/{graph_uri:path}",
             response_model=GraphInfo,
-            tags=["SPARQL"],
+            tags=["Graphs"],
             summary="Get Graph Info",
             description="Get information about a specific graph"
         )
@@ -143,7 +83,7 @@ class SPARQLGraphEndpoint:
         @self.router.put(
             "/{space_id}/graph/{graph_uri:path}",
             response_model=SPARQLGraphResponse,
-            tags=["SPARQL"],
+            tags=["Graphs"],
             summary="Create Graph",
             description="Create a new empty graph"
         )
@@ -162,7 +102,7 @@ class SPARQLGraphEndpoint:
         @self.router.delete(
             "/{space_id}/graph/{graph_uri:path}",
             response_model=SPARQLGraphResponse,
-            tags=["SPARQL"],
+            tags=["Graphs"],
             summary="Drop Graph",
             description="Drop a graph and all its triples"
         )
@@ -444,7 +384,7 @@ class SPARQLGraphEndpoint:
                 )
         
             # Get graph info using PostgreSQLSpaceGraphs
-            graph_data = await db_space_impl.graphs.get_graph_info(space_id, graph_uri)
+            graph_data = await db_space_impl.graphs.get_graph(space_id, graph_uri)
             
             if not graph_data:
                 raise HTTPException(
@@ -471,5 +411,9 @@ class SPARQLGraphEndpoint:
 
 def create_sparql_graph_router(space_manager, auth_dependency) -> APIRouter:
     """Create and return the SPARQL graph router."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Creating SPARQL graph router...")
     endpoint = SPARQLGraphEndpoint(space_manager, auth_dependency)
+    logger.info(f"SPARQL graph router created with {len(endpoint.router.routes)} routes")
     return endpoint.router

@@ -53,6 +53,18 @@ class SharedPoolConnection(psycopg.Connection):
         self._call_stack = traceback.format_stack()
         conn_logger.info(f"Connection close() called on {self._conn_id}")
         
+        # Check if this close() is being called by the pool itself during putconn()
+        # If so, we should just call the parent close() and not try to return to pool
+        call_stack_str = ''.join(self._call_stack)
+        is_pool_initiated_close = ('putconn' in call_stack_str or 
+                                 '_return_connection' in call_stack_str or
+                                 'pool.py' in call_stack_str)
+        
+        if is_pool_initiated_close:
+            conn_logger.info(f"Connection {self._conn_id} close() called by pool, calling super().close()")
+            super().close()
+            return
+        
         if pool := getattr(self, "_pool", None):
             conn_logger.info(f"Connection {self._conn_id} has pool {id(pool)}")
             # Before returning to pool, call reset() instead of close()
@@ -416,15 +428,10 @@ class PostgreSQLDbImpl:
                 self.logger.info(f"SQLAlchemy shared pool test successful: {result.scalar()}")
             
             # Initialize PostgreSQLSpaceImpl for RDF space management with dedicated RDF pool
-            # Read use_unlogged from tables section in config
-            tables_config = self.config.get('tables', {})
-            use_unlogged = tables_config.get('use_unlogged', True)
-            
             self.space_impl = PostgreSQLSpaceImpl(
                 db_impl = self,
                 connection_string=connection_string, 
                 global_prefix=self.global_prefix, 
-                use_unlogged=use_unlogged,
                 pool_config=rdf_pool_config,
                 shared_pool=self.rdf_pool,
                 dict_pool=self.dict_pool

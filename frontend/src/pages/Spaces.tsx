@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 import { Alert, Button, Card, Spinner, Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow, TextInput } from 'flowbite-react';
-import { HiSearch, HiEye, HiPlus } from 'react-icons/hi';
+import { 
+  HiSearch, 
+  HiEye,
+  HiViewBoards
+} from 'react-icons/hi';
 
 interface Space {
   id: number;
@@ -27,9 +31,7 @@ const Spaces: React.FC = () => {
   const fetchSpaces = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/spaces');
-      // Handle both array response and wrapped response
-      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
+      const spacesData = await apiService.getSpaces();
       setSpaces(spacesData);
       setError(null);
     } catch (err) {
@@ -56,11 +58,16 @@ const Spaces: React.FC = () => {
 
     try {
       setFilterLoading(true);
-      const response = await axios.get(`/api/spaces/filter/${encodeURIComponent(nameFilter)}`);
-      // Handle both array response and wrapped response
-      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
-      setSpaces(spacesData);
-      setError(null);
+      const response = await apiService.get(`/api/spaces/filter/${encodeURIComponent(nameFilter)}`);
+      if (response.ok) {
+        const data = await response.json();
+        // Handle both array response and wrapped response
+        const spacesData = Array.isArray(data) ? data : data.spaces || [];
+        setSpaces(spacesData);
+        setError(null);
+      } else {
+        throw new Error(`Failed to filter spaces: ${response.status} ${response.statusText}`);
+      }
     } catch (err) {
       console.error('Error filtering spaces:', err);
       setError('Failed to filter spaces. Please try again later.');
@@ -121,18 +128,15 @@ const Spaces: React.FC = () => {
   return (
     <div>
       <div className="mb-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Spaces</h1>
-            <p className="text-gray-500 dark:text-gray-400">
-              View and manage your VitalGraph spaces.
-            </p>
-          </div>
-          <Button color="blue" onClick={() => navigate('/space/new')}>
-            <HiPlus className="mr-2 h-4 w-4" />
-            Add Space
-          </Button>
+        <div className="flex items-center gap-2 mb-2">
+          <HiViewBoards className="w-6 h-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Spaces
+          </h1>
         </div>
+        <p className="text-gray-600 dark:text-gray-400">
+          Manage your RDF data spaces
+        </p>
       </div>
 
       {/* Filter Section */}

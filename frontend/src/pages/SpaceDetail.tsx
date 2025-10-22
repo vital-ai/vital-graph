@@ -105,7 +105,22 @@ const SpaceDetail: React.FC = () => {
         setError(null);
       } catch (err: any) {
         console.error('Error fetching space:', err);
-        setError(err.response?.data?.detail || 'Failed to load space details');
+        
+        // Handle different error response formats
+        let errorMessage = 'Failed to load space details';
+        if (err.response?.data) {
+          if (typeof err.response.data === 'string') {
+            errorMessage = err.response.data;
+          } else if (err.response.data.detail) {
+            errorMessage = Array.isArray(err.response.data.detail) 
+              ? err.response.data.detail.map((d: any) => d.msg || d).join(', ')
+              : err.response.data.detail;
+          } else if (err.response.data.message) {
+            errorMessage = err.response.data.message;
+          }
+        }
+        
+        setError(errorMessage);
         setSpace(null);
       } finally {
         setLoading(false);
@@ -328,11 +343,14 @@ const SpaceDetail: React.FC = () => {
 
       {/* Header */}
       <div className="mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <HiViewBoards className="w-6 h-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Space Details
+          </h1>
+        </div>
         <div className="flex justify-between items-start">
           <div>
-            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
-              {isCreating ? 'Create New Space' : (isEditing ? 'Edit Space' : 'Space Details')}
-            </h1>
             <p className="text-gray-500 dark:text-gray-400">
               {isEditing ? 'Modify space information' : 'View space information and settings'}
             </p>

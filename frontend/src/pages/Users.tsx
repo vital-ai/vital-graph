@@ -1,15 +1,34 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Alert, Button, Card, Spinner, Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow, TextInput } from 'flowbite-react';
-import { HiSearch, HiEye, HiPlus } from 'react-icons/hi';
+import {
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeadCell,
+  TableRow,
+  TextInput,
+  Alert,
+  Spinner,
+  Card
+} from 'flowbite-react';
+import {
+  HiSearch,
+  HiEye,
+  HiUser
+} from 'react-icons/hi';
 
 interface User {
-  id: number;
-  tenant: string;
+  id: string;
   username: string;
+  full_name: string;
   email: string;
-  update_time: string;
+  profile_image?: string;
+  role: string;
+  tenant?: string;
+  update_time?: string;
 }
 
 const Users: React.FC = () => {
@@ -29,6 +48,8 @@ const Users: React.FC = () => {
       const response = await axios.get('/api/users');
       // Handle both array response and wrapped response
       const usersData = Array.isArray(response.data) ? response.data : response.data.users || [];
+      console.log('Users API response:', response.data);
+      console.log('Processed users data:', usersData);
       setUsers(usersData);
       setError(null);
     } catch (err) {
@@ -95,17 +116,27 @@ const Users: React.FC = () => {
     navigate(`/user/${user.id}`);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | undefined) => {
+    console.log('formatDate called with:', dateString, typeof dateString);
+    if (!dateString) {
+      return 'Not available';
+    }
     try {
-      return new Date(dateString).toLocaleDateString('en-US', {
+      const date = new Date(dateString);
+      console.log('Parsed date:', date, 'isNaN:', isNaN(date.getTime()));
+      if (isNaN(date.getTime())) {
+        return 'Not available';
+      }
+      return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
       });
-    } catch {
-      return dateString;
+    } catch (error) {
+      console.log('formatDate error:', error);
+      return 'Not available';
     }
   };
 
@@ -118,20 +149,17 @@ const Users: React.FC = () => {
   }
 
   return (
-    <div>
+    <div className="space-y-6">
       <div className="mb-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">Users</h1>
-            <p className="text-gray-500 dark:text-gray-400">
-              View and manage your VitalGraph users.
-            </p>
-          </div>
-          <Button color="blue" onClick={() => navigate('/user/new')}>
-            <HiPlus className="mr-2 h-4 w-4" />
-            Add User
-          </Button>
+        <div className="flex items-center gap-2 mb-2">
+          <HiUser className="w-6 h-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            Users
+          </h1>
         </div>
+        <p className="text-gray-600 dark:text-gray-400">
+          Manage user accounts and permissions
+        </p>
       </div>
 
       {/* Filter Section */}
@@ -206,7 +234,7 @@ const Users: React.FC = () => {
                       {user.email || 'No email'}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {user.tenant}
+                      {user.tenant || 'Not specified'}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
                       {formatDate(user.update_time)}
@@ -261,7 +289,7 @@ const Users: React.FC = () => {
                     
                     <div>
                       <span className="font-medium text-gray-700 dark:text-gray-300">Tenant:</span>
-                      <span className="ml-2 text-gray-600 dark:text-gray-400">{user.tenant}</span>
+                      <span className="ml-2 text-gray-600 dark:text-gray-400">{user.tenant || 'Not specified'}</span>
                     </div>
                     
                     <div>

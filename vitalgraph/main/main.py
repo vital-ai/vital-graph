@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -56,6 +57,15 @@ def create_app() -> FastAPI:
     return app
 
 def run_server():
+    
+    # Configure logging for the server
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler()
+        ]
+    )
     
     os.environ["APP_MODE"] = "production"
     

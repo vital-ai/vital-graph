@@ -17,18 +17,16 @@ class PostgreSQLSpaceSchema:
     not database operations or queries.
     """
     
-    def __init__(self, global_prefix: str, space_id: str, use_unlogged: bool = True):
+    def __init__(self, global_prefix: str, space_id: str):
         """
         Initialize schema with configuration parameters.
         
         Args:
             global_prefix: Global prefix for table names
             space_id: Space identifier
-            use_unlogged: Whether to use unlogged tables for better performance
         """
         self.global_prefix = global_prefix
         self.space_id = space_id
-        self.use_unlogged = use_unlogged
         
         # Validate parameters
         PostgreSQLSpaceUtils.validate_global_prefix(global_prefix)
@@ -49,10 +47,6 @@ class PostgreSQLSpaceSchema:
             'datatype': PostgreSQLSpaceUtils.get_table_name(self.global_prefix, self.space_id, 'datatype')
         }
         
-        # Add unlogged suffix if configured
-        if self.use_unlogged:
-            return {key: f"{value}_unlogged" for key, value in base_names.items()}
-        
         return base_names
     
     def get_table_prefix(self) -> str:
@@ -62,10 +56,7 @@ class PostgreSQLSpaceSchema:
         Returns:
             str: Table prefix for index names
         """
-        table_prefix = PostgreSQLSpaceUtils.get_table_prefix(self.global_prefix, self.space_id)
-        if self.use_unlogged:
-            table_prefix += "_unlogged"
-        return table_prefix
+        return PostgreSQLSpaceUtils.get_table_prefix(self.global_prefix, self.space_id)
     
     def get_create_table_sql(self) -> Dict[str, str]:
         """
@@ -81,63 +72,86 @@ class PostgreSQLSpaceSchema:
         """
         table_names = self.get_table_names()
         table_prefix = self.get_table_prefix()
+        table_type = "TABLE"
         
         sql_statements = {}
         
-        # UUID-based term table with ALL performance indexes
-        table_type = "UNLOGGED TABLE" if self.use_unlogged else "TABLE"
+        # Create partitioned term table for logged tables with zero-copy imports
         sql_statements['term'] = f"""
-            CREATE {table_type} {table_names['term']} (
-                term_uuid UUID PRIMARY KEY,
-                term_text TEXT NOT NULL,
-                term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
-                lang VARCHAR(20),
-                datatype_id BIGINT,
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            
-            -- Basic indexes
-            CREATE INDEX idx_{table_prefix}_term_text ON {table_names['term']} (term_text);
-            CREATE INDEX idx_{table_prefix}_term_type ON {table_names['term']} (term_type);
-            
-            -- Composite index for optimized batch lookups
-            CREATE INDEX idx_{table_prefix}_term_text_type ON {table_names['term']} (term_text, term_type);
-            
-            -- Trigram indexes for text search
-            CREATE INDEX idx_{table_prefix}_term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);
-            CREATE INDEX idx_{table_prefix}_term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);
-            
-            -- Cluster term table by UUID for better JOIN performance
-            CLUSTER {table_names['term']} USING {table_names['term']}_pkey;
-        """
+                CREATE TABLE {table_names['term']} (
+                    term_uuid UUID NOT NULL,
+                    term_text TEXT NOT NULL,
+                    term_type CHAR(1) NOT NULL CHECK (term_type IN ('U', 'L', 'B', 'G')),
+                    lang VARCHAR(20),
+                    datatype_id BIGINT,
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    dataset VARCHAR(50) NOT NULL DEFAULT 'primary',
+                    PRIMARY KEY (term_uuid, dataset)
+                ) PARTITION BY LIST (dataset);
+                
+                -- Create primary partition
+                CREATE TABLE {table_names['term']}_primary (
+                    LIKE {table_names['term']} INCLUDING ALL
+                );
+                
+                -- Set partition constraints
+                ALTER TABLE {table_names['term']}_primary 
+                    ALTER COLUMN dataset SET DEFAULT 'primary';
+                ALTER TABLE {table_names['term']}_primary 
+                    ADD CONSTRAINT {table_names['term']}_primary_chk CHECK (dataset = 'primary');
+                
+                -- Attach primary partition
+                ALTER TABLE {table_names['term']} 
+                    ATTACH PARTITION {table_names['term']}_primary FOR VALUES IN ('primary');
+                
+                -- Create partitioned indexes for SPARQL query performance
+                CREATE INDEX idx_{table_prefix}_term_text ON {table_names['term']} (term_text);
+                CREATE INDEX idx_{table_prefix}_term_type ON {table_names['term']} (term_type);
+                CREATE INDEX idx_{table_prefix}_term_dataset ON {table_names['term']} (dataset);
+                CREATE INDEX idx_{table_prefix}_term_text_type ON {table_names['term']} (term_text, term_type);
+                CREATE INDEX idx_{table_prefix}_term_text_gin_trgm ON {table_names['term']} USING gin (term_text gin_trgm_ops);
+                CREATE INDEX idx_{table_prefix}_term_text_gist_trgm ON {table_names['term']} USING gist (term_text gist_trgm_ops);
+            """
         
-        # UUID-based quad table with ALL performance indexes
+        # Create partitioned rdf_quad table for logged tables with zero-copy imports
         sql_statements['rdf_quad'] = f"""
-            CREATE {table_type} {table_names['rdf_quad']} (
-                subject_uuid UUID NOT NULL,
-                predicate_uuid UUID NOT NULL,
-                object_uuid UUID NOT NULL,
-                context_uuid UUID NOT NULL,
-                quad_uuid UUID NOT NULL DEFAULT gen_random_uuid(),
-                created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
-            );
-            
-            -- Individual column indexes
-            CREATE INDEX idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);
-            CREATE INDEX idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);
-            CREATE INDEX idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);
-            CREATE INDEX idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);
-            CREATE INDEX idx_{table_prefix}_quad_uuid ON {table_names['rdf_quad']} (quad_uuid);
-            
-            -- SPARQL-optimized composite index (subject, predicate, object, context)
-            CREATE INDEX idx_{table_prefix}_quad_spoc ON {table_names['rdf_quad']} (subject_uuid, predicate_uuid, object_uuid, context_uuid);
-            
-            -- Cluster quad table by subject_uuid for subject-focused queries
-            CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}_quad_subject;
-        """
+                CREATE TABLE {table_names['rdf_quad']} (
+                    subject_uuid UUID NOT NULL,
+                    predicate_uuid UUID NOT NULL,
+                    object_uuid UUID NOT NULL,
+                    context_uuid UUID NOT NULL,
+                    quad_uuid UUID NOT NULL DEFAULT gen_random_uuid(),
+                    created_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    dataset VARCHAR(50) NOT NULL DEFAULT 'primary',
+                    PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid, dataset)
+                ) PARTITION BY LIST (dataset);
+                
+                -- Create primary partition
+                CREATE TABLE {table_names['rdf_quad']}_primary (
+                    LIKE {table_names['rdf_quad']} INCLUDING ALL
+                );
+                
+                -- Set partition constraints
+                ALTER TABLE {table_names['rdf_quad']}_primary 
+                    ALTER COLUMN dataset SET DEFAULT 'primary';
+                ALTER TABLE {table_names['rdf_quad']}_primary 
+                    ADD CONSTRAINT {table_names['rdf_quad']}_primary_chk CHECK (dataset = 'primary');
+                
+                -- Attach primary partition
+                ALTER TABLE {table_names['rdf_quad']} 
+                    ATTACH PARTITION {table_names['rdf_quad']}_primary FOR VALUES IN ('primary');
+                
+                -- Create partitioned indexes for SPARQL query performance
+                CREATE INDEX idx_{table_prefix}_quad_subject ON {table_names['rdf_quad']} (subject_uuid);
+                CREATE INDEX idx_{table_prefix}_quad_predicate ON {table_names['rdf_quad']} (predicate_uuid);
+                CREATE INDEX idx_{table_prefix}_quad_object ON {table_names['rdf_quad']} (object_uuid);
+                CREATE INDEX idx_{table_prefix}_quad_context ON {table_names['rdf_quad']} (context_uuid);
+                CREATE INDEX idx_{table_prefix}_quad_uuid ON {table_names['rdf_quad']} (quad_uuid);
+                CREATE INDEX idx_{table_prefix}_quad_dataset ON {table_names['rdf_quad']} (dataset);
+                CREATE INDEX idx_{table_prefix}_quad_spoc ON {table_names['rdf_quad']} (subject_uuid, predicate_uuid, object_uuid, context_uuid);
+            """
         
-        # Namespace table (unchanged)
+        # Namespace table
         sql_statements['namespace'] = f"""
             CREATE {table_type} {table_names['namespace']} (
                 namespace_id BIGSERIAL PRIMARY KEY,
@@ -147,7 +161,7 @@ class PostgreSQLSpaceSchema:
             );
         """
         
-        # Graph table (unchanged)
+        # Graph table
         sql_statements['graph'] = f"""
             CREATE {table_type} {table_names['graph']} (
                 graph_id BIGSERIAL PRIMARY KEY,
@@ -236,6 +250,7 @@ class PostgreSQLSpaceSchema:
             f"CREATE INDEX {concurrent_keyword} idx_{table_prefix}_quad_spoc ON {table_names['rdf_quad']} (subject_uuid, predicate_uuid, object_uuid, context_uuid);"
         ]
     
+    # Note: using this is disabled for now
     def get_cluster_sql(self) -> List[str]:
         """
         Get SQL statements to cluster tables for performance.
@@ -250,5 +265,3 @@ class PostgreSQLSpaceSchema:
             f"CLUSTER {table_names['rdf_quad']} USING idx_{table_prefix}_quad_subject;"
         ]
 
-
-# functions for defining the db schema

@@ -16,24 +16,27 @@ import {
   ModalFooter
 } from 'flowbite-react';
 import { 
-  HiPencil, 
-  HiSave, 
-  HiX, 
-  HiHome, 
+  HiPencil,
+  HiTrash,
+  HiSave,
+  HiX,
   HiUser,
+  HiHome,
   HiEye,
   HiEyeOff,
-  HiTrash,
   HiExclamationCircle
 } from 'react-icons/hi';
 
 interface User {
-  id: number;
-  tenant: string;
+  id: string;
   username: string;
-  password: string;
+  full_name: string;
   email: string;
-  update_time: string;
+  profile_image?: string;
+  role: string;
+  password?: string;
+  tenant?: string;
+  update_time?: string;
 }
 
 interface BannerMessage {
@@ -60,7 +63,10 @@ const UserDetail: React.FC = () => {
   // Form state for editing
   const [editForm, setEditForm] = useState({
     username: '',
+    full_name: '',
     email: '',
+    profile_image: '',
+    role: '',
     password: '',
     tenant: ''
   });
@@ -84,7 +90,10 @@ const UserDetail: React.FC = () => {
       if (isCreating) {
         setEditForm({
           username: '',
+          full_name: '',
           email: '',
+          profile_image: '',
+          role: '',
           password: '',
           tenant: ''
         });
@@ -98,12 +107,15 @@ const UserDetail: React.FC = () => {
         const userData = response.data;
         setUser(userData);
         
-        // Initialize edit form with current values including password
+        // Initialize edit form with current values
         setEditForm({
           username: userData.username || '',
+          full_name: userData.full_name || '',
           email: userData.email || '',
-          password: userData.password || '', // Populate password as regular field
-          tenant: userData.tenant || ''
+          profile_image: userData.profile_image || '',
+          role: userData.role || '',
+          password: '', // Password field for editing (empty by default)
+          tenant: '' // Tenant field for editing
         });
         
         setError(null);
@@ -123,16 +135,19 @@ const UserDetail: React.FC = () => {
   useEffect(() => {
     if (isCreating) {
       // For creation mode, check if required fields are filled
-      const hasRequiredFields = editForm.username.trim() !== '' && editForm.password.trim() !== '';
+      const hasRequiredFields = editForm.username.trim() !== '' && editForm.email.trim() !== '';
       setHasChanges(hasRequiredFields);
     } else {
       if (!user) return;
       
       const hasFormChanges = 
         editForm.username !== (user.username || '') ||
+        editForm.full_name !== (user.full_name || '') ||
         editForm.email !== (user.email || '') ||
-        editForm.password !== (user.password || '') || // Password change if different
-        editForm.tenant !== (user.tenant || '');
+        editForm.profile_image !== (user.profile_image || '') ||
+        editForm.role !== (user.role || '') ||
+        editForm.password.trim() !== '' || // Password change if entered
+        editForm.tenant.trim() !== ''; // Tenant change if entered
       
       setHasChanges(hasFormChanges);
     }
@@ -162,7 +177,10 @@ const UserDetail: React.FC = () => {
     // Reset form to original values
     setEditForm({
       username: user.username || '',
+      full_name: user.full_name || '',
       email: user.email || '',
+      profile_image: user.profile_image || '',
+      role: user.role || '',
       password: user.password || '', // Reset to original password
       tenant: user.tenant || ''
     });
@@ -209,7 +227,10 @@ const UserDetail: React.FC = () => {
         // Update edit form with new values from server response
         setEditForm({
           username: updatedUser.username || '',
+          full_name: updatedUser.full_name || '',
           email: updatedUser.email || '',
+          profile_image: updatedUser.profile_image || '',
+          role: updatedUser.role || '',
           password: updatedUser.password || '',
           tenant: updatedUser.tenant || ''
         });
@@ -259,9 +280,16 @@ const UserDetail: React.FC = () => {
     setShowDeleteModal(false);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string | undefined) => {
+    if (!dateString || dateString === '' || dateString === 'undefined' || dateString === 'null') {
+      return 'Not available';
+    }
     try {
-      return new Date(dateString).toLocaleDateString('en-US', {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) {
+        return 'Not available';
+      }
+      return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
@@ -269,7 +297,7 @@ const UserDetail: React.FC = () => {
         minute: '2-digit'
       });
     } catch {
-      return dateString;
+      return 'Not available';
     }
   };
 
@@ -308,23 +336,7 @@ const UserDetail: React.FC = () => {
   }
 
   return (
-    <div>
-      {/* Banner Message Area */}
-      <div className="mb-4 min-h-[60px]">
-        {bannerMessage && (
-          <Alert 
-            color={bannerMessage.type === 'success' ? 'success' : 'failure'}
-            className="mb-4"
-            onDismiss={() => setBannerMessage(null)}
-          >
-            <span className="font-medium">
-              {bannerMessage.type === 'success' ? 'Success:' : 'Error:'}
-            </span>{' '}
-            {bannerMessage.message}
-          </Alert>
-        )}
-      </div>
-
+    <div className="space-y-6">
       {/* Breadcrumbs */}
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>
@@ -338,17 +350,27 @@ const UserDetail: React.FC = () => {
         </BreadcrumbItem>
       </Breadcrumb>
 
+      {/* Banner Message Area */}
+      {bannerMessage && (
+        <Alert 
+          color={bannerMessage.type === 'success' ? 'success' : 'failure'}
+          className="mb-6"
+          onDismiss={() => setBannerMessage(null)}
+        >
+          <span className="font-medium">
+            {bannerMessage.type === 'success' ? 'Success:' : 'Error:'}
+          </span>{' '}
+          {bannerMessage.message}
+        </Alert>
+      )}
+
       {/* Header */}
       <div className="mb-6">
-        <div className="flex justify-between items-start">
-          <div>
-            <h1 className="mb-2 text-2xl font-bold text-gray-900 dark:text-white">
-              {isCreating ? 'Create New User' : (isEditing ? 'Edit User' : 'User Details')}
-            </h1>
-            <p className="text-gray-500 dark:text-gray-400">
-              {isEditing ? 'Modify user information' : 'View user information and settings'}
-            </p>
-          </div>
+        <div className="flex items-center gap-2 mb-4">
+          <HiUser className="w-6 h-6 text-blue-600" />
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            User Details
+          </h1>
           <div className="flex flex-col sm:flex-row gap-2">
             {isEditing ? (
               <>
@@ -532,7 +554,7 @@ const UserDetail: React.FC = () => {
               <TextInput
                 id="last-updated"
                 type="text"
-                value={user?.update_time ? formatDate(user.update_time) : ''}
+                value={formatDate(user?.update_time)}
                 disabled
                 className="mt-1"
               />

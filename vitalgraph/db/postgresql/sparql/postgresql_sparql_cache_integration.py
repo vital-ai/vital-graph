@@ -313,11 +313,16 @@ async def generate_bgp_sql_with_cache(triples: List[Tuple], table_config: TableC
     # Build FROM clause with first quad table - exact logic from original
     from_clause = f"FROM {table_config.quad_table} {quad_aliases[0]}"
     
-    # Add additional quad tables as CROSS JOINs and let PostgreSQL optimizer handle it
-    # This is simpler and relies on WHERE conditions for optimization
+    # PERFORMANCE OPTIMIZATION: For simple single-triple queries, avoid CROSS JOINs entirely
+    # Only use CROSS JOINs when we actually have multiple triples that need to be joined
     if len(quad_aliases) > 1:
+        # Add additional quad tables as CROSS JOINs only when necessary
+        # For complex multi-triple patterns, let PostgreSQL optimizer handle it
         for i in range(1, len(quad_aliases)):
             quad_joins.append(f"CROSS JOIN {table_config.quad_table} {quad_aliases[i]}")
+        logger.debug(f"🔧 PERFORMANCE: Using CROSS JOINs for {len(quad_aliases)} quad tables (multi-triple pattern)")
+    else:
+        logger.debug(f"🚀 PERFORMANCE: Single triple pattern - no CROSS JOINs needed")
     
     # Add WHERE conditions for shared variables to enable PostgreSQL optimization
     shared_var_conditions = _generate_shared_variable_conditions(triples, quad_aliases)

@@ -51,7 +51,16 @@ const Login: React.FC = () => {
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4">
       <Card className="w-full max-w-md">
         <div className="flex justify-center mb-4">
-          <img src="/flowbite-react.svg" className="h-12" alt="VitalGraph Logo" />
+          <img 
+            src="/images/vital-logo-black.png" 
+            className="h-16 w-auto block dark:hidden" 
+            alt="VitalGraph Logo" 
+          />
+          <img 
+            src="/images/vitallogo_offwhite_normal.png" 
+            className="h-16 w-auto hidden dark:block" 
+            alt="VitalGraph Logo" 
+          />
         </div>
         <h1 className="text-xl font-bold text-center mb-6 dark:text-white">
           Sign in to VitalGraph

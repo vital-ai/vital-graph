@@ -558,7 +558,7 @@ def create_table_config(space_impl: PostgreSQLSpaceImpl, space_id: str) -> Table
     Returns:
         TableConfig instance for SQL generation
     """
-    return TableConfig.from_space_impl(space_impl, space_id, use_unlogged=space_impl.use_unlogged)
+    return TableConfig.from_space_impl(space_impl, space_id)
 
 
 def _has_distinct_pattern(pattern) -> bool:
@@ -595,6 +595,67 @@ def _restore_variable_case(sql_results: List[Dict[str, Any]], case_mapping: Dict
         restored_results.append(restored_result)
     
     return restored_results
+
+
+def _convert_sql_results_to_sparql_json(sql_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Convert SQL results to proper SPARQL JSON format.
+    
+    Transforms raw SQL values into SPARQL JSON format with type and value properties:
+    - Numbers become {"type": "literal", "datatype": "http://www.w3.org/2001/XMLSchema#integer", "value": "123"}
+    - Strings become {"type": "literal", "value": "text"}
+    - URIs become {"type": "uri", "value": "http://example.org/resource"}
+    
+    Args:
+        sql_results: Raw SQL query results
+        
+    Returns:
+        List of SPARQL JSON formatted result dictionaries
+    """
+    import re
+    
+    sparql_results = []
+    
+    for result in sql_results:
+        sparql_result = {}
+        
+        for variable, value in result.items():
+            if value is None:
+                # Skip null values (they shouldn't appear in SPARQL results)
+                continue
+                
+            # Convert value to proper SPARQL JSON format
+            if isinstance(value, (int, float)):
+                # Numeric values
+                datatype = "http://www.w3.org/2001/XMLSchema#integer" if isinstance(value, int) else "http://www.w3.org/2001/XMLSchema#double"
+                sparql_result[variable] = {
+                    "type": "literal",
+                    "datatype": datatype,
+                    "value": str(value)
+                }
+            elif isinstance(value, str):
+                # Check if it's a URI (starts with http:// or https:// or urn:)
+                if re.match(r'^(https?://|urn:)', value):
+                    sparql_result[variable] = {
+                        "type": "uri",
+                        "value": value
+                    }
+                else:
+                    # Regular string literal
+                    sparql_result[variable] = {
+                        "type": "literal",
+                        "value": value
+                    }
+            else:
+                # Fallback for other types - convert to string literal
+                sparql_result[variable] = {
+                    "type": "literal", 
+                    "value": str(value)
+                }
+        
+        sparql_results.append(sparql_result)
+    
+    return sparql_results
 
 
 def _build_select_clause(projection_vars: List, variable_mappings: Dict, has_distinct: bool = False) -> Tuple[str, str, str, Dict]:
@@ -949,6 +1010,12 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         else:
             raise NotImplementedError(f"Unsupported query type: {query_type}")
         
+        # Log the generated SQL query for debugging and performance analysis
+        logger.info("🔍 Generated SQL Query:")
+        # Format SQL for better readability in logs
+        formatted_sql = sql_query.replace('\n', '\n    ')
+        logger.info(f"    {formatted_sql}")
+        
         # Execute SQL query using the space_impl's connection method
         logger.info(f"Executing SQL query with memory protection (max_rows={max_rows}, max_memory={max_memory_mb}MB)...")
         
@@ -967,8 +1034,9 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
         
         # Process results based on query type
         if query_type == "SelectQuery":
-            # Return results as-is for SELECT queries
-            return sql_results
+            # Convert SQL results to proper SPARQL JSON format
+            sparql_results = _convert_sql_results_to_sparql_json(sql_results)
+            return sparql_results
         elif query_type == "ConstructQuery":
             # Convert SQL results to RDF triples for CONSTRUCT queries
             construct_template = getattr(query_algebra, 'template', [])
@@ -1331,10 +1399,10 @@ async def _execute_insert_delete_pattern(space_impl: PostgreSQLSpaceImpl, space_
         # Execute the SQL statements
         async with space_impl.core.get_dict_connection() as conn:
             # Connection already configured with dict_row factory
-            async with conn.cursor() as cursor:
+            with conn.cursor() as cursor:
                 for sql in sql_statements:
                     logger.debug(f"Executing SQL: {sql}")
-                    await cursor.execute(sql)
+                    cursor.execute(sql)
         
         logger.info("Successfully executed INSERT/DELETE with WHERE patterns")
         return True
@@ -1712,7 +1780,13 @@ def _parse_modify_operation(sparql_update: str) -> Tuple[List[Tuple], List[Tuple
     # Return empty templates for now
     delete_template = []
     insert_template = []
-    where_sql = SQLComponents(select="", from_clause="", where="", group_by="", order_by="")
+    where_sql = SQLComponents(
+        from_clause="",
+        where_conditions=[],
+        joins=[],
+        variable_mappings={},
+        order_by=""
+    )
     
     return delete_template, insert_template, where_sql
 
@@ -1889,15 +1963,21 @@ def _parse_data_triples_fallback(sparql_update: str, operation_type: str) -> Tup
         triple_pattern = r'<([^>]+)>\s+<([^>]+)>\s+(?:"([^"]+)"|<([^>]+)>)\s*[;.]'
         matches = re.findall(triple_pattern, sparql_update)
         
+        def clean_uri(uri_text):
+            """Remove angle brackets from URI text if present."""
+            if uri_text and uri_text.startswith('<') and uri_text.endswith('>'):
+                return uri_text.strip('<>')
+            return uri_text
+        
         for match in matches:
             subject_uri, predicate_uri, literal_obj, uri_obj = match
-            subject = URIRef(subject_uri)
-            predicate = URIRef(predicate_uri)
+            subject = URIRef(clean_uri(subject_uri))
+            predicate = URIRef(clean_uri(predicate_uri))
             
             if literal_obj:
                 obj = Literal(literal_obj)
             elif uri_obj:
-                obj = URIRef(uri_obj)
+                obj = URIRef(clean_uri(uri_obj))
             else:
                 continue
                 
