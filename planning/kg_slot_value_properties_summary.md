@@ -2,6 +2,59 @@
 
 This document provides a quick reference for the specific value properties available for each KGSlot subclass, as well as information about KGType and its subclasses for typing entities, frames, and slots.
 
+## KG Edge Types for Graph Structure
+
+### Graph Relationship Edges
+The knowledge graph uses specific edge types to define relationships between entities, frames, and slots:
+
+| Edge Type | Relationship | Description |
+|-----------|--------------|-------------|
+| `Edge_hasEntityKGFrame` | Entity → Frame | Connects a KGEntity to its KGFrames |
+| `Edge_hasKGFrame` | Frame → Frame | Connects a parent KGFrame to child KGFrames |
+| `Edge_hasKGSlot` | Frame → Slot | Connects a KGFrame to its KGSlots |
+
+### Graph Structure Validation
+When validating graph structures, these edge types enforce the proper relationships:
+
+```
+Entity Graph Structure:
+KGEntity --[Edge_hasEntityKGFrame]--> KGFrame --[Edge_hasKGSlot]--> KGSlot
+                                         |
+                                         +--[Edge_hasKGFrame]--> KGFrame (child)
+                                                                    |
+                                                                    +--[Edge_hasKGSlot]--> KGSlot
+```
+
+### Edge Properties
+All edges have source and destination properties:
+- `edgeSource` - URI of the source object
+- `edgeDestination` - URI of the destination object
+
+### Usage in Code
+```python
+from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
+
+# Entity to Frame connection
+entity_frame_edge = Edge_hasEntityKGFrame()
+entity_frame_edge.URI = "http://example.org/edge1"
+entity_frame_edge.edgeSource = entity.URI
+entity_frame_edge.edgeDestination = frame.URI
+
+# Frame to Frame connection (parent-child)
+frame_frame_edge = Edge_hasKGFrame()
+frame_frame_edge.URI = "http://example.org/edge2"
+frame_frame_edge.edgeSource = parent_frame.URI
+frame_frame_edge.edgeDestination = child_frame.URI
+
+# Frame to Slot connection
+frame_slot_edge = Edge_hasKGSlot()
+frame_slot_edge.URI = "http://example.org/edge3"
+frame_slot_edge.edgeSource = frame.URI
+frame_slot_edge.edgeDestination = slot.URI
+```
+
 ## KGType and Type Classification
 
 ### Overview
