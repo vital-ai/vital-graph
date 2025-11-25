@@ -27,11 +27,7 @@ logger = logging.getLogger(__name__)
 
 class MockVitalGraphClient(VitalGraphClientInterface):
     """
-    Mock implementation of VitalGraphClientInterface.
-    
-    Provides stub implementations for all VitalGraph client methods
-    for testing purposes. All methods delegate to mock endpoints
-    that return predictable stub responses.
+    Mock implementation of VitalGraphClientInterface with in-memory storage.
     """
     
     def __init__(self, config_path: Optional[str] = None, *, config: Optional[Any] = None):

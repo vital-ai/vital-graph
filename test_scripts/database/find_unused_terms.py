@@ -87,7 +87,7 @@ class UnusedTermsFinder:
         
         # Create schema instance to get table names
         from vitalgraph.db.postgresql.space.postgresql_space_schema import PostgreSQLSpaceSchema
-        schema = PostgreSQLSpaceSchema(space_impl.global_prefix, space_id, use_unlogged=True)
+        schema = PostgreSQLSpaceSchema(space_impl.global_prefix, space_id)
         return schema.get_table_names()
     
     async def analyze_space_statistics(self, space_id: str) -> Dict[str, Any]:

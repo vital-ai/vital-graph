@@ -3,7 +3,8 @@
 
 Test script demonstrating the mock client with real VitalSigns objects:
 - KGFrame, KGEntity, KGEntitySlot
-- Edge_hasKGSlot connections
+- Edge_hasKGSlot connections (frame to slots)
+- Frame-based relationship model (frame has slots pointing to entities)
 - Object instantiation, storage, and retrieval
 - JSON-LD and RDF triple conversion
 - Complete CRUD lifecycle testing
@@ -114,15 +115,15 @@ def create_test_objects():
     # Create edge from frame to source slot
     source_slot_edge = Edge_hasKGSlot()
     source_slot_edge.URI = URIGenerator.generate_uri()
-    source_slot_edge.edgeSource = kgframe.URI
-    source_slot_edge.edgeDestination = source_slot.URI
+    source_slot_edge.edgeSource = str(kgframe.URI)
+    source_slot_edge.edgeDestination = str(source_slot.URI)
     objects.append(source_slot_edge)
     
     # Create edge from frame to destination slot
     destination_slot_edge = Edge_hasKGSlot()
     destination_slot_edge.URI = URIGenerator.generate_uri()
-    destination_slot_edge.edgeSource = kgframe.URI
-    destination_slot_edge.edgeDestination = destination_slot.URI
+    destination_slot_edge.edgeSource = str(kgframe.URI)
+    destination_slot_edge.edgeDestination = str(destination_slot.URI)
     objects.append(destination_slot_edge)
     
     return objects
@@ -167,13 +168,14 @@ def verify_object_equality(original_obj, retrieved_data):
     if not retrieved_data:
         return False, "No retrieved data"
     
-    # Check URI
-    if retrieved_data.get("@id") != str(original_obj.URI):
-        return False, f"URI mismatch: {retrieved_data.get('@id')} != {original_obj.URI}"
+    # Check URI (handle both @id and id fields)
+    retrieved_uri = retrieved_data.get("@id") or retrieved_data.get("id")
+    if retrieved_uri != str(original_obj.URI):
+        return False, f"URI mismatch: {retrieved_uri} != {original_obj.URI}"
     
-    # Check type
+    # Check type (handle both @type and type fields)
     expected_type = original_obj.get_class_uri()
-    retrieved_type = retrieved_data.get("@type")
+    retrieved_type = retrieved_data.get("@type") or retrieved_data.get("type")
     if retrieved_type != expected_type:
         return False, f"Type mismatch: {retrieved_type} != {expected_type}"
     
@@ -193,6 +195,15 @@ def verify_object_equality(original_obj, retrieved_data):
                 if "#" in prop_key:
                     short_prop = prop_key.split("#")[-1]
                     retrieved_value = retrieved_data.get(short_prop)
+            
+            # Handle expanded JSON-LD property values
+            if isinstance(retrieved_value, dict):
+                # Handle JSON-LD expanded form like {'@value': 'dog', 'type': 'xsd:string'}
+                if '@value' in retrieved_value:
+                    retrieved_value = retrieved_value['@value']
+                # Handle JSON-LD object references like {'id': 'http://...'}
+                elif 'id' in retrieved_value:
+                    retrieved_value = retrieved_value['id']
             
             # Handle quoted strings from RDF literals
             if retrieved_value and isinstance(retrieved_value, str):
@@ -282,10 +293,11 @@ def main():
             retrieved_objects = objects_response.objects.graph
             print(f"Retrieved {len(retrieved_objects)} objects in current page:")
             
-            # Group by type
+            
+            # Group by type (handle both @type and type fields)
             by_type = {}
             for obj in retrieved_objects:
-                obj_type = obj.get('@type', 'Unknown')
+                obj_type = obj.get('@type') or obj.get('type', 'Unknown')
                 if obj_type not in by_type:
                     by_type[obj_type] = []
                 by_type[obj_type].append(obj)
@@ -300,17 +312,17 @@ def main():
         if hasattr(objects_response, 'objects') and hasattr(objects_response.objects, 'graph'):
             retrieved_objects = objects_response.objects.graph
             
-            # Create a map of retrieved objects by URI
-            retrieved_by_uri = {obj.get('@id'): obj for obj in retrieved_objects}
+            # Create a map of retrieved objects by URI (handle both @id and id fields)
+            retrieved_by_uri = {}
+            for obj in retrieved_objects:
+                uri = obj.get('@id') or obj.get('id')
+                if uri:
+                    retrieved_by_uri[uri] = obj
             
             # Verify each original object
             for original_obj in test_objects:
                 original_uri = str(original_obj.URI)
                 retrieved_obj = retrieved_by_uri.get(original_uri)
-                
-                # Debug: show first retrieved object structure
-                if original_obj == test_objects[0] and retrieved_obj:
-                    print(f"  Debug - First retrieved object keys: {list(retrieved_obj.keys())}")
                 
                 is_match, message = verify_object_equality(original_obj, retrieved_obj)
                 verification_results.append((original_obj.__class__.__name__, original_uri, is_match, message))
@@ -346,6 +358,34 @@ def main():
                 slot = binding.get('slot', {}).get('value', 'N/A')
                 print(f"  Frame: {frame}")
                 print(f"  Slot:  {slot}")
+        
+        # Query Frame-Entity relationships through slots
+        print("\n🔗 Querying Frame-Entity relationships through slots...")
+        frame_entity_query = SPARQLQueryRequest(
+            query=f"""
+            SELECT ?frame ?slot ?entity WHERE {{
+                GRAPH <{graph_uri}> {{
+                    ?frame a <http://vital.ai/ontology/haley-ai-kg#KGFrame> .
+                    ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> ?frame .
+                    ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?slot .
+                    ?slot a <http://vital.ai/ontology/haley-ai-kg#KGEntitySlot> .
+                    ?slot <http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue> ?entity .
+                }}
+            }}
+            """
+        )
+        
+        frame_entity_results = client.execute_sparql_query("vitalsigns_test_space", frame_entity_query)
+        if hasattr(frame_entity_results, 'results') and isinstance(frame_entity_results.results, dict):
+            frame_entity_bindings = frame_entity_results.results.get('bindings', [])
+            print(f"Found {len(frame_entity_bindings)} frame-entity relationships through slots:")
+            for binding in frame_entity_bindings:
+                frame = binding.get('frame', {}).get('value', 'N/A')
+                slot = binding.get('slot', {}).get('value', 'N/A')
+                entity = binding.get('entity', {}).get('value', 'N/A')
+                print(f"  Frame: {frame}")
+                print(f"  Slot:  {slot}")
+                print(f"  Entity: {entity}")
         
         # Test MinIO file operations
         print("\n📁 Testing MinIO File Operations...")

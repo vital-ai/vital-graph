@@ -328,7 +328,7 @@ async def reload_wordnet_data():
         import asyncio
         await asyncio.sleep(0.5)
         
-        # Get table names using the same logic as table creation (respects use_unlogged config)
+        # Get table names using the same logic as table creation
         table_names = space_impl._get_table_names(SPACE_ID)
         quad_table_name = table_names['rdf_quad']
         

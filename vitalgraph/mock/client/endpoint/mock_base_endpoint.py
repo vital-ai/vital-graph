@@ -404,7 +404,7 @@ class MockBaseEndpoint:
     
     def _objects_to_jsonld_document(self, objects: List[GraphObject]) -> Dict[str, Any]:
         """
-        Convert VitalSigns objects to JSON-LD document using native functionality.
+        Convert VitalSigns objects to JSON-LD document using native VitalSigns methods.
         
         Args:
             objects: List of VitalSigns GraphObject instances
@@ -414,23 +414,11 @@ class MockBaseEndpoint:
         """
         try:
             if not objects:
-                # Return empty document with proper structure - use FileNode class method
-                from vital_ai_domain.model.FileNode import FileNode
-                return FileNode.to_jsonld_list([])
+                # Return empty document using VitalSigns native method
+                return GraphObject.to_jsonld_list([])
             
-            # Create proper @graph structure manually since to_jsonld_list() isn't working as expected
-            graph_items = []
-            for obj in objects:
-                obj_jsonld = obj.to_jsonld()
-                # Remove @context from individual objects since it will be at the top level
-                if '@context' in obj_jsonld:
-                    del obj_jsonld['@context']
-                graph_items.append(obj_jsonld)
-            
-            jsonld_result = {
-                '@context': {},
-                '@graph': graph_items
-            }
+            # Use VitalSigns native to_jsonld_list method
+            jsonld_result = GraphObject.to_jsonld_list(objects)
             
             # Ensure the context includes the vital prefixes that the test expects
             if '@context' not in jsonld_result:

@@ -808,7 +808,7 @@ LIMIT 10 OFFSET 0
         # Get table names for the space
         space_impl = self.db_impl.get_space_impl()
         from vitalgraph.db.postgresql.space.postgresql_space_schema import PostgreSQLSpaceSchema
-        schema = PostgreSQLSpaceSchema(space_impl.global_prefix, space_id, use_unlogged=True)
+        schema = PostgreSQLSpaceSchema(space_impl.global_prefix, space_id)
         table_names = schema.get_table_names()
         term_table = table_names['term']
         quad_table = table_names['rdf_quad']
