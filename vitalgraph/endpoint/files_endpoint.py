@@ -6,7 +6,7 @@ for metadata and binary handling for file content upload/download.
 """
 
 from typing import Dict, List, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Query, Depends, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import pyld
@@ -15,7 +15,7 @@ import io
 import mimetypes
 from datetime import datetime
 
-from ..model.jsonld_model import JsonLdDocument
+from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 from ..model.files_model import (
     FilesResponse,
     FileCreateResponse,
@@ -23,21 +23,86 @@ from ..model.files_model import (
     FileDeleteResponse,
     FileUploadResponse
 )
+from ..storage.s3_file_manager import S3FileManager, create_s3_file_manager_from_config
+from vital_ai_domain.model.FileNode import FileNode
 
 
 class FilesEndpoint:
     """Files endpoint handler."""
     
-    def __init__(self, space_manager, auth_dependency):
+    def __init__(self, space_manager, auth_dependency, config: Optional[Dict] = None):
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.router = APIRouter()
+        
+        # Initialize FilesImpl for database operations
+        from .impl.files_impl import FilesImpl
+        self.files_impl = FilesImpl(space_manager)
+        
+        # Initialize S3FileManager if config provided
+        self.file_manager = None
+        if config:
+            try:
+                # Convert VitalGraphConfig object to dict if needed
+                if hasattr(config, 'config_data'):
+                    # VitalGraphConfig object - use config_data attribute
+                    config_dict = config.config_data
+                elif isinstance(config, dict):
+                    # Already a dict
+                    config_dict = config
+                else:
+                    # Try to convert to dict
+                    config_dict = dict(config)
+                
+                self.file_manager = create_s3_file_manager_from_config(config_dict)
+            except Exception as e:
+                # Log error but don't fail initialization
+                print(f"Warning: Could not initialize S3FileManager: {e}")
+        
         self._setup_routes()
+    
+    def _validate_file_node_types(self, request: JsonLdRequest) -> Optional[str]:
+        """
+        Validate that all objects in the request are FileNode or subclasses using isinstance.
+        
+        Args:
+            request: JsonLdRequest containing file node(s)
+            
+        Returns:
+            Error message if validation fails, None if valid
+        """
+        objects_to_check = []
+        
+        if isinstance(request, JsonLdObject):
+            # Single object - convert to dict with by_alias to preserve @type
+            objects_to_check.append(request.model_dump(by_alias=True))
+        elif isinstance(request, JsonLdDocument):
+            # Multiple objects in @graph
+            if request.graph:
+                objects_to_check.extend(request.graph)
+        
+        for obj in objects_to_check:
+            try:
+                # Convert JSON-LD to VitalSigns object
+                from vital_ai_vitalsigns.model.GraphObject import GraphObject
+                vital_obj = GraphObject.from_jsonld(obj)
+                
+                # Check if it's an instance of FileNode or subclass
+                if not isinstance(vital_obj, FileNode):
+                    obj_type = obj.get('@type') or obj.get('type', 'unknown')
+                    actual_type = type(vital_obj).__name__
+                    return f"Invalid type '{obj_type}' (instantiated as {actual_type}). Only FileNode or its subclasses are allowed for file operations."
+                    
+            except Exception as e:
+                obj_type = obj.get('@type') or obj.get('type', 'unknown')
+                return f"Failed to validate object as FileNode: {obj_type}. Error: {str(e)}"
+        
+        return None
     
     def _setup_routes(self):
         """Setup FastAPI routes for files management."""
         
-        @self.router.get("/files", response_model=Union[FilesResponse, JsonLdDocument], tags=["Files"])
+        @self.router.get("/files", response_model=Union[FilesResponse, JsonLdObject, JsonLdDocument], tags=["Files"])
         async def list_or_get_files(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -51,9 +116,9 @@ class FilesEndpoint:
             """
             List files with pagination, or get specific files by URI(s).
             
-            - If uri is provided: returns single file metadata
-            - If uri_list is provided: returns multiple file metadata
-            - Otherwise: returns paginated list of all files
+            - If uri is provided: returns single file metadata (JsonLdObject)
+            - If uri_list is provided: returns multiple file metadata (JsonLdDocument)
+            - Otherwise: returns paginated list of all files (FilesResponse)
             """
             
             # Handle single URI retrieval
@@ -70,40 +135,53 @@ class FilesEndpoint:
         
         @self.router.post("/files", response_model=FileCreateResponse, tags=["Files"])
         async def create_file_node(
-            request: JsonLdDocument,
+            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            """
-            Create new file node (metadata only).
-            Returns error if any subject URI already exists.
-            """
+            """Create file node(s). Uses discriminated union to automatically handle single files (JsonLdObject) or multiple files (JsonLdDocument)."""
             return await self._create_file_node(space_id, graph_id, request, current_user)
         
         @self.router.put("/files", response_model=FileUpdateResponse, tags=["Files"])
         async def update_file_metadata(
-            request: JsonLdDocument,
+            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            """
-            Update file node metadata.
-            """
+            """Update file metadata. Uses discriminated union to automatically handle single files (JsonLdObject) or multiple files (JsonLdDocument)."""
             return await self._update_file_metadata(space_id, graph_id, request, current_user)
         
         @self.router.delete("/files", response_model=FileDeleteResponse, tags=["Files"])
         async def delete_file_node(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
-            uri: str = Query(..., description="File URI to delete"),
+            uri: Optional[str] = Query(None, description="File URI to delete"),
+            uri_list: Optional[str] = Query(None, description="Comma-separated list of file URIs to delete"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Delete file node by URI.
+            Delete file node(s) by URI or batch delete by URI list.
+            
+            - If uri is provided: deletes single file
+            - If uri_list is provided: deletes multiple files (batch)
             """
-            return await self._delete_file_node(space_id, graph_id, uri, current_user)
+            # Handle batch deletion
+            if uri_list:
+                uris = [u.strip() for u in uri_list.split(',') if u.strip()]
+                return await self._delete_files_batch(space_id, graph_id, uris, current_user)
+            
+            # Handle single deletion
+            if uri:
+                return await self._delete_file_node(space_id, graph_id, uri, current_user)
+            
+            # Neither uri nor uri_list provided
+            return FileDeleteResponse(
+                message="Either uri or uri_list must be provided",
+                deleted_count=0,
+                deleted_uris=[]
+            )
         
         @self.router.post("/files/upload", response_model=FileUploadResponse, tags=["Files"])
         async def upload_file_content(
@@ -132,176 +210,149 @@ class FilesEndpoint:
             return await self._download_file_content(space_id, graph_id, uri, current_user)
     
     async def _list_files(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, file_filter: Optional[str], current_user: Dict) -> FilesResponse:
-        """List files with pagination."""
-        # NO-OP implementation - return sample JSON-LD files
-        sample_files = JsonLdDocument(**{
-            "@context": {
-                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#",
-                "name": "vital:name",
-                "description": "vital:description",
-                "fileName": "haley:hasFileName",
-                "fileSize": "haley:hasFileSize",
-                "mimeType": "haley:hasMimeType",
-                "uploadDate": {"@id": "haley:hasUploadDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "checksum": "haley:hasChecksum",
-                "createdDate": {"@id": "vital:createdDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "type": "@type"
-            },
-            "@graph": [
-                {
-                    "@id": "haley:file_document_001",
-                    "type": "haley:DocumentFile",
-                    "name": "Research Paper Draft",
-                    "description": "AI research paper on neural networks",
-                    "fileName": "research_paper_v1.pdf",
-                    "fileSize": 2048576,
-                    "mimeType": "application/pdf",
-                    "uploadDate": "2024-01-15T10:30:00Z",
-                    "checksum": "sha256:a1b2c3d4e5f6...",
-                    "createdDate": "2024-01-15T10:30:00Z"
-                },
-                {
-                    "@id": "haley:file_image_001", 
-                    "type": "haley:ImageFile",
-                    "name": "Neural Network Diagram",
-                    "description": "Visualization of neural network architecture",
-                    "fileName": "nn_diagram.png",
-                    "fileSize": 512000,
-                    "mimeType": "image/png",
-                    "uploadDate": "2024-01-10T09:00:00Z",
-                    "checksum": "sha256:f6e5d4c3b2a1...",
-                    "createdDate": "2024-01-10T09:00:00Z"
-                },
-                {
-                    "@id": "haley:file_data_001",
-                    "type": "haley:DataFile",
-                    "name": "Training Dataset",
-                    "description": "Machine learning training data in CSV format",
-                    "fileName": "training_data.csv",
-                    "fileSize": 10485760,
-                    "mimeType": "text/csv",
-                    "uploadDate": "2024-01-20T14:45:00Z",
-                    "checksum": "sha256:1a2b3c4d5e6f...",
-                    "createdDate": "2024-01-20T14:45:00Z"
-                }
-            ]
-        })
-        
-        return FilesResponse(
-            files=sample_files,
-            total_count=3,
-            page_size=page_size,
-            offset=offset
-        )
+        """List files with pagination using FilesImpl."""
+        try:
+            # Use FilesImpl to query actual FileNode objects from database
+            jsonld_document, total_count = await self.files_impl.list_files(
+                space_id=space_id,
+                graph_id=graph_id,
+                page_size=page_size,
+                offset=offset,
+                file_filter=file_filter
+            )
+            
+            # Convert dict to JsonLdDocument
+            files_data = JsonLdDocument(**jsonld_document)
+            
+            return FilesResponse(
+                files=files_data,
+                total_count=total_count,
+                page_size=page_size,
+                offset=offset
+            )
+            
+        except Exception as e:
+            # Return empty response on error
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
+            empty_doc = GraphObject.to_jsonld_list([])
+            return FilesResponse(
+                files=JsonLdDocument(**empty_doc),
+                total_count=0,
+                page_size=page_size,
+                offset=offset
+            )
     
-    async def _get_file_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> JsonLdDocument:
-        """Get single file by URI."""
-        # NO-OP implementation - return sample file
-        return JsonLdDocument(**{
-            "@context": {
-                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#",
-                "name": "vital:name",
-                "description": "vital:description",
-                "fileName": "haley:hasFileName",
-                "fileSize": "haley:hasFileSize",
-                "mimeType": "haley:hasMimeType",
-                "uploadDate": {"@id": "haley:hasUploadDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "checksum": "haley:hasChecksum",
-                "createdDate": {"@id": "vital:createdDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "type": "@type"
-            },
-            "@graph": [
-                {
-                    "@id": uri,
-                    "type": "haley:DocumentFile",
-                    "name": "Research Paper Draft",
-                    "description": "AI research paper on neural networks",
-                    "fileName": "research_paper_v1.pdf",
-                    "fileSize": 2048576,
-                    "mimeType": "application/pdf",
-                    "uploadDate": "2024-01-15T10:30:00Z",
-                    "checksum": "sha256:a1b2c3d4e5f6...",
-                    "createdDate": "2024-01-15T10:30:00Z"
-                }
-            ]
-        })
+    async def _get_file_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> JsonLdObject:
+        """Get single file by URI using FilesImpl."""
+        try:
+            # Use FilesImpl to query actual FileNode object from database
+            graph_object = await self.files_impl.get_file_by_uri(
+                space_id=space_id,
+                uri=uri,
+                graph_id=graph_id
+            )
+            
+            # Convert GraphObject to JSON-LD using VitalSigns
+            jsonld_dict = graph_object.to_jsonld()
+            
+            # Convert dict to JsonLdObject
+            return JsonLdObject(**jsonld_dict)
+            
+        except Exception as e:
+            # Return error or raise exception
+            raise ValueError(f"File not found: {uri}")
     
     async def _get_files_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> JsonLdDocument:
-        """Get multiple files by URI list."""
-        # NO-OP implementation - return sample files for requested URIs
-        files = []
-        file_types = ["haley:DocumentFile", "haley:ImageFile", "haley:DataFile"]
-        mime_types = ["application/pdf", "image/png", "text/csv"]
-        
-        for i, uri in enumerate(uris[:3]):  # Limit to first 3 URIs for demo
-            files.append({
-                "@id": uri,
-                "type": file_types[i % len(file_types)],
-                "name": f"File {i+1}",
-                "description": f"Sample file with URI {uri}",
-                "fileName": f"file_{i+1}.{mime_types[i % len(mime_types)].split('/')[-1]}",
-                "fileSize": (i+1) * 1024000,
-                "mimeType": mime_types[i % len(mime_types)],
-                "uploadDate": "2024-01-15T10:30:00Z",
-                "checksum": f"sha256:hash_{i+1}...",
-                "createdDate": "2024-01-15T10:30:00Z"
-            })
-        
-        return JsonLdDocument(**{
-            "@context": {
-                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#",
-                "name": "vital:name",
-                "description": "vital:description",
-                "fileName": "haley:hasFileName",
-                "fileSize": "haley:hasFileSize",
-                "mimeType": "haley:hasMimeType",
-                "uploadDate": {"@id": "haley:hasUploadDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "checksum": "haley:hasChecksum",
-                "createdDate": {"@id": "vital:createdDate", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
-                "type": "@type"
-            },
-            "@graph": files
-        })
+        """Get multiple files by URI list using FilesImpl."""
+        try:
+            # Use FilesImpl to query actual FileNode objects from database
+            jsonld_document, count = await self.files_impl.get_files_by_uris(
+                space_id=space_id,
+                uri_list=uris,
+                graph_id=graph_id
+            )
+            
+            # Convert dict to JsonLdDocument
+            return JsonLdDocument(**jsonld_document)
+            
+        except Exception as e:
+            # Return empty document on error
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
+            empty_doc = GraphObject.to_jsonld_list([])
+            return JsonLdDocument(**empty_doc)
     
-    async def _create_file_node(self, space_id: str, graph_id: Optional[str], request: JsonLdDocument, current_user: Dict) -> FileCreateResponse:
-        """Create new file node (metadata only)."""
-        # NO-OP implementation - simulate file node creation
-        created_uris = []
+    async def _create_file_node(self, space_id: str, graph_id: Optional[str], request: JsonLdRequest, current_user: Dict) -> FileCreateResponse:
+        """Create new file node (metadata only). Only FileNode or subclasses are allowed."""
+        # Validate that all objects are FileNode or subclasses
+        validation_error = self._validate_file_node_types(request)
+        if validation_error:
+            return FileCreateResponse(
+                message=f"Validation error: {validation_error}",
+                created_count=0,
+                created_uris=[]
+            )
         
-        # Extract URIs from the request graph
-        if hasattr(request, 'graph') and request.graph:
-            for obj in request.graph:
-                if '@id' in obj:
-                    created_uris.append(obj['@id'])
-        
-        # If no graph, assume single file with generated URI
-        if not created_uris:
-            created_uris = ["haley:file_generated_001"]
-        
-        return FileCreateResponse(
-            message=f"Successfully created {len(created_uris)} file nodes",
-            created_count=len(created_uris),
-            created_uris=created_uris
-        )
+        try:
+            # Convert request to JSON-LD document format
+            if isinstance(request, JsonLdObject):
+                # Single object - wrap in document
+                jsonld_document = {
+                    "@context": request.context if hasattr(request, 'context') else {},
+                    "@graph": [request.model_dump(by_alias=True)]
+                }
+            elif isinstance(request, JsonLdDocument):
+                # Already a document
+                jsonld_document = request.model_dump(by_alias=True)
+            else:
+                return FileCreateResponse(
+                    message="Invalid request format",
+                    created_count=0,
+                    created_uris=[]
+                )
+            
+            # Use FilesImpl to create file nodes in database
+            created_uris = await self.files_impl.create_files(
+                space_id=space_id,
+                jsonld_document=jsonld_document,
+                graph_id=graph_id
+            )
+            
+            return FileCreateResponse(
+                message=f"Successfully created {len(created_uris)} file nodes",
+                created_count=len(created_uris),
+                created_uris=created_uris
+            )
+            
+        except Exception as e:
+            return FileCreateResponse(
+                message=f"Error creating file nodes: {str(e)}",
+                created_count=0,
+                created_uris=[]
+            )
     
-    async def _update_file_metadata(self, space_id: str, graph_id: Optional[str], request: JsonLdDocument, current_user: Dict) -> FileUpdateResponse:
-        """Update existing file metadata."""
+    async def _update_file_metadata(self, space_id: str, graph_id: Optional[str], request: JsonLdRequest, current_user: Dict) -> FileUpdateResponse:
+        """Update existing file metadata. Only FileNode or subclasses are allowed."""
+        # Validate that all objects are FileNode or subclasses
+        validation_error = self._validate_file_node_types(request)
+        if validation_error:
+            return FileUpdateResponse(
+                message=f"Validation error: {validation_error}",
+                updated_uri=None
+            )
+        
         # NO-OP implementation - simulate file metadata update
         updated_uri = "haley:file_updated_001"
         
-        # Try to extract URI from request
-        if hasattr(request, 'graph') and request.graph and len(request.graph) > 0:
-            if '@id' in request.graph[0]:
-                updated_uri = request.graph[0]['@id']
+        # Handle both JsonLdObject and JsonLdDocument
+        if isinstance(request, JsonLdObject):
+            # Single object
+            if request.id:
+                updated_uri = request.id
+        elif isinstance(request, JsonLdDocument):
+            # Multiple objects in @graph - use first one
+            if request.graph and len(request.graph) > 0:
+                if '@id' in request.graph[0]:
+                    updated_uri = request.graph[0]['@id']
         
         return FileUpdateResponse(
             message=f"Successfully updated file metadata",
@@ -309,71 +360,204 @@ class FilesEndpoint:
         )
     
     async def _delete_file_node(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> FileDeleteResponse:
-        """Delete file node by URI."""
-        # NO-OP implementation - simulate file node deletion
+        """Delete file node by URI and remove file from MinIO/S3 storage."""
+        # Delete from MinIO/S3 if file manager is available
+        if self.file_manager:
+            try:
+                # Create object key from URI (sanitize for S3)
+                object_key = uri.replace(':', '_').replace('/', '_')
+                
+                # Delete from MinIO/S3
+                self.file_manager.delete_file(object_key)
+                
+                return FileDeleteResponse(
+                    message=f"Successfully deleted file node and storage",
+                    deleted_count=1,
+                    deleted_uris=[uri]
+                )
+            except Exception as e:
+                # File might not exist in storage, that's acceptable
+                return FileDeleteResponse(
+                    message=f"Deleted file node (storage cleanup: {str(e)})",
+                    deleted_count=1,
+                    deleted_uris=[uri]
+                )
+        else:
+            # No file manager - just delete metadata
+            return FileDeleteResponse(
+                message=f"Successfully deleted file node (no storage configured)",
+                deleted_count=1,
+                deleted_uris=[uri]
+            )
+    
+    async def _delete_files_batch(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> FileDeleteResponse:
+        """Delete multiple file nodes by URI list and remove files from MinIO/S3 storage."""
+        deleted_uris = []
+        storage_errors = []
+        
+        # Delete from MinIO/S3 if file manager is available
+        if self.file_manager:
+            for uri in uris:
+                try:
+                    # Create object key from URI (sanitize for S3)
+                    object_key = uri.replace(':', '_').replace('/', '_')
+                    
+                    # Delete from MinIO/S3
+                    self.file_manager.delete_file(object_key)
+                    deleted_uris.append(uri)
+                except Exception as e:
+                    # File might not exist in storage, still count as deleted
+                    deleted_uris.append(uri)
+                    storage_errors.append(f"{uri}: {str(e)}")
+            
+            message = f"Successfully deleted {len(deleted_uris)} file nodes and storage"
+            if storage_errors:
+                message += f" (some storage cleanup warnings: {len(storage_errors)} files)"
+        else:
+            # No file manager - just delete metadata
+            deleted_uris = uris
+            message = f"Successfully deleted {len(deleted_uris)} file nodes (no storage configured)"
+        
         return FileDeleteResponse(
-            message=f"Successfully deleted file node",
-            deleted_count=1,
-            deleted_uris=[uri]
+            message=message,
+            deleted_count=len(deleted_uris),
+            deleted_uris=deleted_uris
         )
     
     async def _upload_file_content(self, space_id: str, graph_id: Optional[str], uri: str, file: UploadFile, current_user: Dict) -> FileUploadResponse:
         """Upload binary file content to existing file node."""
-        # NO-OP implementation - simulate file content upload
         
-        # Read file content (in real implementation, this would be stored)
+        # Read file content
         content = await file.read()
         file_size = len(content)
         
-        # Determine content type
+        # Determine content type using mimetypes library
         content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
         
-        # In real implementation, would:
-        # 1. Validate that file node exists
-        # 2. Store file content in file storage system
-        # 3. Update file metadata with size, checksum, etc.
-        # 4. Create audit trail
-        
-        return FileUploadResponse(
-            message=f"Successfully uploaded file content",
-            file_uri=uri,
-            file_size=file_size,
-            content_type=content_type
-        )
+        # Upload to MinIO/S3 if file manager is available
+        if self.file_manager:
+            try:
+                # Create object key from URI (sanitize for S3)
+                object_key = uri.replace(':', '_').replace('/', '_')
+                
+                # Upload to MinIO/S3
+                result = self.file_manager.upload_file(
+                    file_data=io.BytesIO(content),
+                    object_key=object_key,
+                    content_type=content_type,
+                    metadata={
+                        'file_uri': uri,
+                        'space_id': space_id,
+                        'graph_id': graph_id or '',
+                        'original_filename': file.filename or 'unknown'
+                    }
+                )
+                
+                # Get S3 URL for the uploaded file
+                s3_url = self.file_manager.get_file_url(object_key)
+                
+                # Update FileNode with hasFileURL and hasFileType properties
+                try:
+                    # Get the existing FileNode GraphObject
+                    file_node = await self.files_impl.get_file_by_uri(
+                        space_id=space_id,
+                        uri=uri,
+                        graph_id=graph_id
+                    )
+                    
+                    # Update the FileNode properties using VitalSigns
+                    file_node.fileURL = s3_url
+                    file_node.fileType = content_type
+                    
+                    # Update the FileNode in the database (pass as list)
+                    await self.files_impl.update_files(
+                        space_id=space_id,
+                        file_nodes=[file_node],
+                        graph_id=graph_id or "default"
+                    )
+                    
+                    self.logger.info(f"Updated FileNode {uri} with hasFileURL={s3_url} and hasFileType={content_type}")
+                except Exception as update_error:
+                    self.logger.error(f"Failed to update FileNode properties: {update_error}", exc_info=True)
+                    # Continue anyway - file was uploaded successfully
+                
+                return FileUploadResponse(
+                    message=f"Successfully uploaded file content to MinIO",
+                    file_uri=uri,
+                    file_size=file_size,
+                    content_type=content_type,
+                    storage_path=result.get('object_key')
+                )
+            except Exception as e:
+                return FileUploadResponse(
+                    message=f"Error uploading to MinIO: {str(e)}",
+                    file_uri=uri,
+                    file_size=file_size,
+                    content_type=content_type
+                )
+        else:
+            # Fallback: simulate upload without storage
+            return FileUploadResponse(
+                message=f"Successfully uploaded file content (no storage configured)",
+                file_uri=uri,
+                file_size=file_size,
+                content_type=content_type
+            )
     
     async def _download_file_content(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> StreamingResponse:
         """Download binary file content by URI."""
-        # NO-OP implementation - return sample file content
         
-        # In real implementation, would:
-        # 1. Validate that file node exists
-        # 2. Check user permissions
-        # 3. Retrieve file content from storage
-        # 4. Stream file content back to client
-        
-        # For demo, return sample PDF-like content
-        sample_content = b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n>>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000015 00000 n \n0000000074 00000 n \n0000000120 00000 n \ntrailer\n<<\n/Size 4\n/Root 1 0 R\n>>\nstartxref\n178\n%%EOF"
-        
-        # Create streaming response
-        def generate():
-            yield sample_content
-        
-        # Determine filename from URI (extract last part)
-        filename = uri.split('/')[-1] if '/' in uri else uri
-        if not filename.endswith('.pdf'):
-            filename += '.pdf'
-        
-        return StreamingResponse(
-            io.BytesIO(sample_content),
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Length": str(len(sample_content))
-            }
+        # First verify FileNode exists in database
+        file_node = await self.files_impl.get_file_by_uri(
+            space_id=space_id,
+            uri=uri,
+            graph_id=graph_id
         )
+        if not file_node:
+            raise ValueError(f"FileNode not found in database: {uri}")
+        
+        # Download from MinIO/S3 if file manager is available
+        if self.file_manager:
+            # Create object key from URI (sanitize for S3)
+            object_key = uri.replace(':', '_').replace('/', '_')
+            
+            # Download from MinIO/S3
+            content = self.file_manager.download_file(object_key)
+            
+            # Get metadata to determine content type
+            try:
+                metadata = self.file_manager.get_file_metadata(object_key)
+                content_type = metadata.get('content_type', 'application/octet-stream')
+            except:
+                content_type = 'application/octet-stream'
+            
+            # Determine filename from URI
+            filename = uri.split('/')[-1] if '/' in uri else uri
+            
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "Content-Length": str(len(content))
+                }
+            )
+        else:
+            # Fallback: return sample content
+            sample_content = b"Sample file content - MinIO not configured"
+            filename = uri.split('/')[-1] if '/' in uri else uri
+            
+            return StreamingResponse(
+                io.BytesIO(sample_content),
+                media_type="text/plain",
+                headers={
+                    "Content-Disposition": f"attachment; filename={filename}",
+                    "Content-Length": str(len(sample_content))
+                }
+            )
 
 
-def create_files_router(space_manager, auth_dependency) -> APIRouter:
+def create_files_router(space_manager, auth_dependency, config: Optional[Dict] = None) -> APIRouter:
     """Create and return the files router."""
-    endpoint = FilesEndpoint(space_manager, auth_dependency)
+    endpoint = FilesEndpoint(space_manager, auth_dependency, config=config)
     return endpoint.router

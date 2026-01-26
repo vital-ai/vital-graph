@@ -13,7 +13,8 @@ import logging
 from ..model.sparql_model import (
     SPARQLGraphRequest,
     SPARQLGraphResponse,
-    GraphInfo
+    GraphInfo,
+    GraphInfoResponse
 )
 
 
@@ -67,7 +68,7 @@ class SPARQLGraphEndpoint:
         # GET endpoint to get graph info (catch-all route - must come after specific routes)
         @self.router.get(
             "/{space_id}/graph/{graph_uri:path}",
-            response_model=GraphInfo,
+            response_model=GraphInfoResponse,
             tags=["Graphs"],
             summary="Get Graph Info",
             description="Get information about a specific graph"
@@ -154,7 +155,7 @@ class SPARQLGraphEndpoint:
             
             space_impl = space_record.space_impl
             
-            # Get the database-specific PostgreSQL implementation for graph operations
+            # Get the database-specific implementation for graph operations
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
                 raise HTTPException(
@@ -162,7 +163,7 @@ class SPARQLGraphEndpoint:
                     detail="Database-specific space implementation not available"
                 )
             
-            # Execute the operation using PostgreSQLSpaceGraphs
+            # Execute the operation using PostgreSQL graph table operations
             import time
             start_time = time.time()
             
@@ -196,16 +197,7 @@ class SPARQLGraphEndpoint:
             elif operation in ["COPY", "MOVE", "ADD"]:
                 # For complex operations, fall back to SPARQL update
                 sparql_query = self._build_graph_operation_query(request)
-                
-                # Import the orchestrator function
-                from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
-                
-                # Use PostgreSQL implementation for SPARQL update (orchestrator handles term cache)
-                success = await execute_sparql_update(
-                    space_impl=db_space_impl,
-                    space_id=space_id,
-                    sparql_update=sparql_query
-                )
+                success = await space_impl.execute_sparql_update(space_id, sparql_query)
             else:
                 raise HTTPException(
                     status_code=400,
@@ -240,6 +232,7 @@ class SPARQLGraphEndpoint:
                 success=False,
                 operation=request.operation,
                 graph_uri=request.target_graph_uri or request.source_graph_uri,
+                message=f"Graph operation failed: {str(e)}",
                 error=str(e)
             )
     
@@ -312,7 +305,7 @@ class SPARQLGraphEndpoint:
         
             space_impl = space_record.space_impl
         
-            # Get the database-specific PostgreSQL implementation for graph operations
+            # Get the database-specific implementation for graph operations
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
                 raise HTTPException(
@@ -320,7 +313,7 @@ class SPARQLGraphEndpoint:
                     detail="Database-specific space implementation not available"
                 )
         
-            # Get graphs using PostgreSQLSpaceGraphs
+            # Get graphs using PostgreSQL graph table operations
             graphs_data = await db_space_impl.graphs.list_graphs(space_id)
             
             # Convert to GraphInfo objects
@@ -345,7 +338,7 @@ class SPARQLGraphEndpoint:
                 detail=f"Error listing graphs: {str(e)}"
             )
     
-    async def _get_graph_info(self, space_id: str, graph_uri: str, current_user: Dict) -> GraphInfo:
+    async def _get_graph_info(self, space_id: str, graph_uri: str, current_user: Dict) -> GraphInfoResponse:
         """Get information about a specific graph."""
         
         try:
@@ -353,59 +346,79 @@ class SPARQLGraphEndpoint:
             
             # Validate space manager
             if self.space_manager is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Space manager not available"
+                return GraphInfoResponse(
+                    success=False,
+                    graph_info=None,
+                    error="Space manager not available",
+                    message="Internal server error"
                 )
         
             # Validate space exists
             if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return GraphInfoResponse(
+                    success=False,
+                    graph_info=None,
+                    error=f"Space '{space_id}' not found",
+                    message="Space not found"
                 )
         
             # Get space record
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not available"
+                return GraphInfoResponse(
+                    success=False,
+                    graph_info=None,
+                    error=f"Space '{space_id}' not available",
+                    message="Space not available"
                 )
         
             space_impl = space_record.space_impl
         
-            # Get the database-specific PostgreSQL implementation for graph operations
+            # Get the database-specific implementation for graph operations
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Database-specific space implementation not available"
+                return GraphInfoResponse(
+                    success=False,
+                    graph_info=None,
+                    error="Database-specific space implementation not available",
+                    message="Internal server error"
                 )
         
-            # Get graph info using PostgreSQLSpaceGraphs
+            # Get graph info using PostgreSQL graph table operations
             graph_data = await db_space_impl.graphs.get_graph(space_id, graph_uri)
             
             if not graph_data:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Graph '{graph_uri}' not found in space '{space_id}'"
+                # Return error response for non-existent graphs
+                self.logger.info(f"Graph '{graph_uri}' not found in space '{space_id}'")
+                return GraphInfoResponse(
+                    success=False,
+                    graph_info=None,
+                    error=f"Graph '{graph_uri}' not found in space '{space_id}'",
+                    message="Graph not found"
                 )
             
-            return GraphInfo(
+            # Return success response with graph info
+            graph_info = GraphInfo(
                 graph_uri=graph_data['graph_uri'],
                 triple_count=graph_data.get('triple_count', 0),
                 created_time=graph_data.get('created_time', '').isoformat() if graph_data.get('created_time') else None,
                 updated_time=graph_data.get('updated_time', '').isoformat() if graph_data.get('updated_time') else None
             )
+            
+            return GraphInfoResponse(
+                success=True,
+                graph_info=graph_info,
+                error=None,
+                message="Graph info retrieved successfully"
+            )
         
-        except HTTPException:
-            raise
         except Exception as e:
             self.logger.error(f"Error getting graph info: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error getting graph info: {str(e)}"
+            return GraphInfoResponse(
+                success=False,
+                graph_info=None,
+                error=str(e),
+                message="Error getting graph info"
             )
 
 

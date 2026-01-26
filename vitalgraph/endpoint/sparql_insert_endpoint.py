@@ -122,20 +122,19 @@ class SPARQLInsertEndpoint:
         
             space_impl = space_record.space_impl
         
-            # Get the database-specific PostgreSQL implementation for the orchestrator
-            db_space_impl = space_impl.get_db_space_impl()
-            if not db_space_impl:
+            # Use the backend's native SPARQL update execution
+            backend = space_impl.get_db_space_impl()
+            if not backend:
                 raise HTTPException(
                     status_code=500,
-                    detail="Database-specific space implementation not available"
+                    detail="Backend implementation not available"
                 )
         
-            # Execute SPARQL update using orchestrator with PostgreSQL implementation
+            # Execute SPARQL update using backend's native method
             import time
             start_time = time.time()
         
-            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
-            success = await execute_sparql_update(db_space_impl, space_id, update)
+            success = await backend.execute_sparql_update(space_id, update)
             
             insert_time = time.time() - start_time
             
@@ -159,6 +158,7 @@ class SPARQLInsertEndpoint:
             self.logger.error(f"Error executing SPARQL update: {e}")
             return SPARQLInsertResponse(
                 success=False,
+                message=f"SPARQL insert failed: {str(e)}",
                 error=str(e)
             )
 

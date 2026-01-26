@@ -15,6 +15,9 @@ import traceback
 # Import PostgreSQLSpaceImpl for RDF space management
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 
+# Import DbImplInterface
+from ..db_inf import DbImplInterface
+
 
 # Custom connection class for psycopg-pool < 3.3 to properly integrate with SQLAlchemy
 # Logger for connection debugging
@@ -230,7 +233,7 @@ Space = None
 User = None
 
 
-class PostgreSQLDbImpl:
+class PostgreSQLDbImpl(DbImplInterface):
     """
     PostgreSQL database implementation for VitalGraph.
     
@@ -556,7 +559,7 @@ class PostgreSQLDbImpl:
             self.current_spaces = []
             self.current_users = []
             
-            self.logger.info("Successfully disconnected from PostgreSQL database and cleared state")
+            self.logger.info("Database disconnection completed")
             
         except Exception as e:
             self.logger.error(f"Error during database disconnection: {e}")

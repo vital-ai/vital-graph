@@ -1569,7 +1569,12 @@ class VitalGraphServiceImpl(VitalGraphService):
             
             # Build SPARQL DELETE query
             delete_query = f"""
-            DELETE WHERE {{
+            DELETE {{
+                GRAPH <{graph_uri}> {{
+                    <{object_uri}> ?p ?o .
+                }}
+            }}
+            WHERE {{
                 GRAPH <{graph_uri}> {{
                     <{object_uri}> ?p ?o .
                 }}

@@ -13,7 +13,7 @@ from datetime import datetime
 
 from pyld import jsonld
 
-from ..model.jsonld_model import JsonLdDocument
+from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 from ..model.triples_model import (
     TripleListRequest,
     TripleListResponse,
@@ -63,15 +63,15 @@ class TriplesEndpoint:
             response_model=TripleOperationResponse,
             tags=["Triples"],
             summary="Add Triples",
-            description="Add new triples to the specified graph"
+            description="Add new triples to the specified graph. Uses discriminated union to automatically handle single objects (JsonLdObject) or multiple objects (JsonLdDocument)."
         )
         async def add_triples(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
-            request: TripleListRequest = Body(..., description="JSON-LD document to add"),
+            request: JsonLdRequest = Body(..., description="JSON-LD document or object to add"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            return await self._add_triples(space_id, graph_id, request.document, current_user)
+            return await self._add_triples(space_id, graph_id, request, current_user)
         
         # DELETE /api/graphs/triples - Delete specific triples
         @self.router.delete(
@@ -79,15 +79,15 @@ class TriplesEndpoint:
             response_model=TripleOperationResponse,
             tags=["Triples"],
             summary="Delete Triples",
-            description="Delete specific triples from the specified graph"
+            description="Delete specific triples from the specified graph. Uses discriminated union to automatically handle single objects (JsonLdObject) or multiple objects (JsonLdDocument)."
         )
         async def delete_triples(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
-            request: TripleListRequest = Body(..., description="JSON-LD document to delete"),
+            request: JsonLdRequest = Body(..., description="JSON-LD document or object to delete"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
-            return await self._delete_triples(space_id, graph_id, request.document, current_user)
+            return await self._delete_triples(space_id, graph_id, request, current_user)
     
     async def _list_triples(
         self,
@@ -129,6 +129,8 @@ class TriplesEndpoint:
                 )
             
             space_impl = space_record.space_impl
+            
+            # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
                 raise HTTPException(
@@ -136,24 +138,52 @@ class TriplesEndpoint:
                     detail="Database-specific space implementation not available"
                 )
             
-            # Using SPARQL orchestrator - no need for quad patterns
-            
-            # Use direct SQL for maximum performance (faster than SPARQL)
+            # Use SPARQL queries via hybrid backend
             try:
                 import time
                 start_time = time.time()
                 
-                triples_data = await self._get_fast_triples(
-                    db_space_impl, space_id, graph_id, subject, predicate, object, 
-                    object_filter, page_size, offset
+                # Build SPARQL query for triples
+                sparql_query = self._build_sparql_query(
+                    graph_id, subject, predicate, object, object_filter, page_size, offset
                 )
+                
+                # Execute SPARQL query via hybrid backend
+                results = await db_space_impl.query_quads(space_id, sparql_query)
+                
+                # Convert SPARQL results to JSON-LD format
+                # Group triples by subject to create proper JSON-LD objects
+                subjects_map = {}
+                for result in results:
+                    subject_uri = result.get('s', {}).get('value', '')
+                    predicate = result.get('p', {}).get('value', '')
+                    obj_value = self._convert_sparql_binding_to_jsonld(result.get('o', {}))
+                    
+                    if subject_uri not in subjects_map:
+                        subjects_map[subject_uri] = {
+                            "@id": subject_uri,
+                            "@type": "http://www.w3.org/2000/01/rdf-schema#Resource"  # Default RDF type
+                        }
+                    
+                    # Add predicate-object to subject
+                    if predicate in subjects_map[subject_uri]:
+                        # Multiple values for same predicate - convert to array
+                        if not isinstance(subjects_map[subject_uri][predicate], list):
+                            subjects_map[subject_uri][predicate] = [subjects_map[subject_uri][predicate]]
+                        subjects_map[subject_uri][predicate].append(obj_value)
+                    else:
+                        subjects_map[subject_uri][predicate] = obj_value
+                
+                triples_data = list(subjects_map.values())
                 
                 query_time = time.time() - start_time
                 
-                # Get total count with fast SQL query instead of slow SPARQL
-                total_count = await self._get_fast_count(
-                    db_space_impl, space_id, graph_id, subject, predicate, object, object_filter
+                # Get total count with SPARQL COUNT query
+                count_query = self._build_count_sparql_query(
+                    graph_id, subject, predicate, object, object_filter
                 )
+                count_results = await db_space_impl.query_quads(space_id, count_query)
+                total_count = int(count_results[0].get('count', {}).get('value', 0)) if count_results else 0
                         
             except Exception as e:
                 self.logger.error(f"Error executing SPARQL query: {e}")
@@ -163,17 +193,30 @@ class TriplesEndpoint:
                 )
             
             # Build JSON-LD response
-            jsonld_doc = JsonLdDocument(
-                **{
-                    "@context": {
-                        "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                        "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-                        "xsd": "http://www.w3.org/2001/XMLSchema#"
-                    },
-                    "@graph": triples_data
-                }
-            )
+            # Use JsonLdObject for single result, JsonLdDocument for multiple or empty
+            context = {
+                "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+                "xsd": "http://www.w3.org/2001/XMLSchema#"
+            }
+            
+            if len(triples_data) == 1:
+                # Single result - use JsonLdObject
+                jsonld_doc = JsonLdObject(
+                    **{
+                        "@context": context,
+                        **triples_data[0]
+                    }
+                )
+            else:
+                # Multiple results or empty - use JsonLdDocument
+                jsonld_doc = JsonLdDocument(
+                    **{
+                        "@context": context,
+                        "@graph": triples_data
+                    }
+                )
             
             # Calculate pagination info
             total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
@@ -221,10 +264,10 @@ class TriplesEndpoint:
         self,
         space_id: str,
         graph_id: str,
-        document: JsonLdDocument,
+        document: JsonLdRequest,
         current_user: Dict
     ) -> TripleOperationResponse:
-        """Add JSON-LD document to the graph."""
+        """Add JSON-LD document or object to the graph."""
         
         try:
             self.logger.info(f"Adding JSON-LD document to space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
@@ -252,6 +295,8 @@ class TriplesEndpoint:
                 )
             
             space_impl = space_record.space_impl
+            
+            # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
                 raise HTTPException(
@@ -269,8 +314,10 @@ class TriplesEndpoint:
                     affected_count=0
                 )
             
-            # Add quads to the database using batch operation
-            added_count = await db_space_impl.add_rdf_quads_batch(space_id, quads)
+            # Pass RDFLib objects directly to preserve type information
+            # The backend will handle proper formatting for each storage system
+            success = await db_space_impl.add_rdf_quads_batch(space_id, quads)
+            added_count = len(quads) if success else 0
             
             self.logger.info(f"Successfully added {added_count} triples to graph '{graph_id}' in space '{space_id}'")
             
@@ -293,10 +340,10 @@ class TriplesEndpoint:
         self,
         space_id: str,
         graph_id: str,
-        document: JsonLdDocument,
+        document: JsonLdRequest,
         current_user: Dict
     ) -> TripleOperationResponse:
-        """Delete JSON-LD document from the graph."""
+        """Delete JSON-LD document or object from the graph."""
         
         try:
             self.logger.info(f"Deleting JSON-LD document from space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
@@ -324,6 +371,8 @@ class TriplesEndpoint:
                 )
             
             space_impl = space_record.space_impl
+            
+            # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
                 raise HTTPException(
@@ -341,8 +390,15 @@ class TriplesEndpoint:
                     affected_count=0
                 )
             
-            # Remove quads from the database using batch operation
-            removed_count = await db_space_impl.remove_rdf_quads_batch(space_id, quads)
+            # Convert quads to tuple format expected by the backend
+            quad_tuples = []
+            for s, p, o, g in quads:
+                # Use tuple format: (subject, predicate, object, graph)
+                quad_tuples.append((str(s), str(p), str(o), str(g)))
+            
+            # Remove quads from the database using hybrid backend batch method
+            success = await db_space_impl.remove_rdf_quads_batch(space_id, quad_tuples)
+            removed_count = len(quad_tuples) if success else 0
             
             self.logger.info(f"Successfully removed {removed_count} triples from graph '{graph_id}' in space '{space_id}'")
             
@@ -380,14 +436,29 @@ class TriplesEndpoint:
         else:
             return str(obj)
     
-    async def _jsonld_to_quads(self, document: JsonLdDocument, graph_id: str):
-        """Convert JSON-LD document to RDF quads."""
+    async def _jsonld_to_quads(self, document: JsonLdRequest, graph_id: str):
+        """Convert JSON-LD document or object to RDF quads."""
         from rdflib import Graph, URIRef, Namespace
         import json
         
         try:
             # Convert Pydantic model to dict for JSON-LD processing
-            doc_dict = document.dict(by_alias=True)
+            doc_dict = document.model_dump(by_alias=True)
+            
+            # If it's a JsonLdObject (single object), wrap it in a document structure
+            if isinstance(document, JsonLdObject):
+                # Single object - wrap in @graph array for RDFLib
+                context = doc_dict.pop('@context', {})
+                doc_dict = {
+                    '@context': context,
+                    '@graph': [doc_dict]
+                }
+            
+            # Handle empty @graph arrays - return empty list immediately
+            # This prevents RDFLib from creating spurious triples from @context
+            if '@graph' in doc_dict and len(doc_dict['@graph']) == 0:
+                self.logger.info("Empty @graph array - returning 0 quads")
+                return []
             
             # Create RDFLib graph and parse JSON-LD
             g = Graph()
@@ -402,10 +473,13 @@ class TriplesEndpoint:
             graph_uri = URIRef(graph_id)
             quads = []
             
+            self.logger.info(f"RDFLib graph has {len(g)} triples")
             for s, p, o in g:
+                self.logger.info(f"Triple: {s} {p} {o} (types: {type(s).__name__}, {type(p).__name__}, {type(o).__name__})")
+                # Keep RDFLib objects to preserve type information
                 quads.append((s, p, o, graph_uri))
             
-            self.logger.debug(f"Converted JSON-LD document to {len(quads)} quads")
+            self.logger.info(f"Converted JSON-LD document to {len(quads)} quads")
             return quads
             
         except Exception as e:
@@ -421,13 +495,20 @@ class TriplesEndpoint:
         """Build a SPARQL SELECT query with filters and pagination."""
         
         # Build simple SPARQL SELECT with GRAPH clause
-        query_parts = [
-            "SELECT ?s ?p ?o",
-            "WHERE {",
-            f"  GRAPH <{graph_id}> {{",
-            "    ?s ?p ?o .",
-            "  }"
-        ]
+        if graph_id:
+            query_parts = [
+                "SELECT ?s ?p ?o",
+                "WHERE {",
+                f"  GRAPH <{graph_id}> {{",
+                "    ?s ?p ?o .",
+                "  }"
+            ]
+        else:
+            query_parts = [
+                "SELECT ?s ?p ?o",
+                "WHERE {",
+                "  ?s ?p ?o ."
+            ]
         
         # Add filters
         filters = []
@@ -436,7 +517,8 @@ class TriplesEndpoint:
         if predicate:
             filters.append(f"  FILTER(?p = <{predicate}>)")
         if object:
-            if object.startswith('http://') or object.startswith('urn:'):
+            from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+            if validate_rfc3986(object, rule='URI'):
                 filters.append(f"  FILTER(?o = <{object}>)")
             else:
                 filters.append(f'  FILTER(?o = "{object}")')
@@ -456,13 +538,20 @@ class TriplesEndpoint:
                                  object: str = None, object_filter: str = None) -> str:
         """Build a SPARQL COUNT query with the same filters."""
         
-        query_parts = [
-            "SELECT (COUNT(*) AS ?count)",
-            "WHERE {",
-            f"  GRAPH <{graph_id}> {{",
-            "    ?s ?p ?o .",
-            "  }"
-        ]
+        if graph_id:
+            query_parts = [
+                "SELECT (COUNT(*) AS ?count)",
+                "WHERE {",
+                f"  GRAPH <{graph_id}> {{",
+                "    ?s ?p ?o .",
+                "  }"
+            ]
+        else:
+            query_parts = [
+                "SELECT (COUNT(*) AS ?count)",
+                "WHERE {",
+                "  ?s ?p ?o ."
+            ]
         
         # Add the same filters as the main query
         filters = []
@@ -471,7 +560,8 @@ class TriplesEndpoint:
         if predicate:
             filters.append(f"  FILTER(?p = <{predicate}>)")
         if object:
-            if object.startswith('http://') or object.startswith('urn:'):
+            from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+            if validate_rfc3986(object, rule='URI'):
                 filters.append(f"  FILTER(?o = <{object}>)")
             else:
                 filters.append(f'  FILTER(?o = "{object}")')
@@ -550,7 +640,8 @@ class TriplesEndpoint:
             
             if object:
                 joins.append(f"JOIN {term_table} o_term ON q.object_uuid = o_term.term_uuid")
-                if object.startswith('http://') or object.startswith('urn:'):
+                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                if validate_rfc3986(object, rule='URI'):
                     where_conditions.append("o_term.term_text = %s AND o_term.term_type = 'U'")
                     params.append(object)
                 else:
@@ -685,7 +776,8 @@ class TriplesEndpoint:
                     params.append(predicate)
                 
                 if object:
-                    if object.startswith('http://') or object.startswith('urn:'):
+                    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                    if validate_rfc3986(object, rule='URI'):
                         where_conditions.append("o_term.term_text = %s AND o_term.term_type = 'U'")
                         params.append(object)
                     else:

@@ -63,6 +63,68 @@ class SignalManager:
         # Register default logging callbacks for all channels
         self._register_default_logging_callbacks()
     
+    def _is_connection_closed(self, connection) -> bool:
+        """
+        Check if a connection is closed, handling different connection types.
+        
+        Args:
+            connection: Database connection object
+            
+        Returns:
+            bool: True if connection is closed or None, False if open
+        """
+        if connection is None:
+            return True
+            
+        # Handle different connection types
+        try:
+            # psycopg3 async connections have .closed attribute
+            if hasattr(connection, 'closed'):
+                return connection.closed
+            # Some connection types might have is_closed() method
+            elif hasattr(connection, 'is_closed'):
+                return connection.is_closed()
+            # Some connection types might have _closed attribute
+            elif hasattr(connection, '_closed'):
+                return connection._closed
+            else:
+                # If we can't determine, assume it's open
+                return False
+        except Exception:
+            # If any error occurs checking status, assume closed
+            return True
+    
+    def _commit_connection(self, connection) -> bool:
+        """
+        Commit a transaction on a connection, handling different connection types.
+        
+        Args:
+            connection: Database connection object
+            
+        Returns:
+            bool: True if commit succeeded, False otherwise
+        """
+        if connection is None:
+            return False
+            
+        # Handle different connection types
+        try:
+            # Most connections have commit() method
+            if hasattr(connection, 'commit'):
+                connection.commit()
+                return True
+            # Some async connections might use different methods
+            elif hasattr(connection, 'commit_async'):
+                connection.commit_async()
+                return True
+            # Some connections might auto-commit
+            else:
+                # If no commit method, assume auto-commit or not needed
+                return True
+        except Exception as e:
+            self.logger.debug(f"Error committing connection: {e}")
+            return False
+    
     def _register_default_logging_callbacks(self):
         """Register default logging callbacks for all notification channels."""
         # Users notifications
@@ -142,7 +204,7 @@ class SignalManager:
             self.listener_task = None
             
         # Close listen connection
-        if self.listen_connection and not self.listen_connection.closed:
+        if self.listen_connection and not self._is_connection_closed(self.listen_connection):
             self.listen_connection.close()
             self.listen_connection = None
             
@@ -263,7 +325,7 @@ class SignalManager:
                 # Clean up async connection if it exists
                 if hasattr(self, 'listen_connection') and self.listen_connection:
                     try:
-                        if not self.listen_connection.closed:
+                        if not self._is_connection_closed(self.listen_connection):
                             self.logger.debug("Closing async connection after error")
                             await self.listen_connection.close()
                     except Exception:
@@ -274,7 +336,7 @@ class SignalManager:
                 # Clean up dedicated async connection
                 if hasattr(self, 'listen_connection') and self.listen_connection:
                     try:
-                        if not self.listen_connection.closed:
+                        if not self._is_connection_closed(self.listen_connection):
                             self.logger.debug("Closing dedicated async notification connection")
                             await self.listen_connection.close()
                     except Exception as e:
@@ -404,7 +466,7 @@ class SignalManager:
         self.logger.info(f"Total callbacks across all channels: {total_callbacks}")
         
         # If we're already listening, make sure we're listening on this channel
-        if self.running and self.listen_connection and not self.listen_connection.closed:
+        if self.running and self.listen_connection and not self._is_connection_closed(self.listen_connection):
             # Use async cursor for LISTEN command
             async def listen_on_channel():
                 async with self.listen_connection.cursor() as cursor:
@@ -493,7 +555,16 @@ class SignalManager:
         Initialize a persistent connection for sending notifications.
         """
         try:
-            self.notify_connection = self.db_impl.rdf_pool.getconn()
+            # Handle different backend types
+            if hasattr(self.db_impl, 'rdf_pool'):
+                # Standard PostgreSQL backend
+                self.notify_connection = self.db_impl.rdf_pool.getconn()
+            elif hasattr(self.db_impl, 'connection_pool'):
+                # Hybrid FusekiPostgreSQLDbImpl backend
+                self.notify_connection = await self.db_impl.connection_pool.acquire()
+            else:
+                raise AttributeError(f"Backend {type(self.db_impl)} doesn't have a supported connection pool")
+            
             self.logger.info(f"Initialized persistent notification connection ID: {id(self.notify_connection)}")
         except Exception as e:
             self.logger.error(f"Failed to initialize notification connection: {str(e)}")
@@ -504,10 +575,16 @@ class SignalManager:
         """
         Close the persistent notification connection.
         """
-        if self.notify_connection and not self.notify_connection.closed:
+        if self.notify_connection and not self._is_connection_closed(self.notify_connection):
             try:
-                # Return connection to pool - no await needed for this pool
-                self.db_impl.rdf_pool.putconn(self.notify_connection)
+                # Handle different backend types
+                if hasattr(self.db_impl, 'rdf_pool'):
+                    # Standard PostgreSQL backend - no await needed for this pool
+                    self.db_impl.rdf_pool.putconn(self.notify_connection)
+                elif hasattr(self.db_impl, 'connection_pool'):
+                    # Hybrid FusekiPostgreSQLDbImpl backend - await needed for asyncpg pool
+                    await self.db_impl.connection_pool.release(self.notify_connection)
+                
                 self.logger.info("Closed persistent notification connection")
             except Exception as e:
                 self.logger.error(f"Error closing notification connection: {str(e)}")
@@ -526,7 +603,7 @@ class SignalManager:
         async with self.notify_lock:
             try:
                 # Ensure we have a valid connection
-                if self.notify_connection is None or self.notify_connection.closed:
+                if self.notify_connection is None or self._is_connection_closed(self.notify_connection):
                     await self._init_notify_connection()
                 if self.notify_connection:
                     self.logger.info(f"🔔 Using notification connection ID: {id(self.notify_connection)}")
@@ -538,7 +615,7 @@ class SignalManager:
                     # Use synchronous execute for the pooled connection
                     self.notify_connection.execute(notify_sql)
                     # Commit the transaction to ensure notification is sent
-                    self.notify_connection.commit()
+                    self._commit_connection(self.notify_connection)
                     self.logger.info(f"🔔 Sent notification on channel '{channel}': {payload}")
                 else:
                     self.logger.error(f"No notification connection available for channel '{channel}'")

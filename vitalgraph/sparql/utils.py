@@ -116,7 +116,8 @@ def validate_uri(uri: str) -> bool:
     """
     try:
         # Basic URI validation - should start with http:// or https://
-        return uri.startswith(('http://', 'https://')) and len(uri) > 10
+        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+        return validate_rfc3986(uri, rule='URI')
     except Exception:
         return False
 

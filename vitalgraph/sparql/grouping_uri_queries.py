@@ -25,13 +25,20 @@ class GroupingURIQueryBuilder:
         Returns:
             SPARQL query string
         """
-        return f"""
-        SELECT DISTINCT ?subject WHERE {{
-            GRAPH <{graph_id}> {{
+        if graph_id:
+            return f"""
+            SELECT DISTINCT ?subject WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?subject <{self.haley_prefix}hasKGGraphURI> <{entity_uri}> .
+                }}
+            }}
+            """
+        else:
+            return f"""
+            SELECT DISTINCT ?subject WHERE {{
                 ?subject <{self.haley_prefix}hasKGGraphURI> <{entity_uri}> .
             }}
-        }}
-        """
+            """
     
     def build_frame_graph_subjects_query(self, frame_uri: str, graph_id: str) -> str:
         """
@@ -44,13 +51,20 @@ class GroupingURIQueryBuilder:
         Returns:
             SPARQL query string
         """
-        return f"""
-        SELECT DISTINCT ?subject WHERE {{
-            GRAPH <{graph_id}> {{
+        if graph_id:
+            return f"""
+            SELECT DISTINCT ?subject WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?subject <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
+                }}
+            }}
+            """
+        else:
+            return f"""
+            SELECT DISTINCT ?subject WHERE {{
                 ?subject <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
             }}
-        }}
-        """
+            """
     
     def build_subject_triples_query(self, subject_uri: str, graph_id: str) -> str:
         """
@@ -58,18 +72,27 @@ class GroupingURIQueryBuilder:
         
         Args:
             subject_uri: The subject to get triples for
-            graph_id: The graph to search in
+            graph_id: The graph to search in (None for default graph)
             
         Returns:
             SPARQL query string
         """
-        return f"""
-        SELECT ?predicate ?object WHERE {{
-            GRAPH <{graph_id}> {{
+        if graph_id is None:
+            # Query default graph
+            return f"""
+            SELECT ?predicate ?object WHERE {{
                 <{subject_uri}> ?predicate ?object .
             }}
-        }}
-        """
+            """
+        else:
+            # Query named graph
+            return f"""
+            SELECT ?predicate ?object WHERE {{
+                GRAPH <{graph_id}> {{
+                    <{subject_uri}> ?predicate ?object .
+                }}
+            }}
+            """
     
     def build_complete_entity_graph_query(self, entity_uri: str, graph_id: str) -> str:
         """
@@ -77,19 +100,29 @@ class GroupingURIQueryBuilder:
         
         Args:
             entity_uri: The entity URI to get complete graph for
-            graph_id: The graph to search in
+            graph_id: The graph to search in (None for default graph)
             
         Returns:
             SPARQL query string
         """
-        return f"""
-        SELECT DISTINCT ?subject ?predicate ?object WHERE {{
-            GRAPH <{graph_id}> {{
+        if graph_id is None:
+            # Query default graph
+            return f"""
+            SELECT DISTINCT ?subject ?predicate ?object WHERE {{
                 ?subject <{self.haley_prefix}hasKGGraphURI> <{entity_uri}> .
                 ?subject ?predicate ?object .
             }}
-        }}
-        """
+            """
+        else:
+            # Query named graph
+            return f"""
+            SELECT DISTINCT ?subject ?predicate ?object WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?subject <{self.haley_prefix}hasKGGraphURI> <{entity_uri}> .
+                    ?subject ?predicate ?object .
+                }}
+            }}
+            """
     
     def build_complete_frame_graph_query(self, frame_uri: str, graph_id: str) -> str:
         """
@@ -97,19 +130,29 @@ class GroupingURIQueryBuilder:
         
         Args:
             frame_uri: The frame URI to get complete graph for
-            graph_id: The graph to search in
+            graph_id: The graph to search in (None for default graph)
             
         Returns:
             SPARQL query string
         """
-        return f"""
-        SELECT DISTINCT ?subject ?predicate ?object WHERE {{
-            GRAPH <{graph_id}> {{
+        if graph_id is None:
+            # Query default graph
+            return f"""
+            SELECT DISTINCT ?subject ?predicate ?object WHERE {{
                 ?subject <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
                 ?subject ?predicate ?object .
             }}
-        }}
-        """
+            """
+        else:
+            # Query named graph
+            return f"""
+            SELECT DISTINCT ?subject ?predicate ?object WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?subject <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
+                    ?subject ?predicate ?object .
+                }}
+            }}
+            """
     
     def build_entity_components_by_type_query(self, entity_uri: str, graph_id: str) -> str:
         """

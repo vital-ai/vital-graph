@@ -13,6 +13,9 @@ from rdflib import Variable, URIRef, Literal, BNode
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.algebra import translateQuery
 
+# Import space backend interface
+from ..space_backend_interface import SparqlBackendInterface
+
 from .postgresql_space_impl import PostgreSQLSpaceImpl
 from .postgresql_cache_term import PostgreSQLCacheTerm
 
@@ -39,7 +42,7 @@ from .sparql.postgresql_sparql_core import (
 )
 
 
-class PostgreSQLSparqlImpl:
+class PostgreSQLSparqlImpl(SparqlBackendInterface):
     """
     New PostgreSQL SPARQL implementation using function-based orchestrator architecture.
     

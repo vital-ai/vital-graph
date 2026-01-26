@@ -10,7 +10,6 @@ import pyoxigraph as px
 import logging
 
 from .mock_graph import MockGraph
-from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +62,7 @@ class MockSpace:
         Returns:
             True if valid URI, False otherwise
         """
+        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
         return bool(validate_rfc3986(value, rule='URI'))
     
     def to_dict(self) -> Dict[str, Any]:
@@ -430,11 +430,19 @@ class MockSpace:
                     binding = {}
                     # Extract variables from the first solution if not done yet
                     if not variables:
-                        # Get variable names from the query - simplified approach
+                        # Get variable names from the SELECT clause only
                         import re
-                        var_matches = re.findall(r'\?(\w+)', query)
-                        variables = list(set(var_matches))
-                        logger.debug(f"Extracted variables: {variables}")
+                        # Find the SELECT clause and extract variables from it
+                        select_match = re.search(r'SELECT\s+(?:DISTINCT\s+)?(.+?)\s+WHERE', query, re.IGNORECASE | re.DOTALL)
+                        if select_match:
+                            select_clause = select_match.group(1)
+                            var_matches = re.findall(r'\?(\w+)', select_clause)
+                            variables = var_matches  # Keep order, no deduplication
+                        else:
+                            # Fallback to all variables if SELECT parsing fails
+                            var_matches = re.findall(r'\?(\w+)', query)
+                            variables = list(set(var_matches))
+                        logger.debug(f"Extracted variables from SELECT: {variables}")
                     
                     # Access solution values by variable name
                     for var_name in variables:

@@ -3,16 +3,16 @@
 Pydantic models for file management operations.
 """
 
-from typing import List
+from typing import List, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument
+from .jsonld_model import JsonLdDocument, JsonLdObject
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
 
 
 class FilesResponse(BasePaginatedResponse):
     """Response model for files listing."""
-    files: JsonLdDocument = Field(..., description="JSON-LD document containing files")
+    files: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing files")
 
 
 class FileCreateResponse(BaseCreateResponse):

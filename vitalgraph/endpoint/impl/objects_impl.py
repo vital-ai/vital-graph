@@ -28,12 +28,12 @@ from ...utils.data_format_utils import (
 )
 
 
-class ObjectImpl:
+class ObjectsImpl:
     """Implementation for generic VitalSigns object operations using proper VitalGraph patterns."""
     
     def __init__(self, space_manager):
         self.space_manager = space_manager
-        self.logger = logging.getLogger(f"{__name__}.ObjectImpl")
+        self.logger = logging.getLogger(f"{__name__}.ObjectsImpl")
         
         # Initialize VitalSigns for object validation
         try:
@@ -317,11 +317,11 @@ class ObjectImpl:
                 self.logger.info(f"Object {uri} could not be converted to VitalSigns object")
                 return None
             
-            # Use VitalSigns native JSON-LD conversion directly
-            graph_object = graph_objects[0]
+            # Use VitalSigns native functionality to convert GraphObjects to JSON-LD document
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
             
-            # Let VitalSigns handle the complete JSON-LD document creation
-            jsonld_document = graph_object.to_jsonld()
+            # Let VitalSigns handle the complete JSON-LD document creation for single object
+            jsonld_document = GraphObject.to_jsonld_list([graph_objects[0]])
             
             self.logger.debug(f"Successfully converted object {uri} to JSON-LD using VitalSigns native functionality")
             return jsonld_document
@@ -346,10 +346,9 @@ class ObjectImpl:
             
             if not uris:
                 # Use VitalSigns to create empty JSON-LD document
-                from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                vitalsigns = VitalSigns()
-                # Create empty document using VitalSigns native functionality
-                empty_doc = vitalsigns.to_jsonld_list([])
+                from vital_ai_vitalsigns.model.GraphObject import GraphObject
+                # Create empty document using GraphObject native functionality
+                empty_doc = GraphObject.to_jsonld_list([])
                 return empty_doc
             
             # Get database space implementation
@@ -364,21 +363,24 @@ class ObjectImpl:
             )
             
             # Use VitalSigns native functionality to convert GraphObjects to JSON-LD document
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
             
-            # Let VitalSigns handle the complete JSON-LD document creation for multiple objects
-            jsonld_document = vitalsigns.to_jsonld_list(graph_objects)
+            # Handle CombinedProperty serialization issues by converting objects individually
+            try:
+                # Let VitalSigns handle the complete JSON-LD document creation for multiple objects
+                jsonld_document = GraphObject.to_jsonld_list(graph_objects)
+            except Exception as serialization_error:
+                # Re-raise the exception since valid objects should always serialize correctly
+                raise serialization_error
             
             self.logger.info(f"Retrieved {len(graph_objects)} objects")
             return jsonld_document
             
         except Exception as e:
             self.logger.error(f"Error getting objects by URIs: {e}")
-            # Use VitalSigns to create empty JSON-LD document on error
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
-            return vitalsigns.to_jsonld_list([])
+            # Use GraphObject to create empty JSON-LD document on error
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
+            return GraphObject.to_jsonld_list([])
     
     async def list_objects(self, space_id: str, graph_id: Optional[str] = None, 
                           page_size: int = 100, offset: int = 0, 
@@ -421,11 +423,10 @@ class ObjectImpl:
             )
             
             # Use VitalSigns native functionality to convert GraphObjects to JSON-LD document
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
             
             # Let VitalSigns handle the complete JSON-LD document creation for multiple objects
-            jsonld_document = vitalsigns.to_jsonld_list(graph_objects)
+            jsonld_document = GraphObject.to_jsonld_list(graph_objects)
             
             self.logger.info(f"Listed {len(graph_objects)} objects (total: {total_count})")
             return jsonld_document, total_count
@@ -520,6 +521,7 @@ class ObjectImpl:
             ImplValidationError: If validation fails or any object not found
         """
         try:
+            objects_data = jsonld_document.get("@graph", [])
             self.logger.info(f"Updating {len(objects_data)} objects in space {space_id}, graph {graph_id}")
             
             if not objects_data:

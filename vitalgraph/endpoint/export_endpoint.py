@@ -6,7 +6,7 @@ Handles export job lifecycle and file downloads for export results.
 """
 
 from typing import Dict, List, Optional, Any
-from fastapi import APIRouter, Query, Depends, HTTPException, Path
+from fastapi import APIRouter, Query, Depends, Path
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from datetime import datetime

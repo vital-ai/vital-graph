@@ -66,7 +66,7 @@ class SpacesListResponse(BasePaginatedResponse):
 
 class SpaceCreateResponse(BaseCreateResponse):
     """Response model for space creation operations."""
-    pass
+    space: Optional[Space] = Field(None, description="Created space object")
 
 
 class SpaceUpdateResponse(BaseUpdateResponse):
@@ -82,3 +82,29 @@ class SpaceDeleteResponse(BaseDeleteResponse):
 class SpaceOperationResponse(BaseOperationResponse):
     """Response model for general space operations."""
     pass
+
+
+class SpaceResponse(BaseOperationResponse):
+    """Response model for single space retrieval operations."""
+    space: Optional[Space] = Field(None, description="Retrieved space (None if not found)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Space retrieved successfully",
+                "space": {
+                    "id": 1,
+                    "space": "knowledge_base",
+                    "space_name": "Knowledge Base",
+                    "space_description": "Primary knowledge base"
+                }
+            }
+        }
+
+
+class SpaceInfoResponse(BaseOperationResponse):
+    """Response model for space info/statistics operations."""
+    space: Optional[Space] = Field(None, description="Space information")
+    statistics: Optional[dict] = Field(None, description="Space statistics")
+    quad_dump: Optional[List[str]] = Field(None, description="Quad logging dump if enabled")

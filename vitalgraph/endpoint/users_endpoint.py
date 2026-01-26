@@ -4,7 +4,7 @@ Implements REST API endpoints for user management operations.
 """
 
 from typing import Dict, List, Optional
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 import logging
 

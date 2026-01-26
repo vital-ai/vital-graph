@@ -14,6 +14,8 @@ from .config.client_config_loader import VitalGraphClientConfig, ClientConfigura
 from .endpoint.kgtypes_endpoint import KGTypesEndpoint
 from .endpoint.kgframes_endpoint import KGFramesEndpoint
 from .endpoint.kgentities_endpoint import KGEntitiesEndpoint
+from .endpoint.kgrelations_endpoint import KGRelationsEndpoint
+from .endpoint.kgqueries_endpoint import KGQueriesEndpoint
 from .endpoint.objects_endpoint import ObjectsEndpoint
 from .endpoint.files_endpoint import FilesEndpoint
 from .endpoint.spaces_endpoint import SpacesEndpoint
@@ -25,6 +27,7 @@ from .endpoint.import_endpoint import ImportEndpoint
 from .endpoint.export_endpoint import ExportEndpoint
 from .utils.client_utils import VitalGraphClientError
 from .vitalgraph_client_inf import VitalGraphClientInterface
+from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,8 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.kgtypes = KGTypesEndpoint(self)
         self.kgframes = KGFramesEndpoint(self)
         self.kgentities = KGEntitiesEndpoint(self)
+        self.kgrelations = KGRelationsEndpoint(self)
+        self.kgqueries = KGQueriesEndpoint(self)
         self.objects = ObjectsEndpoint(self)
         self.files = FilesEndpoint(self)
         self.spaces = SpacesEndpoint(self)
@@ -668,33 +673,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return self.kgtypes.get_kgtype(space_id, graph_id, uri)
     
-    def create_kgtypes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'KGTypeCreateResponse':
+    def create_kgtypes(self, space_id: str, graph_id: str, data: 'Union[JsonLdObject, JsonLdDocument]') -> 'KGTypeCreateResponse':
         """
-        Create KGTypes from JSON-LD document.
+        Create KGTypes from JSON-LD data.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGTypes
+            data: JSON-LD data - either single object or document with @graph array
             
         Returns:
             KGTypeCreateResponse containing operation result
         """
-        return self.kgtypes.create_kgtypes(space_id, graph_id, document)
+        return self.kgtypes.create_kgtypes(space_id, graph_id, data)
     
-    def update_kgtypes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'KGTypeUpdateResponse':
+    def update_kgtypes(self, space_id: str, graph_id: str, data: 'Union[JsonLdObject, JsonLdDocument]') -> 'KGTypeUpdateResponse':
         """
-        Update KGTypes from JSON-LD document.
+        Update KGTypes from JSON-LD data.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGTypes
+            data: JSON-LD data - either single object or document with @graph array
             
         Returns:
             KGTypeUpdateResponse containing operation result
         """
-        return self.kgtypes.update_kgtypes(space_id, graph_id, document)
+        return self.kgtypes.update_kgtypes(space_id, graph_id, data)
     
     def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeDeleteResponse':
         """
@@ -1575,7 +1580,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # Graph Management Methods - Delegated to GraphsEndpoint
     
-    def list_graphs(self, space_id: str) -> Dict[str, Any]:
+    def list_graphs(self, space_id: str) -> List[GraphInfo]:
         """
         List graphs in a space.
         
@@ -1583,11 +1588,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             
         Returns:
-            List of graphs
+            List of GraphInfo objects
         """
         return self.graphs.list_graphs(space_id)
     
-    def get_graph_info(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
+    def get_graph_info(self, space_id: str, graph_uri: str) -> Optional[GraphInfo]:
         """
         Get information about a specific graph.
         
@@ -1596,11 +1601,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_uri: Graph URI
             
         Returns:
-            Graph information dictionary
+            GraphInfo object or None if graph doesn't exist
         """
         return self.graphs.get_graph_info(space_id, graph_uri)
     
-    def create_graph(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
+    def create_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
         """
         Create a new graph.
         
@@ -1609,33 +1614,34 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_uri: Graph URI to create
             
         Returns:
-            Creation result dictionary
+            SPARQLGraphResponse with creation result
         """
         return self.graphs.create_graph(space_id, graph_uri)
     
-    def drop_graph(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
+    def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> SPARQLGraphResponse:
         """
         Drop (delete) a graph.
         
         Args:
             space_id: Space identifier
             graph_uri: Graph URI to drop
+            silent: Execute silently (optional)
             
         Returns:
-            Deletion result dictionary
+            SPARQLGraphResponse with deletion result
         """
-        return self.graphs.drop_graph(space_id, graph_uri)
+        return self.graphs.drop_graph(space_id, graph_uri, silent)
     
-    def clear_graph(self, space_id: str, graph_uri: Optional[str] = None) -> Dict[str, Any]:
+    def clear_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
         """
         Clear a graph (remove all triples but keep the graph).
         
         Args:
             space_id: Space identifier
-            graph_uri: Graph URI to clear (optional, clears default graph if not specified)
+            graph_uri: Graph URI to clear
             
         Returns:
-            Clear operation result dictionary
+            SPARQLGraphResponse with clear operation result
         """
         return self.graphs.clear_graph(space_id, graph_uri)
     

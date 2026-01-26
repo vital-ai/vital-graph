@@ -14,6 +14,8 @@ from .endpoint.mock_sparql_endpoint import MockSparqlEndpoint
 from .endpoint.mock_kgtypes_endpoint import MockKGTypesEndpoint
 from .endpoint.mock_kgframes_endpoint import MockKGFramesEndpoint
 from .endpoint.mock_kgentities_endpoint import MockKGEntitiesEndpoint
+from .endpoint.mock_kgrelations_endpoint import MockKGRelationsEndpoint
+from .endpoint.mock_kgqueries_endpoint import MockKGQueriesEndpoint
 from .endpoint.mock_objects_endpoint import MockObjectsEndpoint
 from .endpoint.mock_graphs_endpoint import MockGraphsEndpoint
 from .endpoint.mock_files_endpoint import MockFilesEndpoint
@@ -53,6 +55,7 @@ class MockVitalGraphClient(VitalGraphClientInterface):
         self.kgtypes = MockKGTypesEndpoint(self, self.space_manager, config=config)
         self.kgframes = MockKGFramesEndpoint(self, self.space_manager, config=config)
         self.kgentities = MockKGEntitiesEndpoint(self, self.space_manager, config=config)
+        self.kgqueries = MockKGQueriesEndpoint(self, self.space_manager, config=config)
         self.objects = MockObjectsEndpoint(self, self.space_manager, config=config)
         self.graphs = MockGraphsEndpoint(self, self.space_manager, config=config)
         self.files = MockFilesEndpoint(self, self.space_manager, config=config)

@@ -6,7 +6,7 @@ This interface can be implemented by different client implementations
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from ..model.kgframes_model import (
     FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
 )
@@ -41,7 +41,7 @@ from ..model.export_model import (
     ExportJob, ExportJobsResponse, ExportJobResponse, ExportCreateResponse, ExportUpdateResponse, 
     ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse
 )
-from ..model.jsonld_model import JsonLdDocument
+from ..model.jsonld_model import JsonLdDocument, JsonLdObject
 
 
 class VitalGraphClientInterface(ABC):
@@ -185,13 +185,13 @@ class VitalGraphClientInterface(ABC):
         pass
     
     @abstractmethod
-    def create_kgtypes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> KGTypeCreateResponse:
-        """Create KGTypes from JSON-LD document."""
+    def create_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeCreateResponse:
+        """Create KGTypes from JSON-LD data."""
         pass
     
     @abstractmethod
-    def update_kgtypes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> KGTypeUpdateResponse:
-        """Update KGTypes from JSON-LD document."""
+    def update_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeUpdateResponse:
+        """Update KGTypes from JSON-LD data."""
         pass
     
     @abstractmethod

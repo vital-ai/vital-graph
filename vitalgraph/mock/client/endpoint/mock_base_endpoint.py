@@ -181,7 +181,8 @@ class MockBaseEndpoint:
         Returns:
             Full URI
         """
-        if uri_or_curie.startswith("http"):
+        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+        if validate_rfc3986(uri_or_curie, rule='URI'):
             return uri_or_curie
         elif uri_or_curie.startswith("rdfs:"):
             return f"http://www.w3.org/2000/01/rdf-schema#{uri_or_curie.replace('rdfs:', '')}"
@@ -205,6 +206,7 @@ class MockBaseEndpoint:
         Returns:
             Compacted URI or original if no compaction possible
         """
+        # Use string matching for namespace compaction (this is legitimate use of startswith for namespace prefixes)
         if full_uri.startswith("http://www.w3.org/2000/01/rdf-schema#"):
             return f"rdfs:{full_uri.replace('http://www.w3.org/2000/01/rdf-schema#', '')}"
         elif full_uri.startswith("http://www.w3.org/1999/02/22-rdf-syntax-ns#"):
@@ -548,13 +550,15 @@ class MockBaseEndpoint:
                 if obj.startswith('"'):
                     # It's a literal, keep as is
                     object_part = obj
-                elif obj.startswith('http'):
-                    # It's a URI, wrap in angle brackets
-                    clean_object = obj.strip('<>')
-                    object_part = f'<{clean_object}>'
                 else:
-                    # Assume it's a literal without quotes
-                    object_part = f'"{obj}"'
+                    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                    if validate_rfc3986(obj, rule='URI'):
+                        # It's a URI, wrap in angle brackets
+                        clean_object = obj.strip('<>')
+                        object_part = f'<{clean_object}>'
+                    else:
+                        # Assume it's a literal without quotes
+                        object_part = f'"{obj}"'
                 
                 # N-Triples format (ignore graph for now, just convert to triples)
                 rdf_line = f'<{clean_subject}> <{clean_predicate}> {object_part} .'
@@ -599,8 +603,54 @@ class MockBaseEndpoint:
             List of VitalSigns GraphObject instances
         """
         try:
-            # Use VitalSigns native conversion from triples list
-            objects = self.vitalsigns.from_triples_list(triples)
+            # Convert triples to RDF string format for VitalSigns
+            if triples and isinstance(triples[0], str):
+                # Already in RDF string format
+                rdf_data = '\n'.join(triples)
+            else:
+                # Convert tuple format to RDF N-Triples strings
+                rdf_lines = []
+                for triple in triples:
+                    if len(triple) == 3:
+                        subj, pred, obj = triple
+                        # Clean URIs - remove angle brackets if present
+                        clean_subj = subj.strip('<>')
+                        clean_pred = pred.strip('<>')
+                        clean_obj = obj.strip('<>')
+                        
+                        # Format as N-Triples
+                        triple_str = f"<{clean_subj}> <{clean_pred}> "
+                        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+                        if validate_rfc3986(clean_obj, rule='URI'):
+                            triple_str += f"<{clean_obj}> ."
+                        else:
+                            # Remove any existing quotes before adding new ones
+                            clean_literal = clean_obj.strip('"')
+                            triple_str += f'"{clean_literal}" .'
+                        rdf_lines.append(triple_str)
+                rdf_data = '\n'.join(rdf_lines)
+            
+            # Debug specific properties we're tracking
+            if 'hasKGGraphAssertionDateTime' in rdf_data:
+                self.logger.info(f"*** RDF data contains hasKGGraphAssertionDateTime")
+                for line in rdf_data.split('\n'):
+                    if 'hasKGGraphAssertionDateTime' in line:
+                        self.logger.info(f"*** Triple: {line}")
+            
+            # Use VitalSigns RDF conversion - try from_rdf instead of from_rdf_list for single objects
+            try:
+                # First try from_rdf for single object conversion
+                objects = self.vitalsigns.from_rdf(rdf_data)
+                if objects:
+                    objects = [objects] if not isinstance(objects, list) else objects
+                    self.logger.info(f"from_rdf returned {len(objects)} objects")
+                else:
+                    # Fallback to from_rdf_list
+                    objects = self.vitalsigns.from_rdf_list(rdf_data)
+                    self.logger.info(f"from_rdf_list returned {len(objects) if objects else 0} objects")
+            except Exception as e:
+                self.logger.warning(f"from_rdf failed: {e}, trying from_rdf_list")
+                objects = self.vitalsigns.from_rdf_list(rdf_data)
             
             # Ensure we return a list
             if not isinstance(objects, list):
@@ -638,15 +688,27 @@ class MockBaseEndpoint:
                 if subject not in subjects:
                     subjects[subject] = {"@id": subject}
                 
-                # Add predicate-object pair
-                if predicate not in subjects[subject]:
-                    subjects[subject][predicate] = obj
+                # Handle special RDF predicates
+                if predicate == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type":
+                    # Convert rdf:type to @type in JSON-LD
+                    if "@type" not in subjects[subject]:
+                        subjects[subject]["@type"] = obj
+                    else:
+                        # Convert to array if multiple types
+                        current_type = subjects[subject]["@type"]
+                        if not isinstance(current_type, list):
+                            subjects[subject]["@type"] = [current_type]
+                        subjects[subject]["@type"].append(obj)
                 else:
-                    # Convert to array if multiple values
-                    current_value = subjects[subject][predicate]
-                    if not isinstance(current_value, list):
-                        subjects[subject][predicate] = [current_value]
-                    subjects[subject][predicate].append(obj)
+                    # Add regular predicate-object pair
+                    if predicate not in subjects[subject]:
+                        subjects[subject][predicate] = obj
+                    else:
+                        # Convert to array if multiple values
+                        current_value = subjects[subject][predicate]
+                        if not isinstance(current_value, list):
+                            subjects[subject][predicate] = [current_value]
+                        subjects[subject][predicate].append(obj)
             
             # Add all subjects to graph
             graph_items = list(subjects.values())
@@ -833,8 +895,10 @@ class MockBaseEndpoint:
                     if key not in ['context', 'graph', 'id', 'type', '@context', '@graph']:
                         standard_jsonld[key] = value
                 
-                # Use VitalSigns to convert from standard JSON-LD
-                obj = self.vitalsigns.from_jsonld(standard_jsonld)
+                # Use VitalSigns to convert from standard JSON-LD - use fixed conversion
+                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
+                objects = create_vitalsigns_objects_from_jsonld(standard_jsonld, self.logger)
+                obj = objects[0] if objects else None
                 
                 # Handle None result
                 if obj is None:
@@ -844,8 +908,9 @@ class MockBaseEndpoint:
                 return [obj]
                 
             elif "@graph" in jsonld_document and jsonld_document["@graph"] is not None:
-                # Multi-object format with @graph array
-                objects = self.vitalsigns.from_jsonld_list(jsonld_document)
+                # Multi-object format with @graph array - use fixed conversion
+                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
+                objects = create_vitalsigns_objects_from_jsonld(jsonld_document, self.logger)
                 
                 # Handle None result from VitalSigns
                 if objects is None:
@@ -858,8 +923,10 @@ class MockBaseEndpoint:
                 
                 return objects
             else:
-                # Try direct conversion (already in standard JSON-LD format)
-                obj = self.vitalsigns.from_jsonld(jsonld_document)
+                # Try direct conversion (already in standard JSON-LD format) - use fixed conversion
+                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
+                objects = create_vitalsigns_objects_from_jsonld(jsonld_document, self.logger)
+                obj = objects[0] if objects else None
                 
                 # Handle None result
                 if obj is None:
@@ -915,8 +982,23 @@ class MockBaseEndpoint:
                 try:
                     # Convert object to triples using the object's method
                     self.logger.info(f"Converting object to triples: {obj.URI} (type: {type(obj).__name__})")
+                    
+                    # Debug: show all properties before conversion
+                    self.logger.info(f"Object properties before conversion: {list(obj._properties.keys())}")
+                    for prop_uri in obj._properties.keys():
+                        if 'hasKGGraphAssertionDateTime' in prop_uri:
+                            self.logger.info(f"*** Found hasKGGraphAssertionDateTime property: {prop_uri}")
+                    
                     triples = obj.to_triples()
                     self.logger.info(f"Object {obj.URI} generated {len(triples)} triples")
+                    
+                    # Debug: show all triples generated
+                    for i, triple in enumerate(triples):
+                        triple_str = f"{triple[0]} {triple[1]} {triple[2]}"
+                        if 'hasKGGraphAssertionDateTime' in triple_str:
+                            self.logger.info(f"*** Triple {i+1} contains hasKGGraphAssertionDateTime: {triple}")
+                        else:
+                            self.logger.info(f"Triple {i+1}: {triple}")
                     
                     # Convert triples to quads with graph_id, cleaning all URIs
                     quads = []
@@ -924,7 +1006,8 @@ class MockBaseEndpoint:
                         clean_s = str(s).strip('<>')
                         clean_p = str(p).strip('<>')
                         clean_o = str(o).strip('<>')
-                        clean_g = str(graph_id).strip('<>')
+                        # Handle None graph_id properly
+                        clean_g = str(graph_id).strip('<>') if graph_id is not None else None
                         quad = (clean_s, clean_p, clean_o, clean_g)
                         self.logger.info(f"Inserting quad: {quad}")
                         quads.append(quad)

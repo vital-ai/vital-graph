@@ -59,6 +59,9 @@ def validate_entity_graph_structure(objects: List[Any]) -> Dict[str, Any]:
         from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
         from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
         from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
+        from ai_haley_kg_domain.model.KGDoubleSlot import KGDoubleSlot
+        from ai_haley_kg_domain.model.KGDateTimeSlot import KGDateTimeSlot
+        from ai_haley_kg_domain.model.KGEntitySlot import KGEntitySlot
         from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
         from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
         from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
@@ -66,7 +69,7 @@ def validate_entity_graph_structure(objects: List[Any]) -> Dict[str, Any]:
         # Separate objects by type
         entities = [obj for obj in objects if isinstance(obj, KGEntity)]
         frames = [obj for obj in objects if isinstance(obj, KGFrame)]
-        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot))]
+        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot, KGDoubleSlot, KGDateTimeSlot, KGEntitySlot))]
         entity_frame_edges = [obj for obj in objects if isinstance(obj, Edge_hasEntityKGFrame)]
         frame_frame_edges = [obj for obj in objects if isinstance(obj, Edge_hasKGFrame)]
         frame_slot_edges = [obj for obj in objects if isinstance(obj, Edge_hasKGSlot)]
@@ -182,11 +185,14 @@ def validate_frame_graph_structure(objects: List[Any]) -> Dict[str, Any]:
         from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
         from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
         from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
+        from ai_haley_kg_domain.model.KGDoubleSlot import KGDoubleSlot
+        from ai_haley_kg_domain.model.KGDateTimeSlot import KGDateTimeSlot
+        from ai_haley_kg_domain.model.KGEntitySlot import KGEntitySlot
         from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
         
         # Separate objects by type
         frames = [obj for obj in objects if isinstance(obj, KGFrame)]
-        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot))]
+        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot, KGDoubleSlot, KGDateTimeSlot, KGEntitySlot))]
         edges = [obj for obj in objects if isinstance(obj, Edge_hasKGSlot)]
         
         # Validate exactly 1 frame
@@ -279,11 +285,14 @@ def analyze_frame_structure_for_grouping(objects: List[Any]) -> Dict[str, List[A
         from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
         from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
         from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
+        from ai_haley_kg_domain.model.KGDoubleSlot import KGDoubleSlot
+        from ai_haley_kg_domain.model.KGDateTimeSlot import KGDateTimeSlot
+        from ai_haley_kg_domain.model.KGEntitySlot import KGEntitySlot
         from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
         
         # Separate objects by type
         frames = [obj for obj in objects if isinstance(obj, KGFrame)]
-        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot))]
+        slots = [obj for obj in objects if isinstance(obj, (KGTextSlot, KGIntegerSlot, KGBooleanSlot, KGDoubleSlot, KGDateTimeSlot, KGEntitySlot))]
         frame_slot_edges = [obj for obj in objects if isinstance(obj, Edge_hasKGSlot)]
         
         # Build frame membership mapping

@@ -1,0 +1,855 @@
+"""
+Dual-write coordinator for FUSEKI_POSTGRESQL hybrid backend.
+Synchronizes write operations between Fuseki datasets and PostgreSQL primary data tables.
+"""
+
+import asyncio
+import logging
+from typing import Dict, Any, Optional, List
+import uuid
+from datetime import datetime
+
+from .fuseki_dataset_manager import FusekiDatasetManager
+from .postgresql_db_impl import FusekiPostgreSQLDbImpl
+from .sparql_update_parser import SPARQLUpdateParser
+
+logger = logging.getLogger(__name__)
+
+
+class DualWriteCoordinator:
+    """
+    Coordinates dual-write operations between Fuseki and PostgreSQL.
+    
+    Ensures that all graph data changes are written to both:
+    1. Fuseki datasets (index/cache, for fast queries)
+    2. PostgreSQL primary data tables (authoritative storage)
+    
+    Implements rollback mechanisms to maintain consistency.
+    """
+    
+    def __init__(self, fuseki_manager: FusekiDatasetManager, postgresql_impl: FusekiPostgreSQLDbImpl):
+        """
+        Initialize dual-write coordinator.
+        
+        Args:
+            fuseki_manager: Fuseki dataset manager instance
+            postgresql_impl: PostgreSQL database implementation instance
+        """
+        self.fuseki_manager = fuseki_manager
+        self.postgresql_impl = postgresql_impl
+        self.sparql_parser = SPARQLUpdateParser(fuseki_manager)
+        self.graph_manager = None  # Lazy-loaded graph manager
+        
+        logger.info("DualWriteCoordinator initialized")
+    
+    async def execute_sparql_update(self, space_id: str, sparql_update: str, original_quads: List[tuple] = None) -> bool:
+        """
+        Execute SPARQL UPDATE with dual-write coordination.
+        Automatically registers graphs in the graph table before data operations.
+        
+        Parses SPARQL UPDATE, applies changes to PostgreSQL primary storage first,
+        then updates Fuseki query index.
+        
+        Args:
+            space_id: Target space identifier
+            sparql_update: SPARQL UPDATE query string
+            
+        Returns:
+            True if both operations succeeded, False otherwise
+        """
+        try:
+            logger.info(f" Executing SPARQL UPDATE for space {space_id}: {sparql_update[:100]}...")
+            
+            # Step 1: Parse SPARQL UPDATE to determine affected triples
+            parsed_operation = await self.sparql_parser.parse_update_operation(space_id, sparql_update)
+            logger.info(f" Parsed operation: {parsed_operation}")
+            
+            if 'error' in parsed_operation:
+                logger.error(f"SPARQL UPDATE parsing failed: {parsed_operation['error']}")
+                return False
+            
+            # Step 1.5: Auto-register graphs from INSERT operations BEFORE data operations
+            insert_triples = parsed_operation.get('insert_triples', [])
+            if insert_triples:
+                graph_uris = self._extract_graph_uris_from_quads(insert_triples)
+                if graph_uris:
+                    logger.debug(f"Auto-registering {len(graph_uris)} graph(s) from SPARQL UPDATE: {graph_uris}")
+                    for graph_uri in graph_uris:
+                        await self._ensure_graph_registered(space_id, graph_uri)
+            
+            # Step 2: Execute dual-write operation with correct transaction ordering
+            result = await self._execute_parsed_update(space_id, parsed_operation, original_quads)
+            logger.info(f" Dual-write result: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error executing SPARQL UPDATE for space {space_id}: {e}")
+            return False
+    
+    async def _execute_parsed_update(self, space_id: str, parsed_operation: Dict[str, Any], original_quads: List[tuple] = None) -> bool:
+        """
+        Execute dual-write operation from parsed SPARQL UPDATE.
+        
+        Transaction order: PostgreSQL primary storage first, then Fuseki query index.
+        PostgreSQL failure causes entire operation to fail.
+        
+        Args:
+            space_id: Target space
+            parsed_operation: Result from SPARQLUpdateParser.parse_update_operation()
+        """
+        
+        operation_type = parsed_operation['operation_type']
+        
+        # Fail explicitly if operation type is unknown (parser failed)
+        if operation_type == 'unknown':
+            logger.error(f"❌ Cannot execute SPARQL UPDATE: parser failed to identify operation type")
+            logger.error(f"❌ This indicates malformed SPARQL - check that literals are properly quoted")
+            return False
+        
+        try:
+            # Step 1: Begin PostgreSQL transaction and apply primary storage changes FIRST
+            # PostgreSQL is the authoritative permanent store
+            pg_transaction = await self.postgresql_impl.begin_transaction()
+            
+            # Apply PostgreSQL storage changes within transaction (primary store)
+            if operation_type in ['delete', 'delete_insert', 'delete_data', 'insert_delete_pattern']:
+                # Remove deleted triples from primary store (resolved to concrete triples by parser)
+                logger.info(f"🗑️ Processing {len(parsed_operation['delete_triples'])} DELETE triples for PostgreSQL")
+                delete_success = await self._store_delete_triples(
+                    space_id, parsed_operation['delete_triples'], pg_transaction
+                )
+                logger.info(f"🎯 DELETE operation result: {delete_success}")
+                if not delete_success:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
+                    return False
+            
+            # Pattern-based operations are now resolved to concrete triples by the SPARQL parser
+            # so they will be handled by the regular delete/insert logic above
+            
+            if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
+                # Add inserted triples using proper dual-write (both PostgreSQL and Fuseki)
+                logger.info(f"📝 Processing {len(parsed_operation['insert_triples'])} INSERT triples for dual-write")
+                insert_success = await self._store_quads_to_postgresql(
+                    space_id, parsed_operation['insert_triples'], pg_transaction
+                )
+                logger.info(f"🎯 INSERT operation result: {insert_success}")
+                if not insert_success:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
+                    return False
+            
+            # Step 2: Commit PostgreSQL transaction BEFORE Fuseki operation
+            # PostgreSQL is authoritative - must succeed for operation to proceed
+            logger.info("💾 Committing PostgreSQL transaction...")
+            commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+            logger.info(f"🎯 PostgreSQL commit result: {commit_success}")
+            
+            if not commit_success:
+                logger.error("❌ PostgreSQL primary storage failed - aborting operation")
+                return False
+            
+            # Step 3: Update Fuseki dataset AFTER PostgreSQL success
+            # For INSERT operations, use original RDFLib quads if available, otherwise use parsed quads
+            fuseki_success = True
+            if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
+                quads_for_fuseki = original_quads if original_quads else parsed_operation['insert_triples']
+                if quads_for_fuseki:
+                    logger.info(f"📝 Adding {len(quads_for_fuseki)} triples to Fuseki dataset (using {'original RDFLib' if original_quads else 'parsed'} quads)")
+                    fuseki_success = await self.fuseki_manager.add_quads_to_dataset(
+                        space_id, quads_for_fuseki, convert_float_to_decimal=True
+                    )
+            
+            # For DELETE operations, execute the SPARQL UPDATE on Fuseki
+            if operation_type in ['delete', 'delete_insert', 'delete_data']:
+                if parsed_operation['delete_triples']:
+                    logger.info(f"📝 Executing DELETE on Fuseki dataset")
+                    fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
+            
+            # For DROP GRAPH operations, execute directly on Fuseki (PostgreSQL graph table handled separately)
+            if operation_type in ['drop_graph', 'clear_graph']:
+                logger.info(f"📝 Executing {operation_type.upper()} on Fuseki dataset")
+                fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
+            
+            if not fuseki_success:
+                logger.warning("Fuseki dataset update failed - data stored in PostgreSQL but Fuseki may be inconsistent")
+                # Don't rollback PostgreSQL - it's the authoritative store
+            
+            logger.debug(f"SPARQL UPDATE dual-write successful for space {space_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in dual-write operation for space {space_id}: {e}")
+            
+            # Rollback PostgreSQL if transaction exists
+            if 'pg_transaction' in locals():
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+            
+            return False
+    
+    async def add_quads(self, space_id: str, quads: List[tuple]) -> bool:
+        """
+        Add RDF quads to both Fuseki dataset and PostgreSQL primary data tables.
+        Automatically registers graphs in the graph table before data operations.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to add
+            
+        Returns:
+            True if both writes succeeded, False otherwise
+        """
+        if not quads:
+            return True
+        
+        logger.info(f"🔍 DUAL-WRITE: Adding {len(quads)} quads to space {space_id}")
+        logger.info(f"🔍 First quad sample: {quads[0] if quads else 'None'}")
+        
+        # Step 0: Auto-register graphs BEFORE data operations
+        graph_uris = self._extract_graph_uris_from_quads(quads)
+        if graph_uris:
+            logger.debug(f"Auto-registering {len(graph_uris)} graph(s): {graph_uris}")
+            for graph_uri in graph_uris:
+                await self._ensure_graph_registered(space_id, graph_uri)
+        
+        # Start transaction for PostgreSQL operations
+        pg_transaction = None
+        fuseki_success = False
+        
+        try:
+            # Step 1: Begin PostgreSQL transaction and write to primary data tables FIRST
+            logger.info(f"🔍 Starting PostgreSQL transaction...")
+            pg_transaction = await self.postgresql_impl.begin_transaction()
+            logger.info(f"🔍 PostgreSQL transaction started: {pg_transaction}")
+            
+            # Write to PostgreSQL primary data tables (authoritative storage, done first)
+            logger.info(f"🔍 Writing to PostgreSQL primary data tables...")
+            pg_success = await self._store_quads_to_postgresql(space_id, quads, pg_transaction)
+            
+            if not pg_success:
+                logger.error(f"PostgreSQL primary data write failed for space {space_id}")
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                return False
+            
+            # Step 2: Commit PostgreSQL transaction BEFORE Fuseki operation
+            commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+            
+            if not commit_success:
+                logger.error(f"PostgreSQL commit failed for space {space_id}")
+                return False
+            
+            # Step 3: Write to Fuseki dataset (primary) AFTER PostgreSQL success
+            fuseki_success = await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+            
+            if not fuseki_success:
+                logger.error(f"Fuseki write failed for space {space_id}")
+                # Rollback PostgreSQL by removing the quads we just added
+                await self._rollback_postgresql_quads(space_id, quads)
+                return False
+            
+            logger.debug(f"Dual-write successful: {len(quads)} quads added to space {space_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in dual-write operation for space {space_id}: {e}")
+            
+            # Rollback PostgreSQL if transaction exists
+            if pg_transaction:
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+            
+            # Rollback Fuseki if it succeeded
+            if fuseki_success:
+                await self._rollback_fuseki_quads(space_id, quads)
+            
+            return False
+    
+    async def remove_quads(self, space_id: str, quads: List[tuple]) -> bool:
+        """
+        Remove RDF quads from both Fuseki dataset and PostgreSQL primary data tables.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to remove
+            
+        Returns:
+            True if both operations succeeded, False otherwise
+        """
+        if not quads:
+            return True
+        
+        logger.debug(f"Dual-write: Removing {len(quads)} quads from space {space_id}")
+        
+        # Start transaction for PostgreSQL operations
+        pg_transaction = None
+        fuseki_success = False
+        
+        try:
+            # Begin PostgreSQL transaction
+            pg_transaction = await self.postgresql_impl.begin_transaction()
+            
+            # Step 1: Remove from Fuseki dataset (primary)
+            fuseki_success = await self._remove_quads_from_fuseki(space_id, quads)
+            
+            if not fuseki_success:
+                logger.error(f"Fuseki quad removal failed for space {space_id}")
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                return False
+            
+            # Step 2: Remove from PostgreSQL primary data tables
+            pg_success = await self._remove_quads_from_postgresql(space_id, quads, pg_transaction)
+            
+            if not pg_success:
+                logger.error(f"PostgreSQL primary data removal failed for space {space_id}")
+                # Rollback PostgreSQL transaction
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                # TODO: Restore quads to Fuseki
+                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+                return False
+            
+            # Step 3: Commit PostgreSQL transaction
+            commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+            
+            if not commit_success:
+                logger.error(f"PostgreSQL commit failed for space {space_id}")
+                # TODO: Restore quads to Fuseki
+                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+                return False
+            
+            logger.debug(f"Dual-write removal successful: {len(quads)} quads removed from space {space_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in dual-write removal for space {space_id}: {e}")
+            
+            # Rollback PostgreSQL if transaction exists
+            if pg_transaction:
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+            
+            # Restore Fuseki if removal succeeded
+            if fuseki_success:
+                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+            
+            return False
+    
+    async def create_space_storage(self, space_id: str) -> bool:
+        """
+        Create storage for a new space in both Fuseki and PostgreSQL.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            True if both storage systems created successfully, False otherwise
+        """
+        logger.info(f"Creating dual storage for space: {space_id}")
+        
+        fuseki_success = False
+        postgresql_success = False
+        
+        try:
+            # Step 1: Create Fuseki dataset
+            fuseki_success = await self.fuseki_manager.create_dataset(space_id)
+            
+            if not fuseki_success:
+                logger.error(f"Failed to create Fuseki dataset for space {space_id}")
+                return False
+            
+            # Step 2: Create PostgreSQL primary data tables
+            postgresql_success = await self.postgresql_impl.create_space_data_tables(space_id)
+            
+            if not postgresql_success:
+                logger.error(f"Failed to create PostgreSQL primary data tables for space {space_id}")
+                # Rollback: Delete Fuseki dataset
+                await self.fuseki_manager.delete_dataset(space_id)
+                return False
+            
+            logger.info(f"Dual storage created successfully for space: {space_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error creating dual storage for space {space_id}: {e}")
+            
+            # Cleanup on failure
+            if fuseki_success:
+                await self.fuseki_manager.delete_dataset(space_id)
+            if postgresql_success:
+                await self.postgresql_impl.drop_space_data_tables(space_id)
+            
+            return False
+    
+    async def delete_space_storage(self, space_id: str) -> bool:
+        """
+        Delete storage for a space from both Fuseki and PostgreSQL.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            True if both deletions succeeded, False otherwise
+        """
+        logger.info(f"Deleting dual storage for space: {space_id}")
+        
+        fuseki_success = False
+        postgresql_success = False
+        
+        try:
+            # Step 1: Delete Fuseki dataset
+            fuseki_success = await self.fuseki_manager.delete_dataset(space_id)
+            
+            # Step 2: Delete PostgreSQL primary data tables
+            postgresql_success = await self.postgresql_impl.drop_space_data_tables(space_id)
+            
+            # Consider successful if at least one succeeded
+            if fuseki_success or postgresql_success:
+                logger.info(f"Dual storage deleted for space: {space_id} (Fuseki: {fuseki_success}, PostgreSQL: {postgresql_success})")
+                return True
+            else:
+                logger.error(f"Failed to delete dual storage for space {space_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error deleting dual storage for space {space_id}: {e}")
+            return False
+    
+    async def verify_consistency(self, space_id: str) -> Dict[str, Any]:
+        """
+        Verify consistency between Fuseki and PostgreSQL data for a space.
+        
+        Args:
+            space_id: Space identifier
+            
+        Returns:
+            Dictionary with consistency check results
+        """
+        logger.debug(f"Verifying consistency for space: {space_id}")
+        
+        try:
+            # Get Fuseki dataset info
+            fuseki_info = await self.fuseki_manager.get_dataset_info(space_id)
+            fuseki_count = fuseki_info.get('triple_count', 0) if fuseki_info else 0
+            
+            # Get PostgreSQL primary data table info
+            postgresql_count = await self.postgresql_impl.count_quads(space_id)
+            
+            consistency_result = {
+                'space_id': space_id,
+                'fuseki_triple_count': fuseki_count,
+                'postgresql_quad_count': postgresql_count,
+                'consistent': fuseki_count == postgresql_count,
+                'difference': abs(fuseki_count - postgresql_count)
+            }
+            
+            if not consistency_result['consistent']:
+                logger.warning(f"Consistency check failed for space {space_id}: Fuseki={fuseki_count}, PostgreSQL={postgresql_count}")
+            
+            return consistency_result
+            
+        except Exception as e:
+            logger.error(f"Error verifying consistency for space {space_id}: {e}")
+            return {
+                'space_id': space_id,
+                'error': str(e),
+                'consistent': False
+            }
+    
+    # Internal helper methods
+    
+    async def _store_quads_to_postgresql(self, space_id: str, quads: List[tuple], transaction: Any) -> bool:
+        """
+        Store RDF quads to PostgreSQL primary data tables within a transaction.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads
+            transaction: PostgreSQL transaction context
+            
+        Returns:
+            True if storage succeeded, False otherwise
+        """
+        try:
+            # This is a simplified implementation
+            # Full implementation would:
+            # 1. Extract unique terms from quads
+            # 2. Insert terms into {space_id}_term table
+            # 3. Insert quad relationships into {space_id}_rdf_quad table
+            # 4. Handle term deduplication and UUID generation
+            
+            logger.debug(f"Storing {len(quads)} quads to PostgreSQL for space {space_id}")
+            
+            # Pass RDFLib objects directly - PostgreSQL will extract metadata
+            # This preserves datatype and language information from Literal objects
+            success = await self.postgresql_impl.store_quads_to_postgresql(space_id, quads)
+            
+            if success:
+                logger.debug(f"Successfully stored {len(quads)} quads to PostgreSQL for space {space_id}")
+            else:
+                logger.error(f"Failed to store {len(quads)} quads to PostgreSQL for space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error storing quads to PostgreSQL for space {space_id}: {e}")
+            return False
+    
+    async def _execute_fuseki_update(self, space_id: str, sparql_update: str) -> bool:
+        """Execute SPARQL UPDATE on Fuseki dataset."""
+        try:
+            # Execute the SPARQL UPDATE on the Fuseki dataset
+            success = await self.fuseki_manager.update_dataset(space_id, sparql_update)
+            
+            if success:
+                logger.debug(f"Fuseki SPARQL UPDATE successful for space {space_id}")
+            else:
+                logger.error(f"Fuseki SPARQL UPDATE failed for space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error executing Fuseki UPDATE: {e}")
+            return False
+    
+    async def _store_insert_triples(self, space_id: str, triples: List[tuple], transaction: Any) -> bool:
+        """Insert triples into PostgreSQL primary storage within a transaction."""
+        try:
+            if not triples:
+                return True
+            
+            logger.debug(f"Backing up {len(triples)} INSERT triples for space {space_id}")
+            
+            # Triples are already in tuple format from SPARQL parser: (subject, predicate, object, graph)
+            # Use them directly as quads for PostgreSQL storage
+            quads = triples
+            
+            # Use PostgreSQL implementation to store quads within the transaction (primary store)
+            success = await self.postgresql_impl.store_quads_within_transaction(
+                space_id, quads, transaction
+            )
+            
+            if success:
+                logger.debug(f"Successfully stored {len(triples)} INSERT triples for space {space_id}")
+            else:
+                logger.error(f"Failed to store INSERT triples for space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error storing INSERT triples: {e}")
+            return False
+    
+    
+    async def _store_delete_triples(self, space_id: str, triples: List[tuple], transaction: Any) -> bool:
+        """Remove triples from PostgreSQL primary storage within a transaction."""
+        try:
+            if not triples:
+                return True
+            
+            logger.debug(f"Backing up {len(triples)} DELETE triples for space {space_id}")
+            
+            # Triples are already in tuple format from SPARQL parser: (subject, predicate, object, graph)
+            # Use them directly as quads for PostgreSQL storage
+            quads = triples
+            # for quad in quads:
+            #     logger.info(f"🔍 DELETE quad: {quad}")
+            
+            # Use PostgreSQL implementation to remove quads within the transaction
+            # Using batch version for improved performance
+            logger.info(f"🔍 Calling remove_quads_within_transaction_batch with {len(quads)} quads")
+            success = await self.postgresql_impl.remove_quads_within_transaction_batch(
+                space_id, quads, transaction
+            )
+            logger.info(f"🎯 PostgreSQL remove_quads_within_transaction_batch result: {success}")
+            
+            if success:
+                logger.info(f"✅ Successfully removed {len(triples)} DELETE triples from PostgreSQL for space {space_id}")
+            else:
+                logger.error(f"❌ Failed to remove DELETE triples from PostgreSQL for space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ Error removing DELETE triples from PostgreSQL: {e}")
+            return False
+    
+    async def _rollback_postgresql_changes(self, space_id: str, parsed_operation: Dict[str, Any]) -> bool:
+        """Rollback PostgreSQL changes by applying inverse operations."""
+        try:
+            operation_type = parsed_operation['operation_type']
+            
+            logger.warning(f"Rolling back PostgreSQL changes for space {space_id}, operation: {operation_type}")
+            
+            # Start new transaction for rollback
+            pg_transaction = await self.postgresql_impl.begin_transaction()
+            
+            # Apply inverse operations
+            if operation_type in ['insert', 'insert_data']:
+                # Rollback INSERT by removing the inserted triples
+                success = await self._store_delete_triples(
+                    space_id, parsed_operation['insert_triples'], pg_transaction
+                )
+            elif operation_type in ['delete', 'delete_data']:
+                # Rollback DELETE by re-inserting the deleted triples
+                success = await self._store_insert_triples(
+                    space_id, parsed_operation['delete_triples'], pg_transaction
+                )
+            elif operation_type == 'delete_insert':
+                # Rollback DELETE/INSERT by INSERT/DELETE
+                delete_success = await self._store_delete_triples(
+                    space_id, parsed_operation['insert_triples'], pg_transaction
+                )
+                insert_success = await self._store_insert_triples(
+                    space_id, parsed_operation['delete_triples'], pg_transaction
+                )
+                success = delete_success and insert_success
+            else:
+                success = True
+            
+            if success:
+                await self.postgresql_impl.commit_transaction(pg_transaction)
+                logger.info(f"PostgreSQL rollback successful for space {space_id}")
+            else:
+                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                logger.error(f"PostgreSQL rollback failed for space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error rolling back PostgreSQL changes: {e}")
+            return False
+    
+    async def _remove_quads_from_fuseki(self, space_id: str, quads: List[tuple]) -> bool:
+        """
+        Remove RDF quads from Fuseki dataset using SPARQL DELETE.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to remove
+            
+        Returns:
+            True if removal succeeded, False otherwise
+        """
+        try:
+            # Convert quads to SPARQL DELETE query
+            delete_patterns = []
+            for quad in quads:
+                # Handle tuple format: (subject, predicate, object, graph)
+                if len(quad) >= 4:
+                    subject, predicate, obj, graph = quad[:4]
+                else:
+                    subject, predicate, obj = quad[:3]
+                    graph = 'default'
+                
+                subject = self._format_sparql_term(str(subject))
+                predicate = self._format_sparql_term(str(predicate))
+                obj = self._format_sparql_term(str(obj))
+                graph = str(graph)
+                
+                if subject and predicate and obj:
+                    if graph:
+                        graph_formatted = self._format_sparql_term(graph)
+                        delete_patterns.append(f"GRAPH {graph_formatted} {{ {subject} {predicate} {obj} }}")
+                    else:
+                        delete_patterns.append(f"{subject} {predicate} {obj}")
+            
+            if delete_patterns:
+                delete_query = f"""
+                DELETE DATA {{
+                    {' . '.join(delete_patterns)}
+                }}
+                """
+                
+                # Execute delete query on Fuseki dataset
+                result = await self.fuseki_manager.query_dataset(space_id, delete_query)
+                return True
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing quads from Fuseki for space {space_id}: {e}")
+            return False
+    
+    async def _remove_quads_from_postgresql(self, space_id: str, quads: List[tuple], transaction: Any) -> bool:
+        """
+        Remove RDF quads from PostgreSQL primary data tables within a transaction.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to remove
+            transaction: PostgreSQL transaction context
+            
+        Returns:
+            True if removal succeeded, False otherwise
+        """
+        try:
+            # Use PostgreSQL implementation to remove quads
+            logger.debug(f"Removing {len(quads)} quads from PostgreSQL primary data for space {space_id}")
+            success = await self.postgresql_impl.remove_quads_from_postgresql(space_id, quads)
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error removing quads from PostgreSQL for space {space_id}: {e}")
+            return False
+    
+    async def _rollback_postgresql_quads(self, space_id: str, quads: List[tuple]) -> bool:
+        """
+        Rollback PostgreSQL quads by removing them.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to remove
+            
+        Returns:
+            True if rollback succeeded, False otherwise
+        """
+        try:
+            logger.debug(f"Rolling back PostgreSQL quads for space {space_id}")
+            # Use postgresql_impl directly for rollback (no transaction context needed)
+            return await self.postgresql_impl.remove_quads_from_postgresql(space_id, quads)
+            
+        except Exception as e:
+            logger.error(f"Error rolling back PostgreSQL quads for space {space_id}: {e}")
+            return False
+    
+    async def _rollback_fuseki_quads(self, space_id: str, quads: List[tuple]) -> bool:
+        """
+        Rollback Fuseki quads by removing them.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of RDF quads to remove
+            
+        Returns:
+            True if rollback succeeded, False otherwise
+        """
+        try:
+            logger.debug(f"Rolling back Fuseki quads for space {space_id}")
+            return await self._remove_quads_from_fuseki(space_id, quads)
+            
+        except Exception as e:
+            logger.error(f"Error rolling back Fuseki quads for space {space_id}: {e}")
+            return False
+    
+    def _generate_graph_name(self, graph_uri: str) -> str:
+        """
+        Generate a human-readable graph name from URI.
+        Clips to max field size (255 characters).
+        
+        Args:
+            graph_uri: Graph URI to extract name from
+            
+        Returns:
+            Graph name clipped to 255 characters
+            
+        Examples:
+            urn:multi_org_crud_graph -> multi_org_crud_graph
+            http://example.org/graphs/my_graph -> my_graph
+            haley:test_graph -> test_graph
+        """
+        # Extract last segment after '/' or ':'
+        if '/' in graph_uri:
+            name = graph_uri.split('/')[-1]
+        elif ':' in graph_uri:
+            name = graph_uri.split(':')[-1]
+        else:
+            name = graph_uri
+        
+        # Clip to max field size (graph_name VARCHAR(255))
+        return name[:255] if name else graph_uri[:255]
+    
+    def _extract_graph_uris_from_quads(self, quads: List[tuple]) -> List[str]:
+        """
+        Extract unique graph URIs from quad tuples.
+        
+        Args:
+            quads: List of quad tuples (subject, predicate, object, graph)
+            
+        Returns:
+            List of unique graph URI strings (excluding 'default')
+        """
+        graph_uris = set()
+        
+        for quad in quads:
+            if len(quad) >= 4:
+                graph_uri = quad[3]
+                # Convert to string and filter out 'default' graph
+                graph_uri_str = str(graph_uri) if graph_uri else None
+                if graph_uri_str and graph_uri_str != 'default':
+                    graph_uris.add(graph_uri_str)
+        
+        return list(graph_uris)
+    
+    async def _ensure_graph_registered(self, space_id: str, graph_uri: str) -> bool:
+        """
+        Ensure graph is registered in PostgreSQL graph table.
+        Checks existing graphs first before attempting to create.
+        
+        Args:
+            space_id: Space identifier
+            graph_uri: Graph URI to register
+            
+        Returns:
+            True if graph is registered (new or existing), False on error
+        """
+        try:
+            if self.graph_manager is None:
+                logger.warning(f"Graph manager not available for registration")
+                return False
+            
+            # Check if graph already exists
+            existing_graph = await self.graph_manager.get_graph(space_id, graph_uri)
+            if existing_graph:
+                logger.debug(f"Graph already registered: {graph_uri} in space {space_id}")
+                return True
+            
+            # Graph doesn't exist, create it
+            graph_name = self._generate_graph_name(graph_uri)
+            success = await self.graph_manager.create_graph(
+                space_id, graph_uri, graph_name
+            )
+            
+            if success:
+                logger.debug(f"Graph registered: {graph_uri} in space {space_id}")
+            else:
+                logger.warning(f"Graph registration failed: {graph_uri} in space {space_id}")
+            
+            return success
+            
+        except Exception as e:
+            logger.warning(f"Graph registration error for {graph_uri}: {e}")
+            # Don't fail the operation - graph registration is metadata management
+            return False
+    
+    def _format_sparql_term(self, term: Any) -> Optional[str]:
+        """
+        Format an RDF term for SPARQL queries.
+        
+        Args:
+            term: RDF term (URI, literal, or blank node)
+            
+        Returns:
+            Formatted SPARQL term string or None
+        """
+        if not term:
+            return None
+        
+        if isinstance(term, dict):
+            term_type = term.get('type')
+            value = term.get('value')
+            
+            if term_type == 'uri':
+                return f"<{value}>"
+            elif term_type == 'literal':
+                datatype = term.get('datatype')
+                language = term.get('language')
+                
+                if language:
+                    return f'"{value}"@{language}'
+                elif datatype:
+                    return f'"{value}"^^<{datatype}>'
+                else:
+                    return f'"{value}"'
+            elif term_type == 'bnode':
+                return f"_:{value}"
+        
+        elif isinstance(term, str):
+            # Assume URI if string
+            return f"<{term}>"
+        
+        return None

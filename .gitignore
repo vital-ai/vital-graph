@@ -285,7 +285,11 @@ dist/
 *.sqlite
 *.sqlite3
 
-
 test_data
 
 minioFiles
+
+lead_test_data
+
+lead_test_data_docs
+

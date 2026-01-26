@@ -192,8 +192,9 @@ def validate_uri_format(uri: str) -> None:
     if not uri:
         raise ImplValidationError("URI cannot be empty")
     
-    if not (uri.startswith('http://') or uri.startswith('https://') or uri.startswith('urn:')):
-        raise ImplValidationError(f"Invalid URI format: {uri}. Must start with http://, https://, or urn:")
+    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+    if not validate_rfc3986(uri, rule='URI'):
+        raise ImplValidationError(f"Invalid URI format: {uri}. Must be a valid RFC3986 URI")
 
 
 def validate_required_fields(obj_data: Dict, required_fields: List[str]) -> None:

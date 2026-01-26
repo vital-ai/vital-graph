@@ -3,16 +3,16 @@
 Pydantic models for RDF triple management operations.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument
+from .jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 from .api_model import BaseJsonLdResponse, BaseOperationResponse
 
 
 class TripleListRequest(BaseModel):
     """Request model for operations on JSON-LD documents."""
-    document: JsonLdDocument = Field(..., description="JSON-LD document containing RDF triples")
+    document: JsonLdRequest = Field(..., description="JSON-LD request (discriminated union automatically handles single object or document with multiple triples)")
 
 
 class TripleListResponse(BaseJsonLdResponse):

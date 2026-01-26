@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from enum import Enum
 from datetime import datetime
 
+from .api_model import BasePaginatedResponse
+
 
 class ImportStatus(str, Enum):
     """Import job status enumeration."""
@@ -50,12 +52,9 @@ class ImportJob(BaseModel):
     uploaded_files: Optional[List[str]] = Field([], description="List of uploaded file names")
 
 
-class ImportJobsResponse(BaseModel):
+class ImportJobsResponse(BasePaginatedResponse):
     """Response model for import jobs listing."""
     import_jobs: List[ImportJob]
-    total_count: int
-    page_size: int
-    offset: int
 
 
 class ImportJobResponse(BaseModel):

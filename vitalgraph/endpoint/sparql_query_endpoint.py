@@ -100,33 +100,42 @@ class SPARQLQueryEndpoint:
             
             space_impl = space_record.space_impl
             
-            # Get the database-specific PostgreSQL implementation for the orchestrator
-            db_space_impl = space_impl.get_db_space_impl()
-            if not db_space_impl:
+            # Use the backend's native SPARQL query execution
+            backend = space_impl.get_db_space_impl()
+            if not backend:
                 raise HTTPException(
                     status_code=500,
-                    detail="Database-specific space implementation not available"
+                    detail="Backend implementation not available"
                 )
             
-            # Execute SPARQL query using orchestrator with PostgreSQL implementation
+            # Execute SPARQL query using backend's native method
             import time
             start_time = time.time()
-            
-            # print(f" ENDPOINT PRINT: About to call orchestrator with query: {query[:100]}...")
-            self.logger.info(f" ENDPOINT: About to call orchestrator with query: {query[:100]}...")
-            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import orchestrate_sparql_query
-            results = await orchestrate_sparql_query(db_space_impl, space_id, query)
-            # print(f" ENDPOINT PRINT: Orchestrator returned {len(results) if results else 0} results")
-            self.logger.info(f" ENDPOINT: Orchestrator returned {len(results) if results else 0} results")
+            self.logger.info(f" ENDPOINT: About to execute SPARQL query with backend: {type(backend).__name__}")
+            result_dict = await backend.execute_sparql_query(space_id, query)
+            self.logger.info(f" ENDPOINT: Backend returned result: {result_dict}")
             
             query_time = time.time() - start_time
+            
+            # Check if query was successful
+            if not result_dict.get('success', False):
+                error_msg = result_dict.get('error', 'Unknown error')
+                self.logger.error(f"SPARQL query failed: {error_msg}")
+                return SPARQLQueryResponse(
+                    error=error_msg,
+                    query_time=query_time
+                )
+            
+            # Extract bindings from result structure
+            bindings = result_dict.get('results', {}).get('bindings', [])
+            self.logger.info(f" ENDPOINT: Extracted {len(bindings)} bindings")
             
             # Determine query type and format response
             query_upper = query.strip().upper()
             
             if query_upper.startswith('ASK'):
                 # ASK query - return boolean result
-                boolean_result = len(results) > 0 and results[0].get('ask', False)
+                boolean_result = len(bindings) > 0 and bindings[0].get('ask', False)
                 return SPARQLQueryResponse(
                     boolean=boolean_result,
                     query_time=query_time
@@ -135,7 +144,7 @@ class SPARQLQueryEndpoint:
             elif query_upper.startswith('CONSTRUCT') or query_upper.startswith('DESCRIBE'):
                 # CONSTRUCT/DESCRIBE query - return RDF triples
                 return SPARQLQueryResponse(
-                    triples=results,
+                    triples=bindings,
                     query_time=query_time
                 )
             
@@ -143,12 +152,12 @@ class SPARQLQueryEndpoint:
                 # SELECT query - return variable bindings
                 # Extract variables from results
                 variables = []
-                if results:
-                    variables = list(results[0].keys())
+                if bindings:
+                    variables = list(bindings[0].keys())
                 
                 response = SPARQLQueryResponse(
                     head={"vars": variables},
-                    results={"bindings": results},
+                    results={"bindings": bindings},
                     query_time=query_time
                 )
                 

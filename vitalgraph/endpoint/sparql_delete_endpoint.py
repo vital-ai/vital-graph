@@ -129,8 +129,7 @@ class SPARQLDeleteEndpoint:
             import time
             start_time = time.time()
         
-            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
-            success = await execute_sparql_update(db_space_impl, space_id, update)
+            success = await db_space_impl.execute_sparql_update(space_id, update)
             
             delete_time = time.time() - start_time
             
@@ -154,6 +153,7 @@ class SPARQLDeleteEndpoint:
             self.logger.error(f"Error executing SPARQL delete: {e}")
             return SPARQLDeleteResponse(
                 success=False,
+                message=f"SPARQL delete failed: {str(e)}",
                 error=str(e)
             )
 

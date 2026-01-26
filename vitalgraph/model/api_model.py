@@ -4,10 +4,10 @@ Shared Pydantic base models for common response patterns across VitalGraph endpo
 These models provide consistent structure and reduce code duplication.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument
+from .jsonld_model import JsonLdDocument, JsonLdObject
 
 
 class BasePaginatedResponse(BaseModel):
@@ -19,13 +19,14 @@ class BasePaginatedResponse(BaseModel):
 
 class BaseJsonLdResponse(BasePaginatedResponse):
     """Base model for JSON-LD paginated responses."""
-    data: JsonLdDocument = Field(..., description="JSON-LD document containing the response data")
+    data: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing the response data")
     pagination: Optional[Dict[str, Any]] = Field(None, description="Additional pagination information")
     meta: Optional[Dict[str, Any]] = Field(None, description="Response metadata")
 
 
 class BaseCreateResponse(BaseModel):
     """Base model for creation responses."""
+    success: bool = Field(True, description="Whether the operation was successful")
     message: str = Field(..., description="Success message describing the creation operation")
     created_count: int = Field(..., description="Number of items created")
     created_uris: List[str] = Field(..., description="URIs of the created items")
@@ -33,12 +34,14 @@ class BaseCreateResponse(BaseModel):
 
 class BaseUpdateResponse(BaseModel):
     """Base model for update responses."""
+    success: bool = Field(True, description="Whether the operation was successful")
     message: str = Field(..., description="Success message describing the update operation")
-    updated_uri: str = Field(..., description="URI of the updated item")
+    updated_uri: Optional[str] = Field(None, description="URI of the updated item (None on error)")
 
 
 class BaseDeleteResponse(BaseModel):
     """Base model for deletion responses."""
+    success: bool = Field(True, description="Whether the operation was successful")
     message: str = Field(..., description="Success message describing the deletion operation")
     deleted_count: int = Field(..., description="Number of items deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of the deleted items (when available)")

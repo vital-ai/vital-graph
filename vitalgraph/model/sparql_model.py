@@ -30,6 +30,26 @@ class GraphInfo(BaseModel):
     )
 
 
+class GraphInfoResponse(BaseModel):
+    """Response model for graph info requests."""
+    success: bool = Field(
+        ...,
+        description="Whether the operation was successful"
+    )
+    graph_info: Optional[GraphInfo] = Field(
+        None,
+        description="Graph information (None if graph not found)"
+    )
+    error: Optional[str] = Field(
+        None,
+        description="Error message if operation failed"
+    )
+    message: Optional[str] = Field(
+        None,
+        description="Response message"
+    )
+
+
 # SPARQL Query Models
 class SPARQLQueryRequest(BaseModel):
     """Request model for SPARQL query operations."""

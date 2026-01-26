@@ -12,7 +12,7 @@ from ..utils.client_utils import VitalGraphClientError, validate_required_params
 from ...model.triples_model import (
     TripleListResponse, TripleOperationResponse, TripleListRequest
 )
-from ...model.jsonld_model import JsonLdDocument
+from ...model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 
 
 class TriplesEndpoint(BaseEndpoint):
@@ -57,14 +57,14 @@ class TriplesEndpoint(BaseEndpoint):
         
         return self._make_typed_request('GET', url, TripleListResponse, params=params)
     
-    def add_triples(self, space_id: str, graph_id: str, document: JsonLdDocument) -> TripleOperationResponse:
+    def add_triples(self, space_id: str, graph_id: str, document: JsonLdRequest) -> TripleOperationResponse:
         """
         Add triples to a graph.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing triples to add
+            document: JSON-LD request (JsonLdObject for single triple or JsonLdDocument for multiple triples)
             
         Returns:
             TripleOperationResponse containing operation result
@@ -81,9 +81,9 @@ class TriplesEndpoint(BaseEndpoint):
             graph_id=graph_id
         )
         
-        # Wrap the document in TripleListRequest as expected by server
-        request_data = TripleListRequest(document=document)
-        return self._make_typed_request('POST', url, TripleOperationResponse, params=params, json=request_data.model_dump())
+        # Send the JsonLdRequest directly (server handles discriminated union)
+        # The server will automatically detect JsonLdObject vs JsonLdDocument
+        return self._make_typed_request('POST', url, TripleOperationResponse, params=params, json=document.model_dump(by_alias=True))
     
     def delete_triples(self, space_id: str, graph_id: str, 
                       subject: Optional[str] = None, predicate: Optional[str] = None, 

@@ -177,7 +177,8 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             space = self.space_manager.get_space(space_id)
             if not space:
                 # Return empty document for non-existent space
-                empty_jsonld = self.vitalsigns.to_jsonld_list([])
+                from vital_ai_vitalsigns.model.GraphObject import GraphObject
+                empty_jsonld = GraphObject.to_jsonld_list([])
                 return JsonLdDocument(**empty_jsonld)
             
             # Clean URI
@@ -196,7 +197,8 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             
             if not results.get("bindings"):
                 # Type not found
-                empty_jsonld = self.vitalsigns.to_jsonld_list([])
+                from vital_ai_vitalsigns.model.GraphObject import GraphObject
+                empty_jsonld = GraphObject.to_jsonld_list([])
                 return JsonLdDocument(**empty_jsonld)
             
             # Reconstruct type properties

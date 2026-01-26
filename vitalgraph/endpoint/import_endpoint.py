@@ -6,7 +6,7 @@ Handles import job lifecycle and file uploads for import data.
 """
 
 from typing import Dict, List, Optional, Any
-from fastapi import APIRouter, Query, Depends, HTTPException, UploadFile, File, Path
+from fastapi import APIRouter, Query, Depends, UploadFile, File, Path
 from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum

@@ -153,6 +153,33 @@ class VitalGraphConfig:
         """
         return self.config_data.get('app', {})
     
+    def get_backend_config(self) -> Dict[str, Any]:
+        """
+        Get backend configuration section.
+        
+        Returns:
+            Dictionary containing backend configuration
+        """
+        return self.config_data.get('backend', {})
+    
+    def get_fuseki_config(self) -> Dict[str, Any]:
+        """
+        Get Fuseki backend configuration section.
+        
+        Returns:
+            Dictionary containing Fuseki configuration
+        """
+        return self.config_data.get('fuseki', {})
+    
+    def get_fuseki_postgresql_config(self) -> Dict[str, Any]:
+        """
+        Get Fuseki-PostgreSQL hybrid backend configuration section.
+        
+        Returns:
+            Dictionary containing Fuseki-PostgreSQL hybrid configuration
+        """
+        return self.config_data.get('fuseki_postgresql', {})
+    
     def get_rdf_pool_config(self) -> Dict[str, Any]:
         """
         Get RDF connection pool configuration section.
@@ -190,16 +217,8 @@ class VitalGraphConfig:
         database = os.getenv('VITALGRAPH_DB_NAME', db_config.get('database', 'vitalgraphdb'))
         username = os.getenv('VITALGRAPH_DB_USER', db_config.get('username', 'vitalgraph_user'))
         password = os.getenv('VITALGRAPH_DB_PASSWORD', db_config.get('password', 'vitalgraph_password'))
-        
-        # Special handling for host.docker.internal -> localhost resolution
-        # This allows the same config to work in Docker and locally
-        if host == 'host.docker.internal':
-            resolved_host = 'localhost'
-            logger.info(f"Resolved host.docker.internal -> localhost for local execution")
-        else:
-            resolved_host = host
-        
-        return f"postgresql://{username}:{password}@{resolved_host}:{port}/{database}"
+         
+        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
     
     def get_table_prefix(self) -> str:
         """

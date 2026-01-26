@@ -103,13 +103,11 @@ class SPARQLUpdateEndpoint:
                     detail="Database-specific space implementation not available"
                 )
             
-            # Execute SPARQL update using orchestrator with PostgreSQL implementation
+            # Execute SPARQL update using existing dual write coordinator implementation
             import time
             start_time = time.time()
             
-            from vitalgraph.db.postgresql.sparql.postgresql_sparql_orchestrator import execute_sparql_update
-            
-            success = await execute_sparql_update(db_space_impl, space_id, update)
+            success = await db_space_impl.execute_sparql_update(space_id, update)
             
             update_time = time.time() - start_time
             
@@ -133,6 +131,7 @@ class SPARQLUpdateEndpoint:
             self.logger.error(f"Error executing SPARQL update: {e}")
             return SPARQLUpdateResponse(
                 success=False,
+                message=f"SPARQL update failed: {str(e)}",
                 error=str(e)
             )
 

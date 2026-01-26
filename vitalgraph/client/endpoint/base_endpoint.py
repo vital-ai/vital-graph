@@ -5,10 +5,14 @@ Base class for all VitalGraph client endpoint implementations.
 """
 
 import requests
+import time
+import logging
 from typing import Dict, Any, Optional, TypeVar, Type
 
 from pydantic import BaseModel
 from ..utils.client_utils import VitalGraphClientError
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -86,5 +90,14 @@ class BaseEndpoint:
         Raises:
             VitalGraphClientError: If request or parsing fails
         """
+        start_time = time.time()
         response = self._make_authenticated_request(method, url, **kwargs)
-        return self._parse_response(response.json(), response_model)
+        duration = time.time() - start_time
+        
+        # Extract operation name from URL for logging
+        url_parts = url.split('/')
+        operation = url_parts[-1] if url_parts else 'request'
+        logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
+        
+        response_data = response.json()
+        return self._parse_response(response_data, response_model)

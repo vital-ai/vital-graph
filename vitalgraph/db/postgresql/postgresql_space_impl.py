@@ -15,6 +15,9 @@ from psycopg.rows import dict_row
 from rdflib import URIRef, Literal, BNode, Variable
 from rdflib.term import Identifier
 
+# Import space backend interface
+from ..space_backend_interface import SpaceBackendInterface, SparqlBackendInterface
+
 # Import PostgreSQL utilities
 from .postgresql_log_utils import PostgreSQLLogUtils
 from .space.postgresql_space_utils import PostgreSQLSpaceUtils
@@ -32,7 +35,7 @@ from .space.postgresql_space_db_objects import PostgreSQLSpaceDBObjects
 from .space.postgresql_space_graphs import PostgreSQLSpaceGraphs
 from .space.postgresql_space_db_import import PostgreSQLSpaceDBImport
 
-class PostgreSQLSpaceImpl:
+class PostgreSQLSpaceImpl(SpaceBackendInterface):
     """
     PostgreSQL implementation for RDF graph space management.
     
@@ -478,6 +481,15 @@ class PostgreSQLSpaceImpl:
             await self._initialize_space_datatype_cache_sync(space_id)
         
         return success
+    
+    # SpaceBackendInterface adapter methods
+    async def create_space_storage(self, space_id: str) -> bool:
+        """Create space storage - adapter for SpaceBackendInterface."""
+        return await self.create_space_tables(space_id)
+    
+    async def delete_space_storage(self, space_id: str) -> bool:
+        """Delete space storage - adapter for SpaceBackendInterface."""
+        return await self.delete_space_tables(space_id)
     
     async def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
         """

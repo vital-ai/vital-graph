@@ -49,18 +49,24 @@ class SpaceManager:
     and listing space records.
     """
     
-    def __init__(self, db_impl=None):
+    def __init__(self, db_impl=None, space_backend=None):
         """Initialize the SpaceManager with an empty space registry.
         
         Args:
-            db_impl: Database implementation instance (e.g., PostgreSQLDbImpl)
+            db_impl: Database implementation instance (e.g., PostgreSQLDbImpl) - for PostgreSQL backend
+            space_backend: Space backend implementation (e.g., FusekiSpaceImpl) - for Fuseki backend
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.db_impl = db_impl
+        self.space_backend = space_backend
         self._spaces: Dict[str, SpaceRecord] = {}
         self._initialized = False
         self.signal_manager = None
-        self.logger.info(f"SpaceManager initialized with db_impl: {type(db_impl).__name__ if db_impl else 'None'}")
+        
+        if space_backend:
+            self.logger.info(f"SpaceManager initialized with space_backend: {type(space_backend).__name__}")
+        else:
+            self.logger.info(f"SpaceManager initialized with db_impl: {type(db_impl).__name__ if db_impl else 'None'}")
         
         # Note: Eager initialization will be done via async initialize_from_database() method
     
@@ -77,34 +83,51 @@ class SpaceManager:
         try:
             self.logger.info("Initializing SpaceManager from database...")
             
-            if not self.db_impl:
-                self.logger.warning("No database implementation available for initialization")
-                return
+            # Use space_backend if available (works for both Fuseki and PostgreSQL)
+            if self.space_backend:
+                self.logger.info(f"Using space backend for initialization: {type(self.space_backend).__name__}")
+                try:
+                    spaces = await self.space_backend.list_spaces()
+                    # spaces is already a list of dictionaries from PostgreSQL
+                    self.logger.info(f"Found {len(spaces)} spaces in backend")
+                except Exception as e:
+                    self.logger.error(f"Failed to list spaces from backend: {e}")
+                    spaces = []
+                    
+            elif self.db_impl:
+                # Fallback to db_impl for legacy PostgreSQL support
+                self.logger.info("Using PostgreSQL database for initialization (legacy)")
+                if not self.db_impl.is_connected():
+                    self.logger.warning("Database not connected, cannot initialize from database")
+                    return
                 
-            if not self.db_impl.is_connected():
-                self.logger.warning("Database not connected, cannot initialize from database")
+                # Get all space records from database (async call) - returns List[Dict]
+                space_records = await self.db_impl.list_spaces()
+                spaces = space_records  # Keep the original format for compatibility
+                self.logger.info(f"Found {len(spaces)} space records in database")
+                
+            else:
+                self.logger.warning("No database implementation or space backend available for initialization")
                 return
-            
-            # Get all space records from database (async call)
-            spaces = await self.db_impl.list_spaces()
-            self.logger.info(f"Found {len(spaces)} space records in database")
             
             for space_data in spaces:
-                space_id = space_data.get('space')
+                # Handle both formats: {'space_id': ...} from PostgreSQL and {'space': ...} from backend
+                space_id = space_data.get('space_id') or space_data.get('space')
                 if space_id:
                     try:
-                        # Create SpaceImpl instance
-                        space_impl = SpaceImpl(space_id=space_id, db_impl=self.db_impl)
+                        # Create generic SpaceImpl with the appropriate backend
+                        backend = self.space_backend or self.db_impl
+                        space_impl = SpaceImpl(space_id=space_id, backend=backend)
                         
                         # Create SpaceRecord and add to registry
                         space_record = SpaceRecord(space_id=space_id, space_impl=space_impl)
                         self._spaces[space_id] = space_record
                         
-                        # Check for orphaned spaces (database record but no tables)
+                        # Check for orphaned spaces (database record but no backend storage)
                         if not await space_impl.exists():
-                            self.logger.warning(f"⚠️ ORPHANED SPACE DETECTED: Space '{space_id}' has database record but no tables!")
+                            self.logger.warning(f"⚠️ ORPHANED SPACE DETECTED: Space '{space_id}' has database record but no backend storage!")
                         else:
-                            self.logger.debug(f"✅ Space '{space_id}' loaded successfully with tables")
+                            self.logger.debug(f"✅ Space '{space_id}' loaded successfully")
                             
                     except Exception as e:
                         self.logger.error(f"❌ Failed to initialize space '{space_id}': {e}")
@@ -136,12 +159,9 @@ class SpaceManager:
         """
         self.logger.info(f"Creating space with tables: '{space_id}'")
         
-        if not self.db_impl:
-            self.logger.error(f"Cannot create space '{space_id}': No database implementation available")
-            return False
-            
-        if not self.db_impl.is_connected():
-            self.logger.error(f"Cannot create space '{space_id}': Database not connected")
+        # Use space_backend for all operations
+        if not self.space_backend:
+            self.logger.error(f"Cannot create space '{space_id}': No space backend available")
             return False
             
         # Check if space already exists in the manager
@@ -149,50 +169,24 @@ class SpaceManager:
             self.logger.error(f"Cannot create space '{space_id}': Space already exists in manager")
             return False
             
-        # First check if space record exists in the Space table
-        space_record_exists = await self.db_impl.space_record_exists(space_id)
-        if space_record_exists:
-            self.logger.error(f"Cannot create space '{space_id}': Space record already exists in database")
-            return False
-            
-        # Then check if space tables exist
-        space_impl = self.db_impl.get_space_impl()
-        if space_impl:
-            tables_exist = await space_impl.space_exists(space_id)
-            if tables_exist:
-                self.logger.warning(f"Unusual state: Space '{space_id}' has tables but no record. May need cleanup.")
-                return False
-        else:
-            self.logger.error(f"Cannot create space '{space_id}': Space implementation not available")
+        # Check if space already exists in backend
+        space_exists = await self.space_backend.space_exists(space_id)
+        if space_exists:
+            self.logger.error(f"Cannot create space '{space_id}': Space already exists in backend")
             return False
             
         try:
-            # 1. Create space record in database
-            space_data = {
-                'space': space_id,
-                'space_name': space_name,
-                'space_description': space_description,
-                'tenant': None
-            }
-            space_result = await self.db_impl.add_space(space_data)
-            if not space_result:
-                self.logger.error(f"Failed to create space record in database: '{space_id}'")
-                return False
-                
-            self.logger.info(f"Created space record in database: '{space_id}'")
+            # Create space using generic backend interface
+            self.logger.info(f"Creating space storage via space backend: '{space_id}'")
             
-            # 2. Create SpaceImpl instance
-            space_impl = self.create_space(space_id)
-            if not space_impl:
-                self.logger.error(f"Failed to create SpaceImpl for '{space_id}'")
-                return False
-                
-            # 3. Create tables for space
-            tables_created = await space_impl.create()
-            if not tables_created:
-                self.logger.error(f"Failed to create tables for space '{space_id}'")
-                # Rollback space creation in database
-                await self.db_impl.remove_space(space_id)
+            # Create SpaceImpl instance with space_backend and metadata
+            space_impl = SpaceImpl(space_id=space_id, backend=self.space_backend, 
+                                 space_name=space_name, space_description=space_description)
+            
+            # Create space storage (backend handles all details - tables, records, etc.)
+            storage_created = await space_impl.create()
+            if not storage_created:
+                self.logger.error(f"Failed to create space storage for '{space_id}'")
                 return False
                 
             # 4. Initialize default namespaces
@@ -251,66 +245,42 @@ class SpaceManager:
         """
         self.logger.info(f"Deleting space with tables: '{space_id}'")
         
-        if not self.db_impl:
-            self.logger.error(f"Cannot delete space '{space_id}': No database implementation available")
-            return False
-            
-        if not self.db_impl.is_connected():
-            self.logger.error(f"Cannot delete space '{space_id}': Database not connected")
+        # Use space_backend for all operations
+        if not self.space_backend:
+            self.logger.error(f"Cannot delete space '{space_id}': No space backend available")
             return False
             
         # Check if space exists in the manager
         space_record = self._spaces.get(space_id)
-        if not space_record:
-            # Check if either space record or tables exist
-            # First check the space record
-            space_record_exists = await self.db_impl.space_record_exists(space_id)
-            
-            # Then check the space tables
-            space_impl = self.db_impl.get_space_impl()
-            if not space_impl:
-                self.logger.error(f"Cannot delete space '{space_id}': Space implementation not available")
-                return False
-                
-            tables_exist = await space_impl.space_exists(space_id)
-            
-            # If neither record nor tables exist, space doesn't exist at all
-            if not space_record_exists and not tables_exist:
-                self.logger.error(f"Cannot delete space '{space_id}': Space does not exist (no record or tables)")
-                return False
-                
-            # Log warning about inconsistent state if needed
-            if space_record_exists and not tables_exist:
-                self.logger.warning(f"Space '{space_id}' has record but no tables (inconsistent state)")
-            elif not space_record_exists and tables_exist:
-                self.logger.warning(f"Space '{space_id}' has tables but no record (inconsistent state)")
-                
-            # We'll proceed with deletion even in inconsistent state to clean up
-                
-            # Space exists in database but not in manager, create temporary SpaceImpl
-            space_impl = self.create_space(space_id)
-        else:
-            # Get the existing SpaceImpl
-            space_impl = space_record.space_impl
-            
+        
+        # Check if space exists in backend
         try:
-            # 1. Delete tables for space
-            tables_deleted = await space_impl.destroy()
-            if not tables_deleted:
-                self.logger.error(f"Failed to delete tables for space '{space_id}'")
+            space_exists = await self.space_backend.space_exists(space_id)
+            if not space_exists and not space_record:
+                self.logger.error(f"Cannot delete space '{space_id}': Space does not exist")
                 return False
-                
-            # 2. Delete space record from database
-            space_deleted = await self.db_impl.remove_space(space_id)
-            if not space_deleted:
-                self.logger.error(f"Failed to delete space record for '{space_id}' from database")
-                return False
-                
-            # 3. Remove space from manager registry
+        except Exception as e:
+            self.logger.error(f"Error checking space existence: {e}")
+            return False
+        
+        try:
+            # Create SpaceImpl for deletion operations
+            if space_record:
+                space_impl = space_record.space_impl
+            else:
+                # Create temporary SpaceImpl for deletion
+                space_impl = SpaceImpl(space_id=space_id, backend=self.space_backend)
+            
+            # Delete space storage (backend handles all cleanup)
+            storage_deleted = await space_impl.destroy()
+            if not storage_deleted:
+                self.logger.warning(f"Failed to delete space storage for '{space_id}' (may not exist)")
+            
+            # Remove space from manager registry
             if space_id in self._spaces:
                 # Close the space before removing from registry
                 try:
-                    self._spaces[space_id].space_impl.close()
+                    await self._spaces[space_id].space_impl.close()
                 except Exception as close_e:
                     self.logger.warning(f"Error closing space '{space_id}': {close_e}")
                 
@@ -546,7 +516,7 @@ class SpaceManager:
         self.logger.debug(f"has_space('{space_id}') returning {exists}")
         return exists
     
-    def get_space_info(self, space_id: str) -> Optional[Dict[str, Any]]:
+    async def get_space_info(self, space_id: str) -> Optional[Dict[str, Any]]:
         """
         Get detailed information about a space.
         
@@ -563,7 +533,24 @@ class SpaceManager:
             self.logger.debug(f"Space '{space_id}' not found")
             return None
         
+        # Get basic space record info
         info = space_record.to_dict()
+        
+        # If the space implementation has a backend with get_space_info, call it to get detailed backend info
+        # This enables features like quad logging
+        if hasattr(space_record.space_impl, 'backend'):
+            backend = space_record.space_impl.backend
+            if hasattr(backend, 'get_space_info') and asyncio.iscoroutinefunction(backend.get_space_info):
+                try:
+                    # Call async get_space_info from backend
+                    backend_info = await backend.get_space_info(space_id)
+                    
+                    if backend_info:
+                        # Merge backend info with space record info
+                        info.update(backend_info)
+                except Exception as e:
+                    self.logger.error(f"Error getting backend space info: {e}", exc_info=True)
+        
         self.logger.debug(f"Space info for '{space_id}': {info}")
         return info
     

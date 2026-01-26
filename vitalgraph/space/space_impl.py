@@ -8,41 +8,37 @@ from rdflib.graph import Graph
 
 class SpaceImpl:
     """
-    Space implementation that provides database access methods for RDF operations.
+    Generic space implementation that provides database access methods for RDF operations.
     
-    This class acts as a lightweight wrapper that delegates to database-specific implementations
-    (e.g., PostgreSQLSpaceImpl) for actual per-space table management. This separation allows
-    for future support of other database backends while maintaining a consistent interface.
+    This class acts as a lightweight wrapper that delegates to backend-specific implementations
+    (e.g., PostgreSQLDbImpl, FusekiSpaceImpl) for actual space operations. This separation allows
+    for support of multiple database backends while maintaining a consistent interface.
     """
     
-    def __init__(self, *, space_id: str, db_impl):
+    def __init__(self, space_id: str, backend, space_name: str = None, space_description: str = None):
         """
-        Initialize SpaceImpl with space identifier and database implementation.
+        Initialize SpaceImpl with space ID and backend.
         
         Args:
-            space_id: Unique string identifier for this space (e.g., "store123")
-            db_impl: Instance of PostgreSQLDbImpl for database operations
+            space_id: Unique identifier for the space
+            backend: Backend implementation for space operations
+            space_name: Human-readable name for the space
+            space_description: Optional description for the space
         """
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.space_id = space_id
-        self.db_impl = db_impl
+        self.backend = backend
+        self.space_name = space_name or space_id
+        self.space_description = space_description
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         
         self.logger.info(f"Initializing SpaceImpl for space_id='{space_id}'")
-        self.logger.debug(f"Database implementation: {type(db_impl).__name__}")
-        
-        # Get the database-specific space implementation (currently PostgreSQL only)
-        self._space_impl = None
-        if hasattr(db_impl, 'get_space_impl'):
-            self._space_impl = db_impl.get_space_impl()
-            self.logger.debug(f"Using database-specific space implementation: {type(self._space_impl).__name__}")
-        else:
-            self.logger.warning(f"Database implementation does not provide space_impl - operations will be limited")
+        self.logger.debug(f"Using backend: {type(backend).__name__}")
         
         self.logger.debug(f"SpaceImpl initialization completed for space '{space_id}'")
     
     async def create(self) -> bool:
         """
-        Create the database schema and tables for this space.
+        Create the space storage and metadata.
         
         Returns:
             True if creation successful, False otherwise
@@ -50,17 +46,34 @@ class SpaceImpl:
         self.logger.info(f"create() called for space '{self.space_id}'")
         
         try:
-            if self._space_impl:
-                # Delegate to PostgreSQL implementation
-                success = await self._space_impl.create_space_tables(self.space_id)
-                if success:
-                    self.logger.info(f"✅ Successfully created tables for space '{self.space_id}'")
-                else:
-                    self.logger.error(f"❌ Failed to create tables for space '{self.space_id}'")
-                return success
-            else:
-                self.logger.warning("No database-specific space implementation available - schema creation skipped")
+            # Create space storage (Fuseki dataset + PostgreSQL primary data tables)
+            success = await self.backend.create_space_storage(self.space_id)
+            if not success:
+                self.logger.error(f"❌ Failed to create space storage '{self.space_id}'")
                 return False
+            
+            # Create space metadata if backend supports it
+            if hasattr(self.backend, 'create_space_metadata'):
+                metadata = {
+                    'space': self.space_id,
+                    'space_name': self.space_name,
+                    'space_description': self.space_description,
+                    'tenant': 'default'
+                }
+                metadata_success = await self.backend.create_space_metadata(self.space_id, metadata)
+                if not metadata_success:
+                    self.logger.error(f"❌ Failed to create space metadata for '{self.space_id}'")
+                    # Rollback storage creation
+                    try:
+                        await self.backend.delete_space_storage(self.space_id)
+                        self.logger.info(f"🔄 Rolled back storage for '{self.space_id}' due to metadata failure")
+                    except Exception as rollback_error:
+                        self.logger.error(f"❌ Failed to rollback storage for '{self.space_id}': {rollback_error}")
+                    return False
+                self.logger.info(f"✅ Space metadata created for '{self.space_id}'")
+                
+            self.logger.info(f"✅ Successfully created space '{self.space_id}'")
+            return True
             
         except Exception as e:
             self.logger.error(f"create() failed for space '{self.space_id}': {e}")
@@ -103,17 +116,13 @@ class SpaceImpl:
         self.logger.info(f"destroy() called for space '{self.space_id}'")
         
         try:
-            if self._space_impl:
-                # Delegate to PostgreSQL implementation to delete all tables
-                success = await self._space_impl.delete_space_tables(self.space_id)
-                if success:
-                    self.logger.info(f"✅ Successfully destroyed tables for space '{self.space_id}'")
-                else:
-                    self.logger.error(f"❌ Failed to destroy tables for space '{self.space_id}'")
-                return success
+            # Use generic backend to delete space storage
+            success = await self.backend.delete_space_storage(self.space_id)
+            if success:
+                self.logger.info(f"✅ Successfully destroyed space '{self.space_id}'")
             else:
-                self.logger.warning("No database-specific space implementation available - space destruction skipped")
-                return False
+                self.logger.error(f"❌ Failed to destroy space '{self.space_id}'")
+            return success
             
         except Exception as e:
             self.logger.error(f"destroy() failed for space '{self.space_id}': {e}")
@@ -121,48 +130,33 @@ class SpaceImpl:
         
     async def exists(self) -> bool:
         """
-        Check if this space's tables exist in the database.
+        Check if this space exists in the backend.
         
         Returns:
-            True if space tables exist, False otherwise
+            True if space exists, False otherwise
         """
         try:
-            if self._space_impl:
-                return await self._space_impl.space_exists(self.space_id)
-            else:
-                self.logger.warning("No database-specific space implementation available - cannot check existence")
-                return False
+            return await self.backend.space_exists(self.space_id)
         except Exception as e:
             self.logger.error(f"exists() failed for space '{self.space_id}': {e}")
             return False
     
-    def close(self) -> None:
+    async def close(self) -> None:
         """
         Close this space and clean up resources.
         """
         self.logger.info(f"close() called for space '{self.space_id}'")
         
-        try:
-            # For now, just log the close operation
-            # Future implementations might need to:
-            # 1. Flush any pending operations
-            # 2. Close space-specific database connections
-            # 3. Clean up temporary resources
-            
-            self.logger.debug(f"close() completed for space '{self.space_id}'")
-            
-        except Exception as e:
-            self.logger.error(f"close() failed for space '{self.space_id}': {e}")
-    
+        self.logger.debug(f"close() completed for space '{self.space_id}'")
+
     def get_db_space_impl(self):
         """
-        Get the underlying database-specific space implementation.
+        Get the underlying backend implementation.
         
         Returns:
-            The database-specific space implementation (e.g., PostgreSQLSpaceImpl)
-            or None if not available
+            The backend implementation or None if not available
         """
-        return self._space_impl
+        return self.backend
     
     async def initialize_default_namespaces(self) -> None:
         """
@@ -174,26 +168,10 @@ class SpaceImpl:
         self.logger.info(f"Initializing default namespaces for space '{self.space_id}'")
         
         try:
-            if self._space_impl and hasattr(self._space_impl, 'namespaces'):
-                # Define standard RDF namespaces
-                default_namespaces = {
-                    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
-                    'rdfs': 'http://www.w3.org/2000/01/rdf-schema#',
-                    'owl': 'http://www.w3.org/2002/07/owl#',
-                    'xsd': 'http://www.w3.org/2001/XMLSchema#'
-                }
-                
-                # Add each namespace
-                for prefix, uri in default_namespaces.items():
-                    namespace_id = await self._space_impl.add_namespace(self.space_id, prefix, uri)
-                    if namespace_id:
-                        self.logger.debug(f"Added default namespace '{prefix}' -> '{uri}' with ID: {namespace_id}")
-                    else:
-                        self.logger.warning(f"Failed to add default namespace '{prefix}' -> '{uri}'")
-                
-                self.logger.info(f"Default namespaces initialized for space '{self.space_id}'")
-            else:
-                self.logger.warning("Cannot initialize default namespaces - no namespace support available")
+            # For now, skip namespace initialization for generic backends
+            # Different backends may handle namespaces differently
+            self.logger.info(f"Skipping namespace initialization for generic backend: {type(self.backend).__name__}")
+            self.logger.info(f"Default namespaces initialization completed for space '{self.space_id}'")
         except Exception as e:
             self.logger.error(f"Error initializing default namespaces for space '{self.space_id}': {e}")
     

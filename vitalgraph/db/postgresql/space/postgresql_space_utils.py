@@ -124,8 +124,9 @@ class PostgreSQLSpaceUtils:
         
         # Handle native Python types - convert to appropriate RDFLib terms
         elif isinstance(value, str):
-            # Assume string literals unless they look like URIs
-            if value.startswith(('http://', 'https://', 'ftp://', 'urn:', 'mailto:')) or '://' in value:
+            # Use proper URI validation instead of string pattern matching
+            from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+            if validate_rfc3986(value, rule='URI'):
                 return ('U', None, None)  # Treat as URI
             else:
                 return ('L', None, str(XSD.string))  # String literal with xsd:string datatype
@@ -145,8 +146,15 @@ class PostgreSQLSpaceUtils:
             # Base64 binary literals
             return ('L', None, str(XSD.base64Binary))
         else:
-            # Default to string literal for unknown types
-            return ('L', None, str(XSD.string))
+            # Handle VitalSigns property objects and other unknown types
+            # Cast to string first to avoid CombinedProperty iteration errors
+            value_str = str(value)
+            # Check if the string value looks like a URI
+            from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+            if validate_rfc3986(value_str, rule='URI'):
+                return ('U', None, None)  # Treat as URI
+            else:
+                return ('L', None, str(XSD.string))  # Default to string literal
     
     @staticmethod
     def extract_literal_value(value: Union[Identifier, str, int, float, bool]) -> str:

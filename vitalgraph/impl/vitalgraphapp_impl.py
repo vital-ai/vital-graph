@@ -48,12 +48,21 @@ class VitalGraphAppImpl:
             app_config = config.get_app_config()
             log_level = app_config.get('log_level', 'INFO')
             numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+            
+            # Set level for root logger
             logging.getLogger().setLevel(numeric_level)
+            
+            # Set level for all existing loggers
+            for logger_name in logging.Logger.manager.loggerDict:
+                logger = logging.getLogger(logger_name)
+                logger.setLevel(numeric_level)
         except (AttributeError, TypeError):
             # Fallback to INFO if config access fails
+            numeric_level = logging.INFO
             logging.getLogger().setLevel(logging.INFO)
         
         self.logger = logging.getLogger(f"{__name__}.VitalGraphAppImpl")
+        self.logger.setLevel(numeric_level)  # Set this logger's level explicitly
         self.app_mode = os.getenv("APP_MODE", "development").lower()
         
         # Initialize VitalGraphImpl which handles configuration and database initialization
@@ -78,9 +87,16 @@ class VitalGraphAppImpl:
         
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
+        print(f"🔍 DEBUG: Retrieved space_manager from VitalGraphImpl: {self.space_manager}")
+        print(f"🔍 DEBUG: space_manager type: {type(self.space_manager)}")
         
         # Initialize VitalGraph API with auth handler, database implementation, and space manager
-        self.api = VitalGraphAPI(self.auth, db_impl=self.db_impl, space_manager=self.space_manager)
+        self.api = VitalGraphAPI(
+            auth_handler=self.auth,
+            db_impl=self.db_impl, 
+            space_manager=self.space_manager
+        )
+        print(f"🔍 DEBUG: VitalGraphAPI initialized with space_manager: {self.api.space_manager}")
         
         # Add dependency for getting current user (needed before route setup)
         self.get_current_user = self.auth.create_get_current_user_dependency()
@@ -90,7 +106,7 @@ class VitalGraphAppImpl:
         self._setup_static_files()
         self._setup_startup_events()
         
-        # Setup all endpoints during startup
+        # Setup endpoints with API instance (space_manager will be set later in startup event)
         self._setup_all_endpoints()
 
     def _setup_middleware(self):
@@ -99,10 +115,10 @@ class VitalGraphAppImpl:
         # Add request logging middleware
         @self.app.middleware("http")
         async def log_requests(request: Request, call_next):
-            self.logger.info(f"🔍 INCOMING REQUEST: {request.method} {request.url}")
-            self.logger.info(f"🔍 REQUEST HEADERS: {dict(request.headers)}")
+            self.logger.debug(f"🔍 INCOMING REQUEST: {request.method} {request.url}")
+            self.logger.debug(f"🔍 REQUEST HEADERS: {dict(request.headers)}")
             response = await call_next(request)
-            self.logger.info(f"🔍 RESPONSE STATUS: {response.status_code}")
+            self.logger.debug(f"🔍 RESPONSE STATUS: {response.status_code}")
             return response
         
         # Add CORS middleware
@@ -143,6 +159,19 @@ class VitalGraphAppImpl:
                     # Use VitalGraphImpl.connect_database() which handles SignalManager creation and injection
                     success = await self.vital_graph_impl.connect_database()
                     self.logger.info(f"Connected to database successfully: {success}")
+                    
+                    # Update space_manager reference after database connection
+                    self.space_manager = self.vital_graph_impl.get_space_manager()
+                    print(f"🔍 STARTUP DEBUG: Updated space_manager after DB connection: {self.space_manager}")
+                    
+                    # Set the space_manager on VitalGraphAPI now that it's available
+                    if self.space_manager is not None:
+                        self.api.space_manager = self.space_manager
+                        print(f"🔍 STARTUP DEBUG: Set space_manager on VitalGraphAPI: {self.api.space_manager}")
+                        print(f"🔍 STARTUP DEBUG: API object id: {id(self.api)}")
+                        print(f"🔍 STARTUP DEBUG: Endpoints already registered during init - they will use this updated API instance")
+                    else:
+                        print(f"❌ STARTUP ERROR: space_manager is still None after database connection")
                     
                     # Ensure SpaceManager is initialized from database after connection
                     self.logger.debug("Checking SpaceManager for initialization...")
@@ -262,6 +291,8 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.objects_endpoint import create_objects_router
         from vitalgraph.endpoint.kgentities_endpoint import create_kgentities_router
         from vitalgraph.endpoint.kgframes_endpoint import create_kgframes_router
+        from vitalgraph.endpoint.kgrelations_endpoint import create_kgrelations_router
+        from vitalgraph.endpoint.kgquery_endpoint import create_kgqueries_router
         from vitalgraph.endpoint.files_endpoint import create_files_router
         
         # Create routers with space manager and auth dependency
@@ -270,7 +301,9 @@ class VitalGraphAppImpl:
         objects_router = create_objects_router(self.space_manager, self.get_current_user)
         kgentities_router = create_kgentities_router(self.space_manager, self.get_current_user)
         kgframes_router = create_kgframes_router(self.space_manager, self.get_current_user)
-        files_router = create_files_router(self.space_manager, self.get_current_user)
+        kgrelations_router = create_kgrelations_router(self.space_manager, self.get_current_user)
+        kgqueries_router = create_kgqueries_router(self.space_manager, self.get_current_user)
+        files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config)
         
         # Include routers in the FastAPI app  
         self.app.include_router(triples_router, prefix="/api/graphs")
@@ -278,7 +311,9 @@ class VitalGraphAppImpl:
         self.app.include_router(objects_router, prefix="/api/graphs")
         self.app.include_router(kgentities_router, prefix="/api/graphs")
         self.app.include_router(kgframes_router, prefix="/api/graphs")
-        self.app.include_router(files_router, prefix="/api/graphs")
+        self.app.include_router(kgrelations_router, prefix="/api/graphs")
+        self.app.include_router(kgqueries_router, prefix="/api/graphs")
+        self.app.include_router(files_router, prefix="/api")
     
     def _init_data_routers(self):
         """Initialize data import/export endpoint routers."""

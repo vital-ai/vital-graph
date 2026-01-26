@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from enum import Enum
 from datetime import datetime
 
+from .api_model import BasePaginatedResponse
+
 
 class ExportStatus(str, Enum):
     """Export job status enumeration."""
@@ -52,12 +54,9 @@ class ExportJob(BaseModel):
     query_filter: Optional[str] = Field(None, description="SPARQL query filter for export")
 
 
-class ExportJobsResponse(BaseModel):
+class ExportJobsResponse(BasePaginatedResponse):
     """Response model for export jobs listing."""
     export_jobs: List[ExportJob]
-    total_count: int
-    page_size: int
-    offset: int
 
 
 class ExportJobResponse(BaseModel):

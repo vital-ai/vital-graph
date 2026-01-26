@@ -1,0 +1,32 @@
+
+# Include frontend build files
+recursive-include vitalgraph/api/frontend/dist *
+
+# Include README and license files
+include README.md
+include LICENSE
+
+# Include configuration templates
+recursive-include vitalgraphdb_config *.yaml *.yml
+recursive-include vitalgraphclient_config *.yaml *.yml
+
+# Include SQL scripts
+recursive-include sql_scripts *.sql
+
+# Include VitalHome configuration
+recursive-include vitalhome *
+
+# Exclude development and test files
+exclude setup.py
+recursive-exclude test_scripts *
+recursive-exclude frontend *
+recursive-exclude frontend-archive *
+recursive-exclude docs *
+recursive-exclude .vscode *
+recursive-exclude .idea *
+recursive-exclude __pycache__ *
+recursive-exclude *.pyc
+recursive-exclude .pytest_cache *
+recursive-exclude dist *
+recursive-exclude build *
+recursive-exclude *.egg-info *

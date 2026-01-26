@@ -325,7 +325,9 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             
             if obj:
                 # Convert to JSON-LD using VitalSigns native functionality
-                obj_jsonld = obj.to_jsonld()
+                # Use to_jsonld_list for consistent format
+                from vital_ai_vitalsigns.model.GraphObject import GraphObject
+                obj_jsonld = GraphObject.to_jsonld_list([obj])
                 return JsonLdDocument(**obj_jsonld)
             else:
                 from vital_ai_vitalsigns.model.GraphObject import GraphObject

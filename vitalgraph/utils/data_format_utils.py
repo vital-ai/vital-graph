@@ -132,6 +132,7 @@ async def graphobjects_to_quads(graph_objects: List[G], graph_id: str) -> List[T
         
         # Convert triples to quads by adding graph context
         graph_uri = URIRef(_strip_angle_brackets(graph_id))
+        
         quads = []
         
         for s, p, o in triples_list:
@@ -233,6 +234,7 @@ async def batch_graphobjects_to_quads(graph_objects: List[G], graph_id: str) -> 
         
         # Convert triples to quads by adding graph context
         graph_uri = URIRef(_strip_angle_brackets(graph_id))
+        
         quads = []
         
         for s, p, o in triples_list:

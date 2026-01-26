@@ -1129,10 +1129,10 @@ async def orchestrate_sparql_query(space_impl: PostgreSQLSpaceImpl, space_id: st
             
     except Exception as e:
         logger.error(f"Error orchestrating SPARQL query: {e}")
-        logger.error(f"🔍 ORCHESTRATOR ERROR: Exception type: {type(e).__name__}")
-        logger.error(f"🔍 ORCHESTRATOR ERROR: Exception args: {e.args}")
+        logger.debug(f"🔍 ORCHESTRATOR ERROR: Exception type: {type(e).__name__}")
+        logger.debug(f"🔍 ORCHESTRATOR ERROR: Exception args: {e.args}")
         import traceback
-        logger.error(f"🔍 ORCHESTRATOR ERROR: Full traceback:\n{traceback.format_exc()}")
+        logger.debug(f"🔍 ORCHESTRATOR ERROR: Full traceback:\n{traceback.format_exc()}")
         raise
 
 

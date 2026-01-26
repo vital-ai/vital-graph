@@ -41,7 +41,23 @@ class VitalGraphDBAdminREPL:
         self.db_impl = None  # PostgreSQL database implementation
         self.current_space_id = None  # Currently active space ID
         self.log_level = log_level.upper()  # Store current logging level
+        self.loop = None  # Persistent event loop for async operations
         
+    def _run_async(self, coro):
+        """Run async coroutine using persistent event loop."""
+        if self.loop is None:
+            # Create a new event loop for the REPL session
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+        
+        return self.loop.run_until_complete(coro)
+    
+    def _close_loop(self):
+        """Close the event loop when REPL exits."""
+        if self.loop is not None and not self.loop.is_closed():
+            self.loop.close()
+            self.loop = None
+    
     def setup_signal_handlers(self):
         """Setup signal handlers for graceful shutdown."""
         def signal_handler(sig, frame):
@@ -51,6 +67,7 @@ class VitalGraphDBAdminREPL:
                     self.disconnect_db()
                 except Exception as e:
                     print(f"Error closing connection: {e}")
+            self._close_loop()
             print("Goodbye!")
             sys.exit(0)
         
@@ -110,7 +127,7 @@ class VitalGraphDBAdminREPL:
         elif command == 'disconnect':
             return self.cmd_disconnect(args)
         elif command == 'init':
-            return asyncio.run(self.cmd_init(args))
+            return self._run_async(self.cmd_init(args))
         elif command == 'purge':
             return self.cmd_purge(args)
         elif command == 'delete':
@@ -147,6 +164,7 @@ class VitalGraphDBAdminREPL:
                 self.disconnect_db()
             except Exception as e:
                 print(f"Error closing connection: {e}")
+        self._close_loop()
         print("Goodbye!")
         return False
     
@@ -178,7 +196,7 @@ class VitalGraphDBAdminREPL:
             
             # Connect to the database
             print("Connecting to VitalGraphDB database...")
-            connected = asyncio.run(self.db_impl.connect())
+            connected = self._run_async(self.db_impl.connect())
             
             if connected:
                 self.connected = True
@@ -218,6 +236,13 @@ class VitalGraphDBAdminREPL:
             print("Error: Not connected to database. Use 'connect' command first.")
             return True
         
+        # Check if this is a fuseki_postgresql backend
+        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        
+        if backend_type == 'fuseki_postgresql':
+            return await self._init_fuseki_postgresql_backend()
+        
+        # Standard PostgreSQL backend initialization
         if not hasattr(self.db_impl, 'table_prefix') or not self.db_impl.table_prefix:
             print("Error: Database implementation missing table_prefix configuration.")
             return True
@@ -246,6 +271,69 @@ class VitalGraphDBAdminREPL:
             return True
         
         return True
+    
+    async def _init_fuseki_postgresql_backend(self) -> bool:
+        """Initialize fuseki_postgresql backend admin tables."""
+        print("🚀 Initializing Fuseki-PostgreSQL Backend")
+        print("=" * 50)
+        
+        try:
+            from vitalgraph.db.fuseki_postgresql.postgresql_schema import FusekiPostgreSQLSchema
+            
+            # Create schema instance
+            schema = FusekiPostgreSQLSchema()
+            
+            # Check if admin tables already exist
+            print("\n📋 Checking for existing admin tables...")
+            check_query = """
+            SELECT COUNT(*) as table_count
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name IN ('install', 'space', 'graph', 'user')
+            """
+            
+            result = await self.db_impl.execute_query(check_query)
+            table_count = result[0]['table_count'] if result else 0
+            
+            if table_count == 4:
+                print("✅ Admin tables already exist (install, space, graph, user)")
+                print("   No initialization needed.")
+                return True
+            elif table_count > 0:
+                print(f"⚠️  Warning: Found {table_count} out of 4 admin tables")
+                print("   Some tables may be missing or partially created")
+                response = input("   Continue with initialization? (yes/no): ").strip().lower()
+                if response not in ['yes', 'y']:
+                    print("   Initialization cancelled.")
+                    return True
+            
+            print(f"\n📦 Creating admin tables...")
+            
+            # Create admin tables
+            admin_table_statements = schema.create_admin_tables_sql()
+            for i, statement in enumerate(admin_table_statements, 1):
+                table_name = list(schema.ADMIN_TABLES.keys())[i-1]
+                print(f"   Creating table: {table_name}")
+                await self.db_impl.execute_update(statement)
+            
+            print(f"\n🔍 Creating admin table indexes...")
+            
+            # Create admin table indexes
+            admin_index_statements = schema.create_admin_indexes_sql()
+            for statement in admin_index_statements:
+                await self.db_impl.execute_update(statement)
+            
+            print(f"\n✅ Fuseki-PostgreSQL admin tables initialized successfully!")
+            print(f"   Created tables: install, space, graph, user")
+            print(f"   Created indexes for: space, graph, user")
+            
+            return True
+            
+        except Exception as e:
+            print(f"\n❌ Error during Fuseki-PostgreSQL initialization: {e}")
+            import traceback
+            traceback.print_exc()
+            return True
     
     def cmd_purge(self, args: list[str]) -> bool:
         """Reset all tables to initial state."""
@@ -280,8 +368,15 @@ class VitalGraphDBAdminREPL:
         print("VitalGraphDB Installation Information:")
         print("=====================================")
         
+        # Check backend type
+        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        
+        if backend_type == 'fuseki_postgresql':
+            return self._run_async(self._info_fuseki_postgresql_backend())
+        
+        # Standard PostgreSQL backend
         # Load current state to get accurate status
-        asyncio.run(self.db_impl._load_current_state())
+        self._run_async(self.db_impl._load_current_state())
         
         print("Database: PostgreSQL")
         print("Status: Connected")
@@ -297,6 +392,67 @@ class VitalGraphDBAdminREPL:
         
         print("Version: 1.0.0")
         return True
+    
+    async def _info_fuseki_postgresql_backend(self) -> bool:
+        """Show info for fuseki_postgresql backend."""
+        try:
+            print("Backend: Fuseki-PostgreSQL Hybrid")
+            print("Status: Connected")
+            
+            # Check if admin tables exist
+            check_query = """
+            SELECT COUNT(*) as table_count
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name IN ('install', 'space', 'graph', 'user')
+            """
+            
+            result = await self.db_impl.execute_query(check_query)
+            table_count = result[0]['table_count'] if result else 0
+            
+            if table_count == 4:
+                print("Initialization State: Initialized")
+                print("Admin Tables: ✅ All present (install, space, graph, user)")
+                
+                # Get space count
+                space_query = "SELECT COUNT(*) as count FROM space"
+                space_result = await self.db_impl.execute_query(space_query)
+                space_count = space_result[0]['count'] if space_result else 0
+                print(f"Spaces: {space_count} configured")
+                
+                # Get user count
+                user_query = 'SELECT COUNT(*) as count FROM "user"'
+                user_result = await self.db_impl.execute_query(user_query)
+                user_count = user_result[0]['count'] if user_result else 0
+                print(f"Users: {user_count} configured")
+                
+            elif table_count > 0:
+                print("Initialization State: Partially Initialized")
+                print(f"Admin Tables: ⚠️  {table_count} out of 4 tables present")
+                print("   Run 'init;' to complete initialization")
+            else:
+                print("Initialization State: Uninitialized")
+                print("Admin Tables: ❌ Not created")
+                print("   Run 'init;' to initialize")
+            
+            # Show Fuseki connection info
+            fuseki_config = self.config.get_fuseki_postgresql_config().get('fuseki', {})
+            print(f"\nFuseki Server: {fuseki_config.get('server_url', 'N/A')}")
+            print(f"Fuseki Dataset: {fuseki_config.get('dataset_name', 'N/A')}")
+            print(f"JWT Authentication: {'Enabled' if fuseki_config.get('enable_authentication') else 'Disabled'}")
+            
+            # Show PostgreSQL connection info
+            pg_config = self.config.get_fuseki_postgresql_config().get('database', {})
+            print(f"\nPostgreSQL Host: {pg_config.get('host', 'N/A')}")
+            print(f"PostgreSQL Database: {pg_config.get('database', 'N/A')}")
+            
+            print("\nVersion: 1.0.0")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error getting backend info: {e}")
+            return True
     
     def cmd_list(self, args: list[str]) -> bool:
         """List various database components."""
@@ -337,7 +493,7 @@ class VitalGraphDBAdminREPL:
         
         try:
             # Get spaces from database
-            spaces = asyncio.run(self.db_impl.list_spaces())
+            spaces = self._run_async(self.db_impl.list_spaces())
             
             # Define table headers
             headers = ['ID', 'Space', 'Name', 'Tenant', 'Description', 'Updated']
@@ -366,7 +522,7 @@ class VitalGraphDBAdminREPL:
         
         try:
             # Get users from database
-            users = asyncio.run(self.db_impl.list_users())
+            users = self._run_async(self.db_impl.list_users())
             
             # Add password status to each user for display
             for user in users:
@@ -486,7 +642,7 @@ class VitalGraphDBAdminREPL:
         
         try:
             # Get all spaces from database to validate the space_id
-            spaces = asyncio.run(self.db_impl.list_spaces())
+            spaces = self._run_async(self.db_impl.list_spaces())
             
             # Check if space_id exists (can be either ID or space name)
             valid_space = None
