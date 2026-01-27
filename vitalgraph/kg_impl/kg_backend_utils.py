@@ -19,6 +19,9 @@ from ai_haley_kg_domain.model.KGFrame import KGFrame
 # Model imports
 from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 
+# Graph retrieval utilities
+from .kg_graph_retrieval_utils import GraphObjectRetriever
+
 
 @dataclass
 class BackendOperationResult:
@@ -89,6 +92,8 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         """Initialize with the actual backend implementation."""
         self.backend = backend_impl
         self.logger = logging.getLogger(f"{__name__}.FusekiPostgreSQLBackendAdapter")
+        # Initialize centralized graph retrieval utility
+        self.retriever = GraphObjectRetriever(backend_impl)
     
     async def store_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> BackendOperationResult:
         """Store VitalSigns objects using Fuseki+PostgreSQL backend following working triples endpoint pattern."""
@@ -172,49 +177,24 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_object(self, space_id: str, graph_id: str, object_uri: str) -> BackendOperationResult:
         """Retrieve a single object by URI (generic method for any object type)."""
         try:
-            # Use graph_id directly as it should already be a proper URI
-            full_graph_uri = graph_id
+            self.logger.info(f"🔍 Retrieving object {object_uri} from graph {graph_id}")
             
-            # SPARQL CONSTRUCT query to get all triples for the object
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            construct_query = f"""
-            CONSTRUCT {{
-                <{object_uri}> ?p ?o .
-            }}
-            WHERE {{
-                GRAPH <{full_graph_uri}> {{
-                    <{object_uri}> ?p ?o .
-                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                }}
-            }}
-            """
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_object_triples(
+                space_id, graph_id, object_uri, include_materialized_edges=False
+            )
             
-            self.logger.info(f"🔍 Retrieving object {object_uri} from graph {full_graph_uri}")
-            
-            # Execute SPARQL CONSTRUCT query
-            result = await self.backend.query_quads(space_id, construct_query)
-            
-            if not result or (isinstance(result, list) and len(result) == 0):
+            if not triples:
                 return BackendOperationResult(success=True, message="Object not found", objects=[])
             
-            # Convert result to VitalSigns objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vs = VitalSigns()
+            # Convert triples to VitalSigns objects
+            objects = await self._triples_to_vitalsigns(triples)
             
-            # The result should be RDF triples, convert to JSON-LD then to VitalSigns
-            try:
-                # For now, return empty as the conversion is complex
-                # The actual implementation would need proper RDF to JSON-LD conversion
-                return BackendOperationResult(
-                    success=True,
-                    message=f"Object {object_uri} found but conversion not implemented",
-                    objects=[]
-                )
-            except Exception as e:
-                self.logger.warning(f"Failed to convert object: {e}")
-                return BackendOperationResult(success=True, message="Object found but conversion failed", objects=[])
+            return BackendOperationResult(
+                success=True,
+                message=f"Object {object_uri} retrieved successfully",
+                objects=objects
+            )
             
         except Exception as e:
             self.logger.error(f"Error retrieving object {object_uri}: {e}")
@@ -228,37 +208,25 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity(self, space_id: str, graph_id: str, entity_uri: str) -> BackendOperationResult:
         """Retrieve a single entity by URI."""
         try:
-            # Use graph_id directly as it should already be a proper URI
-            full_graph_uri = graph_id
-            
-            # SPARQL query to get entity data
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            select_query = f"""
-            SELECT ?p ?o WHERE {{
-                GRAPH <{full_graph_uri}> {{
-                    <{entity_uri}> ?p ?o .
-                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                }}
-            }}
-            """
-            
-            # Log the retrieval query
-            self.logger.info(f"🔍 QUERYING FUSEKI - Space: {space_id}, Graph: {full_graph_uri}")
+            self.logger.info(f"🔍 QUERYING FUSEKI - Space: {space_id}, Graph: {graph_id}")
             self.logger.info(f"🔍 ENTITY URI: {entity_uri}")
-            self.logger.info(f"🔍 SPARQL QUERY: {select_query}")
             
-            # Execute SPARQL query on Fuseki
-            result = await self.backend.query_quads(space_id, select_query)
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_object_triples(
+                space_id, graph_id, entity_uri, include_materialized_edges=False
+            )
             
-            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(result) if result else 0}")
+            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(triples)}")
+            self.logger.info(f"🔍 First 3 triples: {triples[:3] if triples else 'NONE'}")
             
-            if not result:
+            if not triples:
+                self.logger.warning(f"🔍 No triples returned for entity {entity_uri}")
                 return BackendOperationResult(success=True, message="Entity not found", objects=[])
             
-            # Convert SPARQL results back to VitalSigns objects
-            objects = await self._sparql_results_to_objects(result, entity_uri)
+            # Convert triples to VitalSigns objects
+            self.logger.info(f"🔍 About to convert {len(triples)} triples to VitalSigns")
+            objects = await self._triples_to_vitalsigns(triples)
+            self.logger.info(f"🔍 Conversion complete: got {len(objects)} objects")
             
             return BackendOperationResult(
                 success=True,
@@ -278,56 +246,31 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph(self, space_id: str, graph_id: str, entity_uri: str) -> BackendOperationResult:
         """Retrieve complete entity graph including related objects."""
         try:
-            # Use graph_id directly as graph URI (matching original system)
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            sparql_query = f"""
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    {{
-                        # Get the entity itself
-                        <{entity_uri}> ?p ?o .
-                        BIND(<{entity_uri}> AS ?s)
-                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                    }}
-                    UNION
-                    {{
-                        # Get objects with same entity-level grouping URI (hasKGGraphURI)
-                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
-                        ?s ?p ?o .
-                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                    }}
-                }}
-            }}
-            """
-            
-            self.logger.info(f"🔍 ENTITY GRAPH SPARQL QUERY: {sparql_query}")
-            self.logger.info(f"🔍 Looking for objects with kGGraphURI: {entity_uri}")
+            self.logger.info(f"🔍 Looking for entity graph with URI: {entity_uri}")
             self.logger.info(f"🔍 In graph: {graph_id}")
             
-            result = await self.backend.query_quads(space_id, sparql_query)
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_entity_graph(
+                space_id, graph_id, entity_uri, include_materialized_edges=False
+            )
             
-            self.logger.info(f"🔍 SPARQL query returned {len(result) if result else 0} triples")
-            if result and len(result) > 0:
+            self.logger.info(f"🔍 Retrieved {len(triples)} triples")
+            if triples and len(triples) > 0:
                 # Show first few triples for debugging
-                for i, triple in enumerate(result[:5]):
+                for i, triple in enumerate(triples[:5]):
                     self.logger.info(f"🔍 Triple {i+1}: {triple}")
-                if len(result) > 5:
-                    self.logger.info(f"🔍 ... and {len(result) - 5} more triples")
+                if len(triples) > 5:
+                    self.logger.info(f"🔍 ... and {len(triples) - 5} more triples")
             
-            # query_quads returns a list of tuples, not SPARQL JSON format
-            if not result or len(result) == 0:
+            if not triples or len(triples) == 0:
                 return BackendOperationResult(
                     success=False,
                     message=f"Entity graph not found: {entity_uri}",
                     objects=[]
                 )
             
-            # Convert SPARQL results back to VitalSigns objects
-            objects = await self._sparql_results_to_objects(result)
+            # Convert triples to VitalSigns objects
+            objects = await self._triples_to_vitalsigns(triples)
             
             return BackendOperationResult(
                 success=True,
@@ -347,36 +290,20 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_by_reference_id(self, space_id: str, graph_id: str, reference_id: str) -> BackendOperationResult:
         """Retrieve a single entity by reference ID."""
         try:
-            # SPARQL query to find entity by reference ID and get its data
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            sparql_query = f"""
-            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-            PREFIX aimp: <http://vital.ai/ontology/vital-aimp#>
-            
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?s a haley:KGEntity .
-                    ?s aimp:hasReferenceIdentifier "{reference_id}" .
-                    ?s ?p ?o .
-                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                }}
-            }}
-            """
-            
             self.logger.info(f"🔍 QUERYING ENTITY BY REFERENCE ID: {reference_id}")
-            self.logger.info(f"🔍 SPARQL QUERY: {sparql_query}")
             
-            result = await self.backend.query_quads(space_id, sparql_query)
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_entity_by_reference_id(
+                space_id, graph_id, reference_id, include_materialized_edges=False
+            )
             
-            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(result) if result else 0}")
+            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(triples) if triples else 0}")
             
-            if not result:
+            if not triples:
                 return BackendOperationResult(success=True, message=f"Entity not found with reference ID: {reference_id}", objects=[])
             
-            # Convert SPARQL results back to VitalSigns objects
-            objects = await self._sparql_results_to_objects(result)
+            # Convert triples to VitalSigns objects
+            objects = await self._triples_to_vitalsigns(triples)
             
             return BackendOperationResult(
                 success=True,
@@ -396,65 +323,31 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph_by_reference_id(self, space_id: str, graph_id: str, reference_id: str) -> BackendOperationResult:
         """Retrieve complete entity graph by reference ID."""
         try:
-            # SPARQL query to get complete entity graph by reference ID
-            # This matches the pattern of get_entity_graph but uses reference ID to identify the entity
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            sparql_query = f"""
-            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-            PREFIX aimp: <http://vital.ai/ontology/vital-aimp#>
-            
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    {{
-                        # Get the entity itself by reference ID
-                        ?entity a haley:KGEntity .
-                        ?entity aimp:hasReferenceIdentifier "{reference_id}" .
-                        ?entity ?p ?o .
-                        BIND(?entity AS ?s)
-                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                    }}
-                    UNION
-                    {{
-                        # Get objects with same entity-level grouping URI (hasKGGraphURI)
-                        # First find the entity URI by reference ID
-                        ?entity a haley:KGEntity .
-                        ?entity aimp:hasReferenceIdentifier "{reference_id}" .
-                        # Then get all objects grouped with that entity
-                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
-                        ?s ?p ?o .
-                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                    }}
-                }}
-            }}
-            """
-            
-            self.logger.info(f"🔍 ENTITY GRAPH BY REFERENCE ID SPARQL QUERY: {sparql_query}")
             self.logger.info(f"🔍 Looking for entity graph with reference ID: {reference_id}")
             self.logger.info(f"🔍 In graph: {graph_id}")
             
-            result = await self.backend.query_quads(space_id, sparql_query)
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_entity_graph_by_reference_id(
+                space_id, graph_id, reference_id, include_materialized_edges=False
+            )
             
-            self.logger.info(f"🔍 SPARQL query returned {len(result) if result else 0} triples")
-            if result and len(result) > 0:
+            self.logger.info(f"🔍 Retrieved {len(triples) if triples else 0} triples")
+            if triples and len(triples) > 0:
                 # Show first few triples for debugging
-                for i, triple in enumerate(result[:5]):
+                for i, triple in enumerate(triples[:5]):
                     self.logger.info(f"🔍 Triple {i+1}: {triple}")
-                if len(result) > 5:
-                    self.logger.info(f"🔍 ... and {len(result) - 5} more triples")
+                if len(triples) > 5:
+                    self.logger.info(f"🔍 ... and {len(triples) - 5} more triples")
             
-            if not result or len(result) == 0:
+            if not triples or len(triples) == 0:
                 return BackendOperationResult(
                     success=False,
                     message=f"Entity graph not found with reference ID: {reference_id}",
                     objects=[]
                 )
             
-            # Convert SPARQL results back to VitalSigns objects
-            objects = await self._sparql_results_to_objects(result)
+            # Convert triples to VitalSigns objects
+            objects = await self._triples_to_vitalsigns(triples)
             
             return BackendOperationResult(
                 success=True,
@@ -549,6 +442,42 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             import traceback
             self.logger.error(f"Error converting SPARQL results to objects: {e}")
             self.logger.error("FULL TRACEBACK WITH LINE NUMBERS:")
+            self.logger.error(traceback.format_exc())
+            return []
+    
+    async def _triples_to_vitalsigns(self, triples: List[tuple]) -> List[GraphObject]:
+        """
+        Convert RDFLib triples to VitalSigns objects.
+        
+        Args:
+            triples: List of (subject, predicate, object) tuples with RDFLib URIRef/Literal objects
+            
+        Returns:
+            List of VitalSigns GraphObject instances
+        """
+        try:
+            from vital_ai_vitalsigns.vitalsigns import VitalSigns
+            
+            if not triples:
+                return []
+            
+            # Log first few triples to see their format
+            self.logger.info(f"🔍 Converting {len(triples)} triples to VitalSigns")
+            for i, triple in enumerate(triples[:3]):
+                self.logger.info(f"  Triple {i+1}: s={type(triple[0]).__name__}:{triple[0]}, p={type(triple[1]).__name__}:{triple[1]}, o={type(triple[2]).__name__}:{triple[2]}")
+            
+            vs = VitalSigns()
+            
+            # Use VitalSigns from_triples_list to convert all triples at once
+            objects = vs.from_triples_list(triples)
+            
+            self.logger.info(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
+            return objects
+            
+        except Exception as e:
+            import traceback
+            self.logger.error(f"Error converting triples to VitalSigns objects: {e}")
+            self.logger.error("FULL TRACEBACK:")
             self.logger.error(traceback.format_exc())
             return []
     

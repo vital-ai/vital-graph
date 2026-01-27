@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGType import KGType
 from .kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from .kg_graph_retrieval_utils import GraphObjectRetriever
 
 
 class KGTypesReadProcessor:
@@ -17,6 +18,7 @@ class KGTypesReadProcessor:
     
     def __init__(self):
         self.logger = logging.getLogger(f"{__name__}.KGTypesReadProcessor")
+        self.retriever = None  # Will be initialized when backend is available
     
     async def get_kgtype_by_uri(self, backend, space_id: str, graph_id: str, kgtype_uri: str) -> Optional[GraphObject]:
         """
@@ -34,56 +36,18 @@ class KGTypesReadProcessor:
         try:
             self.logger.info(f"🔍 Getting KGType by URI: {kgtype_uri}")
             
-            # SPARQL query to get all properties of the KGType
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            query = f"""
-            SELECT ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{kgtype_uri}> ?p ?o .
-                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                }}
-            }}
-            """
+            # Initialize retriever if not already done
+            if self.retriever is None:
+                self.retriever = GraphObjectRetriever(backend)
             
-            result = await backend.execute_sparql_query(space_id, query)
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples = await self.retriever.get_object_triples(
+                space_id, graph_id, kgtype_uri, include_materialized_edges=False
+            )
             
-            # Handle dictionary response format from backend
-            if isinstance(result, dict):
-                result = result.get('results', {}).get('bindings', [])
-            
-            if not result or len(result) == 0:
+            if not triples:
                 self.logger.info(f"KGType not found: {kgtype_uri}")
                 return None
-            
-            # Convert SPARQL results to RDFLib triples
-            from rdflib import URIRef, Literal, BNode
-            
-            triples = []
-            subject = URIRef(kgtype_uri)
-            
-            for binding in result:
-                # Extract predicate and object from SPARQL binding
-                predicate_data = binding.get('p', {})
-                object_data = binding.get('o', {})
-                
-                # Convert to RDFLib terms
-                if predicate_data.get('type') == 'uri':
-                    predicate = URIRef(predicate_data.get('value', ''))
-                else:
-                    continue
-                
-                if object_data.get('type') == 'uri':
-                    obj = URIRef(object_data.get('value', ''))
-                elif object_data.get('type') == 'literal':
-                    obj = Literal(object_data.get('value', ''))
-                elif object_data.get('type') == 'bnode':
-                    obj = BNode(object_data.get('value', ''))
-                else:
-                    continue
-                
-                triples.append((subject, predicate, obj))
             
             # Convert triples to VitalSigns GraphObject
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -129,65 +93,19 @@ class KGTypesReadProcessor:
         try:
             self.logger.info(f"🔍 Getting {len(kgtype_uris)} KGTypes by URIs")
             
-            # Build VALUES clause for multiple URIs
-            uri_values = " ".join([f"<{uri}>" for uri in kgtype_uris])
+            # Initialize retriever if not already done
+            if self.retriever is None:
+                self.retriever = GraphObjectRetriever(backend)
             
-            # SPARQL query to get all properties of the KGTypes
-            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
-            query = f"""
-            SELECT ?s ?p ?o WHERE {{
-                VALUES ?s {{ {uri_values} }}
-                GRAPH <{graph_id}> {{
-                    ?s ?p ?o .
-                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
-                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
-                }}
-            }}
-            ORDER BY ?s
-            """
+            # Use centralized retriever (filters OUT materialized edges by default)
+            grouped_triples = await self.retriever.get_objects_by_uris(
+                space_id, graph_id, kgtype_uris, include_materialized_edges=False
+            )
             
-            result = await backend.execute_sparql_query(space_id, query)
-            
-            # Handle dictionary response format from backend
-            if isinstance(result, dict):
-                result = result.get('results', {}).get('bindings', [])
-            elif not result:
-                result = []
-            
-            # Convert SPARQL results to RDFLib triples
-            from rdflib import Graph, URIRef, Literal, BNode
-            
+            # Flatten grouped triples into a single list
             triples = []
-            for binding in result:
-                # Extract subject, predicate, object from SPARQL binding
-                subject_data = binding.get('s', {})
-                predicate_data = binding.get('p', {})
-                object_data = binding.get('o', {})
-                
-                # Convert to RDFLib terms
-                if subject_data.get('type') == 'uri':
-                    subject = URIRef(subject_data.get('value', ''))
-                elif subject_data.get('type') == 'bnode':
-                    subject = BNode(subject_data.get('value', ''))
-                else:
-                    continue
-                
-                if predicate_data.get('type') == 'uri':
-                    predicate = URIRef(predicate_data.get('value', ''))
-                else:
-                    continue
-                
-                if object_data.get('type') == 'uri':
-                    obj = URIRef(object_data.get('value', ''))
-                elif object_data.get('type') == 'literal':
-                    obj = Literal(object_data.get('value', ''))
-                elif object_data.get('type') == 'bnode':
-                    obj = BNode(object_data.get('value', ''))
-                else:
-                    continue
-                
-                triples.append((subject, predicate, obj))
+            for uri, uri_triples in grouped_triples.items():
+                triples.extend(uri_triples)
             
             # Handle empty triples list
             if not triples:
@@ -207,7 +125,7 @@ class KGTypesReadProcessor:
     
     async def list_kgtypes(self, backend, space_id: str, graph_id: str, 
                           page_size: int = 100, offset: int = 0, 
-                          search: Optional[str] = None) -> Tuple[List[Tuple], int]:
+                          search: Optional[str] = None) -> Tuple[List[tuple], int]:
         """
         List KGTypes with pagination and optional search.
         
@@ -225,7 +143,39 @@ class KGTypesReadProcessor:
         try:
             self.logger.info(f"🔍 Listing KGTypes (page_size: {page_size}, offset: {offset}, search: {search})")
             
-            # SPARQL query to get KGTypes with pagination and search
+            # Initialize retriever if not already done
+            if self.retriever is None:
+                self.retriever = GraphObjectRetriever(backend)
+            
+            # Define KGType type URIs
+            kgtype_uris = [
+                "http://vital.ai/ontology/haley-ai-kg#KGType",
+                "http://vital.ai/ontology/haley-ai-kg#KGEntityType",
+                "http://vital.ai/ontology/haley-ai-kg#KGFrameType",
+                "http://vital.ai/ontology/haley-ai-kg#KGRelationType",
+                "http://vital.ai/ontology/haley-ai-kg#KGSlotType"
+            ]
+            
+            # Use centralized retriever (filters OUT materialized edges by default)
+            triples, total_count = await self.retriever.list_objects(
+                space_id, graph_id, kgtype_uris,
+                property_filters=None,
+                include_materialized_edges=False,
+                page_size=page_size,
+                offset=offset,
+                search=search,
+                include_count=True
+            )
+            
+            self.logger.info(f"✅ Listed {len(triples)} KGType RDFLib triples (total: {total_count})")
+            return triples, total_count
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to list KGTypes: {e}")
+            raise
+
+
+# Old code below - to be removed
             if search:
                 # Use a subquery to first filter KGTypes that match the search criteria
                 query = f"""
