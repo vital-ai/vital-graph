@@ -526,6 +526,9 @@ class KGSparqlQueryProcessor:
                             {self.utils.build_graph_clause(graph_id)} {{
                                 ?subject ?predicate ?object .
                                 FILTER(?subject IN ({subject_uris_filter}))
+                                FILTER(?predicate != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                                       ?predicate != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                                       ?predicate != <http://vital.ai/vitalgraph/direct#hasSlot>)
                             }}
                         }}
                         """
@@ -614,6 +617,9 @@ class KGSparqlQueryProcessor:
                     {self.utils.build_graph_clause(graph_id)} {{
                         ?s ?p ?o .
                         FILTER(?s IN ({uri_list}))
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
                 ORDER BY ?s ?p ?o

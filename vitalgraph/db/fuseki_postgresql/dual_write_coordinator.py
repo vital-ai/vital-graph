@@ -12,6 +12,7 @@ from datetime import datetime
 from .fuseki_dataset_manager import FusekiDatasetManager
 from .postgresql_db_impl import FusekiPostgreSQLDbImpl
 from .sparql_update_parser import SPARQLUpdateParser
+from .edge_materialization import EdgeMaterializationManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,9 @@ class DualWriteCoordinator:
         self.postgresql_impl = postgresql_impl
         self.sparql_parser = SPARQLUpdateParser(fuseki_manager)
         self.graph_manager = None  # Lazy-loaded graph manager
+        self.materialization_manager = EdgeMaterializationManager(fuseki_manager)
         
-        logger.info("DualWriteCoordinator initialized")
+        logger.info("DualWriteCoordinator initialized with edge materialization support")
     
     async def execute_sparql_update(self, space_id: str, sparql_update: str, original_quads: List[tuple] = None) -> bool:
         """
@@ -106,22 +108,38 @@ class DualWriteCoordinator:
             logger.error(f"❌ This indicates malformed SPARQL - check that literals are properly quoted")
             return False
         
+        # Fail if DELETE WHERE syntax is used (not supported)
+        if operation_type == 'delete_where':
+            logger.error(f"❌ Cannot execute SPARQL DELETE: DELETE WHERE syntax is not supported")
+            logger.error(f"❌ Use DELETE {{ ... }} WHERE {{ ... }} instead")
+            return False
+        
         try:
             # Step 1: Begin PostgreSQL transaction and apply primary storage changes FIRST
             # PostgreSQL is the authoritative permanent store
             pg_transaction = await self.postgresql_impl.begin_transaction()
             
             # Apply PostgreSQL storage changes within transaction (primary store)
-            if operation_type in ['delete', 'delete_insert', 'delete_data', 'insert_delete_pattern']:
-                # Remove deleted triples from primary store (resolved to concrete triples by parser)
-                logger.info(f"🗑️ Processing {len(parsed_operation['delete_triples'])} DELETE triples for PostgreSQL")
-                delete_success = await self._store_delete_triples(
-                    space_id, parsed_operation['delete_triples'], pg_transaction
-                )
-                logger.info(f"🎯 DELETE operation result: {delete_success}")
-                if not delete_success:
-                    await self.postgresql_impl.rollback_transaction(pg_transaction)
-                    return False
+            if operation_type in ['delete', 'delete_insert', 'delete_data']:
+                # Remove deleted triples from PostgreSQL
+                # Filter out materialized triples before PostgreSQL deletion
+                delete_triples = parsed_operation['delete_triples']
+                filtered_delete_triples, filtered_count = self.materialization_manager.filter_materialized_triples(delete_triples)
+                if filtered_count > 0:
+                    logger.info(f"Filtered {filtered_count} materialized triples from DELETE operation (only deleted from Fuseki)")
+                
+                logger.info(f"🗑️ Processing {len(filtered_delete_triples)} DELETE triples for PostgreSQL (filtered from {len(delete_triples)} total)")
+                
+                if filtered_delete_triples:
+                    delete_success = await self._store_delete_triples(
+                        space_id, filtered_delete_triples, pg_transaction
+                    )
+                    logger.info(f"🎯 DELETE operation result: {delete_success}")
+                    if not delete_success:
+                        await self.postgresql_impl.rollback_transaction(pg_transaction)
+                        return False
+                else:
+                    logger.debug("All DELETE triples were materialized - skipping PostgreSQL deletion")
             
             # Pattern-based operations are now resolved to concrete triples by the SPARQL parser
             # so they will be handled by the regular delete/insert logic above
@@ -173,6 +191,14 @@ class DualWriteCoordinator:
                 logger.warning("Fuseki dataset update failed - data stored in PostgreSQL but Fuseki may be inconsistent")
                 # Don't rollback PostgreSQL - it's the authoritative store
             
+            # Step 4: Materialize direct edge properties in Fuseki (after successful update)
+            if fuseki_success:
+                await self._materialize_edge_properties(
+                    space_id,
+                    parsed_operation.get('insert_triples', []),
+                    parsed_operation.get('delete_triples', [])
+                )
+            
             logger.debug(f"SPARQL UPDATE dual-write successful for space {space_id}")
             return True
             
@@ -185,7 +211,8 @@ class DualWriteCoordinator:
             
             return False
     
-    async def add_quads(self, space_id: str, quads: List[tuple]) -> bool:
+    async def add_quads(self, space_id: str, quads: List[tuple], 
+                       transaction: 'FusekiPostgreSQLTransaction' = None) -> bool:
         """
         Add RDF quads to both Fuseki dataset and PostgreSQL primary data tables.
         Automatically registers graphs in the graph table before data operations.
@@ -193,6 +220,8 @@ class DualWriteCoordinator:
         Args:
             space_id: Space identifier
             quads: List of RDF quads to add
+            transaction: Optional transaction object. If provided, caller manages transaction.
+                        If None, this method creates and manages its own transaction.
             
         Returns:
             True if both writes succeeded, False otherwise
@@ -210,40 +239,68 @@ class DualWriteCoordinator:
             for graph_uri in graph_uris:
                 await self._ensure_graph_registered(space_id, graph_uri)
         
-        # Start transaction for PostgreSQL operations
-        pg_transaction = None
+        # Determine transaction ownership
+        if transaction:
+            # Caller manages transaction
+            pg_transaction = transaction
+            should_commit = False
+            logger.info(f"🔍 Using caller-provided transaction")
+        else:
+            # We manage transaction
+            pg_transaction = None
+            should_commit = True
+        
         fuseki_success = False
         
         try:
-            # Step 1: Begin PostgreSQL transaction and write to primary data tables FIRST
-            logger.info(f"🔍 Starting PostgreSQL transaction...")
-            pg_transaction = await self.postgresql_impl.begin_transaction()
-            logger.info(f"🔍 PostgreSQL transaction started: {pg_transaction}")
+            # Step 1: Begin PostgreSQL transaction if we're managing it
+            if should_commit:
+                logger.info(f"🔍 Starting PostgreSQL transaction...")
+                pg_transaction = await self.postgresql_impl.begin_transaction()
+                logger.info(f"🔍 PostgreSQL transaction started: {pg_transaction}")
             
-            # Write to PostgreSQL primary data tables (authoritative storage, done first)
-            logger.info(f"🔍 Writing to PostgreSQL primary data tables...")
-            pg_success = await self._store_quads_to_postgresql(space_id, quads, pg_transaction)
+            # Filter out materialized triples before PostgreSQL write
+            filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} materialized triples from add_quads (will only exist in Fuseki)")
+            
+            # If all quads were materialized, skip PostgreSQL but continue to Fuseki
+            if not filtered_quads:
+                logger.debug("All quads were materialized - skipping PostgreSQL write, will write to Fuseki only")
+                pg_success = True  # Consider this successful
+            else:
+                # Write to PostgreSQL primary data tables (authoritative storage, done first)
+                logger.info(f"🔍 Writing {len(filtered_quads)} quads to PostgreSQL primary data tables...")
+                pg_success = await self._store_quads_to_postgresql(space_id, filtered_quads, pg_transaction)
             
             if not pg_success:
                 logger.error(f"PostgreSQL primary data write failed for space {space_id}")
-                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                if should_commit:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
                 return False
             
-            # Step 2: Commit PostgreSQL transaction BEFORE Fuseki operation
-            commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+            # Step 2: Commit PostgreSQL transaction if we're managing it
+            if should_commit:
+                commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+                
+                if not commit_success:
+                    logger.error(f"PostgreSQL commit failed for space {space_id}")
+                    return False
             
-            if not commit_success:
-                logger.error(f"PostgreSQL commit failed for space {space_id}")
-                return False
+            # Step 3: Write to Fuseki dataset AFTER PostgreSQL success (only if we committed)
+            # If caller manages transaction, they'll sync Fuseki after their commit
+            if should_commit:
+                fuseki_success = await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
             
-            # Step 3: Write to Fuseki dataset (primary) AFTER PostgreSQL success
-            fuseki_success = await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
-            
-            if not fuseki_success:
+            if should_commit and not fuseki_success:
                 logger.error(f"Fuseki write failed for space {space_id}")
                 # Rollback PostgreSQL by removing the quads we just added
-                await self._rollback_postgresql_quads(space_id, quads)
+                await self._rollback_postgresql_quads(space_id, filtered_quads)
                 return False
+            
+            # Step 4: Materialize direct edge properties in Fuseki (after successful write)
+            if should_commit and fuseki_success:
+                await self._materialize_edge_properties(space_id, quads, [])
             
             logger.debug(f"Dual-write successful: {len(quads)} quads added to space {space_id}")
             return True
@@ -251,23 +308,26 @@ class DualWriteCoordinator:
         except Exception as e:
             logger.error(f"Error in dual-write operation for space {space_id}: {e}")
             
-            # Rollback PostgreSQL if transaction exists
-            if pg_transaction:
+            # Rollback PostgreSQL if we're managing the transaction
+            if should_commit and pg_transaction:
                 await self.postgresql_impl.rollback_transaction(pg_transaction)
             
-            # Rollback Fuseki if it succeeded
-            if fuseki_success:
+            # Rollback Fuseki if it succeeded and we committed
+            if should_commit and fuseki_success:
                 await self._rollback_fuseki_quads(space_id, quads)
             
             return False
     
-    async def remove_quads(self, space_id: str, quads: List[tuple]) -> bool:
+    async def remove_quads(self, space_id: str, quads: List[tuple],
+                          transaction: 'FusekiPostgreSQLTransaction' = None) -> bool:
         """
         Remove RDF quads from both Fuseki dataset and PostgreSQL primary data tables.
         
         Args:
             space_id: Space identifier
             quads: List of RDF quads to remove
+            transaction: Optional transaction object. If provided, caller manages transaction.
+                        If None, this method creates and manages its own transaction.
             
         Returns:
             True if both operations succeeded, False otherwise
@@ -277,41 +337,68 @@ class DualWriteCoordinator:
         
         logger.debug(f"Dual-write: Removing {len(quads)} quads from space {space_id}")
         
-        # Start transaction for PostgreSQL operations
-        pg_transaction = None
+        # Determine transaction ownership
+        if transaction:
+            # Caller manages transaction
+            pg_transaction = transaction
+            should_commit = False
+            logger.info(f"Using caller-provided transaction for remove_quads")
+        else:
+            # We manage transaction
+            pg_transaction = None
+            should_commit = True
+        
         fuseki_success = False
         
         try:
-            # Begin PostgreSQL transaction
-            pg_transaction = await self.postgresql_impl.begin_transaction()
+            # Begin PostgreSQL transaction if we're managing it
+            if should_commit:
+                pg_transaction = await self.postgresql_impl.begin_transaction()
             
             # Step 1: Remove from Fuseki dataset (primary)
             fuseki_success = await self._remove_quads_from_fuseki(space_id, quads)
             
             if not fuseki_success:
                 logger.error(f"Fuseki quad removal failed for space {space_id}")
-                await self.postgresql_impl.rollback_transaction(pg_transaction)
+                if should_commit:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
                 return False
             
             # Step 2: Remove from PostgreSQL primary data tables
-            pg_success = await self._remove_quads_from_postgresql(space_id, quads, pg_transaction)
+            # Filter out materialized triples before PostgreSQL deletion
+            filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} materialized triples from remove_quads (only deleted from Fuseki)")
+            
+            # If all quads were materialized, skip PostgreSQL but deletion from Fuseki already succeeded
+            if not filtered_quads:
+                logger.debug("All quads were materialized - skipping PostgreSQL deletion")
+                pg_success = True  # Consider this successful
+            else:
+                pg_success = await self._remove_quads_from_postgresql(space_id, filtered_quads, pg_transaction)
             
             if not pg_success:
                 logger.error(f"PostgreSQL primary data removal failed for space {space_id}")
-                # Rollback PostgreSQL transaction
-                await self.postgresql_impl.rollback_transaction(pg_transaction)
-                # TODO: Restore quads to Fuseki
-                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+                # Rollback PostgreSQL transaction if we're managing it
+                if should_commit:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
+                    # Restore quads to Fuseki
+                    await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
                 return False
             
-            # Step 3: Commit PostgreSQL transaction
-            commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+            # Step 3: Commit PostgreSQL transaction if we're managing it
+            if should_commit:
+                commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+                
+                if not commit_success:
+                    logger.error(f"PostgreSQL commit failed for space {space_id}")
+                    # Restore quads to Fuseki
+                    await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+                    return False
             
-            if not commit_success:
-                logger.error(f"PostgreSQL commit failed for space {space_id}")
-                # TODO: Restore quads to Fuseki
-                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
-                return False
+            # Step 4: Remove materialized direct edge properties from Fuseki (after successful removal)
+            if should_commit:
+                await self._materialize_edge_properties(space_id, [], quads)
             
             logger.debug(f"Dual-write removal successful: {len(quads)} quads removed from space {space_id}")
             return True
@@ -319,12 +406,12 @@ class DualWriteCoordinator:
         except Exception as e:
             logger.error(f"Error in dual-write removal for space {space_id}: {e}")
             
-            # Rollback PostgreSQL if transaction exists
-            if pg_transaction:
+            # Rollback PostgreSQL if we're managing the transaction
+            if should_commit and pg_transaction:
                 await self.postgresql_impl.rollback_transaction(pg_transaction)
             
-            # Restore Fuseki if removal succeeded
-            if fuseki_success:
+            # Restore Fuseki if removal succeeded and we committed
+            if should_commit and fuseki_success:
                 await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
             
             return False
@@ -476,7 +563,7 @@ class DualWriteCoordinator:
             
             # Pass RDFLib objects directly - PostgreSQL will extract metadata
             # This preserves datatype and language information from Literal objects
-            success = await self.postgresql_impl.store_quads_to_postgresql(space_id, quads)
+            success = await self.postgresql_impl.store_quads_to_postgresql(space_id, quads, transaction)
             
             if success:
                 logger.debug(f"Successfully stored {len(quads)} quads to PostgreSQL for space {space_id}")
@@ -518,13 +605,24 @@ class DualWriteCoordinator:
             # Use them directly as quads for PostgreSQL storage
             quads = triples
             
+            # Filter out materialized triples - they should NEVER go to PostgreSQL
+            filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} materialized triples from INSERT (will only exist in Fuseki)")
+            
+            # If all quads were materialized, skip PostgreSQL write (success)
+            if not filtered_quads:
+                logger.debug("All INSERT triples were materialized - skipping PostgreSQL write")
+                return True
+            
             # Use PostgreSQL implementation to store quads within the transaction (primary store)
-            success = await self.postgresql_impl.store_quads_within_transaction(
-                space_id, quads, transaction
+            # Using unified method with batch optimization
+            success = await self.postgresql_impl.store_quads_to_postgresql(
+                space_id, filtered_quads, transaction
             )
             
             if success:
-                logger.debug(f"Successfully stored {len(triples)} INSERT triples for space {space_id}")
+                logger.debug(f"Successfully stored {len(filtered_quads)} INSERT triples for space {space_id}")
             else:
                 logger.error(f"Failed to store INSERT triples for space {space_id}")
             
@@ -550,12 +648,12 @@ class DualWriteCoordinator:
             #     logger.info(f"🔍 DELETE quad: {quad}")
             
             # Use PostgreSQL implementation to remove quads within the transaction
-            # Using batch version for improved performance
-            logger.info(f"🔍 Calling remove_quads_within_transaction_batch with {len(quads)} quads")
-            success = await self.postgresql_impl.remove_quads_within_transaction_batch(
+            # Using unified method with batch optimization
+            logger.info(f"🔍 Calling remove_quads_from_postgresql with {len(quads)} quads")
+            success = await self.postgresql_impl.remove_quads_from_postgresql(
                 space_id, quads, transaction
             )
-            logger.info(f"🎯 PostgreSQL remove_quads_within_transaction_batch result: {success}")
+            logger.info(f"🎯 PostgreSQL remove_quads_from_postgresql result: {success}")
             
             if success:
                 logger.info(f"✅ Successfully removed {len(triples)} DELETE triples from PostgreSQL for space {space_id}")
@@ -680,7 +778,7 @@ class DualWriteCoordinator:
         try:
             # Use PostgreSQL implementation to remove quads
             logger.debug(f"Removing {len(quads)} quads from PostgreSQL primary data for space {space_id}")
-            success = await self.postgresql_impl.remove_quads_from_postgresql(space_id, quads)
+            success = await self.postgresql_impl.remove_quads_from_postgresql(space_id, quads, transaction)
             return success
             
         except Exception as e:
@@ -815,6 +913,36 @@ class DualWriteCoordinator:
             logger.warning(f"Graph registration error for {graph_uri}: {e}")
             # Don't fail the operation - graph registration is metadata management
             return False
+    
+    async def _materialize_edge_properties(
+        self, 
+        space_id: str, 
+        insert_quads: List[tuple], 
+        delete_quads: List[tuple]
+    ) -> bool:
+        """
+        Materialize direct edge properties in Fuseki.
+        
+        Detects edge objects in quad operations and generates corresponding
+        direct property triples (vg-direct:*) that bypass edge objects for
+        fast hierarchical queries.
+        
+        Args:
+            space_id: Target space
+            insert_quads: Quads being inserted
+            delete_quads: Quads being deleted
+            
+        Returns:
+            True if materialization succeeded or not needed
+        """
+        try:
+            return await self.materialization_manager.materialize_from_quads(
+                space_id, insert_quads, delete_quads
+            )
+        except Exception as e:
+            logger.warning(f"Edge materialization failed: {e}")
+            # Don't fail the operation - materialization is optimization
+            return True
     
     def _format_sparql_term(self, term: Any) -> Optional[str]:
         """

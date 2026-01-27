@@ -171,6 +171,7 @@ class KGTypesDeleteProcessor:
             self.logger.info(f"🔍 Building delete quads for KGType: {kgtype_uri}")
             
             # Query to get all triples for this KGType
+            # Note: Include ALL triples (including materialized) for deletion
             delete_query = f"""
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{

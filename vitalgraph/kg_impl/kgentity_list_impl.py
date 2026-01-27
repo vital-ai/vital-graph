@@ -314,6 +314,9 @@ class KGEntityListProcessor:
         query_parts.extend(subquery_parts)
         query_parts.extend([
             "    ?s ?p ?o .",
+            "    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
+            "           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
+            "           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "  }",
             "}",
             "ORDER BY ?s ?p"
@@ -368,11 +371,17 @@ class KGEntityListProcessor:
             "    {",
             "      ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .",
             "      ?s ?p ?o .",
+            "      FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
+            "             ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
+            "             ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "    }",
             "    UNION",
             "    {",
             "      ?entity ?p ?o .",
             "      BIND(?entity AS ?s)",
+            "      FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&",
+            "             ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&",
+            "             ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)",
             "    }",
             "  }",
             "}",

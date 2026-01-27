@@ -2358,6 +2358,9 @@ class KGFramesEndpoint:
                     GRAPH <{graph_id}> {{
                         ?s ?p ?o .
                         FILTER(?s IN ({uri_list}))
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
                 ORDER BY ?s ?p ?o

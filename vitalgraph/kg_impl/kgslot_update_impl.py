@@ -340,6 +340,7 @@ class KGSlotUpdateProcessor:
         """
         try:
             # Use SPARQL query to get all triples for the object
+            # Note: Include ALL triples (including materialized) for deletion during updates
             sparql_query = f"""
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{

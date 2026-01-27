@@ -142,10 +142,14 @@ class KGRelationsReadProcessor:
             self.logger.info(f"Getting KG Relation: {relation_uri}")
             
             # Build SPARQL query
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             query = f"""
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
                     <{relation_uri}> ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """
@@ -225,6 +229,9 @@ class KGRelationsReadProcessor:
                     OFFSET {offset}
                 }}
                 ?s ?p ?o .
+                FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                       ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                       ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
             }}
         }}
         ORDER BY ?s

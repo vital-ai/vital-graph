@@ -274,365 +274,6 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 pass
             return False
     
-    async def get_connection_info(self) -> Dict[str, Any]:
-        """
-        Get connection information.
-        
-        Returns:
-            Dictionary containing connection details
-        """
-        return {
-            'host': self.config.get('host', 'localhost'),
-            'port': self.config.get('port', 5432),
-            'database': self.config.get('database', 'vitalgraph'),
-            'connected': self.connected
-        }
-    
-    async def store_quads_within_transaction(self, space_id: str, quads: List[tuple], transaction: Any) -> bool:
-        """
-        Store quads to PostgreSQL tables within an existing transaction.
-        PostgreSQL is the primary permanent store - failure here fails the entire operation.
-        
-        Args:
-            space_id: Space identifier
-            quads: List of quad dictionaries to store
-            transaction: Active transaction context
-            
-        Returns:
-            True if storage succeeded, False otherwise
-        """
-        try:
-            if not quads:
-                return True
-            
-            logger.debug(f"Storing {len(quads)} quads for space {space_id} within transaction")
-            
-            # PostgreSQL is the primary store - implement proper storage
-            conn = transaction.get_connection()
-            
-            # Store quads in PostgreSQL tables using proper UUID-based schema
-            for quad in quads:
-                # Tuple format: (subject, predicate, object, graph)
-                if len(quad) >= 4:
-                    subject, predicate, obj, graph = quad[:4]
-                else:
-                    subject, predicate, obj = quad[:3]
-                    graph = 'default'
-                
-                # Insert/get UUIDs for terms first with proper type detection
-                subject_uuid = await self._get_or_create_term_uuid(conn, space_id, str(subject), 'U')
-                predicate_uuid = await self._get_or_create_term_uuid(conn, space_id, str(predicate), 'U') 
-                
-                # Properly detect object type (URI vs Literal)
-                obj_str = str(obj)
-                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
-                if validate_rfc3986(obj_str, rule='URI'):
-                    obj_type = 'U'  # URI
-                elif obj_str.startswith('_:'):
-                    obj_type = 'B'  # Blank node
-                else:
-                    obj_type = 'L'  # Literal
-                
-                object_uuid = await self._get_or_create_term_uuid(conn, space_id, obj_str, obj_type)
-                context_uuid = await self._get_or_create_term_uuid(conn, space_id, str(graph), 'U')
-                
-                # Insert quad using UUIDs - this is the primary storage
-                insert_query = f"""
-                INSERT INTO {space_id}_rdf_quad (subject_uuid, predicate_uuid, object_uuid, context_uuid)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT DO NOTHING
-                """
-                
-                await conn.execute(insert_query, subject_uuid, predicate_uuid, object_uuid, context_uuid)
-            
-            logger.debug(f"Successfully stored {len(quads)} quads for space {space_id} in PostgreSQL")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error backing up quads within transaction for space {space_id}: {e}")
-            return False
-    
-    async def _get_or_create_term_uuid(self, conn, space_id: str, term_text: str, term_type: str) -> str:
-        """Get or create a term UUID in the term table."""
-        try:
-            import uuid
-            
-            # Try to get existing term first
-            select_query = f"""
-            SELECT term_uuid FROM {space_id}_term 
-            WHERE term_text = $1 AND term_type = $2
-            """
-            
-            result = await conn.fetchrow(select_query, term_text, term_type)
-            
-            if result:
-                return str(result['term_uuid'])
-            
-            # Create new term with all required columns
-            term_uuid = uuid.uuid4()
-            insert_query = f"""
-            INSERT INTO {space_id}_term (term_uuid, term_text, term_type, term_language, term_datatype)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING term_uuid
-            """
-            
-            # Set appropriate defaults for language and datatype
-            language = None
-            datatype = None
-            if term_type == 'L':  # Literal
-                datatype = 'http://www.w3.org/2001/XMLSchema#string'
-            
-            result = await conn.fetchrow(insert_query, term_uuid, term_text, term_type, language, datatype)
-            return str(result['term_uuid'])
-            
-        except Exception as e:
-            logger.error(f"Error getting/creating term UUID for '{term_text}' (type: {term_type}): {e}")
-            raise  # Re-raise to abort transaction properly
-    
-    async def remove_quads_within_transaction(self, space_id: str, quads: List[tuple], transaction: FusekiPostgreSQLTransaction) -> bool:
-        """
-        Remove quads from PostgreSQL tables within an existing transaction.
-        
-        Args:
-            space_id: Space identifier
-            quads: List of quad dictionaries to remove
-            transaction: Active transaction context
-            
-        Returns:
-            True if removal succeeded, False otherwise
-        """
-        try:
-            if not quads:
-                return True
-            
-            logger.debug(f"Removing {len(quads)} quads for space {space_id} within transaction")
-            
-            # PostgreSQL is the primary store - implement proper removal
-            conn = transaction.get_connection()
-            
-            # Remove quads from PostgreSQL tables using proper UUID-based schema
-            for quad in quads:
-                # Handle tuple format: (subject, predicate, object, graph)
-                if len(quad) >= 4:
-                    subject, predicate, obj, graph = quad[:4]
-                else:
-                    subject, predicate, obj = quad[:3]
-                    graph = 'default'
-                
-                # Get UUIDs for terms to match existing quads (don't create new ones for DELETE)
-                subject_uuid = await self._find_existing_term_uuid(conn, space_id, subject)
-                predicate_uuid = await self._find_existing_term_uuid(conn, space_id, predicate) 
-                object_uuid = await self._find_existing_term_uuid(conn, space_id, obj)
-                context_uuid = await self._find_existing_term_uuid(conn, space_id, graph)
-                
-                # All UUIDs must exist - if not found, this indicates a data integrity issue
-                if not all([subject_uuid, predicate_uuid, object_uuid, context_uuid]):
-                    logger.error(f"DELETE failed - missing UUIDs for quad: {subject} {predicate} {obj} (graph: {graph})")
-                    logger.error(f"Subject UUID: {subject_uuid}, Predicate UUID: {predicate_uuid}, Object UUID: {object_uuid}, Context UUID: {context_uuid}")
-                    return False
-                
-                # Delete quad using UUIDs
-                delete_query = f"""
-                DELETE FROM {space_id}_rdf_quad 
-                WHERE subject_uuid = $1 
-                  AND predicate_uuid = $2 
-                  AND object_uuid = $3 
-                  AND context_uuid = $4
-                  AND dataset = $5
-                """
-                result = await conn.execute(delete_query, subject_uuid, predicate_uuid, object_uuid, context_uuid, 'primary')
-                logger.debug(f"Deleted quad: {subject} {predicate} {obj} (graph: {graph}) - Result: {result}")
-            
-            logger.debug(f"Successfully removed {len(quads)} quads for space {space_id} from PostgreSQL")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error removing quads within transaction for space {space_id}: {e}")
-            return False
-    
-    async def remove_quads_within_transaction_batch(self, space_id: str, quads: List[tuple], transaction: FusekiPostgreSQLTransaction) -> bool:
-        """
-        Remove quads from PostgreSQL tables within an existing transaction using batch operations.
-        
-        This is an optimized version that:
-        - Performs single batch UUID lookup for all unique terms
-        - Uses executemany() for batch DELETE operations
-        - Significantly reduces database round trips
-        
-        Performance comparison (20 quads with 50 unique terms):
-        - One-by-one: 80 UUID lookups + 20 DELETEs = 100 operations
-        - Batch: 1 UUID lookup + 1 DELETE = 2 operations (~50x improvement)
-        
-        Args:
-            space_id: Space identifier
-            quads: List of quad tuples to remove (subject, predicate, object, graph)
-            transaction: Active transaction context
-            
-        Returns:
-            True if removal succeeded, False otherwise
-        """
-        try:
-            if not quads:
-                return True
-            
-            logger.info(f"Batch removing {len(quads)} quads for space {space_id} within transaction")
-            
-            # Step 1: Collect all unique terms from quads and unwrap literals
-            # Need to map: formatted_string -> unwrapped_value for UUID lookup
-            term_unwrap_map = {}  # Maps formatted string to unwrapped value
-            
-            for quad in quads:
-                if len(quad) >= 4:
-                    subject, predicate, obj, graph = quad[:4]
-                else:
-                    subject, predicate, obj = quad[:3]
-                    graph = 'default'
-                
-                # For each term, extract unwrapped value for UUID lookup
-                for term in [subject, predicate, obj, graph]:
-                    formatted_str = str(term)
-                    if formatted_str not in term_unwrap_map:
-                        # Extract unwrapped value (handles both RDFLib objects and formatted strings)
-                        unwrapped_value, _, _, _ = self._extract_term_info(term)
-                        term_unwrap_map[formatted_str] = unwrapped_value
-            
-            unique_terms = set(term_unwrap_map.values())  # Use unwrapped values for lookup
-            logger.debug(f"Collected {len(unique_terms)} unique unwrapped terms from {len(quads)} quads")
-            
-            # Step 2: Batch UUID lookup - single query for all terms
-            conn = transaction.get_connection()
-            term_table = f"{space_id}_term"
-            
-            # Build parameterized query with WHERE IN clause
-            term_list = list(unique_terms)
-            placeholders = ','.join([f'${i+1}' for i in range(len(term_list))])
-            batch_lookup_query = f"""
-                SELECT term_text, term_uuid 
-                FROM {term_table} 
-                WHERE term_text IN ({placeholders}) 
-                  AND dataset = ${len(term_list) + 1}
-            """
-            
-            # Execute batch lookup
-            rows = await conn.fetch(batch_lookup_query, *term_list, 'primary')
-            
-            # Build term_text -> UUID map
-            term_uuid_map = {row['term_text']: row['term_uuid'] for row in rows}
-            
-            logger.debug(f"Batch lookup found {len(term_uuid_map)} UUIDs out of {len(unique_terms)} terms")
-            
-            # Step 3: Validate all terms found (data integrity check)
-            missing_terms = unique_terms - set(term_uuid_map.keys())
-            if missing_terms:
-                logger.debug(f"Initial lookup: {len(missing_terms)} terms not found, attempting prefix match for float precision")
-                
-                # Step 3b: For missing terms that look like floats, try prefix matching
-                # This handles Fuseki's float truncation (e.g., '32785.68' should match '32785.67923076924')
-                for missing_term in list(missing_terms):
-                    # Check if it looks like a numeric value
-                    try:
-                        missing_float = float(missing_term)
-                        # It's a number - try prefix matching by dropping the last digit
-                        # e.g., '32785.68' → '32785.6%' to match '32785.67923076924'
-                        
-                        if '.' in missing_term:
-                            # Drop the last digit and use as prefix pattern
-                            prefix = missing_term[:-1]  # '32785.68' → '32785.6'
-                            pattern = f"{prefix}%"
-                            
-                            fuzzy_query = f"""
-                                SELECT term_text, term_uuid 
-                                FROM {term_table} 
-                                WHERE term_text LIKE $1 AND dataset = $2
-                            """
-                            rows = await conn.fetch(fuzzy_query, pattern, 'primary')
-                            
-                            # Find the closest numeric match
-                            for row in rows:
-                                try:
-                                    db_float = float(row['term_text'])
-                                    # Check if values are close (within 1% tolerance for float rounding)
-                                    if abs(db_float - missing_float) / max(abs(db_float), abs(missing_float), 1) < 0.01:
-                                        term_uuid_map[missing_term] = row['term_uuid']
-                                        logger.info(f"🔍 Float precision fix: '{missing_term}' → '{row['term_text']}'")
-                                        break
-                                except (ValueError, TypeError):
-                                    continue
-                    except (ValueError, TypeError):
-                        # Not a numeric value, skip fuzzy matching
-                        pass
-                
-                # Re-check for still-missing terms after prefix matching
-                still_missing = unique_terms - set(term_uuid_map.keys())
-                if still_missing:
-                    logger.error(f"DELETE failed - missing UUIDs for {len(still_missing)} terms after prefix matching")
-                    logger.error(f"Missing terms (first 5): {list(still_missing)[:5]}")
-                    return False
-            
-            # Step 4: Build list of quad UUID tuples for batch delete
-            quad_uuids = []
-            for quad in quads:
-                if len(quad) >= 4:
-                    subject, predicate, obj, graph = quad[:4]
-                else:
-                    subject, predicate, obj = quad[:3]
-                    graph = 'default'
-                
-                # Look up UUIDs using unwrapped values
-                subject_unwrapped = term_unwrap_map.get(str(subject))
-                predicate_unwrapped = term_unwrap_map.get(str(predicate))
-                object_unwrapped = term_unwrap_map.get(str(obj))
-                graph_unwrapped = term_unwrap_map.get(str(graph))
-                
-                subject_uuid = term_uuid_map.get(subject_unwrapped)
-                predicate_uuid = term_uuid_map.get(predicate_unwrapped)
-                object_uuid = term_uuid_map.get(object_unwrapped)
-                context_uuid = term_uuid_map.get(graph_unwrapped)
-                
-                if all([subject_uuid, predicate_uuid, object_uuid, context_uuid]):
-                    quad_uuids.append((subject_uuid, predicate_uuid, object_uuid, context_uuid, 'primary'))
-                else:
-                    logger.warning(f"Skipping quad due to missing UUID: {subject} {predicate} {obj} (graph: {graph})")
-            
-            logger.debug(f"Prepared {len(quad_uuids)} quad UUIDs for batch deletion")
-            
-            if not quad_uuids:
-                logger.warning(f"No valid quads to delete after UUID mapping")
-                return True
-            
-            # Step 5: Batch DELETE using executemany
-            delete_query = f"""
-                DELETE FROM {space_id}_rdf_quad 
-                WHERE subject_uuid = $1 
-                  AND predicate_uuid = $2 
-                  AND object_uuid = $3 
-                  AND context_uuid = $4
-                  AND dataset = $5
-            """
-            
-            # Execute batch delete
-            await conn.executemany(delete_query, quad_uuids)
-            
-            logger.info(f"Batch deleted {len(quad_uuids)} quads for space {space_id} from PostgreSQL")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error in batch removal of quads within transaction for space {space_id}: {e}")
-            logger.error(f"Failed after processing {len(quad_uuids) if 'quad_uuids' in locals() else 0} quads")
-            return False
-    
-    async def _find_existing_term_uuid(self, conn, space_id: str, term_text: str) -> str:
-        """Find existing term UUID without creating new ones."""
-        try:
-            term_table = f"{space_id}_term"
-            query = f"SELECT term_uuid FROM {term_table} WHERE term_text = $1 AND dataset = $2"
-            result = await conn.fetchval(query, term_text, 'primary')
-            return result if result else None
-            
-        except Exception as e:
-            logger.error(f"Error finding term UUID for '{term_text}': {e}")
-            return None
-    
     def get_connection_info(self) -> Dict[str, Any]:
         """Get PostgreSQL connection information."""
         return {
@@ -655,7 +296,6 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
         """Get the signal manager for this database implementation."""
         return getattr(self, 'signal_manager', None)
     
-    # Additional methods specific to FUSEKI_POSTGRESQL backend
     
     async def initialize_schema(self) -> bool:
         """Verify PostgreSQL admin tables exist - they should be created during service initialization."""
@@ -1184,14 +824,18 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                     return (term_str[1:-1], 'L', None, None)
                 return (term_str, 'L', None, None)
     
-    async def store_quads_to_postgresql(self, space_id: str, quads: List[tuple]) -> bool:
+    async def store_quads_to_postgresql(self, space_id: str, quads: List[tuple], 
+                                       transaction: 'FusekiPostgreSQLTransaction' = None) -> bool:
         """
         Store RDF quads to PostgreSQL primary data tables.
         This is part of the dual-write system.
         
         Args:
+            space_id: Space identifier
             quads: List of quad tuples with RDFLib objects (s, p, o, g)
                    where s, p, o, g can be URIRef, Literal, BNode, or string
+            transaction: Optional transaction object. If provided, uses transaction connection.
+                        If None, acquires connection from pool.
         
         Uses the FusekiPostgreSQLSpaceTerms class for proper term management.
         """
@@ -1299,12 +943,19 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """
                     
-                    # Execute batch insert with lang and datatype_id
-                    async with self.connection_pool.acquire() as conn:
+                    # Use transaction connection if provided, else acquire from pool
+                    if transaction:
+                        conn = transaction.get_connection()
                         await conn.executemany(insert_query, [
                             (uuid, text, ttype, lang, dtype_id, now) 
                             for uuid, text, ttype, lang, dtype_id in new_terms
                         ])
+                    else:
+                        async with self.connection_pool.acquire() as conn:
+                            await conn.executemany(insert_query, [
+                                (uuid, text, ttype, lang, dtype_id, now) 
+                                for uuid, text, ttype, lang, dtype_id in new_terms
+                            ])
                     
                     logger.debug(f"Successfully inserted {len(new_terms)} new terms")
                 else:
@@ -1348,10 +999,17 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                     VALUES ($1, $2, $3, $4, $5)
                 """
                 
-                async with self.connection_pool.acquire() as conn:
+                # Use transaction connection if provided, else acquire from pool
+                if transaction:
+                    conn = transaction.get_connection()
                     await conn.executemany(quad_insert_query, [
                         (s, p, o, c, now) for s, p, o, c in quads_to_insert
                     ])
+                else:
+                    async with self.connection_pool.acquire() as conn:
+                        await conn.executemany(quad_insert_query, [
+                            (s, p, o, c, now) for s, p, o, c in quads_to_insert
+                        ])
                 
                 logger.debug(f"Successfully inserted {len(quads_to_insert)} quads")
             
@@ -1362,10 +1020,17 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             logger.error(f"Error storing quads for space {space_id}: {e}")
             return False
     
-    async def remove_quads_from_postgresql(self, space_id: str, quads: List[tuple]) -> bool:
+    async def remove_quads_from_postgresql(self, space_id: str, quads: List[tuple],
+                                          transaction: 'FusekiPostgreSQLTransaction' = None) -> bool:
         """
         Remove RDF quads from PostgreSQL primary data tables.
         This is part of the dual-write system.
+        
+        Args:
+            space_id: Space identifier
+            quads: List of quad tuples to remove
+            transaction: Optional transaction object. If provided, uses transaction connection.
+                        If None, uses execute_update/execute_query methods.
         
         Uses the FusekiPostgreSQLSpaceTerms class for proper term management.
         """
@@ -1373,80 +1038,177 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             if not quads:
                 return True
                 
-            logger.debug(f"Removing {len(quads)} quads for space {space_id}")
+            logger.debug(f"Batch removing {len(quads)} quads for space {space_id}")
             
-            # Import required modules
-            from .fuseki_postgresql_space_terms import FusekiPostgreSQLSpaceTerms
-            
-            # Step 1: Process all terms and generate UUIDs
-            term_uuid_map = {}
-            unique_terms = set()
+            # Step 1: Collect all unique terms from quads and unwrap literals
+            # Need to map: formatted_string -> unwrapped_value for UUID lookup
+            term_unwrap_map = {}  # Maps formatted string to unwrapped value
             
             for quad in quads:
-                # Handle tuple format: (subject, predicate, object, graph)
                 if len(quad) >= 4:
                     subject, predicate, obj, graph = quad[:4]
                 else:
                     subject, predicate, obj = quad[:3]
                     graph = 'default'
                 
-                for term_text in [str(subject), str(predicate), str(obj), str(graph)]:
-                    if term_text:
-                        unique_terms.add(term_text)
+                # For each term, extract unwrapped value for UUID lookup
+                for term in [subject, predicate, obj, graph]:
+                    formatted_str = str(term)
+                    if formatted_str not in term_unwrap_map:
+                        # Extract unwrapped value (handles both RDFLib objects and formatted strings)
+                        unwrapped_value, _, _, _ = self._extract_term_info(term)
+                        term_unwrap_map[formatted_str] = unwrapped_value
             
-            # Step 2: Generate UUIDs for all terms
-            for term_text in unique_terms:
-                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
-                if validate_rfc3986(term_text, rule='URI'):
-                    term_type = 'U'  # URI
-                elif term_text.startswith('"') and term_text.endswith('"'):
-                    term_type = 'L'  # Literal (already quoted)
-                elif term_text.startswith('_:'):
-                    term_type = 'B'  # Blank node
-                else:
-                    # Non-URI strings without quotes are literals
-                    term_type = 'L'  # Default to Literal
-                
-                # Generate deterministic UUID for the term using the terms manager
-                term_uuid = FusekiPostgreSQLSpaceTerms.generate_term_uuid(term_text, term_type, None, None)
-                term_uuid_map[term_text] = str(term_uuid)
+            unique_terms = set(term_unwrap_map.values())  # Use unwrapped values for lookup
+            logger.debug(f"Collected {len(unique_terms)} unique unwrapped terms from {len(quads)} quads")
             
-            # Step 3: Remove quad relationships
-            quad_table = f"{space_id}_rdf_quad"
-            quad_delete_query = f"""
-                DELETE FROM {quad_table} 
-                WHERE subject_uuid = $1 AND predicate_uuid = $2 AND object_uuid = $3 AND context_uuid = $4
+            # Step 2: Batch UUID lookup - single query for all terms
+            term_table = f"{space_id}_term"
+            term_list = list(unique_terms)
+            placeholders = ','.join([f'${i+1}' for i in range(len(term_list))])
+            batch_lookup_query = f"""
+                SELECT term_text, term_uuid 
+                FROM {term_table} 
+                WHERE term_text IN ({placeholders}) 
+                  AND dataset = ${len(term_list) + 1}
             """
             
+            # Execute batch lookup using transaction connection or execute_query
+            if transaction:
+                conn = transaction.get_connection()
+                rows = await conn.fetch(batch_lookup_query, *term_list, 'primary')
+            else:
+                rows = await self.execute_query(batch_lookup_query, term_list + ['primary'])
+            
+            # Build term_text -> UUID map
+            term_uuid_map = {row['term_text']: row['term_uuid'] for row in rows}
+            logger.debug(f"Batch lookup found {len(term_uuid_map)} UUIDs out of {len(unique_terms)} terms")
+            
+            # Step 3: Validate all terms found (data integrity check) with float precision matching
+            missing_terms = unique_terms - set(term_uuid_map.keys())
+            if missing_terms:
+                logger.debug(f"Initial lookup: {len(missing_terms)} terms not found, attempting prefix match for float precision")
+                
+                # For missing terms that look like floats, try prefix matching
+                # This handles Fuseki's float truncation (e.g., '32785.68' should match '32785.67923076924')
+                for missing_term in list(missing_terms):
+                    try:
+                        missing_float = float(missing_term)
+                        # It's a number - try prefix matching by dropping the last digit
+                        if '.' in missing_term:
+                            prefix = missing_term[:-1]  # '32785.68' → '32785.6'
+                            pattern = f"{prefix}%"
+                            
+                            fuzzy_query = f"""
+                                SELECT term_text, term_uuid 
+                                FROM {term_table} 
+                                WHERE term_text LIKE $1 AND dataset = $2
+                            """
+                            
+                            if transaction:
+                                conn = transaction.get_connection()
+                                rows = await conn.fetch(fuzzy_query, pattern, 'primary')
+                            else:
+                                rows = await self.execute_query(fuzzy_query, [pattern, 'primary'])
+                            
+                            # Find the closest numeric match
+                            for row in rows:
+                                try:
+                                    db_float = float(row['term_text'])
+                                    # Check if values are close (within 1% tolerance for float rounding)
+                                    if abs(db_float - missing_float) / max(abs(db_float), abs(missing_float), 1) < 0.01:
+                                        term_uuid_map[missing_term] = row['term_uuid']
+                                        logger.info(f"🔍 Float precision fix: '{missing_term}' → '{row['term_text']}'")
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                    except (ValueError, TypeError):
+                        # Not a numeric value, skip fuzzy matching
+                        pass
+                
+                # Re-check for still-missing terms after prefix matching
+                still_missing = unique_terms - set(term_uuid_map.keys())
+                if still_missing:
+                    logger.error(f"DELETE failed - missing UUIDs for {len(still_missing)} terms after prefix matching")
+                    logger.error(f"Missing terms (first 5): {list(still_missing)[:5]}")
+                    return False
+            
+            # Step 4: Build list of quad UUID tuples for batch delete
+            quad_table = f"{space_id}_rdf_quad"
+            quad_uuids = []
+            
             for quad in quads:
-                # Handle tuple format: (subject, predicate, object, graph)
                 if len(quad) >= 4:
                     subject, predicate, obj, graph = quad[:4]
                 else:
                     subject, predicate, obj = quad[:3]
                     graph = 'default'
                 
-                subject_uuid = term_uuid_map.get(str(subject))
-                predicate_uuid = term_uuid_map.get(str(predicate))
-                object_uuid = term_uuid_map.get(str(obj))
-                context_uuid = term_uuid_map.get(str(graph))
+                # Look up UUIDs using unwrapped values
+                subject_unwrapped = term_unwrap_map.get(str(subject))
+                predicate_unwrapped = term_unwrap_map.get(str(predicate))
+                object_unwrapped = term_unwrap_map.get(str(obj))
+                graph_unwrapped = term_unwrap_map.get(str(graph))
+                
+                subject_uuid = term_uuid_map.get(subject_unwrapped)
+                predicate_uuid = term_uuid_map.get(predicate_unwrapped)
+                object_uuid = term_uuid_map.get(object_unwrapped)
+                context_uuid = term_uuid_map.get(graph_unwrapped)
                 
                 if all([subject_uuid, predicate_uuid, object_uuid, context_uuid]):
-                    await self.execute_update(quad_delete_query, [
-                        subject_uuid, predicate_uuid, object_uuid, context_uuid
-                    ])
+                    quad_uuids.append((subject_uuid, predicate_uuid, object_uuid, context_uuid, 'primary'))
+                else:
+                    logger.warning(f"Skipping quad due to missing UUID: {subject} {predicate} {obj} (graph: {graph})")
+            
+            logger.debug(f"Prepared {len(quad_uuids)} quad UUIDs for batch deletion")
+            
+            if not quad_uuids:
+                logger.warning(f"No valid quads to delete after UUID mapping")
+                return True
+            
+            # Step 5: Batch DELETE using executemany
+            delete_query = f"""
+                DELETE FROM {quad_table} 
+                WHERE subject_uuid = $1 
+                  AND predicate_uuid = $2 
+                  AND object_uuid = $3 
+                  AND context_uuid = $4
+                  AND dataset = $5
+            """
+            
+            # Execute batch delete using transaction connection or connection pool
+            if transaction:
+                conn = transaction.get_connection()
+                await conn.executemany(delete_query, quad_uuids)
+            else:
+                async with self.connection_pool.acquire() as conn:
+                    await conn.executemany(delete_query, quad_uuids)
+            
+            logger.debug(f"Batch deleted {len(quad_uuids)} quads for space {space_id}")
             
             # Step 3: Clean up orphaned terms (terms not referenced by any quads)
             # This follows the existing PostgreSQL implementation pattern
+            term_table = f"{space_id}_term"
             for term_uuid in term_uuid_map.values():
                 orphan_check_query = f"""
                     SELECT COUNT(*) as count FROM {quad_table} 
                     WHERE subject_uuid = $1 OR predicate_uuid = $1 OR object_uuid = $1 OR context_uuid = $1
                 """
-                result = await self.execute_query(orphan_check_query, [term_uuid])
+                
+                # Use transaction connection if provided, else execute_query
+                if transaction:
+                    conn = transaction.get_connection()
+                    result = await conn.fetch(orphan_check_query, term_uuid)
+                else:
+                    result = await self.execute_query(orphan_check_query, [term_uuid])
+                
                 if result and result[0]['count'] == 0:
                     # Term is orphaned, remove it
-                    await self.execute_update(f"DELETE FROM {term_table} WHERE term_uuid = $1", [term_uuid])
+                    if transaction:
+                        conn = transaction.get_connection()
+                        await conn.execute(f"DELETE FROM {term_table} WHERE term_uuid = $1", term_uuid)
+                    else:
+                        await self.execute_update(f"DELETE FROM {term_table} WHERE term_uuid = $1", [term_uuid])
             
             logger.debug(f"Successfully removed {len(quads)} quads for space {space_id}")
             return True

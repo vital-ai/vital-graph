@@ -209,11 +209,14 @@ class KGQueriesEndpoint:
             self.logger.info(f"Converted builder_frame_criteria count: {len(builder_frame_criteria) if builder_frame_criteria else 0}")
             
             # Build entity query criteria
+            # Map query_mode to use_edge_pattern: "edge" -> True, "direct" -> False
+            use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
+            
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,  # Filter by specific entity URIs if provided
                 frame_criteria=builder_frame_criteria,
-                use_edge_pattern=True  # Use edge-based pattern for VitalGraph data structure
+                use_edge_pattern=use_edge_pattern  # Use query_mode from request ("edge" or "direct")
             )
             
             self.logger.info(f"Entity criteria: entity_type={entity_criteria.entity_type}, frame_criteria count={len(entity_criteria.frame_criteria) if entity_criteria.frame_criteria else 0}")

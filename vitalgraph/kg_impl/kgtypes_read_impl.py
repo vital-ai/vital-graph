@@ -35,10 +35,14 @@ class KGTypesReadProcessor:
             self.logger.info(f"🔍 Getting KGType by URI: {kgtype_uri}")
             
             # SPARQL query to get all properties of the KGType
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             query = f"""
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
                     <{kgtype_uri}> ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """
@@ -129,11 +133,15 @@ class KGTypesReadProcessor:
             uri_values = " ".join([f"<{uri}>" for uri in kgtype_uris])
             
             # SPARQL query to get all properties of the KGTypes
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             query = f"""
             SELECT ?s ?p ?o WHERE {{
                 VALUES ?s {{ {uri_values} }}
                 GRAPH <{graph_id}> {{
                     ?s ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             ORDER BY ?s
@@ -251,6 +259,9 @@ class KGTypesReadProcessor:
                             OFFSET {offset}
                         }}
                         ?s ?p ?o .
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
                 ORDER BY ?s
@@ -279,6 +290,9 @@ class KGTypesReadProcessor:
                             OFFSET {offset}
                         }}
                         ?s ?p ?o .
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
                 ORDER BY ?s

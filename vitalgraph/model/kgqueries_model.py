@@ -17,6 +17,9 @@ class KGQueryCriteria(BaseModel):
     # Query type specification
     query_type: str = Field(..., description="Query type: 'relation' or 'frame'")
     
+    # Query mode specification (for frame queries)
+    query_mode: str = Field("direct", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
+    
     # Source entity specification
     source_entity_criteria: Optional[EntityQueryCriteria] = Field(None, description="Criteria for source entities")
     source_entity_uris: Optional[List[str]] = Field(None, description="Specific source entity URIs")

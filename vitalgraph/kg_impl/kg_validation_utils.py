@@ -451,6 +451,9 @@ class KGHierarchicalFrameValidator:
             SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
                     <{parent_frame_uri}> ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """

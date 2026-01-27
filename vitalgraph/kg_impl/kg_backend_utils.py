@@ -176,6 +176,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             full_graph_uri = graph_id
             
             # SPARQL CONSTRUCT query to get all triples for the object
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             construct_query = f"""
             CONSTRUCT {{
                 <{object_uri}> ?p ?o .
@@ -183,6 +184,9 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             WHERE {{
                 GRAPH <{full_graph_uri}> {{
                     <{object_uri}> ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """
@@ -228,10 +232,14 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             full_graph_uri = graph_id
             
             # SPARQL query to get entity data
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             select_query = f"""
             SELECT ?p ?o WHERE {{
                 GRAPH <{full_graph_uri}> {{
                     <{entity_uri}> ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """
@@ -271,6 +279,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         """Retrieve complete entity graph including related objects."""
         try:
             # Use graph_id directly as graph URI (matching original system)
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             sparql_query = f"""
             SELECT ?s ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
@@ -278,12 +287,18 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                         # Get the entity itself
                         <{entity_uri}> ?p ?o .
                         BIND(<{entity_uri}> AS ?s)
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                     UNION
                     {{
                         # Get objects with same entity-level grouping URI (hasKGGraphURI)
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
                         ?s ?p ?o .
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
             }}
@@ -333,6 +348,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         """Retrieve a single entity by reference ID."""
         try:
             # SPARQL query to find entity by reference ID and get its data
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             sparql_query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
             PREFIX aimp: <http://vital.ai/ontology/vital-aimp#>
@@ -342,6 +358,9 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                     ?s a haley:KGEntity .
                     ?s aimp:hasReferenceIdentifier "{reference_id}" .
                     ?s ?p ?o .
+                    FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                           ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                 }}
             }}
             """
@@ -379,6 +398,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         try:
             # SPARQL query to get complete entity graph by reference ID
             # This matches the pattern of get_entity_graph but uses reference ID to identify the entity
+            # Filter out materialized predicates (vg-direct:*) as they're not VitalSigns properties
             sparql_query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
             PREFIX aimp: <http://vital.ai/ontology/vital-aimp#>
@@ -391,6 +411,9 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                         ?entity aimp:hasReferenceIdentifier "{reference_id}" .
                         ?entity ?p ?o .
                         BIND(?entity AS ?s)
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                     UNION
                     {{
@@ -401,6 +424,9 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                         # Then get all objects grouped with that entity
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
                         ?s ?p ?o .
+                        FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                               ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
                     }}
                 }}
             }}
