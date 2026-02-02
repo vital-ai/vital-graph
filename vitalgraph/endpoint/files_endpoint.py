@@ -6,14 +6,17 @@ for metadata and binary handling for file content upload/download.
 """
 
 from typing import Dict, List, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 import pyld
 from pyld import jsonld
 import io
 import mimetypes
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 from ..model.files_model import (
@@ -25,6 +28,7 @@ from ..model.files_model import (
 )
 from ..storage.s3_file_manager import S3FileManager, create_s3_file_manager_from_config
 from vital_ai_domain.model.FileNode import FileNode
+from .files_streaming_impl import stream_upload_to_s3, stream_download_from_s3
 
 
 class FilesEndpoint:
@@ -208,6 +212,35 @@ class FilesEndpoint:
             Returns streaming response with file content.
             """
             return await self._download_file_content(space_id, graph_id, uri, current_user)
+        
+        @self.router.post("/files/stream/upload", response_model=FileUploadResponse, tags=["Files", "Streaming"])
+        async def upload_file_stream(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: Optional[str] = Query(None, description="Graph ID"),
+            uri: str = Query(..., description="File URI to upload content to"),
+            file: UploadFile = File(..., description="File content to upload"),
+            chunk_size: int = Query(8192, description="Chunk size for streaming (bytes)"),
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            """
+            Upload binary file content using true streaming (chunk-based).
+            Does not load entire file into memory.
+            """
+            return await self._upload_file_stream(space_id, graph_id, uri, file, chunk_size, current_user)
+        
+        @self.router.get("/files/stream/download", tags=["Files", "Streaming"])
+        async def download_file_stream(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: Optional[str] = Query(None, description="Graph ID"),
+            uri: str = Query(..., description="File URI to download content from"),
+            chunk_size: int = Query(8192, description="Chunk size for streaming (bytes)"),
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            """
+            Download binary file content using true streaming (chunk-based).
+            Returns streaming response that yields chunks without loading entire file into memory.
+            """
+            return await self._download_file_stream(space_id, graph_id, uri, chunk_size, current_user)
     
     async def _list_files(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, file_filter: Optional[str], current_user: Dict) -> FilesResponse:
         """List files with pagination using FilesImpl."""
@@ -258,9 +291,12 @@ class FilesEndpoint:
             # Convert dict to JsonLdObject
             return JsonLdObject(**jsonld_dict)
             
+        except ValueError as e:
+            # File not found - return 404
+            raise HTTPException(status_code=404, detail=f"File not found: {uri}")
         except Exception as e:
-            # Return error or raise exception
-            raise ValueError(f"File not found: {uri}")
+            # Other errors - return 500
+            raise HTTPException(status_code=500, detail=f"Error retrieving file: {str(e)}")
     
     async def _get_files_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> JsonLdDocument:
         """Get multiple files by URI list using FilesImpl."""
@@ -369,30 +405,43 @@ class FilesEndpoint:
                 
                 # Delete from MinIO/S3
                 self.file_manager.delete_file(object_key)
-                
-                return FileDeleteResponse(
-                    message=f"Successfully deleted file node and storage",
-                    deleted_count=1,
-                    deleted_uris=[uri]
-                )
             except Exception as e:
                 # File might not exist in storage, that's acceptable
+                pass
+        
+        # Delete FileNode from graph database
+        try:
+            logger.info(f"Deleting FileNode from graph database: {uri}")
+            deleted_count = await self.files_impl.delete_files(
+                space_id=space_id,
+                graph_id=graph_id,
+                uris=[uri]
+            )
+            
+            logger.info(f"Database deletion result: deleted_count={deleted_count}")
+            
+            if deleted_count > 0:
                 return FileDeleteResponse(
-                    message=f"Deleted file node (storage cleanup: {str(e)})",
-                    deleted_count=1,
+                    message=f"Successfully deleted file node and storage",
+                    deleted_count=deleted_count,
                     deleted_uris=[uri]
                 )
-        else:
-            # No file manager - just delete metadata
+            else:
+                return FileDeleteResponse(
+                    message=f"File node not found - no deletion needed",
+                    deleted_count=0,
+                    deleted_uris=[]
+                )
+        except Exception as e:
+            logger.error(f"Error deleting file node: {e}")
             return FileDeleteResponse(
-                message=f"Successfully deleted file node (no storage configured)",
-                deleted_count=1,
-                deleted_uris=[uri]
+                message=f"Error deleting file node: {str(e)}",
+                deleted_count=0,
+                deleted_uris=[]
             )
     
     async def _delete_files_batch(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> FileDeleteResponse:
         """Delete multiple file nodes by URI list and remove files from MinIO/S3 storage."""
-        deleted_uris = []
         storage_errors = []
         
         # Delete from MinIO/S3 if file manager is available
@@ -404,25 +453,33 @@ class FilesEndpoint:
                     
                     # Delete from MinIO/S3
                     self.file_manager.delete_file(object_key)
-                    deleted_uris.append(uri)
                 except Exception as e:
-                    # File might not exist in storage, still count as deleted
-                    deleted_uris.append(uri)
+                    # File might not exist in storage, that's acceptable
                     storage_errors.append(f"{uri}: {str(e)}")
+        
+        # Delete FileNodes from graph database
+        try:
+            deleted_count = await self.files_impl.delete_files(
+                space_id=space_id,
+                graph_id=graph_id,
+                uris=uris
+            )
             
-            message = f"Successfully deleted {len(deleted_uris)} file nodes and storage"
+            message = f"Successfully deleted {deleted_count} file nodes and storage"
             if storage_errors:
                 message += f" (some storage cleanup warnings: {len(storage_errors)} files)"
-        else:
-            # No file manager - just delete metadata
-            deleted_uris = uris
-            message = f"Successfully deleted {len(deleted_uris)} file nodes (no storage configured)"
-        
-        return FileDeleteResponse(
-            message=message,
-            deleted_count=len(deleted_uris),
-            deleted_uris=deleted_uris
-        )
+            
+            return FileDeleteResponse(
+                message=message,
+                deleted_count=deleted_count,
+                deleted_uris=uris[:deleted_count]
+            )
+        except Exception as e:
+            return FileDeleteResponse(
+                message=f"Error deleting file nodes: {str(e)}",
+                deleted_count=0,
+                deleted_uris=[]
+            )
     
     async def _upload_file_content(self, space_id: str, graph_id: Optional[str], uri: str, file: UploadFile, current_user: Dict) -> FileUploadResponse:
         """Upload binary file content to existing file node."""
@@ -504,17 +561,28 @@ class FilesEndpoint:
                 content_type=content_type
             )
     
-    async def _download_file_content(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> StreamingResponse:
+    async def _download_file_content(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict):
         """Download binary file content by URI."""
         
         # First verify FileNode exists in database
-        file_node = await self.files_impl.get_file_by_uri(
-            space_id=space_id,
-            uri=uri,
-            graph_id=graph_id
-        )
-        if not file_node:
-            raise ValueError(f"FileNode not found in database: {uri}")
+        try:
+            file_node = await self.files_impl.get_file_by_uri(
+                space_id=space_id,
+                uri=uri,
+                graph_id=graph_id
+            )
+            if not file_node:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File not found: {uri}"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {uri}"
+            )
         
         # Download from MinIO/S3 if file manager is available
         if self.file_manager:
@@ -543,17 +611,141 @@ class FilesEndpoint:
                 }
             )
         else:
-            # Fallback: return sample content
-            sample_content = b"Sample file content - MinIO not configured"
-            filename = uri.split('/')[-1] if '/' in uri else uri
-            
+            # Return fallback response
             return StreamingResponse(
-                io.BytesIO(sample_content),
-                media_type="text/plain",
-                headers={
-                    "Content-Disposition": f"attachment; filename={filename}",
-                    "Content-Length": str(len(sample_content))
-                }
+                io.BytesIO(b"File content not available"),
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f"attachment; filename=unknown"}
+            )
+    
+    async def _upload_file_stream(self, space_id: str, graph_id: Optional[str], uri: str, 
+                                   file: UploadFile, chunk_size: int, current_user: Dict) -> FileUploadResponse:
+        """Upload binary file content using true streaming (chunk-based)."""
+        
+        # Determine content type
+        content_type = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
+        
+        # Upload to MinIO/S3 if file manager is available
+        if self.file_manager:
+            try:
+                # Create object key from URI (sanitize for S3)
+                object_key = uri.replace(':', '_').replace('/', '_')
+                
+                # Stream upload to MinIO/S3 without loading into memory
+                result = await stream_upload_to_s3(
+                    file=file,
+                    file_manager=self.file_manager,
+                    object_key=object_key,
+                    content_type=content_type,
+                    metadata={
+                        'file_uri': uri,
+                        'space_id': space_id,
+                        'graph_id': graph_id or '',
+                        'original_filename': file.filename or 'unknown'
+                    },
+                    chunk_size=chunk_size
+                )
+                
+                # Get S3 URL for the uploaded file
+                s3_url = self.file_manager.get_file_url(object_key)
+                
+                # Update FileNode with hasFileURL and hasFileType properties
+                try:
+                    file_node = await self.files_impl.get_file_by_uri(
+                        space_id=space_id,
+                        uri=uri,
+                        graph_id=graph_id
+                    )
+                    
+                    file_node.fileURL = s3_url
+                    file_node.fileType = content_type
+                    
+                    await self.files_impl.update_files(
+                        space_id=space_id,
+                        file_nodes=[file_node],
+                        graph_id=graph_id or "default"
+                    )
+                except Exception as update_error:
+                    print(f"Failed to update FileNode properties: {update_error}")
+                
+                return FileUploadResponse(
+                    message=f"Successfully streamed file upload to MinIO",
+                    file_uri=uri,
+                    file_size=0,  # Size unknown in streaming mode
+                    content_type=content_type,
+                    storage_path=result.get('object_key')
+                )
+            except Exception as e:
+                return FileUploadResponse(
+                    message=f"Error streaming upload to MinIO: {str(e)}",
+                    file_uri=uri,
+                    file_size=0,
+                    content_type=content_type
+                )
+        else:
+            return FileUploadResponse(
+                message=f"Successfully streamed file upload (no storage configured)",
+                file_uri=uri,
+                file_size=0,
+                content_type=content_type
+            )
+    
+    async def _download_file_stream(self, space_id: str, graph_id: Optional[str], uri: str, 
+                                     chunk_size: int, current_user: Dict):
+        """Download binary file content using true streaming (chunk-based)."""
+        
+        # First verify FileNode exists in database
+        try:
+            file_node = await self.files_impl.get_file_by_uri(
+                space_id=space_id,
+                uri=uri,
+                graph_id=graph_id
+            )
+            if not file_node:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File not found: {uri}"
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found: {uri}"
+            )
+        
+        # Download from MinIO/S3 if file manager is available
+        if self.file_manager:
+            # Create object key from URI (sanitize for S3)
+            object_key = uri.replace(':', '_').replace('/', '_')
+            
+            # Get metadata to determine content type
+            try:
+                metadata = self.file_manager.get_file_metadata(object_key)
+                content_type = metadata.get('content_type', 'application/octet-stream')
+            except:
+                content_type = 'application/octet-stream'
+            
+            # Determine filename from URI
+            filename = uri.split('/')[-1] if '/' in uri else uri.split(':')[-1]
+            
+            # Return streaming response with async generator
+            return StreamingResponse(
+                stream_download_from_s3(
+                    file_manager=self.file_manager,
+                    object_key=object_key,
+                    chunk_size=chunk_size
+                ),
+                media_type=content_type,
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
+            )
+        else:
+            # Return fallback response
+            filename = uri.split('/')[-1] if '/' in uri else uri.split(':')[-1]
+            return StreamingResponse(
+                io.BytesIO(b"File content not available"),
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
             )
 
 

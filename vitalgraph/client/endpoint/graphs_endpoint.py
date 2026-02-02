@@ -4,7 +4,7 @@ VitalGraph Client Graphs Endpoint
 Client-side implementation for Graph management operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, List
 
 from .base_endpoint import BaseEndpoint

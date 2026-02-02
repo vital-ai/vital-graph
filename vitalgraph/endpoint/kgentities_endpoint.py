@@ -250,7 +250,7 @@ class KGEntitiesEndpoint:
             frame_uri_list = [uri.strip() for uri in frame_uris.split(',') if uri.strip()]
             return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri)
         
-        @self.router.post("/kgentities/query", response_model=EntityQueryResponse, tags=["KG Entities"])
+        @self.router.post("/kgentities/query", response_model=EntitiesResponse, tags=["KG Entities"])
         async def query_entities(
             query_request: EntityQueryRequest,
             space_id: str = Query(..., description="Space ID"),
@@ -1751,7 +1751,9 @@ class KGEntitiesEndpoint:
         from ..kg_impl.kg_backend_utils import create_backend_adapter
         from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
         try:
-            self.logger.info(f"Querying KGEntities in space {space_id}, graph {graph_id} with criteria: {query_request.criteria}")
+            self.logger.info(f"Querying KGEntities in space {space_id}, graph {graph_id}")
+            self.logger.info(f"Query request: {query_request.model_dump_json()}")
+            self.logger.info(f"Query criteria: {query_request.criteria}")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -1781,9 +1783,41 @@ class KGEntitiesEndpoint:
             # Execute query using SPARQL processor
             query_results = await sparql_processor.execute_entity_query(space_id, graph_id, query_request)
             
-            # Create response
-            return EntityQueryResponse(
-                entity_uris=query_results['entity_uris'],
+            # Fetch actual entity objects for the URIs
+            entity_uris = query_results['entity_uris']
+            if entity_uris:
+                # Get entities using the same approach as _get_entities_by_uris
+                from ..kg_impl.kgentity_get_impl import KGEntityGetProcessor
+                processor = KGEntityGetProcessor(self.logger)
+                
+                # Fetch each entity
+                entities = []
+                for uri in entity_uris:
+                    entity_list = await processor.get_entity(
+                        space_id=space_id,
+                        graph_id=graph_id,
+                        entity_uri=uri,
+                        include_entity_graph=False,
+                        backend_adapter=backend_adapter
+                    )
+                    if entity_list:
+                        entities.extend(entity_list)
+                
+                # Convert to JSON-LD - handle single vs multiple entities
+                if len(entities) == 1:
+                    # Single entity - use JsonLdObject
+                    entity_dict = entities[0].to_jsonld()
+                    entities_doc = JsonLdObject(**entity_dict)
+                else:
+                    # Multiple entities - use JsonLdDocument
+                    entities_dict = GraphObject.to_jsonld_list(entities)
+                    entities_doc = JsonLdDocument(**entities_dict)
+            else:
+                entities_doc = JsonLdDocument(graph=[])
+            
+            # Create response with actual entities
+            return EntitiesResponse(
+                entities=entities_doc,
                 total_count=query_results['total_count'],
                 page_size=query_results['page_size'],
                 offset=query_results['offset']
@@ -1843,11 +1877,19 @@ class KGEntitiesEndpoint:
                     value=filter_criterion.value
                 ))
         
+        # Convert frame_type to frame_criteria if provided
+        sparql_frame_criteria = None
+        if hasattr(criteria, 'frame_type') and criteria.frame_type:
+            from ..sparql.kg_query_builder import FrameCriteria
+            sparql_frame_criteria = [FrameCriteria(
+                frame_type=criteria.frame_type
+            )]
+        
         # Create SPARQL criteria object
         sparql_criteria = SparqlEntityQueryCriteria(
             search_string=criteria.search_string,
             entity_type=criteria.entity_type,
-            frame_type=criteria.frame_type,
+            frame_criteria=sparql_frame_criteria,
             slot_criteria=sparql_slot_criteria,
             sort_criteria=sparql_sort_criteria,
             filters=sparql_filters

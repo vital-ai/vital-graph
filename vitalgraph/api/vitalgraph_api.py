@@ -16,7 +16,7 @@ class VitalGraphAPI:
         """Health check endpoint"""
         return {"status": "ok"}
     
-    async def login(self, form_data: OAuth2PasswordRequestForm):
+    async def login(self, form_data: OAuth2PasswordRequestForm, token_expiry_seconds: Optional[int] = None):
         """Enhanced login with JWT tokens"""
         user = self.auth.authenticate_user(form_data.username, form_data.password)
         if not user:
@@ -26,8 +26,23 @@ class VitalGraphAPI:
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Create JWT tokens
-        tokens = self.auth.create_tokens(user)
+        # Validate token_expiry_seconds if provided (for testing)
+        if token_expiry_seconds is not None:
+            MAX_EXPIRY_SECONDS = 1800  # 30 minutes
+            if token_expiry_seconds > MAX_EXPIRY_SECONDS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"token_expiry_seconds cannot exceed {MAX_EXPIRY_SECONDS} seconds (30 minutes)"
+                )
+            if token_expiry_seconds < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="token_expiry_seconds must be at least 1 second"
+                )
+            logger.info(f"Creating tokens with custom expiry: {token_expiry_seconds} seconds")
+        
+        # Create JWT tokens with optional custom expiry
+        tokens = self.auth.create_tokens(user, token_expiry_seconds=token_expiry_seconds)
         
         return {
             **tokens,

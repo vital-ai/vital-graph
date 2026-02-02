@@ -2,7 +2,7 @@
 Test suite for Enhanced MockKGEntitiesEndpoint with Entity-Frame relationship functionality.
 
 ✅ UPDATED: This test file uses Edge-based relationships, concrete slot classes, and follows Phase 1A enhancements!
-    Entity-frame relationships are properly implemented using Edge_hasKGFrame
+    Entity-frame relationships are properly implemented using Edge_hasEntityKGFrame
     instead of direct properties, with proper VitalSigns integration.
     Concrete slot classes (KGTextSlot, KGIntegerSlot, KGBooleanSlot) with actual values.
 
@@ -104,10 +104,10 @@ def create_test_entity_with_frames() -> List[object]:
     boolean_slot_edge.edgeDestination = str(boolean_slot.URI)
     objects.append(boolean_slot_edge)
     
-    # Create Edge_hasKGFrame to link entity to frame1
-    from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
-    edge1 = Edge_hasKGFrame()
-    edge1.URI = "http://vital.ai/haley.ai/app/Edge_hasKGFrame/entity_frame1"
+    # Create Edge_hasEntityKGFrame to link entity to frame1
+    from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+    edge1 = Edge_hasEntityKGFrame()
+    edge1.URI = "http://vital.ai/haley.ai/app/Edge_hasEntityKGFrame/entity_frame1"
     edge1.edgeSource = str(entity.URI)
     edge1.edgeDestination = str(frame1.URI)
     objects.append(edge1)
@@ -119,9 +119,9 @@ def create_test_entity_with_frames() -> List[object]:
     frame2.kGFrameType = "urn:SimpleTestFrameType"
     objects.append(frame2)
     
-    # Create Edge_hasKGFrame to link entity to frame2
-    edge2 = Edge_hasKGFrame()
-    edge2.URI = "http://vital.ai/haley.ai/app/Edge_hasKGFrame/entity_frame2"
+    # Create Edge_hasEntityKGFrame to link entity to frame2
+    edge2 = Edge_hasEntityKGFrame()
+    edge2.URI = "http://vital.ai/haley.ai/app/Edge_hasEntityKGFrame/entity_frame2"
     edge2.edgeSource = str(entity.URI)
     edge2.edgeDestination = str(frame2.URI)
     objects.append(edge2)

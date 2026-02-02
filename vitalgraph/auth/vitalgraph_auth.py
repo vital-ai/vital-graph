@@ -31,24 +31,30 @@ class VitalGraphAuth:
             return self.users_db[username]
         return None
     
-    def create_tokens(self, user_data: Dict) -> Dict:
-        """Create access and refresh tokens for authenticated user."""
+    def create_tokens(self, user_data: Dict, token_expiry_seconds: Optional[int] = None) -> Dict[str, str]:
+        """Create access and refresh tokens for a user"""
         token_data = {
             "sub": user_data["username"],
-            "username": user_data["username"],
             "full_name": user_data["full_name"],
             "email": user_data["email"],
             "role": user_data["role"]
         }
         
-        access_token = self.jwt_auth.create_access_token(token_data)
+        # Create tokens with optional custom expiry
+        access_token = self.jwt_auth.create_access_token(token_data, expiry_seconds=token_expiry_seconds)
         refresh_token = self.jwt_auth.create_refresh_token(token_data)
+        
+        # Calculate expires_in based on custom or default expiry
+        if token_expiry_seconds is not None:
+            expires_in = token_expiry_seconds
+        else:
+            expires_in = self.jwt_auth.access_token_expire_minutes * 60
         
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
-            "expires_in": self.jwt_auth.access_token_expire_minutes * 60
+            "expires_in": expires_in
         }
     
     def create_get_current_user_dependency(self):

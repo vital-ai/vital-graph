@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """
-Test script for VitalGraph Client JWT Authentication
+VitalGraph Client JWT Authentication Test
 
-This script tests the JWT-only authentication functionality of the VitalGraph client,
-including login, token refresh, and authenticated API calls.
-Requires a VitalGraph server with JWT authentication enabled.
+This script tests JWT-only authentication with the VitalGraph client,
+validating that the client can successfully authenticate and make API calls
+using JWT tokens without requiring username/password for each request.
 
-UPDATED: Now uses typed client methods with SpacesListResponse models 
-instead of direct response handling for full type safety.
+Key Features Tested:
+- JWT token acquisition via login
+- Automatic token refresh
+- Authenticated API calls using JWT
+- Typed client methods with response models
+- Error handling for authentication failures
 """
 
 import sys
+import os
 import logging
 from pathlib import Path
-from typing import Dict, Any
+
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.spaces_model import SpacesListResponse

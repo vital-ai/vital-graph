@@ -1,11 +1,11 @@
 """
 VitalGraph Client KGEntities Endpoint - Refactored with Standardized Responses
 
-Client-side implementation for KGEntities operations using standardized response objects.
+Client-side implementation for KGEntities operations.
 All responses contain VitalSigns GraphObjects, hiding JSON-LD complexity.
 """
 
-import requests
+import httpx
 import time
 import logging
 from typing import Dict, Any, Optional, List
@@ -52,29 +52,30 @@ class KGEntitiesEndpoint(BaseEndpoint):
     
     def _make_request(self, method: str, url: str, params=None, json=None):
         """
-        Make HTTP request and return response object.
+        Make authenticated HTTP request with automatic token refresh.
+        Uses base endpoint's authenticated request method.
         """
         try:
             url_parts = url.split('/')
             operation = url_parts[-1] if url_parts else 'request'
             
             start_time = time.time()
-            if method == 'GET':
-                response = self.client.session.get(url, params=params)
-            elif method == 'POST':
-                response = self.client.session.post(url, params=params, json=json)
-            elif method == 'DELETE':
-                response = self.client.session.delete(url, params=params)
-            else:
-                raise VitalGraphClientError(f"Unsupported HTTP method: {method}")
+            
+            # Use base endpoint's authenticated request method for token refresh
+            kwargs = {}
+            if params:
+                kwargs['params'] = params
+            if json:
+                kwargs['json'] = json
+            
+            response = self._make_authenticated_request(method, url, **kwargs)
             
             duration = time.time() - start_time
             logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
             
-            response.raise_for_status()
             return response
             
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
     def list_kgentities(
@@ -1189,13 +1190,37 @@ class KGEntitiesEndpoint(BaseEndpoint):
             
             vs = self.vs
             
-            # Parse query results
-            results_jsonld = response_data.get('results', response_data)
+            # Server returns EntitiesResponse with 'entities' field containing JsonLdDocument or JsonLdObject
+            # Extract the entities and convert to GraphObjects
+            entities_data = response_data.get('entities', {})
+            
+            # Handle both JsonLdObject (single entity) and JsonLdDocument (multiple entities)
+            if isinstance(entities_data, dict):
+                # Check if it's a JsonLdObject (single entity) - has @id, @type, etc but no @graph
+                if '@id' in entities_data and '@graph' not in entities_data:
+                    # Single entity - wrap in @graph array
+                    results_jsonld = {'@graph': [entities_data]}
+                # JsonLdDocument format with @graph
+                elif '@graph' in entities_data:
+                    results_jsonld = entities_data
+                elif 'graph' in entities_data:
+                    # Pydantic model serialized format - could be array or empty
+                    graph_data = entities_data['graph']
+                    if isinstance(graph_data, list):
+                        results_jsonld = {'@graph': graph_data}
+                    else:
+                        # Single object not in array
+                        results_jsonld = {'@graph': [graph_data] if graph_data else []}
+                else:
+                    results_jsonld = {'@graph': []}
+            else:
+                results_jsonld = {'@graph': []}
+            
             objects = jsonld_to_graph_objects(results_jsonld, vs)
             
             query_info = {
                 'execution_time': response_data.get('execution_time'),
-                'total_results': response_data.get('total_results', len(objects))
+                'total_results': response_data.get('total_count', len(objects))
             }
             
             return build_success_response(

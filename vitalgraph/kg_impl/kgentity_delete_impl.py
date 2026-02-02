@@ -46,24 +46,61 @@ class KGEntityDeleteProcessor:
             # Use the proper graph URI for backend operations
             full_graph_uri = graph_id
             
-            # Create SPARQL DELETE query for single entity
-            delete_query = f"""
-            DELETE {{
-                GRAPH <{full_graph_uri}> {{
-                    <{entity_uri}> ?p ?o .
-                }}
-            }}
-            WHERE {{
+            # Query to get all triples for this entity
+            triples_query = f"""
+            SELECT ?p ?o WHERE {{
                 GRAPH <{full_graph_uri}> {{
                     <{entity_uri}> ?p ?o .
                 }}
             }}
             """
             
-            self.logger.debug(f"Executing DELETE query: {delete_query}")
+            triples_result = await backend.execute_sparql_query(space_id, triples_query)
+            
+            # Extract triples
+            all_triples = []
+            if isinstance(triples_result, dict) and 'results' in triples_result:
+                bindings = triples_result['results'].get('bindings', [])
+                for binding in bindings:
+                    if 'p' in binding and 'o' in binding:
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
+                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        
+                        if p_value and o_value:
+                            all_triples.append((entity_uri, p_value, o_value, o_type))
+            
+            if not all_triples:
+                self.logger.warning(f"No triples found for entity {entity_uri}")
+                return False
+            
+            # Build DELETE DATA query with concrete triples
+            delete_statements = []
+            for s, p, o, o_type in all_triples:
+                # Format object based on type
+                if o_type == 'literal':
+                    # Escape quotes in literals
+                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
+                    o_formatted = f'"{o_escaped}"'
+                elif o_type == 'uri':
+                    o_formatted = f'<{o}>'
+                else:
+                    o_formatted = f'<{o}>'
+                
+                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+            
+            delete_query = f"""
+            DELETE DATA {{
+                GRAPH <{full_graph_uri}> {{
+{chr(10).join(delete_statements)}
+                }}
+            }}
+            """
+            
+            self.logger.debug(f"Executing DELETE DATA with {len(all_triples)} triples")
             
             # Execute delete operation through backend
-            success = await backend.delete_object(space_id, full_graph_uri, entity_uri)
+            success = await backend.execute_sparql_update(space_id, delete_query)
             
             if success:
                 self.logger.info(f"Successfully deleted entity: {entity_uri}")
@@ -103,25 +140,93 @@ class KGEntityDeleteProcessor:
             
             self.logger.info(f"Deleting all objects with kGGraphURI: {kg_graph_uri}")
             
-            # Build SPARQL DELETE query to delete all triples for subjects with this kGGraphURI
-            # The WHERE clause ensures we only match subjects that have the kGGraphURI property
-            delete_query = f"""
+            # First, find all subjects with this kGGraphURI
+            find_subjects_query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
             
-            DELETE {{
-                GRAPH <{full_graph_uri}> {{
-                    ?s ?p ?o .
-                }}
-            }}
-            WHERE {{
+            SELECT DISTINCT ?s WHERE {{
                 GRAPH <{full_graph_uri}> {{
                     ?s haley:hasKGGraphURI <{kg_graph_uri}> .
-                    ?s ?p ?o .
                 }}
             }}
             """
             
-            self.logger.info(f"Executing batch delete for all objects with kGGraphURI: {kg_graph_uri}")
+            subjects_result = await backend.execute_sparql_query(space_id, find_subjects_query)
+            
+            # Extract subject URIs
+            subject_uris = []
+            if isinstance(subjects_result, dict) and 'results' in subjects_result:
+                bindings = subjects_result['results'].get('bindings', [])
+                for binding in bindings:
+                    if 's' in binding:
+                        s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
+                        if s_value:
+                            subject_uris.append(s_value)
+            
+            if not subject_uris:
+                self.logger.warning(f"No objects found with kGGraphURI: {kg_graph_uri}")
+                return 0
+            
+            self.logger.info(f"Found {len(subject_uris)} objects with kGGraphURI: {kg_graph_uri}")
+            
+            # Query to get all triples for all subjects in a single query
+            subject_filter = ', '.join([f'<{str(uri).strip()}>' for uri in subject_uris])
+            
+            triples_query = f"""
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{full_graph_uri}> {{
+                    ?s ?p ?o .
+                    FILTER(?s IN ({subject_filter}))
+                }}
+            }}
+            """
+            
+            triples_result = await backend.execute_sparql_query(space_id, triples_query)
+            
+            # Extract triples
+            all_triples = []
+            if isinstance(triples_result, dict) and 'results' in triples_result:
+                bindings = triples_result['results'].get('bindings', [])
+                for binding in bindings:
+                    if 's' in binding and 'p' in binding and 'o' in binding:
+                        s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
+                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        
+                        if s_value and p_value and o_value:
+                            all_triples.append((s_value, p_value, o_value, o_type))
+            
+            if not all_triples:
+                self.logger.warning(f"No triples found for entity graph objects")
+                return 0
+            
+            self.logger.info(f"Found {len(all_triples)} triples to delete")
+            
+            # Build DELETE DATA query with concrete triples
+            delete_statements = []
+            for s, p, o, o_type in all_triples:
+                # Format object based on type
+                if o_type == 'literal':
+                    # Escape quotes in literals
+                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
+                    o_formatted = f'"{o_escaped}"'
+                elif o_type == 'uri':
+                    o_formatted = f'<{o}>'
+                else:
+                    o_formatted = f'<{o}>'
+                
+                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+            
+            delete_query = f"""
+            DELETE DATA {{
+                GRAPH <{full_graph_uri}> {{
+{chr(10).join(delete_statements)}
+                }}
+            }}
+            """
+            
+            self.logger.info(f"Executing DELETE DATA for entity graph with {len(all_triples)} triples")
             
             # Execute the batch delete
             result = await backend.execute_sparql_update(space_id, delete_query)

@@ -50,7 +50,7 @@ class FilesImpl:
             # Build filters for FileNode objects
             # Note: VitalSigns FileNode uses 'vital#FileNode' not 'vital-core#FileNode'
             filters = {
-                'vitaltype_uri': 'http://vital.ai/ontology/vital#FileNode'
+                'vitaltype_filter': 'http://vital.ai/ontology/vital#FileNode'
             }
             
             if file_filter:
@@ -286,4 +286,56 @@ class FilesImpl:
             
         except Exception as e:
             self.logger.error(f"Error updating files: {e}")
+            raise
+    
+    async def delete_files(self, space_id: str, uris: List[str], graph_id: str) -> int:
+        """
+        Delete FileNode objects from the database.
+        
+        Args:
+            space_id: Space identifier
+            uris: List of file URIs to delete
+            graph_id: Graph identifier (required)
+            
+        Returns:
+            Number of files successfully deleted
+        """
+        try:
+            from .impl_utils import get_existing_quads_for_uris, execute_with_transaction, get_db_space_impl
+            
+            self.logger.info(f"Deleting {len(uris)} file nodes from space {space_id}, graph {graph_id}")
+            
+            # Step 1: Get existing quads for all files
+            existing_quads = await get_existing_quads_for_uris(
+                self.space_manager, space_id, graph_id, uris
+            )
+            
+            if not existing_quads:
+                self.logger.warning("No files found for deletion")
+                return 0
+            
+            # Step 2: Execute batch deletion in transaction
+            async def delete_operation(transaction):
+                db_space_impl = await get_db_space_impl(self.space_manager, space_id)
+                
+                removed_count = await db_space_impl.db_ops.remove_rdf_quads_batch(
+                    space_id, existing_quads, auto_commit=False, transaction=transaction
+                )
+                
+                # Count unique subjects deleted
+                deleted_subjects = set(str(quad[0]) for quad in existing_quads)
+                deleted_count = len(deleted_subjects)
+                
+                self.logger.info(f"Deleted {deleted_count} file nodes: removed {removed_count} quads")
+                return deleted_count
+            
+            result = await execute_with_transaction(
+                self.space_manager, space_id, delete_operation
+            )
+            
+            self.logger.info(f"Successfully deleted {result} file nodes")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error deleting files: {e}")
             raise

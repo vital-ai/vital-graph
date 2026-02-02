@@ -30,7 +30,7 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
-from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -133,9 +133,9 @@ class TestEntityLifecycleManagement:
         integer_slot.kGSlotType = "urn:LifecycleIntegerSlotType"
         integer_slot.integerSlotValue = 200
         
-        # Create Edge_hasKGFrame relationship (entity → frame)
-        entity_frame_edge = Edge_hasKGFrame()
-        entity_frame_edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasKGFrame/lifecycle_entity_frame_edge{entity_name_suffix}"
+        # Create Edge_hasEntityKGFrame relationship (entity → frame)
+        entity_frame_edge = Edge_hasEntityKGFrame()
+        entity_frame_edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasEntityKGFrame/lifecycle_entity_frame_edge{entity_name_suffix}"
         entity_frame_edge.edgeSource = entity.URI
         entity_frame_edge.edgeDestination = frame.URI
         

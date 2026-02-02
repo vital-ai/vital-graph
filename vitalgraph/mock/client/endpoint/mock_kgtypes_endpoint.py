@@ -15,6 +15,7 @@ from vitalgraph.model.kgtypes_model import (
 )
 from vitalgraph.model.jsonld_model import JsonLdDocument
 from ai_haley_kg_domain.model.KGType import KGType
+from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
 
 class MockKGTypesEndpoint(MockBaseEndpoint):
@@ -227,19 +228,19 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             empty_jsonld = GraphObject.to_jsonld_list([])
             return JsonLdDocument(**empty_jsonld)
     
-    def create_kgtypes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> KGTypeCreateResponse:
+    def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
         """
-        Create KGTypes from JSON-LD document using VitalSigns native functionality.
+        Create KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing KGType data
+            objects: List of KGType GraphObject instances to create
             
         Returns:
             KGTypeCreateResponse with created URIs and count
         """
-        self._log_method_call("create_kgtypes", space_id=space_id, graph_id=graph_id, document=document)
+        self._log_method_call("create_kgtypes", space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             # Get space from space manager
@@ -251,19 +252,16 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                     created_uris=[]
                 )
             
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            types = self._jsonld_to_vitalsigns_objects(document_dict)
-            
-            if not types:
+            # Objects are already VitalSigns GraphObjects
+            if not objects:
                 return KGTypeCreateResponse(
-                    message="No valid types found in document",
+                    message="No objects provided",
                     created_count=0, 
                     created_uris=[]
                 )
             
             # Filter for KGType objects only
-            kgtypes = [obj for obj in types if isinstance(obj, KGType)]
+            kgtypes = [obj for obj in objects if isinstance(obj, KGType)]
             
             if not kgtypes:
                 return KGTypeCreateResponse(
@@ -292,19 +290,19 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                 created_uris=[]
             )
     
-    def update_kgtypes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> KGTypeUpdateResponse:
+    def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
         """
-        Update KGTypes from JSON-LD document using VitalSigns native functionality.
+        Update KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing updated KGType data
+            objects: List of KGType GraphObject instances to update
             
         Returns:
             KGTypeUpdateResponse with updated URI
         """
-        self._log_method_call("update_kgtypes", space_id=space_id, graph_id=graph_id, document=document)
+        self._log_method_call("update_kgtypes", space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             # Get space from space manager
@@ -315,18 +313,15 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                     updated_uri=""
                 )
             
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            types = self._jsonld_to_vitalsigns_objects(document_dict)
-            
-            if not types:
+            # Objects are already VitalSigns GraphObjects
+            if not objects:
                 return KGTypeUpdateResponse(
-                    message="No valid types found in document",
+                    message="No objects provided",
                     updated_uri=""
                 )
             
             # Filter for KGType objects only
-            kgtypes = [obj for obj in types if isinstance(obj, KGType)]
+            kgtypes = [obj for obj in objects if isinstance(obj, KGType)]
             
             if not kgtypes:
                 return KGTypeUpdateResponse(

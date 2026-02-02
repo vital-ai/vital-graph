@@ -4,7 +4,6 @@ VitalGraph Client Utilities
 Shared utilities and helper functions for VitalGraph client endpoints.
 """
 
-import requests
 from typing import Dict, Any, Optional
 
 

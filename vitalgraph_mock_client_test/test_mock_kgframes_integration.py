@@ -32,7 +32,7 @@ from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
 from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
-from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 # Property handling will be tested through VitalSigns object property access

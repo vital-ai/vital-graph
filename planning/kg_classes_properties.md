@@ -88,233 +88,379 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGEntity`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGEntity`
-- **Properties**: 88
+- **Properties**: 94
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGEntityAccountURI`
-  - Short name: `None`
+  - Local name: `hasKGEntityAccountURI`
+  - Short name: `kGEntityAccountURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGEntityLoginURI`
-  - Short name: `None`
+  - Local name: `hasKGEntityLoginURI`
+  - Short name: `kGEntityLoginURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGEntityType`
-  - Short name: `None`
+  - Local name: `hasKGEntityType`
+  - Short name: `kGEntityType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGEntityTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGEntityTypeDescription`
+  - Short name: `kGEntityTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGFormType`
-  - Short name: `None`
+  - Local name: `hasKGFormType`
+  - Short name: `kGFormType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGProvenanceType`
-  - Short name: `None`
+  - Local name: `hasKGProvenanceType`
+  - Short name: `kGProvenanceType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTypeMethodURI`
-  - Short name: `None`
+  - Local name: `hasKGTypeMethodURI`
+  - Short name: `kGTypeMethodURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -322,249 +468,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGEntitySlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGEntitySlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue`
-  - Short name: `None`
+  - Local name: `hasEntitySlotValue`
+  - Short name: `entitySlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -575,209 +871,369 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.Edge_hasKGFrame`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame`
-- **Properties**: 78
+- **Properties**: 84
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasEdgeDestination`
-  - Short name: `None`
+  - Local name: `hasEdgeDestination`
+  - Short name: `edgeDestination`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasEdgeSource`
-  - Short name: `None`
+  - Local name: `hasEdgeSource`
+  - Short name: `edgeSource`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasListIndex`
-  - Short name: `None`
+  - Local name: `hasListIndex`
+  - Short name: `listIndex`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasEdgeName`
-  - Short name: `None`
+  - Local name: `hasEdgeName`
+  - Short name: `edgeName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefEdgeURI`
-  - Short name: `None`
+  - Local name: `hasKGRefEdgeURI`
+  - Short name: `kGRefEdgeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceClass`
+  - Local name: `hasDestinationReferenceClass`
+  - Short name: `destinationReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceIdentifier`
+  - Local name: `hasDestinationReferenceIdentifier`
+  - Short name: `destinationReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceClass`
+  - Local name: `hasSourceReferenceClass`
+  - Short name: `sourceReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceIdentifier`
+  - Local name: `hasSourceReferenceIdentifier`
+  - Short name: `sourceReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOfficeAccessURIs`
-  - Short name: `None`
+  - Local name: `hasOfficeAccessURIs`
+  - Short name: `officeAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginDateTime`
-  - Short name: `None`
+  - Local name: `hasOriginDateTime`
+  - Short name: `originDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginURI`
-  - Short name: `None`
+  - Local name: `hasOriginURI`
+  - Short name: `originURI`
   - Type: `URIProperty`
 
-... and 30 more properties
+... and 14 more properties
 
 ---
 
@@ -785,245 +1241,394 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGFrame`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGFrame`
-- **Properties**: 91
+- **Properties**: 97
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameSequence`
-  - Short name: `None`
+  - Local name: `hasFrameSequence`
+  - Short name: `frameSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGFormType`
-  - Short name: `None`
+  - Local name: `hasKGFormType`
+  - Short name: `kGFormType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameType`
-  - Short name: `None`
+  - Local name: `hasKGFrameType`
+  - Short name: `kGFrameType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGFrameTypeDescription`
+  - Short name: `kGFrameTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGProvenanceType`
-  - Short name: `None`
+  - Local name: `hasKGProvenanceType`
+  - Short name: `kGProvenanceType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTypeMethodURI`
-  - Short name: `None`
+  - Local name: `hasKGTypeMethodURI`
+  - Short name: `kGTypeMethodURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasParentFrameURI`
-  - Short name: `None`
+  - Local name: `hasParentFrameURI`
+  - Short name: `parentFrameURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -1034,221 +1639,384 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.Edge_hasKGSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot`
-- **Properties**: 81
+- **Properties**: 87
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasEdgeDestination`
-  - Short name: `None`
+  - Local name: `hasEdgeDestination`
+  - Short name: `edgeDestination`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasEdgeSource`
-  - Short name: `None`
+  - Local name: `hasEdgeSource`
+  - Short name: `edgeSource`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasListIndex`
-  - Short name: `None`
+  - Local name: `hasListIndex`
+  - Short name: `listIndex`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasEdgeName`
-  - Short name: `None`
+  - Local name: `hasEdgeName`
+  - Short name: `edgeName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefEdgeURI`
-  - Short name: `None`
+  - Local name: `hasKGRefEdgeURI`
+  - Short name: `kGRefEdgeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotRoleSequence`
-  - Short name: `None`
+  - Local name: `hasKGSlotRoleSequence`
+  - Short name: `kGSlotRoleSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotRoleType`
-  - Short name: `None`
+  - Local name: `hasKGSlotRoleType`
+  - Short name: `kGSlotRoleType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeExternIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeExternIdentifier`
+  - Short name: `kGSlotTypeExternIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceClass`
+  - Local name: `hasDestinationReferenceClass`
+  - Short name: `destinationReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceIdentifier`
+  - Local name: `hasDestinationReferenceIdentifier`
+  - Short name: `destinationReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceClass`
+  - Local name: `hasSourceReferenceClass`
+  - Short name: `sourceReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceIdentifier`
+  - Local name: `hasSourceReferenceIdentifier`
+  - Short name: `sourceReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOfficeAccessURIs`
-  - Short name: `None`
+  - Local name: `hasOfficeAccessURIs`
+  - Short name: `officeAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginDateTime`
-  - Short name: `None`
+  - Local name: `hasOriginDateTime`
+  - Short name: `originDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginURI`
-  - Short name: `None`
+  - Local name: `hasOriginURI`
+  - Short name: `originURI`
   - Type: `URIProperty`
 
-... and 30 more properties
+... and 14 more properties
 
 ---
 
@@ -1256,249 +2024,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGAudioSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGAudioSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasAudioSlotValue`
-  - Short name: `None`
+  - Local name: `hasAudioSlotValue`
+  - Short name: `audioSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -1506,249 +2424,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGBooleanSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue`
-  - Short name: `None`
+  - Local name: `hasBooleanSlotValue`
+  - Short name: `booleanSlotValue`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -1756,249 +2824,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGChoiceOptionSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGChoiceOptionSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasChoiceSlotOptionValues`
-  - Short name: `None`
+  - Local name: `hasChoiceSlotOptionValues`
+  - Short name: `choiceSlotOptionValues`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -2006,249 +3224,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGChoiceSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGChoiceSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasChoiceSlotValue`
-  - Short name: `None`
+  - Local name: `hasChoiceSlotValue`
+  - Short name: `choiceSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -2256,249 +3624,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGCodeSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGCodeSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasCodeSlotValue`
-  - Short name: `None`
+  - Local name: `hasCodeSlotValue`
+  - Short name: `codeSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -2506,249 +4024,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGCurrencySlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGCurrencySlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasCurrencySlotValue`
-  - Short name: `None`
+  - Local name: `hasCurrencySlotValue`
+  - Short name: `currencySlotValue`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -2756,249 +4424,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGDateTimeSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue`
-  - Short name: `None`
+  - Local name: `hasDateTimeSlotValue`
+  - Short name: `dateTimeSlotValue`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -3006,249 +4824,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGDoubleSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasDoubleSlotValue`
-  - Short name: `None`
+  - Local name: `hasDoubleSlotValue`
+  - Short name: `doubleSlotValue`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -3256,249 +5224,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGFileUploadSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGFileUploadSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFileUploadSlotValue`
-  - Short name: `None`
+  - Local name: `hasFileUploadSlotValue`
+  - Short name: `fileUploadSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -3506,249 +5624,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGGeoLocationSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGGeoLocationSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasGeoLocationSlotValue`
-  - Short name: `None`
+  - Local name: `hasGeoLocationSlotValue`
+  - Short name: `geoLocationSlotValue`
   - Type: `GeoLocationProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -3756,249 +6024,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGImageSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGImageSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasImageSlotValue`
-  - Short name: `None`
+  - Local name: `hasImageSlotValue`
+  - Short name: `imageSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -4006,249 +6424,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGIntegerSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue`
-  - Short name: `None`
+  - Local name: `hasIntegerSlotValue`
+  - Short name: `integerSlotValue`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -4256,249 +6824,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGJSONSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGJSONSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasJsonSlotValue`
-  - Short name: `None`
+  - Local name: `hasJsonSlotValue`
+  - Short name: `jsonSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -4506,249 +7224,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGLongSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGLongSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasLongSlotValue`
-  - Short name: `None`
+  - Local name: `hasLongSlotValue`
+  - Short name: `longSlotValue`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -4756,249 +7624,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGLongTextSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGLongTextSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasLongTextSlotValue`
-  - Short name: `None`
+  - Local name: `hasLongTextSlotValue`
+  - Short name: `longTextSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -5006,249 +8024,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGMultiChoiceOptionSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGMultiChoiceOptionSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasMultiChoiceSlotValues`
-  - Short name: `None`
+  - Local name: `hasMultiChoiceSlotValues`
+  - Short name: `multiChoiceSlotValues`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -5256,249 +8424,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGMultiChoiceSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGMultiChoiceSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasMultiChoiceSlotValues`
-  - Short name: `None`
+  - Local name: `hasMultiChoiceSlotValues`
+  - Short name: `multiChoiceSlotValues`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -5506,249 +8824,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGMultiTaxonomyOptionSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGMultiTaxonomyOptionSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTaxonomyOptionURI`
-  - Short name: `None`
+  - Local name: `hasKGTaxonomyOptionURI`
+  - Short name: `kGTaxonomyOptionURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -5756,249 +9224,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGMultiTaxonomySlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGMultiTaxonomySlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasMultiTaxonomySlotValues`
-  - Short name: `None`
+  - Local name: `hasMultiTaxonomySlotValues`
+  - Short name: `multiTaxonomySlotValues`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -6006,261 +9624,419 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGPropertySlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGPropertySlot`
-- **Properties**: 95
+- **Properties**: 102
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPropertyGroupNameSlotValue`
-  - Short name: `None`
+  - Local name: `hasKGPropertyGroupNameSlotValue`
+  - Short name: `kGPropertyGroupNameSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPropertyNameSlotValue`
-  - Short name: `None`
+  - Local name: `hasKGPropertyNameSlotValue`
+  - Short name: `kGPropertyNameSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasPropertyClassSlotValue`
+  - Local name: `hasPropertyClassSlotValue`
+  - Short name: `propertyClassSlotValue`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasPropertyFrameTypeSlotValue`
-  - Short name: `None`
+  - Local name: `hasPropertyFrameTypeSlotValue`
+  - Short name: `propertyFrameTypeSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasPropertySlotTypeSlotValue`
-  - Short name: `None`
+  - Local name: `hasPropertySlotTypeSlotValue`
+  - Short name: `propertySlotTypeSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -6268,249 +10044,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGRunSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGRunSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasRunSlotValue`
-  - Short name: `None`
+  - Local name: `hasRunSlotValue`
+  - Short name: `runSlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -6518,245 +10444,394 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGSlot`
-- **Properties**: 91
+- **Properties**: 97
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -6764,249 +10839,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGTaxonomyOptionSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGTaxonomyOptionSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTaxonomyOptionURI`
-  - Short name: `None`
+  - Local name: `hasKGTaxonomyOptionURI`
+  - Short name: `kGTaxonomyOptionURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -7014,249 +11239,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGTaxonomySlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGTaxonomySlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasTaxonomySlotValue`
-  - Short name: `None`
+  - Local name: `hasTaxonomySlotValue`
+  - Short name: `taxonomySlotValue`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -7264,249 +11639,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGTextSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGTextSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue`
-  - Short name: `None`
+  - Local name: `hasTextSlotValue`
+  - Short name: `textSlotValue`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -7514,245 +12039,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGURISlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGURISlot`
-- **Properties**: 91
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/haley-ai-kg#hasUriSlotValue`
+  - Local name: `hasUriSlotValue`
+  - Short name: `uriSlotValue`
+  - Type: `URIProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -7760,249 +12439,399 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.KGVideoSlot`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#KGVideoSlot`
-- **Properties**: 92
+- **Properties**: 98
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI`
-  - Short name: `None`
+  - Local name: `hasFrameGraphURI`
+  - Short name: `frameGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeList`
+  - Short name: `kGActionTypeList`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeSummaryDateTime`
-  - Short name: `None`
+  - Local name: `hasKGActionTypeSummaryDateTime`
+  - Short name: `kGActionTypeSummaryDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGBeliefModeType`
-  - Short name: `None`
+  - Local name: `hasKGBeliefModeType`
+  - Short name: `kGBeliefModeType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGExpressionType`
-  - Short name: `None`
+  - Local name: `hasKGExpressionType`
+  - Short name: `kGExpressionType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGNodeCacheDateTime`
-  - Short name: `None`
+  - Local name: `hasKGNodeCacheDateTime`
+  - Short name: `kGNodeCacheDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGParticipationType`
-  - Short name: `None`
+  - Local name: `hasKGParticipationType`
+  - Short name: `kGParticipationType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefURI`
-  - Short name: `None`
+  - Local name: `hasKGRefURI`
+  - Short name: `kGRefURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGReferentURI`
-  - Short name: `None`
+  - Local name: `hasKGReferentURI`
+  - Short name: `kGReferentURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotConstraintType`
-  - Short name: `None`
+  - Local name: `hasKGSlotConstraintType`
+  - Short name: `kGSlotConstraintType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotReferenceURI`
-  - Short name: `None`
+  - Local name: `hasKGSlotReferenceURI`
+  - Short name: `kGSlotReferenceURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotType`
-  - Short name: `None`
+  - Local name: `hasKGSlotType`
+  - Short name: `kGSlotType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeDescription`
-  - Short name: `None`
+  - Local name: `hasKGSlotTypeDescription`
+  - Short name: `kGSlotTypeDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSlotValueType`
-  - Short name: `None`
+  - Local name: `hasKGSlotValueType`
+  - Short name: `kGSlotValueType`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasSlotSequence`
-  - Short name: `None`
+  - Local name: `hasSlotSequence`
+  - Short name: `slotSequence`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasVideoSlotValue`
-  - Short name: `None`
+  - Local name: `hasVideoSlotValue`
+  - Short name: `videoSlotValue`
   - Type: `URIProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
+  - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedContent`
-  - Short name: `None`
+  - Local name: `hasAnalyzedContent`
+  - Short name: `analyzedContent`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAnalyzedName`
-  - Short name: `None`
+  - Local name: `hasAnalyzedName`
+  - Short name: `analyzedName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasKnowledgeGraphID`
-  - Short name: `None`
+  - Local name: `hasKnowledgeGraphID`
+  - Short name: `knowledgeGraphID`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
-... and 34 more properties
+... and 22 more properties
 
 ---
 
@@ -8013,205 +12842,364 @@ def set_grouping_uris(objects: list, entity_uri: str):
 
 - **Module**: `ai_haley_kg_domain.model.Edge_hasKGEdge`
 - **VitalType**: `http://vital.ai/ontology/haley-ai-kg#Edge_hasKGEdge`
-- **Properties**: 77
+- **Properties**: 83
 
 **Available Properties:**
 
 **Vital Core Properties:**
 
+- `http://vital.ai/ontology/vital-core#URIProp`
+  - Local name: `URIProp`
+  - Short name: `uRIProp`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasEdgeDestination`
-  - Short name: `None`
+  - Local name: `hasEdgeDestination`
+  - Short name: `edgeDestination`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasEdgeSource`
-  - Short name: `None`
+  - Local name: `hasEdgeSource`
+  - Short name: `edgeSource`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasListIndex`
-  - Short name: `None`
+  - Local name: `hasListIndex`
+  - Short name: `listIndex`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasName`
-  - Short name: `None`
+  - Local name: `hasName`
+  - Short name: `name`
   - Type: `StringProperty`
 
+- `http://vital.ai/ontology/vital-core#hasOntologyIRI`
+  - Local name: `hasOntologyIRI`
+  - Short name: `ontologyIRI`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#hasProvenance`
-  - Short name: `None`
+  - Local name: `hasProvenance`
+  - Short name: `provenance`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/vital-core#hasTimestamp`
-  - Short name: `None`
+  - Local name: `hasTimestamp`
+  - Short name: `timestamp`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasUpdateTime`
-  - Short name: `None`
+  - Local name: `hasUpdateTime`
+  - Short name: `updateTime`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/vital-core#hasVersionIRI`
-  - Short name: `None`
+  - Local name: `hasVersionIRI`
+  - Short name: `versionIRI`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/vital-core#isActive`
-  - Short name: `None`
+  - Local name: `isActive`
+  - Short name: `active`
   - Type: `BooleanProperty`
 
+- `http://vital.ai/ontology/vital-core#types`
+  - Local name: `types`
+  - Short name: `types`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/vital-core#vitaltype`
-  - Short name: `None`
+  - Local name: `vitaltype`
+  - Short name: `vitaltype`
   - Type: `URIProperty`
 
 **Haley KG Properties:**
 
 - `http://vital.ai/ontology/haley-ai-kg#hasEdgeName`
-  - Short name: `None`
+  - Local name: `hasEdgeName`
+  - Short name: `edgeName`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGChatInteractionGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGChatInteractionGraphURI`
+  - Short name: `kGChatInteractionGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGDataHash`
-  - Short name: `None`
+  - Local name: `hasKGDataHash`
+  - Short name: `kGDataHash`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphAssertionDateTime`
-  - Short name: `None`
+  - Local name: `hasKGGraphAssertionDateTime`
+  - Short name: `kGGraphAssertionDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI`
-  - Short name: `None`
+  - Local name: `hasKGGraphURI`
+  - Short name: `kGGraphURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGIdentifier`
+  - Short name: `kGIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexDateTime`
-  - Short name: `None`
+  - Local name: `hasKGIndexDateTime`
+  - Short name: `kGIndexDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGIndexStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGIndexStatusURI`
+  - Short name: `kGIndexStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGJSON`
-  - Short name: `None`
+  - Local name: `hasKGJSON`
+  - Short name: `kGJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion`
-  - Short name: `None`
+  - Local name: `hasKGModelVersion`
+  - Short name: `kGModelVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGPurgeUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGPurgeUpdateTime`
+  - Short name: `kGPurgeUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGRefEdgeURI`
-  - Short name: `None`
+  - Local name: `hasKGRefEdgeURI`
+  - Short name: `kGRefEdgeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncStatusURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncStatusURI`
+  - Short name: `kGSyncStatusURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGSyncTypeURI`
+  - Short name: `kGSyncTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGSyncUpdateTime`
-  - Short name: `None`
+  - Local name: `hasKGSyncUpdateTime`
+  - Short name: `kGSyncUpdateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGTenantIdentifier`
-  - Short name: `None`
+  - Local name: `hasKGTenantIdentifier`
+  - Short name: `kGTenantIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGValidTypeURI`
-  - Short name: `None`
+  - Local name: `hasKGValidTypeURI`
+  - Short name: `kGValidTypeURI`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVersion`
-  - Short name: `None`
+  - Local name: `hasKGVersion`
+  - Short name: `kGVersion`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGVisualStyleJSON`
-  - Short name: `None`
+  - Local name: `hasKGVisualStyleJSON`
+  - Short name: `kGVisualStyleJSON`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription`
-  - Short name: `None`
+  - Local name: `hasKGraphDescription`
+  - Short name: `kGraphDescription`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainBooleanProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainBooleanProperty`
+  - Short name: `unionDomainBooleanProperty`
   - Type: `BooleanProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDateTimeProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDateTimeProperty`
+  - Short name: `unionDomainDateTimeProperty`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainDoubleProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainDoubleProperty`
+  - Short name: `unionDomainDoubleProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainFloatProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainFloatProperty`
+  - Short name: `unionDomainFloatProperty`
   - Type: `DoubleProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainIntegerProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainIntegerProperty`
+  - Short name: `unionDomainIntegerProperty`
   - Type: `IntegerProperty`
 
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainLongProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainLongProperty`
+  - Short name: `unionDomainLongProperty`
   - Type: `IntegerProperty`
 
+- `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainObjectProperty`
+  - Local name: `hasUnionDomainObjectProperty`
+  - Short name: `unionDomainObjectProperty`
+  - Type: `URIProperty`
+
 - `http://vital.ai/ontology/haley-ai-kg#hasUnionDomainStringProperty`
-  - Short name: `None`
+  - Local name: `hasUnionDomainStringProperty`
+  - Short name: `unionDomainStringProperty`
+  - Type: `StringProperty`
+
+**Vital AIMP Properties:**
+
+- `http://vital.ai/ontology/vital-aimp#hasAIMPGraphURI`
+  - Local name: `hasAIMPGraphURI`
+  - Short name: `aIMPGraphURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAccountURIs`
+  - Local name: `hasAccountURIs`
+  - Short name: `accountURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessAccountURI`
+  - Local name: `hasAgentAccessAccountURI`
+  - Short name: `agentAccessAccountURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentAccessURI`
+  - Local name: `hasAgentAccessURI`
+  - Short name: `agentAccessURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGenerationDateTime`
+  - Local name: `hasAgentGenerationDateTime`
+  - Short name: `agentGenerationDateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasAgentGeneratorURI`
+  - Local name: `hasAgentGeneratorURI`
+  - Short name: `agentGeneratorURI`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasBotCreatorIdentifier`
+  - Local name: `hasBotCreatorIdentifier`
+  - Short name: `botCreatorIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceClass`
+  - Local name: `hasDestinationReferenceClass`
+  - Short name: `destinationReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasDestinationReferenceIdentifier`
+  - Local name: `hasDestinationReferenceIdentifier`
+  - Short name: `destinationReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasGraphLabelURIs`
+  - Local name: `hasGraphLabelURIs`
+  - Short name: `graphLabelURIs`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+  - Local name: `hasObjectCreationTime`
+  - Short name: `objectCreationTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+  - Local name: `hasObjectStatusType`
+  - Short name: `objectStatusType`
+  - Type: `URIProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasObjectUpdateTime`
+  - Local name: `hasObjectUpdateTime`
+  - Short name: `objectUpdateTime`
+  - Type: `DateTimeProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier`
+  - Local name: `hasReferenceIdentifier`
+  - Short name: `referenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSecurityProfile`
+  - Local name: `hasSecurityProfile`
+  - Short name: `securityProfile`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceClass`
+  - Local name: `hasSourceReferenceClass`
+  - Short name: `sourceReferenceClass`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasSourceReferenceIdentifier`
+  - Local name: `hasSourceReferenceIdentifier`
+  - Short name: `sourceReferenceIdentifier`
+  - Type: `StringProperty`
+
+- `http://vital.ai/ontology/vital-aimp#hasUserCreatorIdentifier`
+  - Local name: `hasUserCreatorIdentifier`
+  - Short name: `userCreatorIdentifier`
   - Type: `StringProperty`
 
 **Other Properties:**
 
 - `http://vital.ai/ontology/chat-ai#hasVersionNonce`
-  - Short name: `None`
+  - Local name: `hasVersionNonce`
+  - Short name: `versionNonce`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasAccountObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasAccountObjectAccessTypes`
+  - Short name: `accountObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasApplicationObjectAccessTypes`
-  - Short name: `None`
+  - Local name: `hasApplicationObjectAccessTypes`
+  - Short name: `applicationObjectAccessTypes`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasDatasetAccessURIs`
-  - Short name: `None`
+  - Local name: `hasDatasetAccessURIs`
+  - Short name: `datasetAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasGroupAccessURIs`
-  - Short name: `None`
+  - Local name: `hasGroupAccessURIs`
+  - Short name: `groupAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasHaleyContextIdentifier`
-  - Short name: `None`
+  - Local name: `hasHaleyContextIdentifier`
+  - Short name: `haleyContextIdentifier`
   - Type: `StringProperty`
 
 - `http://vital.ai/ontology/haley#hasLoginAccessURIs`
-  - Short name: `None`
+  - Local name: `hasLoginAccessURIs`
+  - Short name: `loginAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOfficeAccessURIs`
-  - Short name: `None`
+  - Local name: `hasOfficeAccessURIs`
+  - Short name: `officeAccessURIs`
   - Type: `URIProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginDateTime`
-  - Short name: `None`
+  - Local name: `hasOriginDateTime`
+  - Short name: `originDateTime`
   - Type: `DateTimeProperty`
 
 - `http://vital.ai/ontology/haley#hasOriginURI`
-  - Short name: `None`
+  - Local name: `hasOriginURI`
+  - Short name: `originURI`
   - Type: `URIProperty`
 
-... and 30 more properties
+... and 14 more properties
 
 ---
 

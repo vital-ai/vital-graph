@@ -4,11 +4,12 @@ VitalGraph Client KGTypes Endpoint
 Client-side implementation for KGTypes operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, Union, List
 import logging
 
 from .base_endpoint import BaseEndpoint
+from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ...model.kgtypes_model import (
     KGTypeListResponse as ServerKGTypeListResponse,
@@ -238,14 +239,14 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def create_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeCreateResponse:
+    def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
         """
-        Create KGTypes from JSON-LD data.
+        Create KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            data: JSON-LD data - either single object or document with @graph array
+            objects: List of KGType GraphObject instances to create
             
         Returns:
             KGTypeCreateResponse with .is_success property
@@ -254,15 +255,24 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, data=data)
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
-            # Set discriminator field based on type before wrapping in request
-            if isinstance(data, JsonLdObject):
+            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching KGEntities pattern)
+            if len(objects) == 1:
+                # Single object - create JsonLdObject
+                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
+                data = JsonLdObject(**jsonld_dict['@graph'][0])
                 data.jsonld_type = 'object'
-            elif isinstance(data, JsonLdDocument):
+            else:
+                # Multiple objects - create JsonLdDocument
+                jsonld_dict = GraphObject.to_jsonld_list(objects)
+                data = JsonLdDocument(
+                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
+                    graph=jsonld_dict['@graph']
+                )
                 data.jsonld_type = 'document'
             
             # Build request body with space_id, graph_id, and data
@@ -309,14 +319,14 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def update_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeUpdateResponse:
+    def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
         """
-        Update KGTypes from JSON-LD data.
+        Update KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            data: JSON-LD data - either single object or document with @graph array
+            objects: List of KGType GraphObject instances to update
             
         Returns:
             KGTypeUpdateResponse with .is_success property
@@ -325,15 +335,24 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, data=data)
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
-            # Set discriminator field based on type before wrapping in request
-            if isinstance(data, JsonLdObject):
+            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching KGEntities pattern)
+            if len(objects) == 1:
+                # Single object - create JsonLdObject
+                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
+                data = JsonLdObject(**jsonld_dict['@graph'][0])
                 data.jsonld_type = 'object'
-            elif isinstance(data, JsonLdDocument):
+            else:
+                # Multiple objects - create JsonLdDocument
+                jsonld_dict = GraphObject.to_jsonld_list(objects)
+                data = JsonLdDocument(
+                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
+                    graph=jsonld_dict['@graph']
+                )
                 data.jsonld_type = 'document'
             
             # Build request body with space_id, graph_id, and data

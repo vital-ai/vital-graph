@@ -4,7 +4,7 @@ VitalGraph Client SPARQL Endpoint
 Client-side implementation for SPARQL operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional
 
 from .base_endpoint import BaseEndpoint

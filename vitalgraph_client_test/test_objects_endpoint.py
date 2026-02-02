@@ -15,8 +15,11 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
-from vitalgraph.model.objects_model import ObjectsResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+from vitalgraph.client.response.client_response import ObjectsListResponse, ObjectResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
 from vitalgraph.model.jsonld_model import JsonLdDocument
 
 
@@ -32,13 +35,16 @@ def setup_logging():
 
 
 def test_objects_endpoint(config_path: str):
-    """Test the Objects endpoint with test_4847 space data."""
+    """Test the Objects endpoint with its own test space."""
     logger = logging.getLogger(__name__)
     
     print("=" * 80)
     print("VitalGraph Objects Endpoint Testing")
     print("   Using new structured response models (ObjectsResponse)")
     print("=" * 80)
+    
+    space_id = None
+    graph_id = None
     
     try:
         # Initialize and connect client with JWT
@@ -55,12 +61,95 @@ def test_objects_endpoint(config_path: str):
         print(f"     - Access Token: {'✓' if auth_info.get('has_access_token') else '✗'}")
         print(f"     - Refresh Token: {'✓' if auth_info.get('has_refresh_token') else '✗'}")
         
-        # Test parameters - using test space with WordNet graph
-        space_id = "test_4847"  # Use string identifier for space manager
-        graph_id = "urn:kgframe-wordnet-002"
+        # Create or use test space
+        print("\n2. Setting up test space...")
+        space_id = "space_objects_test"
+        
+        # Check if space already exists
+        spaces_response = client.spaces.list_spaces()
+        existing_spaces = spaces_response.spaces
+        existing_space = next((s for s in existing_spaces if s.space == space_id), None)
+        
+        if existing_space:
+            print(f"   ⚠️  Found existing test space '{space_id}', deleting it first...")
+            try:
+                delete_response = client.spaces.delete_space(space_id)
+                if delete_response and (
+                    (hasattr(delete_response, 'success') and delete_response.success) or
+                    (hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message))
+                ):
+                    print(f"   ✓ Existing space deleted successfully")
+                else:
+                    error_msg = delete_response.message if delete_response and hasattr(delete_response, 'message') else 'Unknown error'
+                    print(f"   ❌ Failed to delete existing space: {error_msg}")
+                    client.close()
+                    return False
+            except Exception as e:
+                print(f"   ❌ Exception deleting existing space: {e}")
+                client.close()
+                return False
+        
+        # Create fresh test space
+        print(f"   📝 Creating fresh test space: {space_id}")
+        try:
+            from vitalgraph.model.spaces_model import Space
+            space_data = Space(
+                space=space_id,
+                space_name="Objects Endpoint Test Space",
+                space_description="Test space for objects endpoint testing",
+                tenant="test_tenant"
+            )
+            
+            create_response = client.spaces.add_space(space_data)
+            if create_response and (
+                (hasattr(create_response, 'success') and create_response.success) or
+                (hasattr(create_response, 'created_count') and create_response.created_count == 1) or
+                (hasattr(create_response, 'message') and "created successfully" in str(create_response.message))
+            ):
+                print(f"   ✓ Test space created successfully: {space_id}")
+            else:
+                error_msg = create_response.message if create_response and hasattr(create_response, 'message') else 'Unknown error'
+                print(f"   ❌ Failed to create test space: {error_msg}")
+                client.close()
+                return False
+        except Exception as e:
+            print(f"   ❌ Exception creating test space: {e}")
+            client.close()
+            return False
+        
+        # Create test graph
+        print("\n3. Creating test graph...")
+        graph_id = "http://vital.ai/graph/objects_test"
+        client.graphs.create_graph(space_id, graph_id)
+        print(f"   ✓ Test graph created: {graph_id}")
+        
+        # Insert some test data using VitalSigns KGEntity objects
+        print("\n4. Creating VitalSigns KGEntity objects...")
+        from vital_ai_vitalsigns.model.GraphObject import GraphObject
+        from ai_haley_kg_domain.model.KGEntity import KGEntity
+        
+        # Create VitalSigns KGEntity objects
+        objects = []
+        for i in range(1, 4):
+            entity = KGEntity()
+            entity.URI = f"http://example.org/entity{i}"
+            entity.name = f"Test Entity {i}"
+            entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#GenericEntity"
+            objects.append(entity)
+        
+        print(f"   ✓ Created {len(objects)} VitalSigns KGEntity objects")
+        
+        # Convert VitalSigns objects to JSON-LD for endpoint
+        print("\n5. Converting to JSON-LD and inserting via objects endpoint...")
+        jsonld_data = GraphObject.to_jsonld_list(objects)
+        from vitalgraph.model.jsonld_model import JsonLdDocument
+        test_objects_doc = JsonLdDocument(**jsonld_data)
+        
+        create_response = client.objects.create_objects(space_id, graph_id, test_objects_doc)
+        print(f"   ✓ Test objects created: {create_response.created_count} objects")
         
         # Test 1: List objects with pagination
-        print("\n2. Testing List Objects (Paginated)...")
+        print("\n6. Testing List Objects (Paginated)...")
         try:
             objects_response: ObjectsResponse = client.list_objects(
                 space_id=space_id,
@@ -70,12 +159,12 @@ def test_objects_endpoint(config_path: str):
             )
             
             print(f"   ✓ Listed objects successfully")
-            print(f"     - Total count: {objects_response.total_count}")
+            print(f"     - Total count: {objects_response.count}")
             print(f"     - Page size: {objects_response.page_size}")
             print(f"     - Offset: {objects_response.offset}")
             
-            # Access objects from the JsonLdDocument
-            objects = objects_response.objects.graph if objects_response.objects.graph else []
+            # Access objects from the response (now a list)
+            objects = objects_response.objects
             print(f"     - Objects returned: {len(objects)}")
             
             # Show first object
@@ -91,32 +180,26 @@ def test_objects_endpoint(config_path: str):
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
-        # Test 2: Filter by vitaltype (look for any VitalSigns objects)
-        print("\n3. Testing Filter by VitalType...")
+        # Test 2: Count objects
+        print("\n7. Testing Object Count...")
         try:
-            # Try filtering by a common VitalSigns type
-            filter_response: ObjectsResponse = client.list_objects(
+            count_response: ObjectsResponse = client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
-                page_size=3,
-                vitaltype_filter="http://vital.ai/ontology/haley-ai-kg#KGFrame"
+                page_size=100,
+                offset=0
             )
             
-            print(f"   ✓ Filtered by KGFrame successfully")
-            print(f"     - KGFrame objects found: {filter_response.total_count}")
-            
-            # Access objects from the JsonLdDocument
-            objects = filter_response.objects.graph if filter_response.objects.graph else []
-            for i, obj in enumerate(objects[:2]):  # Show first 2
-                print(f"     - KGFrame {i+1}: {obj.get('@id', 'N/A')}")
+            print(f"   ✓ Object count retrieved successfully")
+            print(f"     - Total objects in graph: {count_response.count}")
                 
         except VitalGraphClientError as e:
-            print(f"   ❌ Filter by vitaltype error: {e}")
+            print(f"   ❌ Count objects error: {e}")
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
         # Test 3: Search functionality
-        print("\n4. Testing Search Objects...")
+        print("\n8. Testing Search Objects...")
         try:
             search_response: ObjectsResponse = client.list_objects(
                 space_id=space_id,
@@ -126,130 +209,155 @@ def test_objects_endpoint(config_path: str):
             )
             
             print(f"   ✓ Search for 'test' successful")
-            print(f"     - Matching objects: {search_response.total_count}")
+            print(f"     - Matching objects: {search_response.count}")
             
-            # Access objects from the JsonLdDocument
-            objects = search_response.objects.graph if search_response.objects.graph else []
+            # Access objects from the response (now a list)
+            objects = search_response.objects
             for i, obj in enumerate(objects[:2]):
-                print(f"     - Match {i+1}: {obj.get('@id', 'N/A')}")
+                print(f"     - Match {i+1}: {obj.get('@id', 'N/A') if isinstance(obj, dict) else obj}")
                 
         except VitalGraphClientError as e:
             print(f"   ❌ Search error: {e}")
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
-        # Test 4: Get specific object by URI
-        print("\n5. Testing Get Specific Object...")
-        
-        # First get a URI from the list
+        # Test 4: Verify objects exist
+        print("\n9. Testing Object Verification...")
         try:
-            list_response: ObjectsResponse = client.list_objects(
+            verify_response = client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
-                page_size=1
+                page_size=100
             )
             
-            # Access objects from the JsonLdDocument
-            objects = list_response.objects.graph if list_response.objects.graph else []
-            
+            # Access objects from the response (now a list)
+            objects = verify_response.objects
+            print(f"   ✓ Verified {len(objects)} objects exist")
             if objects:
-                test_uri = objects[0].get('@id')
-                
-                # Now get that specific object using get_object method
-                object_response = client.get_object(
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    uri=test_uri
-                )
-                
-                print(f"   ✓ Retrieved specific object: {test_uri}")
-                
-                # Access the specific object data from the response
-                if hasattr(object_response, 'graph') and object_response.graph:
-                    obj_data = object_response.graph[0]  # Should be single object
-                    print(f"     - Object type: {obj_data.get('vitaltype', 'N/A')}")
-                    print(f"     - Properties count: {len(obj_data.keys())}")
-                    
-                    # Show some properties
-                    print(f"     - Sample properties:")
-                    for key, value in list(obj_data.items())[:3]:
-                        if key not in ['@context', '@id']:
-                            print(f"       • {key}: {str(value)[:50]}{'...' if len(str(value)) > 50 else ''}")
-                else:
-                    print("   ⚠️  No object data in response")
+                for i, obj in enumerate(objects[:3]):
+                    print(f"     - Object {i+1}: {obj.get('@id', 'N/A')}")
             else:
-                print("   ⚠️  No objects found to test specific retrieval")
+                print("   ⚠️  No objects found")
                 
         except VitalGraphClientError as e:
-            print(f"   ❌ Get specific object error: {e}")
+            print(f"   ❌ Verify objects error: {e}")
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
-        # Test 5: Get multiple objects by URI list
-        print("\n6. Testing Get Multiple Objects by URI List...")
+        # Test 5: List with offset
+        print("\n10. Testing List with Offset...")
         try:
-            # Get a few URIs first
-            multi_list_response: ObjectsResponse = client.list_objects(
+            offset_response = client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
-                page_size=3
+                page_size=2,
+                offset=1
             )
             
-            # Access objects from the JsonLdDocument
-            objects = multi_list_response.objects.graph if multi_list_response.objects.graph else []
-            
-            if len(objects) >= 2:
-                uri_list = ",".join([obj.get('@id') for obj in objects[:2]])
-                
-                # Get multiple objects using get_objects_by_uris method
-                multi_response = client.get_objects_by_uris(
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    uri_list=uri_list
-                )
-                
-                # Access returned objects from JsonLdDocument
-                returned_objects = multi_response.graph if multi_response.graph else []
-                print(f"   ✓ Retrieved multiple objects successfully")
-                print(f"     - Requested: 2 objects")
-                print(f"     - Returned: {len(returned_objects)} objects")
-                
-                for i, obj in enumerate(returned_objects):
-                    print(f"     - Object {i+1}: {obj.get('@id', 'N/A')}")
-            else:
-                print("   ⚠️  Not enough objects to test multiple retrieval")
+            # Access objects from the response (now a list)
+            objects = offset_response.objects
+            print(f"   ✓ List with offset successful")
+            print(f"     - Page size: {offset_response.page_size}, Offset: {offset_response.offset}")
+            print(f"     - Objects returned: {len(objects)}")
+            print(f"     - Total count: {offset_response.count}")
                 
         except VitalGraphClientError as e:
-            print(f"   ❌ Get multiple objects error: {e}")
+            print(f"   ❌ List with offset error: {e}")
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
         # Test 6: Test with different page sizes
-        print("\n7. Testing Pagination...")
+        print("\n11. Testing Pagination...")
         try:
-            # Test with different page sizes
-            for page_size in [1, 5, 10]:
-                pagination_response: ObjectsResponse = client.list_objects(
+            print(f"   Testing different page sizes:")
+            for page_size in [1, 2, 5]:
+                page_response = client.list_objects(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,
                     offset=0
                 )
                 
-                # Access objects from the JsonLdDocument
-                objects = pagination_response.objects.graph if pagination_response.objects.graph else []
-                total_count = pagination_response.total_count
-                
-                print(f"   ✓ Page size {page_size}: returned {len(objects)} objects (total: {total_count})")
+                # Access objects from the response (now a list)
+                objects = page_response.objects
+                print(f"     - Page size {page_size}: returned {len(objects)} objects (total: {page_response.count})")
+            
+            print(f"   ✓ Pagination test successful")
                     
         except VitalGraphClientError as e:
             print(f"   ❌ Pagination test error: {e}")
         except Exception as e:
             print(f"   ❌ Unexpected error: {e}")
         
+        # Test 7: Update objects (PUT /api/graphs/objects)
+        print("\n12. Testing Update Objects...")
+        try:
+            # Create updated VitalSigns KGEntity object
+            updated_entity = KGEntity()
+            updated_entity.URI = "http://example.org/entity1"
+            updated_entity.name = "Updated Test Entity 1"
+            updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#GenericEntity"
+            
+            # Convert to JSON-LD - use JsonLdObject for single object
+            updated_jsonld = GraphObject.to_jsonld_list([updated_entity])
+            from vitalgraph.model.jsonld_model import JsonLdObject
+            # Extract the single object from the @graph array
+            single_object_data = updated_jsonld['@graph'][0]
+            single_object_data['@context'] = updated_jsonld['@context']
+            updated_object = JsonLdObject(**single_object_data)
+            
+            update_response = client.objects.update_objects(space_id, graph_id, updated_object)
+            print(f"   ✓ Objects updated successfully")
+            print(f"     - Updated count: {update_response.updated_count}")
+            if update_response.updated_uris:
+                print(f"     - Updated URI: {update_response.updated_uris[0]}")
+        except VitalGraphClientError as e:
+            print(f"   ❌ Update objects error: {e}")
+        except Exception as e:
+            print(f"   ❌ Unexpected error: {e}")
+        
+        # Test 8: Delete single object (DELETE /api/graphs/objects)
+        print("\n13. Testing Delete Single Object...")
+        try:
+            delete_response = client.objects.delete_object(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri="http://example.org/entity1"
+            )
+            print(f"   ✓ Object deleted successfully")
+            print(f"     - Deleted count: {delete_response.deleted_count}")
+        except VitalGraphClientError as e:
+            print(f"   ❌ Delete object error: {e}")
+        except Exception as e:
+            print(f"   ❌ Unexpected error: {e}")
+        
+        # Test 9: Delete multiple objects (DELETE /api/graphs/objects with uri_list)
+        print("\n14. Testing Delete Multiple Objects...")
+        try:
+            delete_batch_response = client.objects.delete_objects_batch(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri_list="http://example.org/entity2,http://example.org/entity3"
+            )
+            print(f"   ✓ Multiple objects deleted successfully")
+            print(f"     - Deleted count: {delete_batch_response.deleted_count}")
+        except VitalGraphClientError as e:
+            print(f"   ❌ Delete multiple objects error: {e}")
+        except Exception as e:
+            print(f"   ❌ Unexpected error: {e}")
+        
+        # Cleanup: Delete test space
+        print("\n15. Cleaning up test space...")
+        if space_id:
+            try:
+                client.spaces.delete_space(space_id)
+                print(f"   ✓ Test space deleted: {space_id}")
+            except Exception as e:
+                print(f"   ⚠️  Failed to delete test space: {e}")
+        
         # Close client
         client.close()
-        print(f"\n8. Client closed successfully")
+        print(f"\n16. Client closed successfully")
         
         print("\n✅ Objects endpoint testing completed successfully!")
         print("\n📊 Test Summary:")

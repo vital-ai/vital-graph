@@ -10,10 +10,14 @@ SpaceUpdateResponse, and SpaceDeleteResponse models for full type safety.
 """
 
 import sys
+import os
 import logging
 import json
 from pathlib import Path
 from typing import Dict, Any
+
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.spaces_model import SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse, Space
@@ -132,8 +136,15 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         initial_spaces_response: SpacesListResponse = client.list_spaces()
         initial_spaces = initial_spaces_response.spaces
         print(f"   ✓ Found {len(initial_spaces)} initial spaces (total: {initial_spaces_response.total_count}):")
+        print(f"   ✓ Response pagination: page_size={initial_spaces_response.page_size}, offset={initial_spaces_response.offset}")
         for space in initial_spaces:
             print(f"     - ID: {space.id}, Name: {space.space_name}, Space: {space.space}")
+        
+        # Validate response structure
+        if initial_spaces_response.total_count != len(initial_spaces):
+            print(f"   ⚠️  Warning: total_count ({initial_spaces_response.total_count}) != actual count ({len(initial_spaces)})")
+        else:
+            print(f"   ✓ Response structure validated: counts match")
         
         # Step 2: Test delete operation on an existing space (if any)
         print("\n3. Testing delete operation on existing space...")
@@ -175,8 +186,8 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         else:
             print(f"   ✓ No spaces available to test delete operation")
         
-        # Step 3: Add a new test space
-        print("\n5. Adding new test space...")
+        # Step 3: Clean up existing test space and create fresh one
+        print("\n5. Preparing test space...")
         test_space_identifier = "test_space_crud"
         test_space_data = {
             "tenant": "test_tenant",
@@ -184,6 +195,28 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
             "space_name": "Test Space CRUD",
             "space_description": "Test space for CRUD lifecycle testing"
         }
+        
+        # Check if the test space already exists and delete it for a clean test
+        existing_space = next((s for s in initial_spaces if s.space == test_space_identifier), None)
+        
+        if existing_space:
+            print(f"   🗑️  Found existing test space '{test_space_identifier}' - deleting for clean test...")
+            try:
+                existing_space_id = existing_space.id or test_space_identifier
+                delete_response: SpaceDeleteResponse = client.delete_space(existing_space_id)
+                print(f"   ✓ Existing space deleted successfully:")
+                print(f"   Message: {delete_response.message}")
+                print(f"   Deleted count: {delete_response.deleted_count}")
+                if delete_response.deleted_uris:
+                    print(f"   Deleted URIs: {delete_response.deleted_uris}")
+            except Exception as e:
+                print(f"   ⚠️  Warning: Failed to delete existing space: {e}")
+                print(f"   Continuing with test anyway...")
+        else:
+            print(f"   ✓ No existing test space found - ready for clean test")
+        
+        # Now create the fresh test space
+        print(f"\n   Creating fresh test space...")
         print(f"   Space data to add:")
         print(f"   {json.dumps(test_space_data, indent=4)}")
         
@@ -200,29 +233,44 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         print(f"   Created count: {add_response.created_count}")
         print(f"   Created URIs: {add_response.created_uris}")
         
+        # Validate create response structure
+        if add_response.created_count != 1:
+            print(f"   ⚠️  Warning: Expected created_count=1, got {add_response.created_count}")
+        if not add_response.created_uris or len(add_response.created_uris) != 1:
+            raise VitalGraphClientError(f"Expected 1 created URI, got {len(add_response.created_uris) if add_response.created_uris else 0}")
+        
         # Extract space ID from the response
-        if not add_response.created_uris:
-            raise VitalGraphClientError("No created URIs in add response")
         space_id = add_response.created_uris[0]
         if not space_id:
             raise VitalGraphClientError("Added space does not have an ID")
+        print(f"   ✓ Space ID extracted: {space_id}")
         
-        # Step 3: List spaces after addition
-        print("\n4. Listing spaces after addition...")
+        # Get updated spaces list after addition
         spaces_after_add_response: SpacesListResponse = client.list_spaces()
         spaces_after_add = spaces_after_add_response.spaces
+        
+        # Step 4: List spaces after addition/check
+        print("\n6. Listing spaces after addition/check...")
         print(f"   ✓ Found {len(spaces_after_add)} spaces after addition (total: {spaces_after_add_response.total_count}):")
         for space in spaces_after_add:
             print(f"     - ID: {space.id}, Name: {space.space_name}, Space: {space.space}")
         
-        # Verify the space was added
-        found_space = next((s for s in spaces_after_add if str(s.id) == str(space_id)), None)
+        # Verify the space was added (check by space identifier since ID might be None)
+        found_space = next((s for s in spaces_after_add if s.space == test_space_identifier), None)
         if not found_space:
-            raise VitalGraphClientError(f"Added space with ID {space_id} not found in list")
-        print(f"   ✓ Confirmed added space is in the list")
+            # Try by ID as fallback
+            found_space = next((s for s in spaces_after_add if str(s.id) == str(space_id)), None)
         
-        # Step 4: Update the space
-        print("\n5. Updating the test space...")
+        if not found_space:
+            print(f"   🔍 Debug: Looking for space with identifier '{test_space_identifier}' or ID '{space_id}'")
+            print(f"   🔍 Debug: Available spaces:")
+            for space in spaces_after_add:
+                print(f"     - ID: {space.id}, Space: {space.space}, Name: {space.space_name}")
+            raise VitalGraphClientError(f"Added space with identifier '{test_space_identifier}' not found in list")
+        print(f"   ✓ Confirmed added space is in the list (found by {'space identifier' if found_space.space == test_space_identifier else 'ID'})")
+        
+        # Step 5: Update the space
+        print("\n7. Updating the test space...")
         update_data = {
             "space_name": "Updated Test Space CRUD",
             "space_description": "Updated description for CRUD lifecycle testing"
@@ -230,12 +278,11 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         print(f"   Update data:")
         print(f"   {json.dumps(update_data, indent=4)}")
         
-        # Create updated Space object
+        # Create updated Space object (don't set id for update, let server handle it)
         updated_space = Space(
-            id=space_id,
             tenant="test_tenant",
             space="test_space_crud_updated",
-            space_name="Test Space CRUD Updated",
+            space_name=update_data["space_name"],
             space_description=update_data["space_description"]
         )
         update_response: SpaceUpdateResponse = client.update_space(space_id, updated_space)
@@ -243,8 +290,8 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         print(f"   Message: {update_response.message}")
         print(f"   Updated URI: {update_response.updated_uri}")
         
-        # Step 5: Get space by ID to confirm update
-        print("\n6. Getting space by ID to confirm update...")
+        # Step 6: Get space by ID to confirm update
+        print("\n8. Getting space by ID to confirm update...")
         retrieved_space: Space = client.get_space(space_id)
         print(f"   ✓ Retrieved space by ID {space_id}:")
         print(f"   ID: {retrieved_space.id}, Name: {retrieved_space.space_name}")
@@ -257,8 +304,8 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
             raise VitalGraphClientError(f"Space description was not updated correctly")
         print(f"   ✓ Confirmed space was updated correctly")
         
-        # Step 6: Delete the space
-        print("\n7. Deleting the test space...")
+        # Step 7: Delete the space
+        print("\n9. Deleting the test space...")
         delete_response: SpaceDeleteResponse = client.delete_space(space_id)
         print(f"   ✓ Space deleted successfully:")
         print(f"   Message: {delete_response.message}")
@@ -266,18 +313,29 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         if delete_response.deleted_uris:
             print(f"   Deleted URIs: {delete_response.deleted_uris}")
         
-        # Step 7: List spaces after deletion to confirm cleanup
-        print("\n8. Listing spaces after deletion...")
+        # Step 8: List spaces after deletion to confirm cleanup
+        print("\n10. Listing spaces after deletion...")
         final_spaces_response: SpacesListResponse = client.list_spaces()
         final_spaces = final_spaces_response.spaces
         print(f"   ✓ Found {len(final_spaces)} spaces after deletion (total: {final_spaces_response.total_count}):")
+        print(f"   ✓ Response pagination: page_size={final_spaces_response.page_size}, offset={final_spaces_response.offset}")
         for space in final_spaces:
             print(f"     - ID: {space.id}, Name: {space.space_name}, Space: {space.space}")
         
-        # Verify the space was deleted
-        deleted_space = next((s for s in final_spaces if str(s.id) == str(space_id)), None)
+        # Validate final response structure
+        if final_spaces_response.total_count != len(final_spaces):
+            print(f"   ⚠️  Warning: total_count ({final_spaces_response.total_count}) != actual count ({len(final_spaces)})")
+        else:
+            print(f"   ✓ Final response structure validated: counts match")
+        
+        # Verify the space was deleted (check by space identifier since ID might be None)
+        deleted_space = next((s for s in final_spaces if s.space == test_space_identifier), None)
+        if not deleted_space:
+            # Try by ID as fallback
+            deleted_space = next((s for s in final_spaces if str(s.id) == str(space_id)), None)
+        
         if deleted_space:
-            raise VitalGraphClientError(f"Deleted space with ID {space_id} still found in list")
+            raise VitalGraphClientError(f"Deleted space with identifier '{test_space_identifier}' still found in list")
         print(f"   ✓ Confirmed space was deleted from the list")
         
         # Verify we're back to the initial count
@@ -297,7 +355,9 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
         print(f"   • After deletion: {len(final_spaces)}")
         print(f"   • Space ID tested: {space_id}")
         print(f"   • All CRUD operations: ✓ PASSED")
-        print(f"   • Response models: ✓ UPDATED (using typed SpacesListResponse, SpaceCreateResponse, etc.)")
+        print(f"   • Response models: ✓ VALIDATED (SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse)")
+        print(f"   • Response structure: ✓ VALIDATED (pagination fields, counts, URIs)")
+        print(f"   • API endpoint: ✓ WORKING (spaces endpoint fixed and functional)")
         
     except VitalGraphClientError as e:
         print(f"   ✗ VitalGraph client error: {e}")

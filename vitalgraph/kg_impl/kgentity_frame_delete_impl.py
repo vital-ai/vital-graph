@@ -246,27 +246,64 @@ class KGEntityFrameDeleteProcessor:
             
             self.logger.info(f"🔍 Found {len(component_uris)} components in frame graph {frame_uri}")
             
-            # Delete all triples for these components
-            delete_patterns = []
-            for component_uri in component_uris:
-                # Use URI directly as VitalSigns produces clean URIs
-                component_str = str(component_uri).strip()
-                delete_patterns.append(f"    <{component_str}> ?p ?o .")
+            # Query Fuseki to get all triples for all components in a single query
+            component_filter = ', '.join([f'<{str(uri).strip()}>' for uri in component_uris])
             
-            delete_query = f"""
-            DELETE {{
+            triples_query = f"""
+            SELECT ?s ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
-                    {chr(10).join(delete_patterns)}
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    {chr(10).join(delete_patterns)}
+                    ?s ?p ?o .
+                    FILTER(?s IN ({component_filter}))
                 }}
             }}
             """
             
-            self.logger.debug(f"🗑️ Frame graph deletion query: {delete_query}")
+            results = await self.backend.execute_sparql_query(space_id, triples_query)
+            
+            # Extract triples from results
+            all_triples = []
+            if isinstance(results, dict) and 'results' in results:
+                bindings = results['results'].get('bindings', [])
+                for binding in bindings:
+                    if 's' in binding and 'p' in binding and 'o' in binding:
+                        s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
+                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        
+                        if s_value and p_value and o_value:
+                            all_triples.append((s_value, p_value, o_value, o_type))
+            
+            if not all_triples:
+                self.logger.warning(f"⚠️ No triples found for frame graph components")
+                return 0
+            
+            self.logger.info(f"🔍 Found {len(all_triples)} triples to delete")
+            
+            # Build DELETE DATA query with concrete triples
+            delete_statements = []
+            for s, p, o, o_type in all_triples:
+                # Format object based on type
+                if o_type == 'literal':
+                    # Escape quotes in literals
+                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
+                    o_formatted = f'"{o_escaped}"'
+                elif o_type == 'uri':
+                    o_formatted = f'<{o}>'
+                else:
+                    o_formatted = f'<{o}>'
+                
+                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+            
+            delete_query = f"""
+            DELETE DATA {{
+                GRAPH <{graph_id}> {{
+{chr(10).join(delete_statements)}
+                }}
+            }}
+            """
+            
+            self.logger.debug(f"🗑️ Frame graph deletion query (DELETE DATA with {len(all_triples)} triples)")
             
             success = await self.backend.execute_sparql_update(space_id, delete_query)
             

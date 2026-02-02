@@ -391,9 +391,9 @@ class VitalGraphAppImpl:
             self.app.get("/")(self.api_root)
     
 
-    async def login(self, form_data: OAuth2PasswordRequestForm = Depends()):
+    async def login(self, form_data: OAuth2PasswordRequestForm = Depends(), token_expiry_seconds: Optional[int] = Form(None)):
         """Login endpoint - delegates to API class"""
-        return await self.api.login(form_data)
+        return await self.api.login(form_data, token_expiry_seconds)
 
     async def logout(self, request: Request, current_user: Dict):
         """Logout endpoint - delegates to API class"""

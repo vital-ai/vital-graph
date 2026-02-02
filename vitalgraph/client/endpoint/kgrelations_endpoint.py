@@ -5,7 +5,7 @@ Client-side implementation for KGRelations operations using standardized respons
 All responses contain VitalSigns GraphObjects (Edge_hasKGRelation), hiding JSON-LD complexity.
 """
 
-import requests
+import httpx
 import time
 import logging
 from typing import Dict, Any, Optional, List
@@ -42,29 +42,30 @@ class KGRelationsEndpoint(BaseEndpoint):
     
     def _make_request(self, method: str, url: str, params=None, json=None):
         """
-        Make HTTP request and return response object.
+        Make authenticated HTTP request with automatic token refresh.
+        Uses base endpoint's authenticated request method.
         """
         try:
             url_parts = url.split('/')
             operation = url_parts[-1] if url_parts else 'request'
             
             start_time = time.time()
-            if method == 'GET':
-                response = self.client.session.get(url, params=params)
-            elif method == 'POST':
-                response = self.client.session.post(url, params=params, json=json)
-            elif method == 'DELETE':
-                response = self.client.session.delete(url, params=params, json=json)
-            else:
-                raise VitalGraphClientError(f"Unsupported HTTP method: {method}")
+            
+            # Use base endpoint's authenticated request method for token refresh
+            kwargs = {}
+            if params:
+                kwargs['params'] = params
+            if json:
+                kwargs['json'] = json
+            
+            response = self._make_authenticated_request(method, url, **kwargs)
             
             duration = time.time() - start_time
             logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
             
-            response.raise_for_status()
             return response
             
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
     def list_relations(

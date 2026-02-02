@@ -4,7 +4,7 @@ VitalGraph Client Export Endpoint
 Client-side implementation for Data Export operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, Union, BinaryIO, List
 from pathlib import Path
 
@@ -192,7 +192,8 @@ class ExportEndpoint(BaseEndpoint):
             url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}/download"
             params = build_query_params(binary_id=binary_id)
             
-            response = self.client.session.get(url, params=params, stream=True)
+            # Use authenticated request with token refresh
+            response = self._make_authenticated_request('GET', url, params=params, stream=True)
             response.raise_for_status()
             
             # Save to file
@@ -206,7 +207,7 @@ class ExportEndpoint(BaseEndpoint):
             
             return True
             
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to download export results: {e}")
     
     def download_to_consumer(self, export_id: str, binary_id: str, 

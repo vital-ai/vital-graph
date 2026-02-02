@@ -332,8 +332,12 @@ class KGGroupingURIManager:
                 
                 # Set frame-level grouping URI on frame objects (including edges)
                 for obj in frame_objects:
+                    obj_type = type(obj).__name__
+                    self.logger.debug(f"Setting frameGraphURI on {obj_type} (URI: {obj.URI})")
+                    
+                    self.logger.debug(f"Object JSON: {obj.to_json()}")
+                
                     obj.frameGraphURI = frame_uri
-                    # self.logger.debug(f"Set frameGraphURI={frame_uri} on {type(obj).__name__} {obj.URI}")
             
             self.logger.info(f"Set dual grouping URIs for {len(objects)} objects with entity URI: {entity_uri}")
             

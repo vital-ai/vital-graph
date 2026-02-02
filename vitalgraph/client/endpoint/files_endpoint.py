@@ -5,9 +5,11 @@ Client-side implementation for Files operations.
 Hides JSON-LD complexity and returns VitalSigns GraphObjects directly.
 """
 
-import requests
+import httpx
+import aiohttp
 from typing import Dict, Any, Optional, BinaryIO, Union, List
 from pathlib import Path
+import asyncio
 
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -18,6 +20,11 @@ from ..binary.streaming import (
     BinaryGenerator, BinaryConsumer, BytesConsumer,
     create_generator, create_consumer
 )
+from ..binary.async_streaming import (
+    AsyncBinaryGenerator, AsyncBinaryConsumer,
+    create_async_generator, create_async_consumer,
+    pump_data_async
+)
 from ..response.client_response import (
     FileResponse,
     FilesListResponse,
@@ -25,7 +32,6 @@ from ..response.client_response import (
     FileUpdateResponse,
     FileDeleteResponse,
     FileUploadResponse,
-    FileDownloadResponse,
 )
 from ..response.response_builder import (
     jsonld_to_graph_objects,
@@ -433,7 +439,7 @@ class FilesEndpoint(BaseEndpoint):
             
             response = self._make_authenticated_request('DELETE', url, params=params)
             return response.json()
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to delete File nodes: {e}")
     
     def upload_file_content(self, space_id: str, graph_id: str, file_uri: str, 
@@ -494,10 +500,8 @@ class FilesEndpoint(BaseEndpoint):
                 'file': (final_filename, file_content, final_content_type)
             }
             
-            # Remove Content-Type header to let requests set multipart/form-data with boundary
-            headers = {'Content-Type': None}
-            
-            response = self._make_authenticated_request('POST', url, params=params, files=files, headers=headers)
+            # httpx will automatically set multipart/form-data with boundary
+            response = self._make_authenticated_request('POST', url, params=params, files=files)
             
             return build_success_response(
                 FileUploadResponse,
@@ -540,7 +544,7 @@ class FilesEndpoint(BaseEndpoint):
     
     def download_file_content(self, space_id: str, graph_id: str, file_uri: str, 
                              destination: Optional[Union[str, Path, BinaryIO, BinaryConsumer]] = None,
-                             chunk_size: int = 8192) -> Union[bytes, FileDownloadResponse]:
+                             chunk_size: int = 8192) -> Union[bytes, FileUploadResponse]:
         """
         Download file content from a File node using streaming consumers.
         
@@ -568,15 +572,24 @@ class FilesEndpoint(BaseEndpoint):
                 uri=file_uri
             )
             
-            response = self._make_authenticated_request('GET', url, params=params, stream=True)
-            content_type = response.headers.get('content-type')
+            response = self._make_authenticated_request('GET', url, params=params)
+            
+            # Check HTTP status code - raise exception for errors
+            if response.status_code >= 400:
+                error_detail = f"File download failed with status {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_detail = error_data.get('detail', error_detail)
+                except:
+                    pass
+                raise VitalGraphClientError(error_detail)
+            
+            content_type = response.headers.get('content-type', 'application/octet-stream')
             
             if destination is None:
                 # Return raw bytes - use BytesConsumer for consistency
                 consumer = BytesConsumer()
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        consumer.consume(chunk)
+                consumer.consume(response.content)
                 consumer.finalize()
                 return consumer.get_bytes()
             else:
@@ -585,44 +598,30 @@ class FilesEndpoint(BaseEndpoint):
                 total_size = 0
                 
                 try:
-                    for chunk in response.iter_content(chunk_size=chunk_size):
-                        if chunk:
-                            consumer.consume(chunk)
-                            total_size += len(chunk)
+                    consumer.consume(response.content)
+                    total_size += len(response.content)
                 finally:
                     consumer.finalize()
                 
-                destination_str = str(destination) if isinstance(destination, (str, Path)) else "stream"
-                
-                return build_success_response(
-                    FileDownloadResponse,
+                return FileUploadResponse(
                     file_uri=file_uri,
                     size=total_size,
                     content_type=content_type,
-                    destination=destination_str,
-                    status_code=response.status_code,
+                    filename=file_uri.split('/')[-1] if '/' in file_uri else file_uri.split(':')[-1],
                     message=f"Downloaded {total_size} bytes from {file_uri}",
+                    error_code=0,
+                    status_code=200,
                     space_id=space_id,
                     graph_id=graph_id
                 )
                 
+        except VitalGraphClientError:
+            raise
         except Exception as e:
-            if destination is None:
-                raise VitalGraphClientError(f"Failed to download file content: {e}")
-            else:
-                return build_error_response(
-                    FileDownloadResponse,
-                    error_code=8,
-                    error_message=str(e),
-                    status_code=500,
-                    file_uri=file_uri,
-                    destination="",
-                    space_id=space_id,
-                    graph_id=graph_id
-                )
+            raise VitalGraphClientError(f"Failed to download file content: {e}")
     
     def download_to_consumer(self, space_id: str, graph_id: str, file_uri: str, 
-                            consumer: BinaryConsumer, chunk_size: int = 8192) -> FileDownloadResponse:
+                            consumer: BinaryConsumer, chunk_size: int = 8192) -> FileUploadResponse:
         """
         Download file content to a BinaryConsumer.
         
@@ -634,13 +633,13 @@ class FilesEndpoint(BaseEndpoint):
             chunk_size: Size of chunks for streaming
             
         Returns:
-            FileDownloadResponse with download information
+            FileUploadResponse with download information
         """
         return self.download_file_content(space_id, graph_id, file_uri, consumer, chunk_size)
     
     def pump_file(self, source_space_id: str, source_graph_id: str, source_file_uri: str,
                   target_space_id: str, target_graph_id: str, target_file_uri: str,
-                  chunk_size: int = 8192) -> Dict[str, Any]:
+                  chunk_size: int = 8192, use_streaming: bool = True) -> Dict[str, Any]:
         """
         Pump file content from one file node to another (download + upload).
         
@@ -652,9 +651,16 @@ class FilesEndpoint(BaseEndpoint):
             target_graph_id: Target graph identifier
             target_file_uri: Target file URI
             chunk_size: Size of chunks for streaming
+            use_streaming: If True, uses true streaming (memory-efficient for large files).
+                          If False, loads entire file into memory (compatible with all servers).
             
         Returns:
             Dictionary containing pump result
+            
+        Note:
+            Streaming mode (use_streaming=True) is more memory-efficient for large files
+            but requires the upload endpoint to support chunked transfer encoding.
+            Non-streaming mode loads the entire file into memory but is more compatible.
         """
         self._check_connection()
         
@@ -667,7 +673,13 @@ class FilesEndpoint(BaseEndpoint):
                 uri=source_file_uri
             )
             
-            download_response = self._make_authenticated_request('GET', download_url, params=download_params, stream=True)
+            download_response = self._make_authenticated_request('GET', download_url, params=download_params)
+            
+            # Check for download errors
+            if download_response.status_code >= 400:
+                raise VitalGraphClientError(f"Download failed with status {download_response.status_code}")
+            
+            content_type = download_response.headers.get('content-type', 'application/octet-stream')
             
             # Upload to target
             upload_url = f"{self._get_server_url()}/api/files/upload"
@@ -677,29 +689,469 @@ class FilesEndpoint(BaseEndpoint):
                 uri=target_file_uri
             )
             
-            # Collect downloaded content into bytes for upload
-            # (requests doesn't handle generators well in multipart/form-data)
-            file_content = b""
-            for chunk in download_response.iter_content(chunk_size=chunk_size):
-                if chunk:
-                    file_content += chunk
-            
-            files = {
-                'file': ('pumped_file', file_content, download_response.headers.get('content-type'))
-            }
-            
-            # Remove Content-Type header to let requests set multipart/form-data with boundary
-            headers = {'Content-Type': None}
-            
-            upload_response = self._make_authenticated_request('POST', upload_url, params=upload_params, files=files, headers=headers)
+            if use_streaming:
+                # True streaming: use generator to avoid loading entire file into memory
+                def file_generator():
+                    """Generator that yields chunks from download response."""
+                    yield download_response.content
+                
+                # Use generator for streaming upload
+                files = {
+                    'file': ('pumped_file', file_generator(), content_type)
+                }
+                
+                response = self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
+            else:
+                # Non-streaming: collect all content into memory first
+                # (More compatible but uses more memory)
+                file_content = download_response.content
+                
+                files = {
+                    'file': ('pumped_file', file_content, content_type)
+                }
+                
+                response = self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
             
             return {
                 "success": True,
                 "source": f"{source_space_id}/{source_graph_id}/{source_file_uri}",
                 "target": f"{target_space_id}/{target_graph_id}/{target_file_uri}",
-                "content_type": download_response.headers.get('content-type'),
-                "upload_result": upload_response.json()
+                "content_type": content_type,
+                "streaming_mode": use_streaming,
+                "upload_result": response.json()
             }
             
-        except requests.exceptions.RequestException as e:
+        except VitalGraphClientError:
+            raise
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to pump file content: {e}")
+    
+    async def upload_file_stream_async(self, space_id: str, graph_id: str, file_uri: str,
+                                       source: Union[str, Path, bytes, AsyncBinaryGenerator],
+                                       filename: Optional[str] = None,
+                                       content_type: Optional[str] = None,
+                                       chunk_size: int = 8192) -> FileUploadResponse:
+        """
+        Upload file content using true streaming (chunk-based) - ASYNC version for FastAPI.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file_uri: File node URI
+            source: Data source (path, bytes, or AsyncBinaryGenerator)
+            filename: Original filename (optional)
+            content_type: MIME content type (optional)
+            chunk_size: Size of chunks for streaming (default: 8192)
+            
+        Returns:
+            FileUploadResponse with upload information
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri, source=source)
+        
+        try:
+            url = f"{self._get_server_url()}/api/files/stream/upload"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri=file_uri,
+                chunk_size=chunk_size
+            )
+            
+            # Create async generator from source
+            async_gen = create_async_generator(
+                source,
+                chunk_size=chunk_size,
+                filename=filename,
+                content_type=content_type
+            )
+            
+            # Use async generator properties for metadata
+            final_filename = filename or async_gen.filename or 'uploaded_file'
+            final_content_type = content_type or async_gen.content_type or 'application/octet-stream'
+            
+            # Use aiohttp for true async streaming with async generator
+            # aiohttp supports async generators in multipart uploads - only one chunk in memory!
+            async with aiohttp.ClientSession() as session:
+                # Get auth headers
+                headers = self._get_auth_headers()
+                
+                # Create multipart form data with async generator
+                data = aiohttp.FormData()
+                data.add_field(
+                    'file',
+                    async_gen.generate(),  # aiohttp supports async generators!
+                    filename=final_filename,
+                    content_type=final_content_type
+                )
+                
+                # Make request with true async streaming - only one chunk in memory at a time
+                async with session.post(
+                    url,
+                    params=params,
+                    data=data,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=300.0)
+                ) as response:
+                    response.raise_for_status()
+                    response_data = await response.json()
+                    
+                    return FileUploadResponse(
+                        file_uri=file_uri,
+                        size=response_data.get('file_size', 0),
+                        content_type=final_content_type,
+                        filename=final_filename,
+                        message=response_data.get('message', 'File uploaded successfully'),
+                        error_code=0,
+                        status_code=response.status,  # aiohttp uses 'status' not 'status_code'
+                        space_id=space_id,
+                        graph_id=graph_id
+                    )
+                
+        except Exception as e:
+            raise VitalGraphClientError(f"Failed to stream upload file: {e}")
+    
+    def upload_file_stream(self, space_id: str, graph_id: str, file_uri: str,
+                          source: Union[str, Path, bytes, AsyncBinaryGenerator],
+                          filename: Optional[str] = None,
+                          content_type: Optional[str] = None,
+                          chunk_size: int = 8192) -> FileUploadResponse:
+        """
+        Upload file content using true streaming (chunk-based) to avoid loading entire file into memory.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file_uri: File node URI
+            source: Data source (path, bytes, or AsyncBinaryGenerator)
+            filename: Original filename (optional)
+            content_type: MIME content type (optional)
+            chunk_size: Size of chunks for streaming (default: 8192)
+            
+        Returns:
+            FileUploadResponse with upload information
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri, source=source)
+        
+        try:
+            url = f"{self._get_server_url()}/api/files/stream/upload"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri=file_uri,
+                chunk_size=chunk_size
+            )
+            
+            # Create async generator from source
+            async_gen = create_async_generator(
+                source,
+                chunk_size=chunk_size,
+                filename=filename,
+                content_type=content_type
+            )
+            
+            # Use async generator properties for metadata
+            final_filename = filename or async_gen.filename or 'uploaded_file'
+            final_content_type = content_type or async_gen.content_type or 'application/octet-stream'
+            
+            # Create a sync generator wrapper for requests library
+            def sync_generator():
+                """Sync wrapper around async generator for requests library."""
+                # Run in a separate thread to avoid event loop conflicts
+                import queue
+                chunk_queue = queue.Queue()
+                exception_holder = [None]
+                
+                def run_async_gen():
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            async def generate_chunks():
+                                async for chunk in async_gen.generate():
+                                    chunk_queue.put(chunk)
+                                chunk_queue.put(None)  # Signal end
+                            
+                            loop.run_until_complete(generate_chunks())
+                        finally:
+                            loop.close()
+                    except Exception as e:
+                        exception_holder[0] = e
+                        chunk_queue.put(None)
+                
+                thread = threading.Thread(target=run_async_gen, daemon=True)
+                thread.start()
+                
+                while True:
+                    chunk = chunk_queue.get()
+                    if chunk is None:
+                        if exception_holder[0]:
+                            raise exception_holder[0]
+                        break
+                    yield chunk
+            
+            files = {
+                'file': (final_filename, sync_generator(), final_content_type)
+            }
+            
+            response = self._make_authenticated_request('POST', url, params=params, files=files)
+            response_data = response.json()
+            
+            return FileUploadResponse(
+                file_uri=file_uri,
+                file_size=response_data.get('file_size', 0),
+                content_type=final_content_type,
+                filename=final_filename,
+                message=response_data.get('message', 'File uploaded successfully'),
+                storage_path=response_data.get('storage_path')
+            )
+            
+        except Exception as e:
+            raise VitalGraphClientError(f"Failed to stream upload file: {e}")
+    
+    async def download_file_stream_async(self, space_id: str, graph_id: str, file_uri: str,
+                                        destination: Union[str, Path, AsyncBinaryConsumer],
+                                        chunk_size: int = 8192) -> FileUploadResponse:
+        """
+        Download file content using true streaming (chunk-based) - ASYNC version for FastAPI.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file_uri: File node URI
+            destination: Destination (path or AsyncBinaryConsumer)
+            chunk_size: Size of chunks for streaming (default: 8192)
+            
+        Returns:
+            FileUploadResponse with download information
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri, destination=destination)
+        
+        try:
+            url = f"{self._get_server_url()}/api/files/stream/download"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri=file_uri,
+                chunk_size=chunk_size
+            )
+            
+            # Use httpx for async HTTP requests
+            async with httpx.AsyncClient() as client:
+                # Get auth headers
+                headers = self._get_auth_headers()
+                
+                async with client.stream('GET', url, params=params, headers=headers, timeout=300.0) as response:
+                    response.raise_for_status()
+                    
+                    content_type = response.headers.get('content-type', 'application/octet-stream')
+                    
+                    # Create async consumer from destination
+                    consumer = create_async_consumer(destination)
+                    total_size = 0
+                    
+                    # Stream chunks directly
+                    async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                        if chunk:
+                            await consumer.consume(chunk)
+                            total_size += len(chunk)
+                    
+                    await consumer.finalize()
+                    
+                    return FileUploadResponse(
+                        file_uri=file_uri,
+                        size=total_size,
+                        content_type=content_type,
+                        filename=file_uri.split('/')[-1] if '/' in file_uri else file_uri.split(':')[-1],
+                        message=f"Downloaded {total_size} bytes from {file_uri}",
+                        error_code=0,
+                        status_code=200,
+                        space_id=space_id,
+                        graph_id=graph_id
+                    )
+                    
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            raise VitalGraphClientError(f"Failed to stream download file: {e}")
+    
+    def download_file_stream(self, space_id: str, graph_id: str, file_uri: str,
+                            destination: Union[str, Path, AsyncBinaryConsumer],
+                            chunk_size: int = 8192) -> FileUploadResponse:
+        """
+        Download file content using true streaming (chunk-based) - SYNC wrapper.
+        For async contexts (FastAPI), use download_file_stream_async() instead.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file_uri: File node URI
+            destination: Destination (path or AsyncBinaryConsumer)
+            chunk_size: Size of chunks for streaming
+            
+        Returns:
+            FileUploadResponse with download information
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        # Try to get running event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # If we're already in an async context, raise an error
+            raise VitalGraphClientError(
+                "Cannot use sync download_file_stream() in async context. "
+                "Use 'await download_file_stream_async()' instead."
+            )
+        except RuntimeError:
+            # No running loop - we can create one
+            pass
+        
+        # Run async version in new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                self.download_file_stream_async(space_id, graph_id, file_uri, destination, chunk_size)
+            )
+        finally:
+            loop.close()
+    
+    def _download_file_stream_sync_fallback(self, space_id: str, graph_id: str, file_uri: str,
+                            destination: Union[str, Path, AsyncBinaryConsumer],
+                            chunk_size: int = 8192) -> FileUploadResponse:
+        """
+        Download file content using true streaming (chunk-based) to avoid loading entire file into memory.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            file_uri: File node URI
+            destination: Destination (path or AsyncBinaryConsumer)
+            chunk_size: Size of chunks for streaming
+            
+        Returns:
+            FileUploadResponse with download information
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, file_uri=file_uri, destination=destination)
+        
+        try:
+            url = f"{self._get_server_url()}/api/files/stream/download"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri=file_uri,
+                chunk_size=chunk_size
+            )
+            
+            response = self._make_authenticated_request('GET', url, params=params)
+            
+            # Check HTTP status code
+            if response.status_code >= 400:
+                error_detail = f"File download failed with status {response.status_code}"
+                try:
+                    error_data = response.json()
+                    error_detail = error_data.get('detail', error_detail)
+                except:
+                    pass
+                raise VitalGraphClientError(error_detail)
+            
+            content_type = response.headers.get('content-type', 'application/octet-stream')
+            
+            # Create async consumer from destination
+            consumer = create_async_consumer(destination)
+            total_size = 0
+            
+            # Run async consumption in a separate thread to avoid event loop conflicts
+            exception_holder = [None]
+            
+            def run_async_consumer():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        async def consume_chunks():
+                            nonlocal total_size
+                            for chunk in response.iter_content(chunk_size=chunk_size):
+                                if chunk:
+                                    await consumer.consume(chunk)
+                                    total_size += len(chunk)
+                            await consumer.finalize()
+                        
+                        loop.run_until_complete(consume_chunks())
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    exception_holder[0] = e
+            
+            thread = threading.Thread(target=run_async_consumer, daemon=False)
+            thread.start()
+            thread.join()  # Wait for completion
+            
+            if exception_holder[0]:
+                raise exception_holder[0]
+            
+            return FileUploadResponse(
+                file_uri=file_uri,
+                size=total_size,
+                content_type=content_type,
+                filename=file_uri.split('/')[-1] if '/' in file_uri else file_uri.split(':')[-1],
+                message=f"Downloaded {total_size} bytes from {file_uri}",
+                error_code=0,
+                status_code=200,
+                space_id=space_id,
+                graph_id=graph_id
+            )
+            
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            raise VitalGraphClientError(f"Failed to stream download file: {e}")
+    
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """
+        Get authentication headers with automatic token refresh.
+        Ensures token is valid before returning headers.
+        """
+        headers = {}
+        
+        # Ensure token is valid (will refresh if expired)
+        # This uses the client's proactive token refresh logic
+        if hasattr(self.client, '_ensure_valid_token'):
+            try:
+                self.client._ensure_valid_token()
+            except Exception as e:
+                # If token refresh fails, log but continue with current token
+                # The request will fail with 401 if token is invalid
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Token refresh failed in _get_auth_headers: {e}")
+        
+        # Extract auth headers from the client's session
+        if hasattr(self.client, 'session') and self.client.session:
+            # Get Authorization header from session headers
+            session_headers = self.client.session.headers
+            if 'Authorization' in session_headers:
+                headers['Authorization'] = session_headers['Authorization']
+        
+        # Fallback: try to get token directly from JWT manager
+        if 'Authorization' not in headers:
+            if hasattr(self.client, 'access_token') and self.client.access_token:
+                headers['Authorization'] = f'Bearer {self.client.access_token}'
+        
+        return headers

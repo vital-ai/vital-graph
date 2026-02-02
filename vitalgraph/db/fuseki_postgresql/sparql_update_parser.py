@@ -180,18 +180,11 @@ class SPARQLUpdateParser:
             
             # Execute SELECT query against Fuseki to find concrete triples
             if self.fuseki_manager:
-                logger.info(f"🔍 Executing SELECT query against Fuseki for space: {space_id}")
-                results = await self.fuseki_manager.query_dataset(space_id, select_query)
-                logger.info(f"📊 Fuseki query returned {len(results)} results")
-                logger.info(f"📋 Results: {results}")
-                
-                # Convert Fuseki results to triple format
-                triples = []
-                
-                # Extract subject URI and graph URI from the original DELETE query
-                subject_uri = self._extract_subject_from_delete_query(sparql_update)
-                # Extract the actual graph URI from the DELETE query
+                # CRITICAL FIX: Extract ALL subjects from DELETE pattern, not just the first one
+                all_subjects = self._extract_all_subjects_from_delete_query(sparql_update)
                 graph_uri = self._extract_graph_from_delete_query(sparql_update)
+                
+                logger.info(f"🔍 Extracted {len(all_subjects)} subjects from DELETE query")
                 logger.info(f"🔍 Extracted graph URI from DELETE query: {graph_uri}")
                 
                 # Graph URI is required for DELETE operations
@@ -199,39 +192,47 @@ class SPARQLUpdateParser:
                     logger.error(f"❌ DELETE query must specify a GRAPH clause - no graph URI found in query")
                     return []
                 
-                for result in results:
-                    # Handle SPARQL JSON result format: {'s': {'type': 'uri', 'value': '...'}, 'p': {...}, 'o': {...}}
-                    if isinstance(result, dict) and 's' in result and 'p' in result and 'o' in result:
-                        subject = result['s']['value']
-                        predicate = result['p']['value']
-                        object_val = self._format_sparql_term(result['o'])
-                    # Handle incomplete SPARQL JSON result (missing subject) - use default subject
-                    elif isinstance(result, dict) and 'p' in result and 'o' in result and not 's' in result:
-                        subject = subject_uri  # Use the default subject URI
-                        predicate = result['p']['value']
-                        object_val = self._format_sparql_term(result['o'])
-                        logger.debug(f"Using default subject {subject_uri} for incomplete result: {result}")
-                    # Handle tuple format: (subject, predicate, object, graph)
-                    elif isinstance(result, (list, tuple)) and len(result) >= 3:
-                        subject = str(result[0]) if result[0] else subject_uri
-                        predicate = str(result[1])
-                        object_val = str(result[2])
-                    else:
-                        logger.warning(f"Skipping malformed result: {result}")
-                        continue
-                    
-                    # Skip empty results
-                    if not predicate or not object_val:
-                        logger.warning(f"Skipping empty result: {result}")
-                        continue
-                    
-                    # Create tuple format: (subject, predicate, object, graph)
-                    # Use the actual graph URI from the DELETE query
-                    triple_tuple = (subject, predicate, object_val, graph_uri)
-                    triples.append(triple_tuple)
-                    logger.info(f"🔍 Resolved triple: {triple_tuple}")
+                # Convert Fuseki results to triple format
+                triples = []
                 
-                logger.info(f"✅ Resolved {len(triples)} concrete triples from DELETE pattern")
+                # Query Fuseki for each subject to find all its triples
+                for subject_uri in all_subjects:
+                    subject_query = f"""
+                    SELECT ?p ?o WHERE {{
+                        GRAPH <{graph_uri}> {{
+                            <{subject_uri}> ?p ?o .
+                        }}
+                    }}
+                    """
+                    
+                    logger.info(f"🔍 Querying Fuseki for subject: {subject_uri}")
+                    results = await self.fuseki_manager.query_dataset(space_id, subject_query)
+                    logger.info(f"📊 Found {len(results)} triples for subject {subject_uri}")
+                    
+                    for result in results:
+                        # Handle SPARQL JSON result format: {'p': {...}, 'o': {...}}
+                        if isinstance(result, dict) and 'p' in result and 'o' in result:
+                            predicate = result['p']['value']
+                            object_val = self._format_sparql_term(result['o'])
+                        # Handle tuple format: (predicate, object)
+                        elif isinstance(result, (list, tuple)) and len(result) >= 2:
+                            predicate = str(result[0])
+                            object_val = str(result[1])
+                        else:
+                            logger.warning(f"Skipping malformed result: {result}")
+                            continue
+                        
+                        # Skip empty results
+                        if not predicate or not object_val:
+                            logger.warning(f"Skipping empty result: {result}")
+                            continue
+                        
+                        # Create tuple format: (subject, predicate, object, graph)
+                        triple_tuple = (subject_uri, predicate, object_val, graph_uri)
+                        triples.append(triple_tuple)
+                        logger.debug(f"🔍 Resolved triple: {triple_tuple}")
+                
+                logger.info(f"✅ Resolved {len(triples)} concrete triples from DELETE pattern with {len(all_subjects)} subjects")
                 return triples
             else:
                 logger.error("❌ No Fuseki manager available for pattern resolution")
@@ -540,7 +541,11 @@ class SPARQLUpdateParser:
                 return "?s ?p ?o ."
     
     def _extract_subject_from_delete_query(self, sparql_update: str) -> str:
-        """Extract the subject URI from a DELETE query using RDFLib parsing."""
+        """Extract the subject URI from a DELETE query using RDFLib parsing.
+        
+        Note: For DELETE patterns with multiple subjects, this returns the first one.
+        Use _extract_all_subjects_from_delete_query() for multi-subject patterns.
+        """
         try:
             from rdflib.plugins.sparql.parser import parseUpdate
             from rdflib.plugins.sparql.algebra import translateUpdate
@@ -580,6 +585,52 @@ class SPARQLUpdateParser:
         except Exception as e:
             logger.error(f"Error extracting subject from DELETE query: {e}")
             return ""
+    
+    def _extract_all_subjects_from_delete_query(self, sparql_update: str) -> list:
+        """Extract ALL subject URIs from a DELETE query using RDFLib parsing."""
+        try:
+            from rdflib.plugins.sparql.parser import parseUpdate
+            from rdflib.plugins.sparql.algebra import translateUpdate
+            from rdflib import URIRef
+            
+            # Parse the DELETE query using RDFLib
+            parsed_update = parseUpdate(sparql_update)
+            algebra = translateUpdate(parsed_update)
+            
+            # Handle Update algebra structure
+            update_ops = []
+            if hasattr(algebra, 'request'):
+                if hasattr(algebra.request, '__iter__'):
+                    update_ops = list(algebra.request)
+                else:
+                    update_ops = [algebra.request]
+            else:
+                update_ops = [algebra]
+            
+            subjects = []
+            
+            # Find the Modify operation and extract ALL subjects from DELETE clause
+            for update_op in update_ops:
+                if hasattr(update_op, 'algebra'):
+                    algebra_ops = update_op.algebra if isinstance(update_op.algebra, list) else [update_op.algebra]
+                    
+                    for actual_op in algebra_ops:
+                        if hasattr(actual_op, 'name') and actual_op.name == 'Modify':
+                            # Extract all subjects from DELETE clause
+                            if hasattr(actual_op, 'delete') and hasattr(actual_op.delete, 'quads'):
+                                for graph_uri, triples in actual_op.delete.quads.items():
+                                    for triple in triples:
+                                        s, p, o = triple
+                                        if isinstance(s, URIRef):
+                                            subject_str = str(s)
+                                            if subject_str not in subjects:
+                                                subjects.append(subject_str)
+            
+            return subjects
+            
+        except Exception as e:
+            logger.error(f"Error extracting subjects from DELETE query: {e}")
+            return []
     
     def _extract_graph_from_delete_query(self, sparql_update: str) -> str:
         """Extract the graph URI from a DELETE query using RDFLib parsing.

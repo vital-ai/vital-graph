@@ -307,6 +307,11 @@ class FileUploadResponse(VitalGraphResponse):
     
     space_id: Optional[str] = Field(default=None, description="Space ID from request")
     graph_id: Optional[str] = Field(default=None, description="Graph ID from request")
+    
+    @property
+    def file_size(self) -> int:
+        """Alias for size field for backward compatibility."""
+        return self.size
 
 
 class FileDownloadResponse(VitalGraphResponse):

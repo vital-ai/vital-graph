@@ -134,14 +134,16 @@ class KGEntityListProcessor:
         try:
             # First, get entity URIs using SELECT query
             select_query_parts = [
+                "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>",
+                "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>",
                 "SELECT DISTINCT ?entity WHERE {",
                 f"  GRAPH <{graph_id}> {{",
-                "    ?entity a <http://vital.ai/ontology/haley-ai-kg#KGEntity> ."
+                "    ?entity vital-core:vitaltype haley:KGEntity ."
             ]
             
             # Add entity type filtering if specified
             if entity_type_uri:
-                select_query_parts.append(f"    ?entity <http://vital.ai/ontology/haley-ai-kg#hasKGEntityType> <{entity_type_uri}> .")
+                select_query_parts.append(f"    ?entity haley:hasKGEntityType <{entity_type_uri}> .")
             
             # Add search filtering if specified
             if search:
@@ -214,8 +216,17 @@ class KGEntityListProcessor:
                         # Use the backend's get_entity method to retrieve just the basic entity
                         entity_result = await backend_adapter.get_entity(space_id, graph_id, entity_uri)
                         if entity_result and hasattr(entity_result, 'objects') and entity_result.objects:
+                            # Log how many objects were retrieved
+                            self.logger.info(f"🔍 entity_result.objects contains {len(entity_result.objects)} objects for {entity_uri}")
+                            if len(entity_result.objects) > 1:
+                                self.logger.warning(f"⚠️ Expected 1 object but got {len(entity_result.objects)} - only using first one")
+                            # Log the type of the object
+                            obj = entity_result.objects[0]
+                            self.logger.info(f"🔍 Object type: {type(obj).__name__}, Object class: {obj.__class__.__name__}")
+                            if hasattr(obj, 'URI'):
+                                self.logger.info(f"🔍 Object URI: {obj.URI}")
                             # Add the first object (should be the entity itself)
-                            entities.append(entity_result.objects[0])
+                            entities.append(obj)
                             self.logger.debug(f"Retrieved basic entity: {entity_uri}")
                         else:
                             self.logger.warning(f"Failed to retrieve entity data for: {entity_uri}")
@@ -235,6 +246,8 @@ class KGEntityListProcessor:
         """Build SPARQL count query."""
         # Base count query
         query_parts = [
+            "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>",
+            "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>",
             "SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {",
             f"  GRAPH <{graph_id}> {{"
         ]
@@ -242,11 +255,11 @@ class KGEntityListProcessor:
         # Entity type constraint
         if entity_type_uri:
             query_parts.extend([
-                f"    ?entity a <{entity_type_uri}> .",
-                "    ?entity a <http://vital.ai/ontology/haley-ai-kg#KGEntity> ."
+                "    ?entity vital-core:vitaltype haley:KGEntity .",
+                f"    ?entity haley:hasKGEntityType <{entity_type_uri}> ."
             ])
         else:
-            query_parts.append("    ?entity a <http://vital.ai/ontology/haley-ai-kg#KGEntity> .")
+            query_parts.append("    ?entity vital-core:vitaltype haley:KGEntity .")
         
         # Search constraint
         if search:
@@ -275,6 +288,8 @@ class KGEntityListProcessor:
                                     entity_type_uri: Optional[str], search: Optional[str]) -> str:
         """Build simple entities query (entity properties only)."""
         query_parts = [
+            "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>",
+            "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>",
             "SELECT ?s ?p ?o WHERE {",
             f"  GRAPH <{graph_id}> {{"
         ]
@@ -289,11 +304,11 @@ class KGEntityListProcessor:
         # Entity type constraint
         if entity_type_uri:
             subquery_parts.extend([
-                f"          ?s a <{entity_type_uri}> .",
-                "          ?s a <http://vital.ai/ontology/haley-ai-kg#KGEntity> ."
+                "          ?s vital-core:vitaltype haley:KGEntity .",
+                f"          ?s haley:hasKGEntityType <{entity_type_uri}> ."
             ])
         else:
-            subquery_parts.append("          ?s a <http://vital.ai/ontology/haley-ai-kg#KGEntity> .")
+            subquery_parts.append("          ?s vital-core:vitaltype haley:KGEntity .")
         
         # Search constraint
         if search:

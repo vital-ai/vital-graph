@@ -93,8 +93,9 @@ def create_test_jsonld_document(types: List[KGType]) -> Dict[str, Any]:
     """Convert VitalSigns KGType objects to JSON-LD document using VitalSigns native functionality."""
     vitalsigns = VitalSigns()
     
-    # Use VitalSigns native conversion
-    jsonld_document = vitalsigns.to_jsonld_list(types)
+    # Use VitalSigns static method for conversion
+    from vital_ai_vitalsigns.model.GraphObject import GraphObject
+    jsonld_document = GraphObject.to_jsonld_list(types)
     
     return jsonld_document
 

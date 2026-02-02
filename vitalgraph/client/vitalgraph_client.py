@@ -3,11 +3,12 @@
 REST API client for connecting to VitalGraph servers with JWT authentication.
 """
 
-import requests
+import httpx
 import logging
 import time
+import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from pathlib import Path
 
 from .config.client_config_loader import VitalGraphClientConfig, ClientConfigurationError
@@ -40,16 +41,21 @@ class VitalGraphClient(VitalGraphClientInterface):
     JWT-based authentication with automatic token refresh and connection management.
     """
     
-    def __init__(self, config_path: Optional[str] = None, *, config: Optional[VitalGraphClientConfig] = None):
+    def __init__(self, config_path: Optional[str] = None, *, config: Optional[VitalGraphClientConfig] = None, 
+                 token_expiry_seconds: Optional[int] = None,
+                 disable_proactive_refresh: bool = False):
         """
         Initialize the VitalGraph client.
         
         Args:
             config_path: Path to the client configuration YAML file (optional if config provided)
             config: Pre-configured VitalGraphClientConfig object (takes precedence over config_path)
+            token_expiry_seconds: Optional token expiry override in seconds for testing (max 1800 = 30 min)
+            disable_proactive_refresh: If True, skip proactive token refresh to test reactive 401 retry (testing only)
         """
         self.config: Optional[VitalGraphClientConfig] = None
-        self.session: Optional[requests.Session] = None
+        self.session: Optional[httpx.Client] = None
+        self.async_session: Optional[httpx.AsyncClient] = None
         self.is_open: bool = False
         
         # JWT Authentication data
@@ -57,6 +63,8 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.refresh_token: Optional[str] = None
         self.token_expiry: Optional[datetime] = None
         self.auth_data: Optional[Dict[str, Any]] = None
+        self.token_expiry_seconds: Optional[int] = token_expiry_seconds
+        self.disable_proactive_refresh: bool = disable_proactive_refresh
         
         # Load configuration with precedence: config object > config_path > defaults
         try:
@@ -109,19 +117,24 @@ class VitalGraphClient(VitalGraphClientInterface):
             raise VitalGraphClientError("No configuration loaded")
         
         try:
-            # Create HTTP session
-            self.session = requests.Session()
-            
-            # Set timeout
+            # Create HTTP sessions (both sync and async)
             timeout = self.config.get_timeout()
-            self.session.timeout = timeout
-            
-            # Set headers
-            self.session.headers.update({
-                'Content-Type': 'application/json',
+            headers = {
                 'Accept': 'application/json',
                 'User-Agent': 'VitalGraph-Client/1.0'
-            })
+            }
+            
+            self.session = httpx.Client(
+                timeout=timeout,
+                headers=headers,
+                follow_redirects=True
+            )
+            
+            self.async_session = httpx.AsyncClient(
+                timeout=timeout,
+                headers=headers,
+                follow_redirects=True
+            )
             
             # Authenticate with the server using /api/login
             server_url = self.config.get_server_url()
@@ -162,11 +175,16 @@ class VitalGraphClient(VitalGraphClientInterface):
             "password": password
         }
         
+        # Add optional token_expiry_seconds if provided (for testing)
+        if self.token_expiry_seconds is not None:
+            login_data["token_expiry_seconds"] = self.token_expiry_seconds
+            logger.info(f"Requesting custom token expiry: {self.token_expiry_seconds} seconds")
+        
         try:
             logger.info(f"Authenticating with VitalGraph server at {login_url}")
             # Set content type for form data and send authentication request
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-            response = self.session.post(login_url, data=login_data, headers=headers, timeout=timeout)
+            response = self.session.post(login_url, data=login_data, headers=headers)
             
             if response.status_code == 200:
                 # Authentication successful - parse JWT response
@@ -182,10 +200,10 @@ class VitalGraphClient(VitalGraphClientInterface):
                     expires_in = auth_result.get('expires_in', 1800)  # Default 30 minutes
                     self.token_expiry = datetime.now() + timedelta(seconds=expires_in)
                     
-                    # Add access token to session headers
-                    self.session.headers.update({
-                        'Authorization': f'Bearer {self.access_token}'
-                    })
+                    # Add access token to both session headers
+                    auth_header = {'Authorization': f'Bearer {self.access_token}'}
+                    self.session.headers.update(auth_header)
+                    self.async_session.headers.update(auth_header)
                     
                     logger.info("JWT authentication successful")
                     logger.info(f"Access token expires in {expires_in} seconds")
@@ -215,7 +233,7 @@ class VitalGraphClient(VitalGraphClientInterface):
                 logger.error(error_msg)
                 raise VitalGraphClientError(error_msg)
                 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             error_msg = f"Failed to connect to authentication endpoint: {e}"
             logger.error(error_msg)
             raise VitalGraphClientError(error_msg)
@@ -223,6 +241,30 @@ class VitalGraphClient(VitalGraphClientInterface):
             error_msg = f"Authentication error: {e}"
             logger.error(error_msg)
             raise VitalGraphClientError(error_msg)
+    
+    def _reauthenticate(self) -> None:
+        """
+        Re-authenticate with the server using stored credentials.
+        Fallback method when refresh token is not available.
+        
+        Raises:
+            VitalGraphClientError: If re-authentication fails
+        """
+        try:
+            logger.info("Re-authenticating with server (no refresh token available)...")
+            
+            server_url = self.config.get_server_url()
+            api_base_path = self.config.get_api_base_path()
+            timeout = self.config.get_timeout()
+            
+            # Call existing authenticate method
+            self._authenticate(server_url, api_base_path, timeout)
+            
+            logger.info("Re-authentication successful")
+            
+        except Exception as e:
+            logger.error(f"Re-authentication failed: {e}")
+            raise VitalGraphClientError(f"Failed to re-authenticate: {e}")
     
     def close(self) -> None:
         """
@@ -253,9 +295,29 @@ class VitalGraphClient(VitalGraphClientInterface):
             try:
                 self.session.close()
             except Exception as e:
-                logger.warning(f"Error closing session: {e}")
+                logger.warning(f"Error closing sync session: {e}")
             finally:
                 self.session = None
+        
+        if self.async_session:
+            try:
+                # Close async session synchronously
+                loop = None
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # No running loop, create one
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.async_session.aclose())
+                    loop.close()
+                else:
+                    # Already in async context, schedule close
+                    asyncio.create_task(self.async_session.aclose())
+            except Exception as e:
+                logger.warning(f"Error closing async session: {e}")
+            finally:
+                self.async_session = None
         
         # Clear JWT authentication data
         self.access_token = None
@@ -270,21 +332,39 @@ class VitalGraphClient(VitalGraphClientInterface):
         Returns:
             True if the client is open and has an active session
         """
-        return self.is_open and self.session is not None
+        return self.is_open and self.session is not None and self.async_session is not None
     
     def _is_token_expired(self) -> bool:
         """
         Check if the current access token is expired or will expire soon.
         
         Returns:
-            True if token is expired or will expire within 5 minutes
+            True if token is expired or will expire soon (with proportional buffer)
         """
         if not self.token_expiry:
+            logger.debug("Token expiry not set - considering token expired")
             return True
         
-        # Consider token expired if it expires within 5 minutes
-        buffer_time = timedelta(minutes=5)
-        return datetime.now() >= (self.token_expiry - buffer_time)
+        # Use proportional buffer: 10% of token lifetime or 5 minutes, whichever is smaller
+        # This allows short-lived test tokens to work properly
+        now = datetime.now()
+        time_until_expiry = (self.token_expiry - now).total_seconds()
+        
+        logger.debug(f"Token expiry check: expires at {self.token_expiry}, time until expiry: {time_until_expiry:.1f}s")
+        
+        # For very short tokens (< 60 seconds), use 10% buffer
+        # For longer tokens, use up to 5 minutes (300 seconds)
+        if time_until_expiry > 0:
+            # Calculate 10% of original token lifetime
+            # Estimate original lifetime from current remaining time
+            buffer_seconds = min(300, max(5, time_until_expiry * 0.1))
+            is_expired = time_until_expiry <= buffer_seconds
+            logger.debug(f"Token buffer: {buffer_seconds:.1f}s, expired: {is_expired}")
+            return is_expired
+        else:
+            # Already expired
+            logger.debug(f"Token already expired by {abs(time_until_expiry):.1f}s")
+            return True
     
     def _refresh_access_token(self) -> bool:
         """
@@ -293,7 +373,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         Returns:
             True if refresh was successful, False otherwise
         """
-        if not self.refresh_token or not self.session:
+        if not self.refresh_token or not self.session or not self.async_session:
             logger.warning("Cannot refresh token: no refresh token or session available")
             return False
         
@@ -324,10 +404,10 @@ class VitalGraphClient(VitalGraphClientInterface):
                     expires_in = refresh_result.get('expires_in', 1800)
                     self.token_expiry = datetime.now() + timedelta(seconds=expires_in)
                     
-                    # Update session headers with new access token
-                    self.session.headers.update({
-                        'Authorization': f'Bearer {self.access_token}'
-                    })
+                    # Update both session headers with new access token
+                    auth_header = {'Authorization': f'Bearer {self.access_token}'}
+                    self.session.headers.update(auth_header)
+                    self.async_session.headers.update(auth_header)
                     
                     logger.info("Access token refreshed successfully")
                     logger.info(f"New token expires in {expires_in} seconds")
@@ -359,7 +439,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             if not self._refresh_access_token():
                 raise VitalGraphClientError("Failed to refresh access token - please re-authenticate")
     
-    def _make_authenticated_request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _make_authenticated_request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """
         Make an authenticated request with automatic token refresh.
         
@@ -377,15 +457,99 @@ class VitalGraphClient(VitalGraphClientInterface):
         if not self.is_connected():
             raise VitalGraphClientError("Client is not connected")
         
-        # Ensure we have a valid access token
-        self._ensure_valid_token()
+        # Proactive: Ensure we have a valid access token (unless disabled for testing)
+        if not self.disable_proactive_refresh:
+            self._ensure_valid_token()
         
         try:
             response = self.session.request(method, url, **kwargs)
             response.raise_for_status()
             return response
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPStatusError as e:
+            # Reactive: Handle 401 Unauthorized with token refresh and retry
+            if e.response.status_code == 401:
+                logger.warning("Received 401 Unauthorized - attempting token refresh and retry")
+                
+                # Determine authentication mode and handle accordingly
+                if self.refresh_token:
+                    # OAuth2 Password Grant: refresh with refresh token
+                    logger.info("Attempting token refresh with refresh token")
+                    if not self._refresh_access_token():
+                        raise VitalGraphClientError("Token refresh failed after 401 - please re-authenticate")
+                else:
+                    # Fallback: re-authenticate with credentials
+                    logger.info("No refresh token available - re-authenticating with credentials")
+                    self._reauthenticate()
+                
+                # Retry the request ONCE with new token
+                logger.info("Retrying request with refreshed token")
+                try:
+                    response = self.session.request(method, url, **kwargs)
+                    response.raise_for_status()
+                    return response
+                except httpx.HTTPError as retry_error:
+                    raise VitalGraphClientError(f"Request failed after token refresh: {retry_error}")
+            else:
+                # Not a 401 error, re-raise
+                raise VitalGraphClientError(f"Request failed: {e}")
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {e}")
+    
+    async def _make_authenticated_request_async(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """
+        Make an authenticated async request with automatic token refresh.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Request URL
+            **kwargs: Additional request parameters
+            
+        Returns:
+            Response object
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        if not self.is_connected():
+            raise VitalGraphClientError("Client is not connected")
+        
+        # Proactive: Ensure we have a valid access token (unless disabled for testing)
+        if not self.disable_proactive_refresh:
+            self._ensure_valid_token()
+        
+        try:
+            response = await self.async_session.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as e:
+            # Reactive: Handle 401 Unauthorized with token refresh and retry
+            if e.response.status_code == 401:
+                logger.warning("Received 401 Unauthorized (async) - attempting token refresh and retry")
+                
+                # Determine authentication mode and handle accordingly
+                if self.refresh_token:
+                    # OAuth2 Password Grant: refresh with refresh token
+                    logger.info("Attempting token refresh with refresh token (async)")
+                    if not self._refresh_access_token():
+                        raise VitalGraphClientError("Token refresh failed after 401 - please re-authenticate")
+                else:
+                    # Fallback: re-authenticate with credentials
+                    logger.info("No refresh token available - re-authenticating with credentials (async)")
+                    self._reauthenticate()
+                
+                # Retry the request ONCE with new token
+                logger.info("Retrying async request with refreshed token")
+                try:
+                    response = await self.async_session.request(method, url, **kwargs)
+                    response.raise_for_status()
+                    return response
+                except httpx.HTTPError as retry_error:
+                    raise VitalGraphClientError(f"Async request failed after token refresh: {retry_error}")
+            else:
+                # Not a 401 error, re-raise
+                raise VitalGraphClientError(f"Async request failed: {e}")
+        except httpx.HTTPError as e:
+            raise VitalGraphClientError(f"Async request failed: {e}")
     
     def get_server_info(self) -> Dict[str, Any]:
         """

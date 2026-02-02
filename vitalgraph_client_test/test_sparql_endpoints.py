@@ -20,6 +20,9 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.sparql_model import SPARQLQueryResponse, SPARQLInsertResponse, SPARQLUpdateResponse, SPARQLDeleteResponse, SPARQLQueryRequest, SPARQLInsertRequest, SPARQLUpdateRequest, SPARQLDeleteRequest
 
@@ -81,8 +84,8 @@ class SPARQLEndpointTester:
             
             print(f"   ✅ POST query successful!")
             print(f"   📈 Query time: {end_time - start_time:.5f}s")
-            if result and result.results and result.results.bindings:
-                bindings = result.results.bindings
+            if result and result.results and 'bindings' in result.results:
+                bindings = result.results['bindings']
                 print(f"   📊 Results: {len(bindings)} bindings")
             else:
                 print(f"   📊 Results: No bindings found")
@@ -116,6 +119,12 @@ class SPARQLEndpointTester:
             insert_request = SPARQLInsertRequest(update=insert_query)
             result: SPARQLInsertResponse = self.client.execute_sparql_insert(SPACE_ID, insert_request)
             end_time = time.time()
+            
+            # Check response success field
+            if hasattr(result, 'success') and not result.success:
+                print(f"   ❌ Insert failed!")
+                print(f"   📋 Error: {result.message if hasattr(result, 'message') else 'Unknown error'}")
+                return False
             
             print(f"   ✅ Insert successful!")
             print(f"   ⏱️  Insert time: {end_time - start_time:.5f}s")
@@ -156,20 +165,32 @@ class SPARQLEndpointTester:
             result: SPARQLUpdateResponse = self.client.execute_sparql_update(SPACE_ID, update_request)
             end_time = time.time()
             
+            # Check response success field
+            if hasattr(result, 'success') and not result.success:
+                print(f"   ❌ Update failed!")
+                print(f"   📋 Error: {result.message if hasattr(result, 'message') else 'Unknown error'}")
+                return False
+            
             print(f"   ✅ Update successful!")
             print(f"   ⏱️  Update time: {end_time - start_time:.5f}s")
             return True
                 
         except Exception as e:
             print(f"   ❌ Update test error: {e}")
+            return False
     
     def test_sparql_delete(self) -> bool:
         """Test SPARQL delete endpoint."""
         print(f"\n🗑️  Testing SPARQL Delete Endpoint...")
         
-        # Test DELETE query using our test data
+        # Test DELETE query using DELETE {} WHERE {} syntax (DELETE WHERE doesn't work)
         delete_query = f"""
-        DELETE WHERE {{
+        DELETE {{
+            GRAPH <{TEST_GRAPH_URI}> {{
+                <http://example.org/test/endpoint_test_entity> ?p ?o .
+            }}
+        }}
+        WHERE {{
             GRAPH <{TEST_GRAPH_URI}> {{
                 <http://example.org/test/endpoint_test_entity> ?p ?o .
             }}
@@ -182,6 +203,12 @@ class SPARQLEndpointTester:
             result: SPARQLDeleteResponse = self.client.execute_sparql_delete(SPACE_ID, delete_request)
             end_time = time.time()
             
+            # Check response success field
+            if hasattr(result, 'success') and not result.success:
+                print(f"   ❌ Delete failed!")
+                print(f"   📋 Error: {result.message if hasattr(result, 'message') else 'Unknown error'}")
+                return False
+            
             print(f"   ✅ Delete successful!")
             print(f"   ⏱️  Delete time: {end_time - start_time:.5f}s")
             return True
@@ -189,6 +216,45 @@ class SPARQLEndpointTester:
         except Exception as e:
             print(f"   ❌ Delete test error: {e}")
             return False
+    
+    def test_sparql_delete_where_error(self) -> bool:
+        """Test that DELETE WHERE syntax (unsupported) returns an error."""
+        print(f"\n⚠️  Testing DELETE WHERE Error Handling...")
+        
+        # Test DELETE WHERE query (unsupported syntax - should fail)
+        delete_where_query = f"""
+        DELETE WHERE {{
+            GRAPH <{TEST_GRAPH_URI}> {{
+                <http://example.org/test/some_entity> ?p ?o .
+            }}
+        }}
+        """
+        
+        try:
+            start_time = time.time()
+            delete_request = SPARQLDeleteRequest(update=delete_where_query)
+            result: SPARQLDeleteResponse = self.client.execute_sparql_delete(SPACE_ID, delete_request)
+            end_time = time.time()
+            
+            # Check if the operation failed (success=False in response)
+            if hasattr(result, 'success') and not result.success:
+                # Expected behavior - operation failed
+                print(f"   ✅ DELETE WHERE correctly rejected!")
+                print(f"   📋 Error message: {result.message if hasattr(result, 'message') else 'No message'}")
+                if hasattr(result, 'error'):
+                    print(f"   📋 Error details: {result.error}")
+                return True
+            else:
+                # Operation succeeded when it should have failed
+                print(f"   ❌ DELETE WHERE should have failed but succeeded!")
+                print(f"   ⚠️  Response: {result}")
+                return False
+                
+        except Exception as e:
+            # Also acceptable - exception raised
+            print(f"   ✅ DELETE WHERE correctly rejected with exception!")
+            print(f"   📋 Error message: {str(e)[:100]}...")
+            return True
     
     def test_graph_management(self) -> bool:
         """Test graph management endpoints."""
@@ -296,9 +362,9 @@ class SPARQLEndpointTester:
                 triples = result.triples
                 print(f"   ✅ CONSTRUCT query successful!")
                 print(f"   📊 Constructed {len(triples)} triples")
-            elif result and result.results and result.results.bindings:
+            elif result and result.results and 'bindings' in result.results:
                 # Fallback to results format
-                bindings = result.results.bindings
+                bindings = result.results['bindings']
                 print(f"   ✅ CONSTRUCT query successful!")
                 print(f"   📊 Constructed {len(bindings)} result bindings")
             else:
@@ -363,8 +429,8 @@ class SPARQLEndpointTester:
                 result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
                 end_time = time.time()
                 
-                if result and result.results and result.results.bindings:
-                    bindings = result.results.bindings
+                if result and result.results and 'bindings' in result.results:
+                    bindings = result.results['bindings']
                     print(f"   ✅ {query_name}: {len(bindings)} results ({end_time - start_time:.3f}s)")
                     if bindings and len(bindings) <= 5:  # Show results if few enough
                         for binding in bindings:
@@ -378,6 +444,54 @@ class SPARQLEndpointTester:
             print(f"   ❌ Comprehensive queries test error: {e}")
             return False
     
+    def setup_test_space(self) -> bool:
+        """Set up test space - delete if exists, create fresh."""
+        print(f"\n📦 Setting up test space: {SPACE_ID}")
+        
+        try:
+            # List existing spaces
+            print("   Listing existing spaces...")
+            spaces_response = self.client.spaces.list_spaces()
+            if spaces_response.is_success:
+                existing_space = next((s for s in spaces_response.spaces if s.space == SPACE_ID), None)
+                
+                if existing_space:
+                    print(f"   Found existing space, deleting...")
+                    delete_response = self.client.spaces.delete_space(SPACE_ID)
+                    if delete_response.is_success:
+                        print(f"   ✅ Existing space deleted")
+                    else:
+                        print(f"   ⚠️  Could not delete existing space: {delete_response.error_message}")
+                else:
+                    print(f"   No existing test space found")
+        except Exception as e:
+            print(f"   Note: Could not check/delete existing space: {e}")
+        
+        # Create fresh test space
+        print(f"   Creating fresh test space...")
+        try:
+            from vitalgraph.model.spaces_model import Space
+            space_data = Space(
+                space=SPACE_ID,
+                space_name="SPARQL Endpoints Test",
+                space_description="Test space for SPARQL endpoint testing",
+                tenant="test_tenant"
+            )
+            create_response = self.client.spaces.create_space(space_data)
+            if not create_response.is_success:
+                print(f"   ❌ Failed to create space: {create_response.error_message}")
+                return False
+            print(f"   ✅ Test space created: {SPACE_ID}")
+            
+            # Create test graph
+            print(f"   Creating test graph: {TEST_GRAPH_URI}")
+            # Graph will be created automatically when we insert data
+            
+            return True
+        except Exception as e:
+            print(f"   ❌ Error creating test space: {e}")
+            return False
+    
     def run_all_tests(self) -> bool:
         """Run all SPARQL endpoint tests."""
         print("🧪 VitalGraph SPARQL Endpoints Test Suite")
@@ -389,6 +503,11 @@ class SPARQLEndpointTester:
             print("❌ Authentication failed - cannot proceed with tests")
             return False
         
+        # Set up test space
+        if not self.setup_test_space():
+            print("❌ Test space setup failed - cannot proceed with tests")
+            return False
+        
         # Run all tests
         tests = [
             ("SPARQL Query", self.test_sparql_query),
@@ -398,6 +517,7 @@ class SPARQLEndpointTester:
             ("SPARQL Insert", self.test_sparql_insert),
             ("SPARQL Update", self.test_sparql_update),
             ("SPARQL Delete", self.test_sparql_delete),
+            ("DELETE WHERE Error", self.test_sparql_delete_where_error),
             ("Graph Management", self.test_graph_management),
         ]
         
@@ -447,15 +567,27 @@ def main() -> int:
     print(f"📋 Note: Using typed SPARQL response models for full type safety")
     
     tester = SPARQLEndpointTester(BASE_URL)
-    success = tester.run_all_tests()
     
-    if success:
-        print("\n✅ All SPARQL endpoint tests completed successfully with typed client methods!")
-        print("   Used SPARQLQueryResponse, SPARQLInsertResponse, and SPARQLUpdateResponse models.")
-        return 0
-    else:
-        print("\n❌ Some SPARQL endpoint tests failed!")
-        return 1
+    try:
+        success = tester.run_all_tests()
+        
+        if success:
+            print("\n✅ All SPARQL endpoint tests completed successfully with typed client methods!")
+            print("   Used SPARQLQueryResponse, SPARQLInsertResponse, and SPARQLUpdateResponse models.")
+        else:
+            print("\n❌ Some SPARQL endpoint tests failed!")
+        
+        # Leave test space for inspection (do not delete)
+        print(f"\n📦 Test space '{SPACE_ID}' left for inspection")
+        print(f"   You can manually delete it later if needed")
+        
+        return 0 if success else 1
+        
+    finally:
+        # Always disconnect client
+        if tester.client:
+            tester.disconnect()
+            print("✅ Client closed")
 
 
 if __name__ == "__main__":

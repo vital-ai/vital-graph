@@ -4,7 +4,7 @@ VitalGraph Client Import Endpoint
 Client-side implementation for Data Import operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, Union, BinaryIO, List
 from pathlib import Path
 
@@ -217,11 +217,12 @@ class ImportEndpoint(BaseEndpoint):
             
             with open(file_path_obj, 'rb') as f:
                 files = {'file': (file_path_obj.name, f, 'application/octet-stream')}
-                response = self.client.session.post(url, files=files)
+                # Use authenticated request with token refresh
+                response = self._make_authenticated_request('POST', url, files=files)
                 response.raise_for_status()
                 return ImportUploadResponse.model_validate(response.json())
                 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to upload import file: {e}")
     
     def upload_from_generator(self, import_id: str, generator: BinaryGenerator) -> Dict[str, Any]:

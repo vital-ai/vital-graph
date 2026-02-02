@@ -273,23 +273,17 @@ class KGEntityFrameCreateProcessor:
                 
                 # For frame objects, set frameGraphURI to their own URI
                 if 'KGFrame' in class_name:
-                    if hasattr(obj, 'frameGraphURI') and hasattr(obj, 'URI'):
-                        obj.frameGraphURI = obj.URI
-                        self.logger.info(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
-                    else:
-                        self.logger.warning(f"⚠️ Frame object missing frameGraphURI or URI property. Has frameGraphURI: {hasattr(obj, 'frameGraphURI')}, Has URI: {hasattr(obj, 'URI')}")
-                
+                    obj.frameGraphURI = obj.URI
+                    self.logger.info(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
+                    
                 # For slots, set frameGraphURI to the frame they belong to
                 elif 'Slot' in class_name:
                     # Find the frame this slot should belong to
                     frame_candidates = [o for o in frame_objects if hasattr(o, '__class__') and 'KGFrame' in o.__class__.__name__]
                     if frame_candidates:
                         target_frame = frame_candidates[0]  # Use first frame (simplified)
-                        if hasattr(obj, 'frameGraphURI') and hasattr(target_frame, 'URI'):
-                            obj.frameGraphURI = target_frame.URI
-                            self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
-                        else:
-                            self.logger.warning(f"⚠️ Slot object missing frameGraphURI property or target frame missing URI. Has frameGraphURI: {hasattr(obj, 'frameGraphURI')}, Target has URI: {hasattr(target_frame, 'URI')}")
+                        obj.frameGraphURI = target_frame.URI
+                        self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
                     else:
                         self.logger.warning(f"⚠️ No frame candidates found for slot {obj.URI}")
                 
@@ -299,11 +293,9 @@ class KGEntityFrameCreateProcessor:
                     frame_candidates = [o for o in frame_objects if hasattr(o, '__class__') and 'KGFrame' in o.__class__.__name__]
                     if frame_candidates:
                         target_frame = frame_candidates[0]  # Use first frame (simplified)
-                        if hasattr(obj, 'frameGraphURI') and hasattr(target_frame, 'URI'):
-                            obj.frameGraphURI = target_frame.URI
-                            self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
-                        else:
-                            self.logger.warning(f"⚠️ Edge object missing frameGraphURI property or target frame missing URI")
+                        
+                        obj.frameGraphURI = target_frame.URI
+                        self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
                     else:
                         self.logger.warning(f"⚠️ No frame candidates found for edge {obj.URI}")
             
@@ -516,16 +508,32 @@ class KGEntityFrameCreateProcessor:
             List[tuple]: List of quad tuples (subject, predicate, object, graph) to insert
         """
         try:
-            self.logger.info(f"🔍 Converting {len(all_objects)} objects to triples")
+            self.logger.info(f"🔍 Building insert quads for {len(all_objects)} objects")
+            
+            # Log each object type, URI, and check for kGGraphURI property
             for i, obj in enumerate(all_objects):
                 obj_type = type(obj).__name__
                 obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
+                has_kg_graph_uri = hasattr(obj, 'kGGraphURI')
+                kg_graph_uri_value = str(obj.kGGraphURI) if has_kg_graph_uri and obj.kGGraphURI else 'NOT_SET'
                 self.logger.info(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
+                self.logger.info(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
             
             # Convert VitalSigns objects to triples
             triples = GraphObject.to_triples_list(all_objects)
             
             self.logger.info(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
+            
+            # Check if hasKGGraphURI triples are present
+            kg_graph_uri_triples = [t for t in triples if 'hasKGGraphURI' in str(t[1])]
+            frame_graph_uri_triples = [t for t in triples if 'hasFrameGraphURI' in str(t[1])]
+            self.logger.info(f"🔍 Found {len(kg_graph_uri_triples)} hasKGGraphURI triples")
+            self.logger.info(f"🔍 Found {len(frame_graph_uri_triples)} hasFrameGraphURI triples")
+            
+            for triple in kg_graph_uri_triples:
+                s, p, o = triple
+                self.logger.info(f"🔍   hasKGGraphURI triple: {s} -> {o}")
+            
             for i, triple in enumerate(triples[:10]):  # Log first 10 triples
                 s, p, o = triple
                 self.logger.info(f"🔍   Triple {i+1}: {s} | {p} | {o}")

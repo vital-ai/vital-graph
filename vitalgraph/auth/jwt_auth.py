@@ -34,18 +34,25 @@ class JWTAuth:
         self.access_token_expire_minutes = 30
         self.refresh_token_expire_days = 7
     
-    def create_access_token(self, data: dict) -> str:
+    def create_access_token(self, data: dict, expiry_seconds: int = None) -> str:
         """
         Create JWT access token with expiration.
         
         Args:
             data: Token payload data
+            expiry_seconds: Optional custom expiry in seconds (for testing, max 1800)
             
         Returns:
             Encoded JWT access token
         """
         to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
+        
+        # Use custom expiry if provided, otherwise use default minutes
+        if expiry_seconds is not None:
+            expire = datetime.utcnow() + timedelta(seconds=expiry_seconds)
+        else:
+            expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
+            
         to_encode.update({"exp": expire, "type": "access"})
         return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
     

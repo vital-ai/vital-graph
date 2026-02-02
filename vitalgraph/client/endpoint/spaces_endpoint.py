@@ -4,7 +4,7 @@ VitalGraph Client Spaces Endpoint
 Client-side implementation for Spaces operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional
 
 from .base_endpoint import BaseEndpoint

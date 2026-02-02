@@ -17,6 +17,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
 
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.spaces_model import SpacesListResponse, SpaceCreateResponse, Space
 from vitalgraph.model.sparql_model import SPARQLQueryResponse, SPARQLInsertResponse, SPARQLQueryRequest, SPARQLInsertRequest
@@ -69,6 +72,14 @@ def create_test_space_with_data(config_path: str) -> bool:
         spaces_response: SpacesListResponse = client.list_spaces()
         existing_spaces = spaces_response.spaces
         print(f"   📊 Found {len(existing_spaces)} total spaces (total: {spaces_response.total_count})")
+        print(f"   ✓ Response pagination: page_size={spaces_response.page_size}, offset={spaces_response.offset}")
+        
+        # Validate response structure
+        if spaces_response.total_count != len(existing_spaces):
+            print(f"   ⚠️  Warning: total_count ({spaces_response.total_count}) != actual count ({len(existing_spaces)})")
+        else:
+            print(f"   ✓ Response structure validated: counts match")
+        
         test_space_identifier = "space_test_crud"
         existing_test_space = next((s for s in existing_spaces if s.space == test_space_identifier), None)
         
@@ -105,11 +116,17 @@ def create_test_space_with_data(config_path: str) -> bool:
         print(f"   Created count: {add_response.created_count}")
         print(f"   Created URIs: {add_response.created_uris}")
         
-        if not add_response.created_uris:
-            raise VitalGraphClientError("No created URIs in add response")
+        # Validate create response structure
+        if add_response.created_count != 1:
+            print(f"   ⚠️  Warning: Expected created_count=1, got {add_response.created_count}")
+        if not add_response.created_uris or len(add_response.created_uris) != 1:
+            raise VitalGraphClientError(f"Expected 1 created URI, got {len(add_response.created_uris) if add_response.created_uris else 0}")
+        
+        # Extract space ID from the response
         space_id = add_response.created_uris[0]
         if not space_id:
             raise VitalGraphClientError("Created space does not have an ID")
+        print(f"   ✓ Space ID extracted: {space_id}")
         
         # Create test graph first
         print("\n4. Creating test graph...")
@@ -117,12 +134,10 @@ def create_test_space_with_data(config_path: str) -> bool:
         global_graph_uri = "urn:___GLOBAL"
         
         try:
-            # Create the main test graph
-            create_result = client.execute_sparql_graph_operation(
-                test_space_identifier,
-                "CREATE",
-                target_graph_uri=test_graph_uri
-            )
+            # Create the main test graph using SPARQL UPDATE
+            create_graph_query = f"CREATE GRAPH <{test_graph_uri}>"
+            create_request = SPARQLInsertRequest(update=create_graph_query)
+            create_result = client.execute_sparql_insert(test_space_identifier, create_request)
             print(f"   ✓ Test graph created: {test_graph_uri}")
         except Exception as e:
             print(f"   ⚠️  Graph creation warning: {e}")
@@ -372,8 +387,16 @@ def create_test_space_with_data(config_path: str) -> bool:
         query_request = SPARQLQueryRequest(query=verify_query, format="json")
         result: SPARQLQueryResponse = client.execute_sparql_query(test_space_identifier, query_request)
         
-        if result and result.results and result.results.bindings:
-            bindings = result.results.bindings
+        # Handle different response formats - could be dict or object
+        if result:
+            # Check if result is a dict (raw response) or SPARQLQueryResponse object
+            if isinstance(result, dict):
+                # Handle raw dict response
+                bindings = result.get('results', {}).get('bindings', [])
+            else:
+                # Handle SPARQLQueryResponse object
+                bindings = result.results.bindings if result.results and hasattr(result.results, 'bindings') else []
+            
             if bindings:
                 # Handle both formats: {'count': {'value': 104}} and {'count': 104}
                 count_data = bindings[0].get('count', 0)
@@ -385,7 +408,7 @@ def create_test_space_with_data(config_path: str) -> bool:
             else:
                 print(f"   ⚠️  No count result returned")
         else:
-            print(f"   ⚠️  Verification query returned unexpected format")
+            print(f"   ⚠️  Verification query returned no result")
         
         # Verify global graph data
         global_verify_query = f"""
@@ -398,8 +421,17 @@ def create_test_space_with_data(config_path: str) -> bool:
         
         query_request = SPARQLQueryRequest(query=global_verify_query, format="json")
         result: SPARQLQueryResponse = client.execute_sparql_query(test_space_identifier, query_request)
-        if result and result.results and result.results.bindings:
-            bindings = result.results.bindings
+        
+        # Handle different response formats - could be dict or object
+        if result:
+            # Check if result is a dict (raw response) or SPARQLQueryResponse object
+            if isinstance(result, dict):
+                # Handle raw dict response
+                bindings = result.get('results', {}).get('bindings', [])
+            else:
+                # Handle SPARQLQueryResponse object
+                bindings = result.results.bindings if result.results and hasattr(result.results, 'bindings') else []
+            
             if bindings:
                 # Handle both formats: {'count': {'value': 104}} and {'count': 104}
                 count_data = bindings[0].get('count', 0)
@@ -410,6 +442,8 @@ def create_test_space_with_data(config_path: str) -> bool:
                 print(f"   ✓ Global graph verification successful: {count} triples in global graph")
             else:
                 print(f"   ⚠️  No global count result returned")
+        else:
+            print(f"   ⚠️  Global verification query returned no result")
         
         # Close client
         client.close()

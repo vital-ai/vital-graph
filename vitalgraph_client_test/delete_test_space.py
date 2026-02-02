@@ -14,6 +14,9 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+# Add the project root to Python path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.spaces_model import SpacesListResponse, SpaceDeleteResponse
 
@@ -63,13 +66,18 @@ def delete_test_space(config_path: str, space_name: str) -> bool:
         
         # Find the specified space
         print(f"\n2. Looking for space '{space_name}' to delete...")
-        spaces_response: SpacesListResponse = client.list_spaces()
+        spaces_response = client.spaces.list_spaces()
+        if not spaces_response.is_success:
+            print(f"   ❌ Failed to list spaces: {spaces_response.error_message}")
+            return False
+        
         existing_spaces = spaces_response.spaces
-        print(f"   📊 Found {len(existing_spaces)} total spaces (total: {spaces_response.total_count})")
+        print(f"   📊 Found {spaces_response.count} total spaces")
         test_space = next((s for s in existing_spaces if s.space == space_name), None)
         
         if test_space:
-            space_id = test_space.id
+            # Use space identifier as fallback if ID is None (like in main test)
+            space_id = test_space.id or space_name
             space_display_name = test_space.space_name
             print(f"   ✓ Found space:")
             print(f"     - ID: {space_id}")
@@ -80,13 +88,16 @@ def delete_test_space(config_path: str, space_name: str) -> bool:
             print(f"\n3. Deleting space '{space_name}' (ID: {space_id})...")
             
             try:
-                delete_result: SpaceDeleteResponse = client.delete_space(space_id)
-                print(f"   ✓ Test space deleted successfully!")
-                print(f"   📋 Deletion result:")
-                print(f"     - Message: {delete_result.message}")
-                print(f"     - Deleted count: {delete_result.deleted_count}")
-                if delete_result.deleted_uris:
-                    print(f"     - Deleted URIs: {delete_result.deleted_uris}")
+                delete_result = client.spaces.delete_space(space_id)
+                if delete_result.is_success:
+                    print(f"   ✓ Test space deleted successfully!")
+                    print(f"   📋 Deletion result:")
+                    print(f"     - Space ID: {delete_result.space_id}")
+                    print(f"     - Deleted count: {delete_result.deleted_count}")
+                    print(f"     - Message: {delete_result.message}")
+                else:
+                    print(f"   ❌ Failed to delete space: {delete_result.error_message}")
+                    return False
                 
             except VitalGraphClientError as e:
                 print(f"   ❌ VitalGraph client error deleting test space: {e}")
@@ -103,7 +114,11 @@ def delete_test_space(config_path: str, space_name: str) -> bool:
         
         # Verify deletion
         print("\n4. Verifying deletion...")
-        updated_spaces_response: SpacesListResponse = client.list_spaces()
+        updated_spaces_response = client.spaces.list_spaces()
+        if not updated_spaces_response.is_success:
+            print(f"   ⚠️  Could not verify deletion: {updated_spaces_response.error_message}")
+            return False
+        
         updated_spaces = updated_spaces_response.spaces
         remaining_test_space = next((s for s in updated_spaces if s.space == space_name), None)
         
@@ -112,7 +127,7 @@ def delete_test_space(config_path: str, space_name: str) -> bool:
             return False
         else:
             print(f"   ✓ Test space successfully removed")
-            print(f"   📊 Remaining spaces: {len(updated_spaces)} (total: {updated_spaces_response.total_count})")
+            print(f"   📊 Remaining spaces: {updated_spaces_response.count}")
         
         # Close client
         client.close()

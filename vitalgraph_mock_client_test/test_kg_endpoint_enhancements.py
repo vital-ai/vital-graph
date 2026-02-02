@@ -6,7 +6,7 @@ This test suite validates the new KG endpoint functionality including:
 - Entity-frame relationship operations (create_entity_frames, get_entity_frames, etc.)
 - Frame-slot relationship operations (create_frame_slots, get_frame_slots, etc.)
 - Enhanced parameters (include_entity_graph, delete_entity_graph, include_frame_graph)
-- Proper edge-based relationships using Edge_hasKGFrame and Edge_hasKGSlot
+- Proper edge-based relationships using Edge_hasEntityKGFrame and Edge_hasKGSlot
 - VitalSigns native JSON-LD functionality with concrete slot values
 """
 
@@ -32,7 +32,7 @@ from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
 from ai_haley_kg_domain.model.KGBooleanSlot import KGBooleanSlot
-from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -381,7 +381,7 @@ class TestKGEndpointEnhancements:
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
                 frame_uri=self.frame_uri,
-                slot_type="urn:EnhancedTextSlotType"
+                kGSlotType="urn:EnhancedTextSlotType"
             )
             
             # Check if we got a valid response
@@ -511,8 +511,8 @@ class TestKGEndpointEnhancements:
             # Create a test frame using VitalSigns patterns
             test_frame = KGFrame()
             test_frame.URI = "http://vital.ai/haley.ai/app/KGFrame/vitalsigns_test_frame"
-            test_frame.hasName = "VitalSigns Integration Test Frame"
-            test_frame.hasKGFrameType = "urn:VitalSignsTestFrameType"
+            test_frame.name = "VitalSigns Integration Test Frame"
+            test_frame.kGFrameType = "urn:VitalSignsTestFrameType"
             
             # Test VitalSigns JSON-LD conversion
             jsonld_doc = GraphObject.to_jsonld_list([test_frame])
@@ -523,8 +523,8 @@ class TestKGEndpointEnhancements:
                 "GraphObject inheritance": isinstance(test_frame, GraphObject),
                 "JSON-LD conversion": isinstance(jsonld_doc, dict),
                 "Has @context": "@context" in jsonld_doc,
-                "Property access": hasattr(test_frame, 'hasName'),
-                "Property value set": test_frame.hasName == "VitalSigns Integration Test Frame"
+                "Property access": hasattr(test_frame, 'name'),
+                "Property value set": test_frame.name == "VitalSigns Integration Test Frame"
             }
             
             passed_tests = sum(1 for result in vitalsigns_tests.values() if result)
@@ -537,7 +537,7 @@ class TestKGEndpointEnhancements:
                 f"VitalSigns integration tests: {passed_tests}/{total_tests} passed",
                 {
                     "test_results": vitalsigns_tests,
-                    "frame_uri": test_frame.URI,
+                    "frame_uri": str(test_frame.URI),
                     "jsonld_keys": list(jsonld_doc.keys()) if isinstance(jsonld_doc, dict) else []
                 }
             )
@@ -559,15 +559,15 @@ class TestKGEndpointEnhancements:
             # Create slots with different property types
             text_slot = KGTextSlot()
             text_slot.URI = "http://vital.ai/haley.ai/app/KGTextSlot/property_test_text"
-            text_slot.hasTextSlotValue = "Property Test Value"
+            text_slot.textSlotValue = "Property Test Value"
             
             integer_slot = KGIntegerSlot()
             integer_slot.URI = "http://vital.ai/haley.ai/app/KGIntegerSlot/property_test_integer"
-            integer_slot.hasIntegerSlotValue = 123
+            integer_slot.integerSlotValue = 123
             
             boolean_slot = KGBooleanSlot()
             boolean_slot.URI = "http://vital.ai/haley.ai/app/KGBooleanSlot/property_test_boolean"
-            boolean_slot.hasBooleanSlotValue = False
+            boolean_slot.booleanSlotValue = False
             
             # Test isinstance() checks
             property_tests = {
@@ -577,12 +577,12 @@ class TestKGEndpointEnhancements:
                 "GraphObject inheritance text": isinstance(text_slot, GraphObject),
                 "GraphObject inheritance integer": isinstance(integer_slot, GraphObject),
                 "GraphObject inheritance boolean": isinstance(boolean_slot, GraphObject),
-                "Text property access": hasattr(text_slot, 'hasTextSlotValue'),
-                "Integer property access": hasattr(integer_slot, 'hasIntegerSlotValue'),
-                "Boolean property access": hasattr(boolean_slot, 'hasBooleanSlotValue'),
-                "Text value correct": text_slot.hasTextSlotValue == "Property Test Value",
-                "Integer value correct": integer_slot.hasIntegerSlotValue == 123,
-                "Boolean value correct": boolean_slot.hasBooleanSlotValue == False
+                "Text property access": hasattr(text_slot, 'textSlotValue'),
+                "Integer property access": hasattr(integer_slot, 'integerSlotValue'),
+                "Boolean property access": hasattr(boolean_slot, 'booleanSlotValue'),
+                "Text value correct": text_slot.textSlotValue == "Property Test Value",
+                "Integer value correct": integer_slot.integerSlotValue == 123,
+                "Boolean value correct": boolean_slot.booleanSlotValue == False
             }
             
             passed_tests = sum(1 for result in property_tests.values() if result)

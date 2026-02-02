@@ -4,7 +4,7 @@ VitalGraph Client KGFrames Endpoint
 Client-side implementation for KGFrames operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, Union
 
 from .base_endpoint import BaseEndpoint
@@ -22,23 +22,21 @@ class KGFramesEndpoint(BaseEndpoint):
     
     def _make_request(self, method: str, url: str, params=None, json=None):
         """
-        Make HTTP request and return response object.
-        Helper method for handling Union response types.
+        Make authenticated HTTP request with automatic token refresh.
+        Uses base endpoint's authenticated request method.
         """
         try:
-            if method == 'GET':
-                response = self.client.session.get(url, params=params)
-            elif method == 'POST':
-                response = self.client.session.post(url, params=params, json=json)
-            elif method == 'DELETE':
-                response = self.client.session.delete(url, params=params)
-            else:
-                raise VitalGraphClientError(f"Unsupported HTTP method: {method}")
+            # Use base endpoint's authenticated request method for token refresh
+            kwargs = {}
+            if params:
+                kwargs['params'] = params
+            if json:
+                kwargs['json'] = json
             
-            response.raise_for_status()
+            response = self._make_authenticated_request(method, url, **kwargs)
             return response
             
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
     def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> FramesResponse:

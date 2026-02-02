@@ -4,7 +4,7 @@ VitalGraph Client Triples Endpoint
 Client-side implementation for Triples operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, List
 
 from .base_endpoint import BaseEndpoint

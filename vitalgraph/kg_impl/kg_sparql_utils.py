@@ -658,12 +658,15 @@ class KGSparqlQueryBuilder:
             str: SPARQL query string
         """
         # Build entity type filter
+        # KGEntity uses hasKGEntityType property, not rdf:type
         if entity_type_uri:
-            type_filter = f"?entity a {self.utils.build_uri_reference(entity_type_uri)} ."
+            type_filter = f"""
+            ?entity vital-core:vitaltype haley:KGEntity .
+            ?entity haley:hasKGEntityType {self.utils.build_uri_reference(entity_type_uri)} .
+            """
         else:
             type_filter = """
-            ?entity a ?entityType .
-            FILTER(STRSTARTS(STR(?entityType), "http://vital.ai/ontology/haley-ai-kg#KG") && STRENDS(STR(?entityType), "Entity"))
+            ?entity vital-core:vitaltype haley:KGEntity .
             """
         
         # Build search filter

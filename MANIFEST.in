@@ -6,27 +6,80 @@ recursive-include vitalgraph/api/frontend/dist *
 include README.md
 include LICENSE
 
-# Include configuration templates
-recursive-include vitalgraphdb_config *.yaml *.yml
-recursive-include vitalgraphclient_config *.yaml *.yml
-
-# Include SQL scripts
-recursive-include sql_scripts *.sql
-
-# Include VitalHome configuration
-recursive-include vitalhome *
+# Note: Config directories are excluded from PyPI distribution
+# Users should create their own config files from templates in documentation
 
 # Exclude development and test files
 exclude setup.py
+exclude setup.py.bak
+exclude notes.txt
+exclude .env
+exclude .env.example
+exclude docker-compose.yml
+exclude Dockerfile
+exclude .dockerignore
+exclude environment.yml
+
+# Exclude config directories
+recursive-exclude vitalgraphdb_config *
+recursive-exclude vitalgraphclient_config *
+recursive-exclude vitalhome *
+recursive-exclude k8s_config *
+
+# Exclude test directories
 recursive-exclude test_scripts *
+recursive-exclude test_script_kg_impl *
+recursive-exclude vitalgraph_client_test *
+recursive-exclude vitalgraph_mock_client_test *
+recursive-exclude vitalgraph_service_tests *
+recursive-exclude vitalsigns_test_scripts *
+recursive-exclude test_sparql *
+recursive-exclude test_client_api *
+recursive-exclude test_files *
+recursive-exclude test_files_download *
+recursive-exclude test_data *
+recursive-exclude lead_test_data *
+recursive-exclude lead_test_data_docs *
+
+# Exclude development directories
 recursive-exclude frontend *
 recursive-exclude frontend-archive *
+recursive-exclude frontend-old *
 recursive-exclude docs *
+recursive-exclude planning *
+recursive-exclude planning_fuseki *
+recursive-exclude debug_scripts *
+recursive-exclude examples *
+recursive-exclude archive_vitalgraph_old *
+recursive-exclude fuseki_deploy_test *
+recursive-exclude oxigraph *
+recursive-exclude rdflib_sqlalchemy *
+recursive-exclude domain_schema *
+recursive-exclude generated_instances *
+recursive-exclude sql_scripts *
+recursive-exclude scripts *
+recursive-exclude localTestFiles *
+recursive-exclude minioFiles *
+recursive-exclude web_assets *
+recursive-exclude notes *
+recursive-exclude vitalgraph-client-ts *
+
+# Exclude IDE and build artifacts
 recursive-exclude .vscode *
 recursive-exclude .idea *
+recursive-exclude .vite *
 recursive-exclude __pycache__ *
-recursive-exclude *.pyc
 recursive-exclude .pytest_cache *
 recursive-exclude dist *
 recursive-exclude build *
 recursive-exclude *.egg-info *
+recursive-exclude .git *
+recursive-exclude .github *
+
+# Exclude specific file patterns
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude .DS_Store
+global-exclude *.nq
+global-exclude test_*.py

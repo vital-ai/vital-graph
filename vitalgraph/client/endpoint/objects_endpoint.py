@@ -4,7 +4,7 @@ VitalGraph Client Objects Endpoint
 Client-side implementation for Objects operations.
 """
 
-import requests
+import httpx
 from typing import Dict, Any, Optional, List
 import logging
 

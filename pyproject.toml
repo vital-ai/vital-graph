@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vital-graph"
-version = "0.0.3"
+version = "0.0.8"
 authors = [
     {name = "Marc Hadfield", email = "marc@vital.ai"},
 ]
@@ -21,7 +21,7 @@ keywords = ["knowledge-graph", "rdf", "sparql", "database", "semantic-web"]
 
 # Core dependencies - minimal set for basic functionality
 dependencies = [
-    "vital-ai-vitalsigns>=0.1.46",
+    "vital-ai-vitalsigns>=0.1.47",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
@@ -36,11 +36,13 @@ dependencies = [
 [project.optional-dependencies]
 # Client installation - lightweight for connecting to VitalGraph servers
 client = [
-    "requests>=2.28.0",
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
     "pydantic>=2.0.0",
     "PyYAML>=6.0",
     "tabulate>=0.9.0",
     "click-repl>=0.3.0",
+    "aiofiles>=23.0.0",
 ]
 
 # Server installation - full database and API capabilities
@@ -109,7 +111,26 @@ vitalgraph = "vitalgraph.client.cmd.vitalgraph_repl:main"
 
 [tool.setuptools.packages.find]
 include = ["vitalgraph*"]
-exclude = ["test*", "test_scripts*", "rdflib_sqlalchemy*", "frontend*", "docs*"]
+exclude = [
+    "test*",
+    "test_scripts*",
+    "test_script_kg_impl*",
+    "vitalgraph_client_test*",
+    "vitalgraph_mock_client_test*",
+    "vitalgraph_service_tests*",
+    "vitalsigns_test_scripts*",
+    "rdflib_sqlalchemy*",
+    "frontend*",
+    "docs*",
+    "planning*",
+    "debug_scripts*",
+    "examples*",
+    "archive_vitalgraph_old*",
+    "vitalgraphdb_config*",
+    "vitalgraphclient_config*",
+    "vitalhome*",
+    "k8s_config*",
+]
 
 [tool.setuptools.package-data]
 vitalgraph = [

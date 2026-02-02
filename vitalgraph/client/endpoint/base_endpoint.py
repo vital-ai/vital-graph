@@ -4,7 +4,7 @@ VitalGraph Client Base Endpoint
 Base class for all VitalGraph client endpoint implementations.
 """
 
-import requests
+import httpx
 import time
 import logging
 from typing import Dict, Any, Optional, TypeVar, Type
@@ -29,7 +29,7 @@ class BaseEndpoint:
         """
         self.client = client
     
-    def _make_authenticated_request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def _make_authenticated_request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """
         Make an authenticated request using the main client's method.
         
@@ -45,6 +45,23 @@ class BaseEndpoint:
             VitalGraphClientError: If request fails
         """
         return self.client._make_authenticated_request(method, url, **kwargs)
+    
+    async def _make_authenticated_request_async(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """
+        Make an authenticated async request using the main client's method.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Request URL
+            **kwargs: Additional request parameters
+            
+        Returns:
+            Response object
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        return await self.client._make_authenticated_request_async(method, url, **kwargs)
     
     def _check_connection(self):
         """Check if the client is connected."""
@@ -92,6 +109,34 @@ class BaseEndpoint:
         """
         start_time = time.time()
         response = self._make_authenticated_request(method, url, **kwargs)
+        duration = time.time() - start_time
+        
+        # Extract operation name from URL for logging
+        url_parts = url.split('/')
+        operation = url_parts[-1] if url_parts else 'request'
+        logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
+        
+        response_data = response.json()
+        return self._parse_response(response_data, response_model)
+    
+    async def _make_typed_request_async(self, method: str, url: str, response_model: Type[T], **kwargs) -> T:
+        """
+        Make an async request and return a typed Pydantic model response.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Request URL
+            response_model: Pydantic model class for response parsing
+            **kwargs: Additional request parameters
+            
+        Returns:
+            Parsed Pydantic model instance
+            
+        Raises:
+            VitalGraphClientError: If request or parsing fails
+        """
+        start_time = time.time()
+        response = await self._make_authenticated_request_async(method, url, **kwargs)
         duration = time.time() - start_time
         
         # Extract operation name from URL for logging

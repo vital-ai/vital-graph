@@ -84,11 +84,19 @@ class KGSparqlQueryProcessor:
                         value=filter_criterion.value
                     ))
             
+            # Convert frame_type to frame_criteria if provided
+            sparql_frame_criteria = None
+            if hasattr(criteria, 'frame_type') and criteria.frame_type:
+                from ..sparql.kg_query_builder import FrameCriteria
+                sparql_frame_criteria = [FrameCriteria(
+                    frame_type=criteria.frame_type
+                )]
+            
             # Create SPARQL criteria object
             sparql_criteria = SparqlEntityQueryCriteria(
                 search_string=criteria.search_string,
                 entity_type=criteria.entity_type,
-                frame_type=criteria.frame_type,
+                frame_criteria=sparql_frame_criteria,
                 slot_criteria=sparql_slot_criteria,
                 sort_criteria=sparql_sort_criteria,
                 filters=sparql_filters
