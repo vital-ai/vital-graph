@@ -269,7 +269,7 @@ class KGEntitiesEndpoint:
         from ..model.jsonld_model import JsonLdDocument
         
         try:
-            self.logger.info(f"Listing KGEntities from space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Listing KGEntities from space {space_id}, graph {graph_id}")
             
             # Backend setup (following _get_entity_by_uri pattern)
             space_record = self.space_manager.get_space(space_id)
@@ -346,9 +346,9 @@ class KGEntitiesEndpoint:
         
         try:
             if uri:
-                self.logger.info(f"Getting KGEntity {uri} from space {space_id}, graph {graph_id}")
+                self.logger.debug(f"Getting KGEntity {uri} from space {space_id}, graph {graph_id}")
             elif reference_id:
-                self.logger.info(f"Getting KGEntity by reference ID '{reference_id}' from space {space_id}, graph {graph_id}")
+                self.logger.debug(f"Getting KGEntity by reference ID '{reference_id}' from space {space_id}, graph {graph_id}")
             else:
                 raise ValueError("Either uri or reference_id must be provided")
             
@@ -379,7 +379,7 @@ class KGEntitiesEndpoint:
                 backend_adapter=backend_adapter
             )
             
-            self.logger.info(f"🔍 KGEntityGetProcessor returned {len(graph_objects) if graph_objects else 0} objects for entity {uri} (include_entity_graph={include_entity_graph})")
+            self.logger.debug(f"🔍 KGEntityGetProcessor returned {len(graph_objects) if graph_objects else 0} objects for entity {uri} (include_entity_graph={include_entity_graph})")
             
             # Convert GraphObjects back to JsonLD for response
             if not graph_objects or len(graph_objects) == 0:
@@ -405,13 +405,13 @@ class KGEntitiesEndpoint:
         """Get multiple entities by URI list or reference ID list using initialized processors."""
         try:
             if uris:
-                self.logger.info(f"Getting {len(uris)} KGEntities by URIs from space {space_id}, graph {graph_id}")
-                self.logger.info(f"🔍 Requested URIs: {uris}")
+                self.logger.debug(f"Getting {len(uris)} KGEntities by URIs from space {space_id}, graph {graph_id}")
+                self.logger.debug(f"🔍 Requested URIs: {uris}")
                 identifiers = uris
                 use_reference_ids = False
             elif reference_ids:
-                self.logger.info(f"Getting {len(reference_ids)} KGEntities by reference IDs from space {space_id}, graph {graph_id}")
-                self.logger.info(f"🔍 Requested reference IDs: {reference_ids}")
+                self.logger.debug(f"Getting {len(reference_ids)} KGEntities by reference IDs from space {space_id}, graph {graph_id}")
+                self.logger.debug(f"🔍 Requested reference IDs: {reference_ids}")
                 identifiers = reference_ids
                 use_reference_ids = True
             else:
@@ -444,12 +444,12 @@ class KGEntitiesEndpoint:
                     if entity_doc:
                         if hasattr(entity_doc, 'graph') and entity_doc.graph:
                             # JsonLdDocument with graph array
-                            self.logger.info(f"🔍 Adding {len(entity_doc.graph)} objects from JsonLdDocument")
+                            self.logger.debug(f"🔍 Adding {len(entity_doc.graph)} objects from JsonLdDocument")
                             all_entities.extend(entity_doc.graph)
                         elif hasattr(entity_doc, 'model_dump'):
                             # JsonLdObject - convert to dict and add as single object
                             entity_dict = entity_doc.model_dump(by_alias=True)
-                            self.logger.info(f"🔍 Adding 1 object from JsonLdObject")
+                            self.logger.debug(f"🔍 Adding 1 object from JsonLdObject")
                             all_entities.append(entity_dict)
                         else:
                             self.logger.warning(f"🔍 Unknown entity doc type: {type(entity_doc)}")
@@ -473,7 +473,7 @@ class KGEntitiesEndpoint:
     async def _create_or_update_entities(self, space_id: str, graph_id: str, request: JsonLdRequest, operation_mode: OperationMode, parent_uri: Optional[str], current_user: Dict) -> Union[EntityCreateResponse, EntityUpdateResponse]:
         """Create or update KG entities using refactored kg_impl implementation."""
         try:
-            self.logger.info(f"Processing KG entities in space '{space_id}', graph '{graph_id}', operation_mode='{operation_mode}', parent_uri='{parent_uri}'")
+            self.logger.debug(f"Processing KG entities in space '{space_id}', graph '{graph_id}', operation_mode='{operation_mode}', parent_uri='{parent_uri}'")
             
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
@@ -601,7 +601,7 @@ class KGEntitiesEndpoint:
                                  vitalsigns_objects: List[GraphObject], current_user: Dict) -> EntityUpdateResponse:
         """Handle UPDATE mode using KGEntityUpdateProcessor with DELETE + INSERT pattern."""
         try:
-            self.logger.info(f"Handling UPDATE mode for entities in space '{space_id}', graph '{graph_id}'")
+            self.logger.debug(f"Handling UPDATE mode for entities in space '{space_id}', graph '{graph_id}'")
             
             # Initialize update processor if not already done
             if not hasattr(self, 'update_processor') or self.update_processor is None:
@@ -706,7 +706,7 @@ class KGEntitiesEndpoint:
         from ..model.kgentities_model import EntityDeleteResponse
         
         try:
-            self.logger.info(f"Deleting KG entity '{uri}' from space '{space_id}', graph '{graph_id}', delete_entity_graph={delete_entity_graph}")
+            self.logger.debug(f"Deleting KG entity '{uri}' from space '{space_id}', graph '{graph_id}', delete_entity_graph={delete_entity_graph}")
             
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
@@ -756,7 +756,7 @@ class KGEntitiesEndpoint:
                 deleted_count = await delete_processor.delete_entity_graph(backend_adapter, space_id, graph_id, uri)
                 deletion_type = "entity graph (via kgGraphURI)"
                 success = deleted_count > 0
-                self.logger.info(f"🔍 DEBUG: delete_entity_graph returned: {deleted_count} (type: {type(deleted_count)})")
+                self.logger.debug(f"🔍 DEBUG: delete_entity_graph returned: {deleted_count} (type: {type(deleted_count)})")
             else:
                 # Delete only the specific entity using processor
                 result = await delete_processor.delete_entity(backend_adapter, space_id, graph_id, uri)
@@ -764,10 +764,10 @@ class KGEntitiesEndpoint:
                 # Handle BackendOperationResult object
                 success = result.success if hasattr(result, 'success') else bool(result)
                 deleted_count = 1 if success else 0
-                self.logger.info(f"🔍 DEBUG: delete_entity returned: {result} (type: {type(result)})")
+                self.logger.debug(f"🔍 DEBUG: delete_entity returned: {result} (type: {type(result)})")
             
             # Always return response with actual deletion results
-            self.logger.info(f"Deletion result - {deletion_type}: {uri}, success: {success}, deleted_count: {deleted_count}")
+            self.logger.debug(f"Deletion result - {deletion_type}: {uri}, success: {success}, deleted_count: {deleted_count}")
             
             return EntityDeleteResponse(
                 message=f"Successfully deleted KG {deletion_type} '{str(uri)}' from graph '{graph_id}' in space '{space_id}' ({deleted_count} objects)" if success else f"Failed to delete KGEntity '{str(uri)}'",
@@ -788,7 +788,7 @@ class KGEntitiesEndpoint:
         from ..model.kgentities_model import EntityDeleteResponse
         
         try:
-            self.logger.info(f"Deleting {len(uris)} KG entities from space '{space_id}', graph '{graph_id}'")
+            self.logger.debug(f"Deleting {len(uris)} KG entities from space '{space_id}', graph '{graph_id}'")
             
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
@@ -826,7 +826,7 @@ class KGEntitiesEndpoint:
                 backend_adapter, space_id, graph_id, uris, delete_entity_graph
             )
             
-            self.logger.info(f"Successfully deleted {deleted_count} KG entities")
+            self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
             return EntityDeleteResponse(
                 message=f"Successfully deleted {deleted_count} KG entities from graph '{graph_id}' in space '{space_id}'",
@@ -845,7 +845,7 @@ class KGEntitiesEndpoint:
     async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None) -> 'FramesResponse':
         """Get frames associated with KGEntities using SPARQL query processor."""
         try:
-            self.logger.info(f"Getting KGEntity frames in space {space_id}, graph {graph_id}, entity_uri {entity_uri}, frame_uris {frame_uris}, parent_frame_uri {parent_frame_uri}")
+            self.logger.debug(f"Getting KGEntity frames in space {space_id}, graph {graph_id}, entity_uri {entity_uri}, frame_uris {frame_uris}, parent_frame_uri {parent_frame_uri}")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -895,11 +895,11 @@ class KGEntitiesEndpoint:
             if frame_results['frame_uris']:
                 # Get triples for all frame subjects
                 triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_results['frame_uris'])
-                self.logger.info(f"🔍 DEBUG: Got {len(triples)} triples for {len(frame_results['frame_uris'])} frame URIs")
+                self.logger.debug(f"🔍 DEBUG: Got {len(triples)} triples for {len(frame_results['frame_uris'])} frame URIs")
                 
                 # Convert triples to VitalSigns frame objects
                 frames = self._convert_triples_to_vitalsigns_frames(triples)
-                self.logger.info(f"🔍 DEBUG: Converted to {len(frames)} VitalSigns frame objects")
+                self.logger.debug(f"🔍 DEBUG: Converted to {len(frames)} VitalSigns frame objects")
             
             # Convert frames to JSON-LD document (same pattern as KGFramesEndpoint)
             from ..model.jsonld_model import JsonLdDocument, JsonLdObject
@@ -966,7 +966,7 @@ class KGEntitiesEndpoint:
     async def _get_individual_frame(self, space_id: str, graph_id: str, frame_uri: str, include_frame_graph: bool = False, current_user: Dict = None):
         """Get an individual frame by URI using SPARQL query processor."""
         try:
-            self.logger.info(f"Getting individual frame {frame_uri} from space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Getting individual frame {frame_uri} from space {space_id}, graph {graph_id}")
             
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
@@ -1004,7 +1004,7 @@ class KGEntitiesEndpoint:
                     data=None
                 )
             
-            self.logger.info(f"🔍 Found {len(frame_data['subject_uris'])} objects for frame {frame_uri}")
+            self.logger.debug(f"🔍 Found {len(frame_data['subject_uris'])} objects for frame {frame_uri}")
             
             # Get all triples for the subject URIs
             triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_data['subject_uris'])
@@ -1038,7 +1038,7 @@ class KGEntitiesEndpoint:
                     created_uris=[]
                 )
             
-            self.logger.info(f"Creating/updating frames for entity {entity_uri} in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Creating/updating frames for entity {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
@@ -1109,7 +1109,7 @@ class KGEntitiesEndpoint:
             
             # Handle processor result and maintain API compatibility
             if result.success:
-                self.logger.info(f"Successfully created/updated {result.frame_count} frame objects")
+                self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
                 
                 # Return response in expected format (maintaining backward compatibility)
                 class FrameCreateResponse:
@@ -1141,7 +1141,7 @@ class KGEntitiesEndpoint:
     async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict = None):
         """Delete a frame by URI using SPARQL query processor."""
         try:
-            self.logger.info(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
             
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
@@ -1175,7 +1175,7 @@ class KGEntitiesEndpoint:
             # Use processor to delete frame
             delete_result = await sparql_processor.delete_frame(space_id, graph_id, uri)
             
-            self.logger.info(f"Successfully deleted frame {uri} and {delete_result['deleted_count']} related objects")
+            self.logger.debug(f"Successfully deleted frame {uri} and {delete_result['deleted_count']} related objects")
             
             # Return response in expected format
             class FrameDeleteResponse:
@@ -1202,7 +1202,7 @@ class KGEntitiesEndpoint:
         try:
             # Handle both OperationMode enum and string types
             mode_str = operation_mode.value if hasattr(operation_mode, 'value') else str(operation_mode)
-            self.logger.info(f"Processing entity frames for {entity_uri} in space {space_id}, graph {graph_id}, mode '{mode_str}'")
+            self.logger.debug(f"Processing entity frames for {entity_uri} in space {space_id}, graph {graph_id}, mode '{mode_str}'")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -1257,7 +1257,7 @@ class KGEntitiesEndpoint:
                     # 2. Set kGGraphURI - groups all objects within the entity's complete graph
                     graph_obj.kGGraphURI = entity_uri
                     
-                    self.logger.info(f"Setting grouping URIs for frame {frame_uri}: frameGraphURI={frame_uri}, kgGraphURI={entity_uri}")
+                    self.logger.debug(f"Setting grouping URIs for frame {frame_uri}: frameGraphURI={frame_uri}, kgGraphURI={entity_uri}")
                     
                     processed_frames.append(graph_obj)
                 else:
@@ -1274,7 +1274,7 @@ class KGEntitiesEndpoint:
                             if hasattr(graph_obj, 'edgeSource') and graph_obj.edgeSource:
                                 frame_uri_for_edge = str(graph_obj.edgeSource)
                                 graph_obj.frameGraphURI = frame_uri_for_edge
-                                self.logger.info(f"Setting frameGraphURI={frame_uri_for_edge} on Edge_hasKGSlot {graph_obj.URI}")
+                                self.logger.debug(f"Setting frameGraphURI={frame_uri_for_edge} on Edge_hasKGSlot {graph_obj.URI}")
                             else:
                                 self.logger.warning(f"Edge_hasKGSlot missing edgeSource: {graph_obj.URI}")
                         
@@ -1371,7 +1371,7 @@ class KGEntitiesEndpoint:
     async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
         """Delete frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
-            self.logger.info(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}")
+            self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -1457,9 +1457,9 @@ class KGEntitiesEndpoint:
         """Update frames within entity context using complete frame replacement."""
         try:
             if parent_frame_uri:
-                self.logger.info(f"Updating CHILD entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}")
+                self.logger.debug(f"Updating CHILD entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}")
             else:
-                self.logger.info(f"Updating TOP-LEVEL entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
+                self.logger.debug(f"Updating TOP-LEVEL entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -1486,13 +1486,13 @@ class KGEntitiesEndpoint:
             from ai_haley_kg_domain.model.KGFrame import KGFrame
             vs = VitalSigns()
             jsonld_document = request.model_dump(by_alias=True)
-            self.logger.info(f"🔍 Update request JSON-LD has {len(jsonld_document.get('graph', []))} objects")
+            self.logger.debug(f"🔍 Update request JSON-LD has {len(jsonld_document.get('graph', []))} objects")
             graph_objects = vs.from_jsonld_list(jsonld_document)
-            self.logger.info(f"🔍 Converted to {len(graph_objects)} VitalSigns objects")
+            self.logger.debug(f"🔍 Converted to {len(graph_objects)} VitalSigns objects")
             for i, obj in enumerate(graph_objects):
                 obj_type = type(obj).__name__
                 obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
-                self.logger.info(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
+                self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
             
             # Create backend adapter for frame operations
             from ..kg_impl.kg_backend_utils import create_backend_adapter
@@ -1658,23 +1658,23 @@ class KGEntitiesEndpoint:
             updated_frame_count = 0
             update_results = []
             
-            self.logger.info(f"🔍 Frame groups to update: {list(frame_groups.keys())}")
-            self.logger.info(f"🔍 Total frame groups: {len(frame_groups)}")
+            self.logger.debug(f"🔍 Frame groups to update: {list(frame_groups.keys())}")
+            self.logger.debug(f"🔍 Total frame groups: {len(frame_groups)}")
             
             for frame_uri, frame_group in frame_groups.items():
                 frame_objects = frame_group['frame_objects']
                 connecting_edges = frame_group['connecting_edges']
                 total_objects = len(frame_objects) + len(connecting_edges)
                 
-                self.logger.info(f"Updating atomic frame operation: {frame_uri} with {len(frame_objects)} frame objects and {len(connecting_edges)} connecting edges (total: {total_objects})")
+                self.logger.debug(f"Updating atomic frame operation: {frame_uri} with {len(frame_objects)} frame objects and {len(connecting_edges)} connecting edges (total: {total_objects})")
                 for i, obj in enumerate(frame_objects):
                     obj_type = type(obj).__name__
                     obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
-                    self.logger.info(f"  Frame object {i+1}: {obj_type} - {obj_uri}")
+                    self.logger.debug(f"  Frame object {i+1}: {obj_type} - {obj_uri}")
                 for i, obj in enumerate(connecting_edges):
                     obj_type = type(obj).__name__
                     obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
-                    self.logger.info(f"  Connecting edge {i+1}: {obj_type} - {obj_uri}")
+                    self.logger.debug(f"  Connecting edge {i+1}: {obj_type} - {obj_uri}")
                 
                 # Combine frame objects and connecting edges for atomic operation
                 all_frame_components = frame_objects + connecting_edges
@@ -1751,9 +1751,9 @@ class KGEntitiesEndpoint:
         from ..kg_impl.kg_backend_utils import create_backend_adapter
         from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
         try:
-            self.logger.info(f"Querying KGEntities in space {space_id}, graph {graph_id}")
-            self.logger.info(f"Query request: {query_request.model_dump_json()}")
-            self.logger.info(f"Query criteria: {query_request.criteria}")
+            self.logger.debug(f"Querying KGEntities in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Query request: {query_request.model_dump_json()}")
+            self.logger.debug(f"Query criteria: {query_request.criteria}")
             
             # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
@@ -1919,7 +1919,7 @@ class KGEntitiesEndpoint:
             EntitiesGraphResponse containing entities and optional complete graphs
         """
         try:
-            self.logger.info(f"Listing KGEntities with graphs in space {space_id}, graph {graph_id}, include_graphs={include_entity_graphs}")
+            self.logger.debug(f"Listing KGEntities with graphs in space {space_id}, graph {graph_id}, include_graphs={include_entity_graphs}")
             
             # Delegate to the main _list_entities method with include_entity_graph parameter
             # Create a mock user for internal calls
@@ -1953,7 +1953,7 @@ class KGEntitiesEndpoint:
                             if hasattr(entity.data, 'graph'):
                                 complete_graphs.append(entity.data.graph)
                 
-                self.logger.info(f"Extracted {len(complete_graphs)} complete entity graphs")
+                self.logger.debug(f"Extracted {len(complete_graphs)} complete entity graphs")
             
             return EntitiesGraphResponse(
                 entities=entities_response.entities,
@@ -1972,7 +1972,7 @@ class KGEntitiesEndpoint:
     async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument, operation_mode: str = "create") -> 'FrameCreateResponse':
         """Create frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
-            self.logger.info(f"Creating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Creating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Use the existing _create_or_update_frames implementation
             from vitalgraph.endpoint.kgentities_endpoint import OperationMode
@@ -2039,8 +2039,8 @@ class KGEntitiesEndpoint:
     async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument) -> 'FrameUpdateResponse':
         """Update frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
-            self.logger.info(f"🔄 Starting frame update for entity {entity_uri}: {len(document.graph) if document.graph else 0} frame objects")
-            self.logger.info(f"Updating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"🔄 Starting frame update for entity {entity_uri}: {len(document.graph) if document.graph else 0} frame objects")
+            self.logger.debug(f"Updating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
@@ -2072,11 +2072,11 @@ class KGEntitiesEndpoint:
             
             # Get the JSON-LD document
             jsonld_document = document.model_dump(by_alias=True)
-            self.logger.info(f"🔄 Converting JSON-LD document with {len(jsonld_document.get('graph', []))} objects")
+            self.logger.debug(f"🔄 Converting JSON-LD document with {len(jsonld_document.get('graph', []))} objects")
             
             # Convert to VitalSigns objects
             graph_objects = vs.from_jsonld_list(jsonld_document)
-            self.logger.info(f"🔄 Converted to {len(graph_objects) if graph_objects else 0} VitalSigns objects")
+            self.logger.debug(f"🔄 Converted to {len(graph_objects) if graph_objects else 0} VitalSigns objects")
             
             if not graph_objects:
                 self.logger.error("❌ No valid objects found in JSON-LD document for frame update")
@@ -2091,7 +2091,7 @@ class KGEntitiesEndpoint:
             frame_update_processor = KGEntityFrameUpdateProcessor(backend_adapter, self.logger)
             
             # Update frames using processor
-            self.logger.info(f"🔄 Calling frame update processor with {len(graph_objects)} objects")
+            self.logger.debug(f"🔄 Calling frame update processor with {len(graph_objects)} objects")
             result = await frame_update_processor.update_frames(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -2099,13 +2099,13 @@ class KGEntitiesEndpoint:
                 frame_objects=graph_objects
             )
             
-            self.logger.info(f"🔄 Frame update processor result: success={result.success}, message='{result.message}'")
+            self.logger.debug(f"🔄 Frame update processor result: success={result.success}, message='{result.message}'")
             
             # Convert result to FrameUpdateResponse format
             from ..model.kgframes_model import FrameUpdateResponse
             
             if result.success:
-                self.logger.info(f"✅ Frame update successful for entity {entity_uri}")
+                self.logger.debug(f"✅ Frame update successful for entity {entity_uri}")
                 return FrameUpdateResponse(
                     message=result.message,
                     updated_uri=entity_uri
@@ -2124,7 +2124,7 @@ class KGEntitiesEndpoint:
     async def delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str]) -> 'FrameDeleteResponse':
         """Delete frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
-            self.logger.info(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
@@ -2281,7 +2281,7 @@ class KGEntitiesEndpoint:
                             rdflib_triples.append((subject, predicate, obj))
                         
                         # Use from_triples_list with RDFLib Triple objects
-                        self.logger.info(f"🔍 Frame {frame_uri}: Converting {len(rdflib_triples)} RDFLib triples to VitalSigns objects")
+                        self.logger.debug(f"🔍 Frame {frame_uri}: Converting {len(rdflib_triples)} RDFLib triples to VitalSigns objects")
                         graph_objects = vs.from_triples_list(rdflib_triples)
                         
                         # Log what types of objects were created
@@ -2289,18 +2289,18 @@ class KGEntitiesEndpoint:
                         for obj in graph_objects:
                             obj_type = type(obj).__name__
                             object_types[obj_type] = object_types.get(obj_type, 0) + 1
-                        self.logger.info(f"🔍 Frame {frame_uri}: Created objects: {object_types}")
+                        self.logger.debug(f"🔍 Frame {frame_uri}: Created objects: {object_types}")
                         
                         from vital_ai_vitalsigns.model.GraphObject import GraphObject
                         jsonld_dict = GraphObject.to_jsonld_list(graph_objects)
                         frame_graphs[frame_uri] = jsonld_dict
-                        self.logger.info(f"🔍 Frame {frame_uri}: Retrieved {len(graph_objects)} objects from {len(frame_data['triples'])} triples")
+                        self.logger.debug(f"🔍 Frame {frame_uri}: Retrieved {len(graph_objects)} objects from {len(frame_data['triples'])} triples")
                     except Exception as vs_error:
                         self.logger.warning(f"VitalSigns conversion error for frame {frame_uri}: {vs_error}")
                         # Don't include frames with conversion errors
                 else:
                     # Empty or no data - don't include deleted/non-existent frames in response
-                    self.logger.info(f"🔍 Frame {frame_uri}: No graph data found (frame may not exist)")
+                    self.logger.debug(f"🔍 Frame {frame_uri}: No graph data found (frame may not exist)")
             
             # Return response in expected format
             return {

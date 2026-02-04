@@ -49,14 +49,14 @@ class FusekiPostgreSQLDbOps:
                 self.logger.debug("No quads provided for addition")
                 return 0
             
-            self.logger.info(f"Adding {len(quads)} RDF quads to space {space_id} via dual-write")
+            self.logger.debug(f"Adding {len(quads)} RDF quads to space {space_id} via dual-write")
             try:
                 # Bypass SPARQL parser entirely for simple INSERT operations
                 # Call dual-write coordinator directly with RDFLib quads
                 success = await self.dual_write_coordinator.add_quads(space_id, quads)
                 
                 if success:
-                    self.logger.info(f"Successfully added {len(quads)} quads via dual-write")
+                    self.logger.debug(f"Successfully added {len(quads)} quads via dual-write")
                     return len(quads)
                 else:
                     self.logger.error(f"Failed to add quads via dual-write coordinator")
@@ -89,7 +89,7 @@ class FusekiPostgreSQLDbOps:
                 self.logger.debug("No quads provided for removal")
                 return 0
             
-            self.logger.info(f"Removing {len(quads)} RDF quads from space {space_id} via dual-write")
+            self.logger.debug(f"Removing {len(quads)} RDF quads from space {space_id} via dual-write")
             
             # Convert quads to SPARQL DELETE DATA format
             graph_blocks = {}
@@ -127,7 +127,7 @@ class FusekiPostgreSQLDbOps:
             success = await self.dual_write_coordinator.execute_sparql_update(space_id, delete_sparql)
             
             if success:
-                self.logger.info(f"Successfully removed {len(quads)} quads via dual-write")
+                self.logger.debug(f"Successfully removed {len(quads)} quads via dual-write")
                 return len(quads)
             else:
                 self.logger.error(f"Failed to remove quads via dual-write coordinator")
@@ -161,7 +161,7 @@ class FusekiPostgreSQLDbOps:
             if graph_id is None:
                 graph_id = "main"
             
-            self.logger.info(f"Removing all quads for {len(subject_uris)} subjects in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Removing all quads for {len(subject_uris)} subjects in space {space_id}, graph {graph_id}")
             
             # Build graph URI
             from .fuseki_query_utils import FusekiQueryUtils
@@ -196,7 +196,7 @@ class FusekiPostgreSQLDbOps:
                 except Exception as e:
                     self.logger.error(f"Error removing subject {subject_uris[i]}: {e}")
             
-            self.logger.info(f"Successfully removed {successful_removals}/{len(subject_uris)} subjects")
+            self.logger.debug(f"Successfully removed {successful_removals}/{len(subject_uris)} subjects")
             return successful_removals
             
         except Exception as e:
@@ -219,7 +219,7 @@ class FusekiPostgreSQLDbOps:
             Tuple of (removed_count, added_count)
         """
         try:
-            self.logger.info(f"Updating RDF quads: removing {len(old_quads)}, adding {len(new_quads)}")
+            self.logger.debug(f"Updating RDF quads: removing {len(old_quads)}, adding {len(new_quads)}")
             
             # Remove old quads first
             removed_count = 0
@@ -231,7 +231,7 @@ class FusekiPostgreSQLDbOps:
             if new_quads:
                 added_count = await self.add_rdf_quads_batch(space_id, new_quads, transaction)
             
-            self.logger.info(f"Update complete: removed {removed_count}, added {added_count}")
+            self.logger.debug(f"Update complete: removed {removed_count}, added {added_count}")
             return removed_count, added_count
             
         except Exception as e:
@@ -305,7 +305,7 @@ class FusekiPostgreSQLDbOps:
             # Delegate to space implementation
             count = await self.space_impl.get_quad_count(space_id, graph_uri)
             
-            self.logger.info(f"Quad count for space {space_id}, graph {graph_id}: {count}")
+            self.logger.debug(f"Quad count for space {space_id}, graph {graph_id}: {count}")
             return count
             
         except Exception as e:
@@ -324,13 +324,13 @@ class FusekiPostgreSQLDbOps:
             True if successful, False otherwise
         """
         try:
-            self.logger.info(f"Executing SPARQL UPDATE in space {space_id}")
+            self.logger.debug(f"Executing SPARQL UPDATE in space {space_id}")
             self.logger.debug(f"SPARQL UPDATE: {sparql_update}")
             
             success = await self.dual_write_coordinator.execute_sparql_update(space_id, sparql_update)
             
             if success:
-                self.logger.info("SPARQL UPDATE executed successfully via dual-write")
+                self.logger.debug("SPARQL UPDATE executed successfully via dual-write")
             else:
                 self.logger.error("SPARQL UPDATE failed via dual-write coordinator")
             
@@ -352,12 +352,12 @@ class FusekiPostgreSQLDbOps:
             List of binding dictionaries
         """
         try:
-            self.logger.info(f"Executing SPARQL SELECT in space {space_id}")
+            self.logger.debug(f"Executing SPARQL SELECT in space {space_id}")
             self.logger.debug(f"SPARQL SELECT: {sparql_query}")
             
             bindings = await self.fuseki_manager.query_dataset(space_id, sparql_query)
             
-            self.logger.info(f"SPARQL SELECT returned {len(bindings)} results")
+            self.logger.debug(f"SPARQL SELECT returned {len(bindings)} results")
             return bindings
             
         except Exception as e:

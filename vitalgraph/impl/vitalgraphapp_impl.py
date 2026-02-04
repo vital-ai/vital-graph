@@ -149,7 +149,7 @@ class VitalGraphAppImpl:
                 self.logger.warning(f"Static files directory not found at {static_dir}")
 
     def _setup_startup_events(self):
-        """Setup FastAPI startup events"""
+        """Setup FastAPI startup and shutdown events"""
         @self.app.on_event("startup")
         async def startup_event():
             """Connect to database on server startup"""
@@ -223,6 +223,44 @@ class VitalGraphAppImpl:
                     
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
+        
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            """Clean up resources on server shutdown"""
+            self.logger.info("🛑 Shutting down VitalGraph server...")
+            
+            try:
+                # Close signal manager (stops listen loops and closes connections)
+                if self.vital_graph_impl and self.vital_graph_impl.signal_manager:
+                    self.logger.info("Closing signal manager...")
+                    try:
+                        await self.vital_graph_impl.signal_manager.stop_listening()
+                        self.logger.info("✅ Signal manager closed")
+                    except Exception as e:
+                        self.logger.warning(f"Error closing signal manager: {e}")
+                
+                # Close database connections
+                if self.vital_graph_impl and self.vital_graph_impl.db_impl:
+                    self.logger.info("Closing database connections...")
+                    try:
+                        await self.vital_graph_impl.db_impl.disconnect()
+                        self.logger.info("✅ Database connections closed")
+                    except Exception as e:
+                        self.logger.warning(f"Error closing database: {e}")
+                
+                # Clean up any tracked resources (aiohttp sessions, etc.)
+                try:
+                    from vitalgraph.utils.resource_manager import cleanup_resources
+                    self.logger.info("Cleaning up tracked resources...")
+                    await cleanup_resources()
+                    self.logger.info("✅ Resources cleaned up")
+                except Exception as e:
+                    self.logger.warning(f"Error cleaning up resources: {e}")
+                
+                self.logger.info("✅ VitalGraph server shutdown complete")
+                
+            except Exception as e:
+                self.logger.error(f"Error during shutdown: {e}")
     
     def _setup_all_endpoints(self):
         """Setup all API endpoints in a single atomic operation."""

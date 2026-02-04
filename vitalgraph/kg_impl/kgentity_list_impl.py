@@ -60,8 +60,8 @@ class KGEntityListProcessor:
             ListEntitiesResult: Contains List[GraphObject] and total count
         """
         try:
-            self.logger.info(f"Listing entities in space '{space_id}', graph '{graph_id}'")
-            self.logger.info(f"Parameters: page_size={page_size}, offset={offset}, entity_type_uri={entity_type_uri}, search={search}, include_entity_graph={include_entity_graph}")
+            self.logger.debug(f"Listing entities in space '{space_id}', graph '{graph_id}'")
+            self.logger.debug(f"Parameters: page_size={page_size}, offset={offset}, entity_type_uri={entity_type_uri}, search={search}, include_entity_graph={include_entity_graph}")
             
             # Get total count first
             total_count = await self._get_total_count(
@@ -69,7 +69,7 @@ class KGEntityListProcessor:
             )
             
             if total_count == 0:
-                self.logger.info("No entities found matching criteria")
+                self.logger.debug("No entities found matching criteria")
                 return ListEntitiesResult(entities=[], total_count=0)
             
             # Get entities with pagination
@@ -78,7 +78,7 @@ class KGEntityListProcessor:
                 search, include_entity_graph, backend_adapter
             )
             
-            self.logger.info(f"Retrieved {len(entities)} entities (total: {total_count})")
+            self.logger.debug(f"Retrieved {len(entities)} entities (total: {total_count})")
             return ListEntitiesResult(entities=entities, total_count=total_count)
             
         except Exception as e:
@@ -108,7 +108,7 @@ class KGEntityListProcessor:
                 if 'count' in binding:
                     count_value = binding['count']['value']
                     count = int(count_value)
-                    self.logger.info(f"Found {count} entities matching criteria")
+                    self.logger.debug(f"Found {count} entities matching criteria")
                     return count
             elif isinstance(result, dict):
                 # Standard SPARQL JSON format
@@ -116,7 +116,7 @@ class KGEntityListProcessor:
                 if bindings and 'count' in bindings[0]:
                     count_value = bindings[0]['count']['value']
                     count = int(count_value)
-                    self.logger.info(f"Found {count} entities matching criteria")
+                    self.logger.debug(f"Found {count} entities matching criteria")
                     return count
             
             self.logger.warning(f"Count query returned unexpected format: {type(result)}")
@@ -166,7 +166,7 @@ class KGEntityListProcessor:
             result = await backend_adapter.execute_sparql_query(space_id, select_query)
             
             if not result:
-                self.logger.info("No entity URIs found")
+                self.logger.debug("No entity URIs found")
                 return []
             
             # Extract entity URIs from results - handle different formats
@@ -186,10 +186,10 @@ class KGEntityListProcessor:
                         entity_uris.append(entity_uri)
             
             if not entity_uris:
-                self.logger.info("No entity URIs extracted from query results")
+                self.logger.debug("No entity URIs extracted from query results")
                 return []
             
-            self.logger.info(f"Found {len(entity_uris)} entity URIs: {entity_uris}")
+            self.logger.debug(f"Found {len(entity_uris)} entity URIs: {entity_uris}")
             
             # Now retrieve each entity as a GraphObject
             entities = []
@@ -217,14 +217,14 @@ class KGEntityListProcessor:
                         entity_result = await backend_adapter.get_entity(space_id, graph_id, entity_uri)
                         if entity_result and hasattr(entity_result, 'objects') and entity_result.objects:
                             # Log how many objects were retrieved
-                            self.logger.info(f"🔍 entity_result.objects contains {len(entity_result.objects)} objects for {entity_uri}")
+                            self.logger.debug(f"🔍 entity_result.objects contains {len(entity_result.objects)} objects for {entity_uri}")
                             if len(entity_result.objects) > 1:
                                 self.logger.warning(f"⚠️ Expected 1 object but got {len(entity_result.objects)} - only using first one")
                             # Log the type of the object
                             obj = entity_result.objects[0]
-                            self.logger.info(f"🔍 Object type: {type(obj).__name__}, Object class: {obj.__class__.__name__}")
+                            self.logger.debug(f"🔍 Object type: {type(obj).__name__}, Object class: {obj.__class__.__name__}")
                             if hasattr(obj, 'URI'):
-                                self.logger.info(f"🔍 Object URI: {obj.URI}")
+                                self.logger.debug(f"🔍 Object URI: {obj.URI}")
                             # Add the first object (should be the entity itself)
                             entities.append(obj)
                             self.logger.debug(f"Retrieved basic entity: {entity_uri}")
@@ -234,7 +234,7 @@ class KGEntityListProcessor:
                     self.logger.warning(f"Error retrieving entity {entity_uri}: {e}")
                     continue
             
-            self.logger.info(f"Successfully retrieved {len(entities)} entities")
+            self.logger.debug(f"Successfully retrieved {len(entities)} entities")
             return entities
             
         except Exception as e:

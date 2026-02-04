@@ -51,11 +51,6 @@ ENV VITAL_HOME=/app/vitalhome
 # Expose the default port (actual port is configurable via PORT environment variable at runtime)
 EXPOSE 8001
 
-# Copy environment-specific configuration file (placed last to avoid cache invalidation)
-# This allows switching between local and production configs by changing VITALGRAPH_ENVIRONMENT
-ARG VITALGRAPH_ENVIRONMENT=local
-RUN mkdir -p /app/vitalgraphdb_config
-COPY vitalgraphdb_config/vitalgraphdb-config-${VITALGRAPH_ENVIRONMENT}.yaml /app/vitalgraphdb_config/vitalgraphdb-config.yaml
 
 # Use the vitalgraphdb script as entrypoint
 CMD ["python", "-m", "vitalgraph.cmd.vitalgraphdb_cmd"]

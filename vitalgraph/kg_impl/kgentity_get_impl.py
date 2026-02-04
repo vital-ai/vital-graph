@@ -78,13 +78,13 @@ class KGEntityGetProcessor:
         """
         try:
             if entity_uri:
-                self.logger.info(f"Retrieving entity: {entity_uri}")
+                self.logger.debug(f"Retrieving entity: {entity_uri}")
             elif reference_id:
-                self.logger.info(f"Retrieving entity by reference ID: {reference_id}")
+                self.logger.debug(f"Retrieving entity by reference ID: {reference_id}")
             else:
                 raise ValueError("Either entity_uri or reference_id must be provided")
                 
-            self.logger.info(f"Include entity graph: {include_entity_graph}")
+            self.logger.debug(f"Include entity graph: {include_entity_graph}")
             
             if not backend_adapter:
                 raise ValueError("Backend adapter is required")
@@ -106,7 +106,7 @@ class KGEntityGetProcessor:
                 self.logger.warning(f"Entity not found: {entity_uri}")
                 return []
             
-            self.logger.info(f"Successfully retrieved entity with {len(retrieval_result.objects)} objects")
+            self.logger.debug(f"Successfully retrieved entity with {len(retrieval_result.objects)} objects")
             return retrieval_result.objects
             
         except Exception as e:
@@ -140,18 +140,18 @@ class KGEntityGetProcessor:
             if mode == EntityRetrievalMode.WITH_GRAPH:
                 # Retrieve complete entity graph
                 if entity_uri:
-                    self.logger.info(f"Retrieving complete entity graph for: {entity_uri}")
+                    self.logger.debug(f"Retrieving complete entity graph for: {entity_uri}")
                     return await backend_adapter.get_entity_graph(space_id, graph_id, entity_uri)
                 elif reference_id:
-                    self.logger.info(f"Retrieving complete entity graph by reference ID: {reference_id}")
+                    self.logger.debug(f"Retrieving complete entity graph by reference ID: {reference_id}")
                     return await backend_adapter.get_entity_graph_by_reference_id(space_id, graph_id, reference_id)
             else:
                 # Retrieve single entity
                 if entity_uri:
-                    self.logger.info(f"Retrieving single entity: {entity_uri}")
+                    self.logger.debug(f"Retrieving single entity: {entity_uri}")
                     return await backend_adapter.get_entity(space_id, graph_id, entity_uri)
                 elif reference_id:
-                    self.logger.info(f"Retrieving single entity by reference ID: {reference_id}")
+                    self.logger.debug(f"Retrieving single entity by reference ID: {reference_id}")
                     return await backend_adapter.get_entity_by_reference_id(space_id, graph_id, reference_id)
                 
         except Exception as e:

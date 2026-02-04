@@ -35,30 +35,9 @@ def create_app() -> FastAPI:
     """Application factory function."""
     
     try:
-        # Try to find configuration file in expected locations
-        config_paths = [
-            "vitalgraphdb_config/vitalgraphdb-config.yaml",  # Standard location
-            "/app/vitalgraphdb_config/vitalgraphdb-config.yaml",  # Docker location
-            "config/vitalgraphdb-config.yaml",  # Alternative location
-        ]
-        
-        config = None
-        for config_path in config_paths:
-            try:
-                if Path(config_path).exists():
-                    config = get_config(config_path)
-                    print(f"✅ Loaded VitalGraph configuration from: {config.config_path}")
-                    break
-            except Exception as e:
-                print(f"⚠️  Failed to load config from {config_path}: {e}")
-                continue
-        
-        if config is None:
-            print("❌ No configuration file found in expected locations")
-            print("Expected locations:")
-            for path in config_paths:
-                print(f"  - {path}")
-            raise ConfigurationError("No valid configuration file found")
+        # Load configuration from environment variables
+        config = get_config()
+        print(f"✅ Loaded VitalGraph configuration from environment variables")
             
     except ConfigurationError as e:
         print(f"❌ Configuration error: {e}")

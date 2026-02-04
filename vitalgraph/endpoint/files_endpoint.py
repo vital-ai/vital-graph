@@ -411,14 +411,14 @@ class FilesEndpoint:
         
         # Delete FileNode from graph database
         try:
-            logger.info(f"Deleting FileNode from graph database: {uri}")
+            logger.debug(f"Deleting FileNode from graph database: {uri}")
             deleted_count = await self.files_impl.delete_files(
                 space_id=space_id,
                 graph_id=graph_id,
                 uris=[uri]
             )
             
-            logger.info(f"Database deletion result: deleted_count={deleted_count}")
+            logger.debug(f"Database deletion result: deleted_count={deleted_count}")
             
             if deleted_count > 0:
                 return FileDeleteResponse(
@@ -533,7 +533,7 @@ class FilesEndpoint:
                         graph_id=graph_id or "default"
                     )
                     
-                    self.logger.info(f"Updated FileNode {uri} with hasFileURL={s3_url} and hasFileType={content_type}")
+                    self.logger.debug(f"Updated FileNode {uri} with hasFileURL={s3_url} and hasFileType={content_type}")
                 except Exception as update_error:
                     self.logger.error(f"Failed to update FileNode properties: {update_error}", exc_info=True)
                     # Continue anyway - file was uploaded successfully

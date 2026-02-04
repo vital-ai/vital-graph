@@ -34,7 +34,7 @@ class KGTypesReadProcessor:
             Optional[GraphObject]: KGType GraphObject or None if not found
         """
         try:
-            self.logger.info(f"🔍 Getting KGType by URI: {kgtype_uri}")
+            self.logger.debug(f"🔍 Getting KGType by URI: {kgtype_uri}")
             
             # Initialize retriever if not already done
             if self.retriever is None:
@@ -46,23 +46,23 @@ class KGTypesReadProcessor:
             )
             
             if not triples:
-                self.logger.info(f"KGType not found: {kgtype_uri}")
+                self.logger.debug(f"KGType not found: {kgtype_uri}")
                 return None
             
             # Convert triples to VitalSigns GraphObject
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
             
             # Log triples for debugging
-            self.logger.info(f"🔍 Converting {len(triples)} triples to GraphObject for {kgtype_uri}")
+            self.logger.debug(f"🔍 Converting {len(triples)} triples to GraphObject for {kgtype_uri}")
             for i, triple in enumerate(triples[:5]):  # Log first 5 triples
-                self.logger.info(f"  Triple {i+1}: {triple}")
+                self.logger.debug(f"  Triple {i+1}: {triple}")
             
             try:
                 graph_object = GraphObject.from_triples(triples)
                 if graph_object:
-                    self.logger.info(f"✅ Successfully created GraphObject for {kgtype_uri}")
-                    self.logger.info(f"  GraphObject type: {type(graph_object).__name__}")
-                    self.logger.info(f"  GraphObject URI: {getattr(graph_object, 'URI', 'No URI attribute')}")
+                    self.logger.debug(f"✅ Successfully created GraphObject for {kgtype_uri}")
+                    self.logger.debug(f"  GraphObject type: {type(graph_object).__name__}")
+                    self.logger.debug(f"  GraphObject URI: {getattr(graph_object, 'URI', 'No URI attribute')}")
                 else:
                     self.logger.warning(f"⚠️  GraphObject.from_triples returned None for {kgtype_uri}")
                     return None
@@ -70,7 +70,7 @@ class KGTypesReadProcessor:
                 self.logger.error(f"❌ Failed to convert triples to GraphObject for {kgtype_uri}: {e}")
                 return None
             
-            self.logger.info(f"✅ Retrieved KGType: {kgtype_uri} with {len(triples)} triples")
+            self.logger.debug(f"✅ Retrieved KGType: {kgtype_uri} with {len(triples)} triples")
             return graph_object
             
         except Exception as e:
@@ -91,7 +91,7 @@ class KGTypesReadProcessor:
             List[GraphObject]: List of KGType GraphObjects (may be subclasses of KGType or KGType instances)
         """
         try:
-            self.logger.info(f"🔍 Getting {len(kgtype_uris)} KGTypes by URIs")
+            self.logger.debug(f"🔍 Getting {len(kgtype_uris)} KGTypes by URIs")
             
             # Initialize retriever if not already done
             if self.retriever is None:
@@ -109,14 +109,14 @@ class KGTypesReadProcessor:
             
             # Handle empty triples list
             if not triples:
-                self.logger.info(f"✅ No KGTypes found for the given URIs")
+                self.logger.debug(f"✅ No KGTypes found for the given URIs")
                 return []
             
             # Convert RDFLib triples to VitalSigns GraphObjects
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
             graph_objects = GraphObject.from_triples_list(triples)
             
-            self.logger.info(f"✅ Retrieved {len(graph_objects)} KGType GraphObjects from {len(triples)} triples")
+            self.logger.debug(f"✅ Retrieved {len(graph_objects)} KGType GraphObjects from {len(triples)} triples")
             return graph_objects
             
         except Exception as e:
@@ -141,7 +141,7 @@ class KGTypesReadProcessor:
             Tuple[List[Tuple], int]: (List of RDFLib triples (subject, predicate, object), total count)
         """
         try:
-            self.logger.info(f"🔍 Listing KGTypes (page_size: {page_size}, offset: {offset}, search: {search})")
+            self.logger.debug(f"🔍 Listing KGTypes (page_size: {page_size}, offset: {offset}, search: {search})")
             
             # Initialize retriever if not already done
             if self.retriever is None:
@@ -167,7 +167,7 @@ class KGTypesReadProcessor:
                 include_count=True
             )
             
-            self.logger.info(f"✅ Listed {len(triples)} KGType RDFLib triples (total: {total_count})")
+            self.logger.debug(f"✅ Listed {len(triples)} KGType RDFLib triples (total: {total_count})")
             return triples, total_count
             
         except Exception as e:

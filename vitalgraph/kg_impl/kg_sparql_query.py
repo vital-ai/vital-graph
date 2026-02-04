@@ -296,11 +296,11 @@ class KGSparqlQueryProcessor:
             results = await self.backend.execute_sparql_query(space_id, frame_query)
             subject_uris = self.utils.extract_subject_uris_from_results(results)
             
-            self.logger.info(f"🔍 Frame {frame_uri}: get_individual_frame returned {len(subject_uris)} subject URIs")
+            self.logger.debug(f"🔍 Frame {frame_uri}: get_individual_frame returned {len(subject_uris)} subject URIs")
             for i, uri in enumerate(subject_uris[:10]):
-                self.logger.info(f"🔍   Subject {i+1}: {uri}")
+                self.logger.debug(f"🔍   Subject {i+1}: {uri}")
             if len(subject_uris) > 10:
-                self.logger.info(f"🔍   ... and {len(subject_uris) - 10} more subjects")
+                self.logger.debug(f"🔍   ... and {len(subject_uris) - 10} more subjects")
             
             # Diagnostic: Check what hasFrameGraphURI values exist near this frame
             if len(subject_uris) <= 1:
@@ -520,7 +520,7 @@ class KGSparqlQueryProcessor:
                     # Valid frame - retrieve its graph using processor method
                     frame_data = await self.get_individual_frame(space_id, graph_id, frame_uri, include_frame_graph=True)
                     
-                    self.logger.info(f"🔍 Frame {frame_uri}: get_individual_frame returned {len(frame_data.get('subject_uris', [])) if frame_data else 0} subject URIs")
+                    self.logger.debug(f"🔍 Frame {frame_uri}: get_individual_frame returned {len(frame_data.get('subject_uris', [])) if frame_data else 0} subject URIs")
                     
                     if frame_data and frame_data.get('subject_uris'):
                         # Get triples for all subject URIs (frame, slots, and edges)
@@ -656,7 +656,7 @@ class KGSparqlQueryProcessor:
                                 "object": obj
                             })
             
-            self.logger.info(f"Retrieved {len(all_triples)} triples for {len(subject_uris)} subjects")
+            self.logger.debug(f"Retrieved {len(all_triples)} triples for {len(subject_uris)} subjects")
             return all_triples
             
         except Exception as e:

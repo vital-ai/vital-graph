@@ -57,14 +57,14 @@ class KGRelationsCreateProcessor:
             RelationCreateResponse, RelationUpdateResponse, or RelationUpsertResponse
         """
         try:
-            self.logger.info(f"Processing KG relations in space '{space_id}', graph '{graph_id}', "
+            self.logger.debug(f"Processing KG relations in space '{space_id}', graph '{graph_id}', "
                            f"operation_mode='{operation_mode}'")
             
             # Step 1: Validate VitalSigns objects
             if not vitalsigns_objects:
                 return self._create_error_response(operation_mode, "No valid objects provided")
             
-            self.logger.info(f"Processing {len(vitalsigns_objects)} VitalSigns objects")
+            self.logger.debug(f"Processing {len(vitalsigns_objects)} VitalSigns objects")
             
             # Step 2: Extract and validate relations
             relations = [obj for obj in vitalsigns_objects if isinstance(obj, Edge_hasKGRelation)]
@@ -72,7 +72,7 @@ class KGRelationsCreateProcessor:
             if not relations:
                 return self._create_error_response(operation_mode, "No Edge_hasKGRelation objects found in request")
             
-            self.logger.info(f"Found {len(relations)} relation objects")
+            self.logger.debug(f"Found {len(relations)} relation objects")
             
             # Step 3: Handle operation mode
             if operation_mode == OperationMode.CREATE:

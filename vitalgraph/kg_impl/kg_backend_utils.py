@@ -98,7 +98,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def store_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> BackendOperationResult:
         """Store VitalSigns objects using Fuseki+PostgreSQL backend following working triples endpoint pattern."""
         try:
-            self.logger.info(f"🔥 BACKEND ADAPTER: Storing {len(objects)} objects in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"🔥 BACKEND ADAPTER: Storing {len(objects)} objects in space {space_id}, graph {graph_id}")
             
             # Convert VitalSigns objects to RDF quads using the same pattern as working triples endpoint
             from rdflib import Graph, URIRef
@@ -122,16 +122,16 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             graph_uri = URIRef(graph_id)
             quads = []
             
-            self.logger.info(f"🔥 RDFLib graph has {len(rdf_graph)} triples")
+            self.logger.debug(f"🔥 RDFLib graph has {len(rdf_graph)} triples")
             for s, p, o in rdf_graph:
                 # Keep RDFLib objects to preserve type information (like triples endpoint)
                 quads.append((s, p, o, graph_uri))
             
-            self.logger.info(f"🔥 Converted to {len(quads)} quads with graph {graph_id}")
+            self.logger.debug(f"🔥 Converted to {len(quads)} quads with graph {graph_id}")
             
             # Store via backend using add_rdf_quads_batch (like triples endpoint)
             success = await self.backend.add_rdf_quads_batch(space_id, quads)
-            self.logger.info(f"🔥 FUSEKI INSERT RESULT: {success}")
+            self.logger.debug(f"🔥 FUSEKI INSERT RESULT: {success}")
             
             return BackendOperationResult(
                 success=True,
@@ -177,7 +177,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_object(self, space_id: str, graph_id: str, object_uri: str) -> BackendOperationResult:
         """Retrieve a single object by URI (generic method for any object type)."""
         try:
-            self.logger.info(f"🔍 Retrieving object {object_uri} from graph {graph_id}")
+            self.logger.debug(f"🔍 Retrieving object {object_uri} from graph {graph_id}")
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_object_triples(
@@ -208,25 +208,25 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity(self, space_id: str, graph_id: str, entity_uri: str) -> BackendOperationResult:
         """Retrieve a single entity by URI."""
         try:
-            self.logger.info(f"🔍 QUERYING FUSEKI - Space: {space_id}, Graph: {graph_id}")
-            self.logger.info(f"🔍 ENTITY URI: {entity_uri}")
+            self.logger.debug(f"🔍 QUERYING FUSEKI - Space: {space_id}, Graph: {graph_id}")
+            self.logger.debug(f"🔍 ENTITY URI: {entity_uri}")
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_object_triples(
                 space_id, graph_id, entity_uri, include_materialized_edges=False
             )
             
-            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(triples)}")
-            self.logger.info(f"🔍 First 3 triples: {triples[:3] if triples else 'NONE'}")
+            self.logger.debug(f"🔍 QUERY RESULT COUNT: {len(triples)}")
+            self.logger.debug(f"🔍 First 3 triples: {triples[:3] if triples else 'NONE'}")
             
             if not triples:
                 self.logger.warning(f"🔍 No triples returned for entity {entity_uri}")
                 return BackendOperationResult(success=True, message="Entity not found", objects=[])
             
             # Convert triples to VitalSigns objects
-            self.logger.info(f"🔍 About to convert {len(triples)} triples to VitalSigns")
+            self.logger.debug(f"🔍 About to convert {len(triples)} triples to VitalSigns")
             objects = await self._triples_to_vitalsigns(triples)
-            self.logger.info(f"🔍 Conversion complete: got {len(objects)} objects")
+            self.logger.debug(f"🔍 Conversion complete: got {len(objects)} objects")
             
             return BackendOperationResult(
                 success=True,
@@ -246,21 +246,21 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph(self, space_id: str, graph_id: str, entity_uri: str) -> BackendOperationResult:
         """Retrieve complete entity graph including related objects."""
         try:
-            self.logger.info(f"🔍 Looking for entity graph with URI: {entity_uri}")
-            self.logger.info(f"🔍 In graph: {graph_id}")
+            self.logger.debug(f"🔍 Looking for entity graph with URI: {entity_uri}")
+            self.logger.debug(f"🔍 In graph: {graph_id}")
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_entity_graph(
                 space_id, graph_id, entity_uri, include_materialized_edges=False
             )
             
-            self.logger.info(f"🔍 Retrieved {len(triples)} triples")
+            self.logger.debug(f"🔍 Retrieved {len(triples)} triples")
             if triples and len(triples) > 0:
                 # Show first few triples for debugging
                 for i, triple in enumerate(triples[:5]):
-                    self.logger.info(f"🔍 Triple {i+1}: {triple}")
+                    self.logger.debug(f"🔍 Triple {i+1}: {triple}")
                 if len(triples) > 5:
-                    self.logger.info(f"🔍 ... and {len(triples) - 5} more triples")
+                    self.logger.debug(f"🔍 ... and {len(triples) - 5} more triples")
             
             if not triples or len(triples) == 0:
                 return BackendOperationResult(
@@ -290,14 +290,14 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_by_reference_id(self, space_id: str, graph_id: str, reference_id: str) -> BackendOperationResult:
         """Retrieve a single entity by reference ID."""
         try:
-            self.logger.info(f"🔍 QUERYING ENTITY BY REFERENCE ID: {reference_id}")
+            self.logger.debug(f"🔍 QUERYING ENTITY BY REFERENCE ID: {reference_id}")
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_entity_by_reference_id(
                 space_id, graph_id, reference_id, include_materialized_edges=False
             )
             
-            self.logger.info(f"🔍 QUERY RESULT COUNT: {len(triples) if triples else 0}")
+            self.logger.debug(f"🔍 QUERY RESULT COUNT: {len(triples) if triples else 0}")
             
             if not triples:
                 return BackendOperationResult(success=True, message=f"Entity not found with reference ID: {reference_id}", objects=[])
@@ -323,21 +323,21 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph_by_reference_id(self, space_id: str, graph_id: str, reference_id: str) -> BackendOperationResult:
         """Retrieve complete entity graph by reference ID."""
         try:
-            self.logger.info(f"🔍 Looking for entity graph with reference ID: {reference_id}")
-            self.logger.info(f"🔍 In graph: {graph_id}")
+            self.logger.debug(f"🔍 Looking for entity graph with reference ID: {reference_id}")
+            self.logger.debug(f"🔍 In graph: {graph_id}")
             
             # Use centralized retriever (filters OUT materialized edges by default)
             triples = await self.retriever.get_entity_graph_by_reference_id(
                 space_id, graph_id, reference_id, include_materialized_edges=False
             )
             
-            self.logger.info(f"🔍 Retrieved {len(triples) if triples else 0} triples")
+            self.logger.debug(f"🔍 Retrieved {len(triples) if triples else 0} triples")
             if triples and len(triples) > 0:
                 # Show first few triples for debugging
                 for i, triple in enumerate(triples[:5]):
-                    self.logger.info(f"🔍 Triple {i+1}: {triple}")
+                    self.logger.debug(f"🔍 Triple {i+1}: {triple}")
                 if len(triples) > 5:
-                    self.logger.info(f"🔍 ... and {len(triples) - 5} more triples")
+                    self.logger.debug(f"🔍 ... and {len(triples) - 5} more triples")
             
             if not triples or len(triples) == 0:
                 return BackendOperationResult(
@@ -435,7 +435,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                     self.logger.warning(f"Failed to convert triples for subject {subject_uri}: {e}")
                     continue
             
-            self.logger.info(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
+            self.logger.debug(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
             return objects
             
         except Exception as e:
@@ -462,16 +462,16 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                 return []
             
             # Log first few triples to see their format
-            self.logger.info(f"🔍 Converting {len(triples)} triples to VitalSigns")
+            self.logger.debug(f"🔍 Converting {len(triples)} triples to VitalSigns")
             for i, triple in enumerate(triples[:3]):
-                self.logger.info(f"  Triple {i+1}: s={type(triple[0]).__name__}:{triple[0]}, p={type(triple[1]).__name__}:{triple[1]}, o={type(triple[2]).__name__}:{triple[2]}")
+                self.logger.debug(f"  Triple {i+1}: s={type(triple[0]).__name__}:{triple[0]}, p={type(triple[1]).__name__}:{triple[1]}, o={type(triple[2]).__name__}:{triple[2]}")
             
             vs = VitalSigns()
             
             # Use VitalSigns from_triples_list to convert all triples at once
             objects = vs.from_triples_list(triples)
             
-            self.logger.info(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
+            self.logger.debug(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
             return objects
             
         except Exception as e:
@@ -573,8 +573,8 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         use the transactional pattern in _update_frame_slots_in_backend instead.
         """
         try:
-            self.logger.info(f"🔄 ATOMIC UPDATE: Starting update_quads for space {space_id}, graph {graph_id}")
-            self.logger.info(f"🔄 Delete quads: {len(delete_quads)}, Insert quads: {len(insert_quads)}")
+            self.logger.debug(f"🔄 ATOMIC UPDATE: Starting update_quads for space {space_id}, graph {graph_id}")
+            self.logger.debug(f"🔄 Delete quads: {len(delete_quads)}, Insert quads: {len(insert_quads)}")
             
             # Use backend's existing transactional methods
             # Delete operations first
@@ -582,16 +582,16 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
                 success = await self.backend.remove_rdf_quads_batch(space_id, delete_quads)
                 if not success:
                     raise Exception("Failed to delete quads")
-                self.logger.info(f"🔄 Deleted {len(delete_quads)} quads")
+                self.logger.debug(f"🔄 Deleted {len(delete_quads)} quads")
             
             # Insert operations second
             if insert_quads:
                 success = await self.backend.add_rdf_quads_batch(space_id, insert_quads)
                 if not success:
                     raise Exception("Failed to insert quads")
-                self.logger.info(f"🔄 Inserted {len(insert_quads)} quads")
+                self.logger.debug(f"🔄 Inserted {len(insert_quads)} quads")
             
-            self.logger.info("🔄 update_quads completed successfully")
+            self.logger.debug("🔄 update_quads completed successfully")
             return True
             
         except Exception as e:

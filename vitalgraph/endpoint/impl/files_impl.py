@@ -41,7 +41,7 @@ class FilesImpl:
             Tuple of (JSON-LD document, total count)
         """
         try:
-            self.logger.info(f"Listing files in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Listing files in space {space_id}, graph {graph_id}")
             
             # Get database space implementation
             from .impl_utils import get_db_space_impl
@@ -74,7 +74,7 @@ class FilesImpl:
             # Let VitalSigns handle the complete JSON-LD document creation
             jsonld_document = GraphObject.to_jsonld_list(graph_objects)
             
-            self.logger.info(f"Listed {len(graph_objects)} files (total: {total_count})")
+            self.logger.debug(f"Listed {len(graph_objects)} files (total: {total_count})")
             return jsonld_document, total_count
             
         except Exception as e:
@@ -94,7 +94,7 @@ class FilesImpl:
             FileNode GraphObject
         """
         try:
-            self.logger.info(f"Getting file {uri} from space {space_id}")
+            self.logger.debug(f"Getting file {uri} from space {space_id}")
             
             # Get database space implementation
             from .impl_utils import get_db_space_impl
@@ -110,7 +110,7 @@ class FilesImpl:
             if not graph_object:
                 raise ValueError(f"File not found: {uri}")
             
-            self.logger.info(f"Retrieved file {uri}")
+            self.logger.debug(f"Retrieved file {uri}")
             return graph_object
             
         except Exception as e:
@@ -131,7 +131,7 @@ class FilesImpl:
             Tuple of (JSON-LD document, count)
         """
         try:
-            self.logger.info(f"Getting {len(uri_list)} files from space {space_id}")
+            self.logger.debug(f"Getting {len(uri_list)} files from space {space_id}")
             
             # Get database space implementation
             from .impl_utils import get_db_space_impl
@@ -155,7 +155,7 @@ class FilesImpl:
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
             jsonld_document = GraphObject.to_jsonld_list(graph_objects)
             
-            self.logger.info(f"Retrieved {len(graph_objects)} files")
+            self.logger.debug(f"Retrieved {len(graph_objects)} files")
             return jsonld_document, len(graph_objects)
             
         except Exception as e:
@@ -179,7 +179,7 @@ class FilesImpl:
             from ...utils.data_format_utils import batch_jsonld_to_graphobjects, batch_graphobjects_to_quads
             
             objects_data = jsonld_document.get("@graph", [])
-            self.logger.info(f"Creating {len(objects_data)} file nodes in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Creating {len(objects_data)} file nodes in space {space_id}, graph {graph_id}")
             
             if not objects_data:
                 return []
@@ -214,7 +214,7 @@ class FilesImpl:
                 if added_count != len(quads):
                     raise RuntimeError(f"Expected to add {len(quads)} quads, but added {added_count}")
                 
-                self.logger.info(f"Created {len(subject_uris)} file nodes: added {added_count} quads")
+                self.logger.debug(f"Created {len(subject_uris)} file nodes: added {added_count} quads")
                 return subject_uris
             
             from .impl_utils import execute_with_transaction
@@ -222,7 +222,7 @@ class FilesImpl:
                 self.space_manager, space_id, create_operation
             )
             
-            self.logger.info(f"Successfully created {len(result)} file nodes")
+            self.logger.debug(f"Successfully created {len(result)} file nodes")
             return result
             
         except Exception as e:
@@ -245,7 +245,7 @@ class FilesImpl:
             from .impl_utils import get_db_space_impl
             from ...utils.data_format_utils import batch_graphobjects_to_quads
             
-            self.logger.info(f"Updating {len(file_nodes)} file nodes in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Updating {len(file_nodes)} file nodes in space {space_id}, graph {graph_id}")
             
             if not file_nodes:
                 return []
@@ -273,7 +273,7 @@ class FilesImpl:
                     space_id, quads, auto_commit=False, transaction=transaction
                 )
                 
-                self.logger.info(f"Updated {len(subject_uris)} file nodes: added {added_count} quads")
+                self.logger.debug(f"Updated {len(subject_uris)} file nodes: added {added_count} quads")
                 return subject_uris
             
             from .impl_utils import execute_with_transaction
@@ -281,7 +281,7 @@ class FilesImpl:
                 self.space_manager, space_id, update_operation
             )
             
-            self.logger.info(f"Successfully updated {len(result)} file nodes")
+            self.logger.debug(f"Successfully updated {len(result)} file nodes")
             return result
             
         except Exception as e:
@@ -303,7 +303,7 @@ class FilesImpl:
         try:
             from .impl_utils import get_existing_quads_for_uris, execute_with_transaction, get_db_space_impl
             
-            self.logger.info(f"Deleting {len(uris)} file nodes from space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Deleting {len(uris)} file nodes from space {space_id}, graph {graph_id}")
             
             # Step 1: Get existing quads for all files
             existing_quads = await get_existing_quads_for_uris(
@@ -326,14 +326,14 @@ class FilesImpl:
                 deleted_subjects = set(str(quad[0]) for quad in existing_quads)
                 deleted_count = len(deleted_subjects)
                 
-                self.logger.info(f"Deleted {deleted_count} file nodes: removed {removed_count} quads")
+                self.logger.debug(f"Deleted {deleted_count} file nodes: removed {removed_count} quads")
                 return deleted_count
             
             result = await execute_with_transaction(
                 self.space_manager, space_id, delete_operation
             )
             
-            self.logger.info(f"Successfully deleted {result} file nodes")
+            self.logger.debug(f"Successfully deleted {result} file nodes")
             return result
             
         except Exception as e:

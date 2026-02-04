@@ -60,11 +60,11 @@ class DualWriteCoordinator:
             True if both operations succeeded, False otherwise
         """
         try:
-            logger.info(f" Executing SPARQL UPDATE for space {space_id}: {sparql_update[:100]}...")
+            logger.debug(f" Executing SPARQL UPDATE for space {space_id}: {sparql_update[:100]}...")
             
             # Step 1: Parse SPARQL UPDATE to determine affected triples
             parsed_operation = await self.sparql_parser.parse_update_operation(space_id, sparql_update)
-            logger.info(f" Parsed operation: {parsed_operation}")
+            logger.debug(f" Parsed operation: {parsed_operation}")
             
             if 'error' in parsed_operation:
                 logger.error(f"SPARQL UPDATE parsing failed: {parsed_operation['error']}")
@@ -81,7 +81,7 @@ class DualWriteCoordinator:
             
             # Step 2: Execute dual-write operation with correct transaction ordering
             result = await self._execute_parsed_update(space_id, parsed_operation, original_quads)
-            logger.info(f" Dual-write result: {result}")
+            logger.debug(f" Dual-write result: {result}")
             return result
             
         except Exception as e:
@@ -126,15 +126,15 @@ class DualWriteCoordinator:
                 delete_triples = parsed_operation['delete_triples']
                 filtered_delete_triples, filtered_count = self.materialization_manager.filter_materialized_triples(delete_triples)
                 if filtered_count > 0:
-                    logger.info(f"Filtered {filtered_count} materialized triples from DELETE operation (only deleted from Fuseki)")
+                    logger.debug(f"Filtered {filtered_count} materialized triples from DELETE operation (only deleted from Fuseki)")
                 
-                logger.info(f"🗑️ Processing {len(filtered_delete_triples)} DELETE triples for PostgreSQL (filtered from {len(delete_triples)} total)")
+                logger.debug(f"🗑️ Processing {len(filtered_delete_triples)} DELETE triples for PostgreSQL (filtered from {len(delete_triples)} total)")
                 
                 if filtered_delete_triples:
                     delete_success = await self._store_delete_triples(
                         space_id, filtered_delete_triples, pg_transaction
                     )
-                    logger.info(f"🎯 DELETE operation result: {delete_success}")
+                    logger.debug(f"🎯 DELETE operation result: {delete_success}")
                     if not delete_success:
                         await self.postgresql_impl.rollback_transaction(pg_transaction)
                         return False
@@ -146,20 +146,20 @@ class DualWriteCoordinator:
             
             if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
                 # Add inserted triples using proper dual-write (both PostgreSQL and Fuseki)
-                logger.info(f"📝 Processing {len(parsed_operation['insert_triples'])} INSERT triples for dual-write")
+                logger.debug(f"📝 Processing {len(parsed_operation['insert_triples'])} INSERT triples for dual-write")
                 insert_success = await self._store_quads_to_postgresql(
                     space_id, parsed_operation['insert_triples'], pg_transaction
                 )
-                logger.info(f"🎯 INSERT operation result: {insert_success}")
+                logger.debug(f"🎯 INSERT operation result: {insert_success}")
                 if not insert_success:
                     await self.postgresql_impl.rollback_transaction(pg_transaction)
                     return False
             
             # Step 2: Commit PostgreSQL transaction BEFORE Fuseki operation
             # PostgreSQL is authoritative - must succeed for operation to proceed
-            logger.info("💾 Committing PostgreSQL transaction...")
+            logger.debug("💾 Committing PostgreSQL transaction...")
             commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
-            logger.info(f"🎯 PostgreSQL commit result: {commit_success}")
+            logger.debug(f"🎯 PostgreSQL commit result: {commit_success}")
             
             if not commit_success:
                 logger.error("❌ PostgreSQL primary storage failed - aborting operation")
@@ -171,7 +171,7 @@ class DualWriteCoordinator:
             if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
                 quads_for_fuseki = original_quads if original_quads else parsed_operation['insert_triples']
                 if quads_for_fuseki:
-                    logger.info(f"📝 Adding {len(quads_for_fuseki)} triples to Fuseki dataset (using {'original RDFLib' if original_quads else 'parsed'} quads)")
+                    logger.debug(f"📝 Adding {len(quads_for_fuseki)} triples to Fuseki dataset (using {'original RDFLib' if original_quads else 'parsed'} quads)")
                     fuseki_success = await self.fuseki_manager.add_quads_to_dataset(
                         space_id, quads_for_fuseki, convert_float_to_decimal=True
                     )
@@ -179,12 +179,12 @@ class DualWriteCoordinator:
             # For DELETE operations, execute the SPARQL UPDATE on Fuseki
             if operation_type in ['delete', 'delete_insert', 'delete_data']:
                 if parsed_operation['delete_triples']:
-                    logger.info(f"📝 Executing DELETE on Fuseki dataset")
+                    logger.debug(f"📝 Executing DELETE on Fuseki dataset")
                     fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
             
             # For DROP GRAPH operations, execute directly on Fuseki (PostgreSQL graph table handled separately)
             if operation_type in ['drop_graph', 'clear_graph']:
-                logger.info(f"📝 Executing {operation_type.upper()} on Fuseki dataset")
+                logger.debug(f"📝 Executing {operation_type.upper()} on Fuseki dataset")
                 fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
             
             if not fuseki_success:
@@ -229,8 +229,8 @@ class DualWriteCoordinator:
         if not quads:
             return True
         
-        logger.info(f"🔍 DUAL-WRITE: Adding {len(quads)} quads to space {space_id}")
-        logger.info(f"🔍 First quad sample: {quads[0] if quads else 'None'}")
+        logger.debug(f"🔍 DUAL-WRITE: Adding {len(quads)} quads to space {space_id}")
+        logger.debug(f"🔍 First quad sample: {quads[0] if quads else 'None'}")
         
         # Step 0: Auto-register graphs BEFORE data operations
         graph_uris = self._extract_graph_uris_from_quads(quads)
@@ -244,7 +244,7 @@ class DualWriteCoordinator:
             # Caller manages transaction
             pg_transaction = transaction
             should_commit = False
-            logger.info(f"🔍 Using caller-provided transaction")
+            logger.debug(f"🔍 Using caller-provided transaction")
         else:
             # We manage transaction
             pg_transaction = None
@@ -255,14 +255,14 @@ class DualWriteCoordinator:
         try:
             # Step 1: Begin PostgreSQL transaction if we're managing it
             if should_commit:
-                logger.info(f"🔍 Starting PostgreSQL transaction...")
+                logger.debug(f"🔍 Starting PostgreSQL transaction...")
                 pg_transaction = await self.postgresql_impl.begin_transaction()
-                logger.info(f"🔍 PostgreSQL transaction started: {pg_transaction}")
+                logger.debug(f"🔍 PostgreSQL transaction started: {pg_transaction}")
             
             # Filter out materialized triples before PostgreSQL write
             filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} materialized triples from add_quads (will only exist in Fuseki)")
+                logger.debug(f"Filtered {filtered_count} materialized triples from add_quads (will only exist in Fuseki)")
             
             # If all quads were materialized, skip PostgreSQL but continue to Fuseki
             if not filtered_quads:
@@ -270,7 +270,7 @@ class DualWriteCoordinator:
                 pg_success = True  # Consider this successful
             else:
                 # Write to PostgreSQL primary data tables (authoritative storage, done first)
-                logger.info(f"🔍 Writing {len(filtered_quads)} quads to PostgreSQL primary data tables...")
+                logger.debug(f"🔍 Writing {len(filtered_quads)} quads to PostgreSQL primary data tables...")
                 pg_success = await self._store_quads_to_postgresql(space_id, filtered_quads, pg_transaction)
             
             if not pg_success:
@@ -342,7 +342,7 @@ class DualWriteCoordinator:
             # Caller manages transaction
             pg_transaction = transaction
             should_commit = False
-            logger.info(f"Using caller-provided transaction for remove_quads")
+            logger.debug(f"Using caller-provided transaction for remove_quads")
         else:
             # We manage transaction
             pg_transaction = None
@@ -368,7 +368,7 @@ class DualWriteCoordinator:
             # Filter out materialized triples before PostgreSQL deletion
             filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} materialized triples from remove_quads (only deleted from Fuseki)")
+                logger.debug(f"Filtered {filtered_count} materialized triples from remove_quads (only deleted from Fuseki)")
             
             # If all quads were materialized, skip PostgreSQL but deletion from Fuseki already succeeded
             if not filtered_quads:
@@ -649,14 +649,14 @@ class DualWriteCoordinator:
             
             # Use PostgreSQL implementation to remove quads within the transaction
             # Using unified method with batch optimization
-            logger.info(f"🔍 Calling remove_quads_from_postgresql with {len(quads)} quads")
+            logger.debug(f"🔍 Calling remove_quads_from_postgresql with {len(quads)} quads")
             success = await self.postgresql_impl.remove_quads_from_postgresql(
                 space_id, quads, transaction
             )
-            logger.info(f"🎯 PostgreSQL remove_quads_from_postgresql result: {success}")
+            logger.debug(f"🎯 PostgreSQL remove_quads_from_postgresql result: {success}")
             
             if success:
-                logger.info(f"✅ Successfully removed {len(triples)} DELETE triples from PostgreSQL for space {space_id}")
+                logger.debug(f"✅ Successfully removed {len(triples)} DELETE triples from PostgreSQL for space {space_id}")
             else:
                 logger.error(f"❌ Failed to remove DELETE triples from PostgreSQL for space {space_id}")
             

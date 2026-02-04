@@ -96,9 +96,9 @@ class KGEntityFrameCreateProcessor:
         """
         try:
             if parent_frame_uri:
-                self.logger.info(f"Creating/updating CHILD frames for entity {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}, operation_mode={operation_mode}")
+                self.logger.debug(f"Creating/updating CHILD frames for entity {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}, operation_mode={operation_mode}")
             else:
-                self.logger.info(f"Creating/updating TOP-LEVEL frames for entity {entity_uri} in space {space_id}, graph {graph_id}, operation_mode={operation_mode}")
+                self.logger.debug(f"Creating/updating TOP-LEVEL frames for entity {entity_uri} in space {space_id}, graph {graph_id}, operation_mode={operation_mode}")
             
             # Step 1: Validate entity exists (extracted from lines 957-959)
             entity_exists = await self.validate_entity_exists(backend_adapter, space_id, graph_id, entity_uri)
@@ -144,7 +144,7 @@ class KGEntityFrameCreateProcessor:
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
-                self.logger.info(f"Successfully created/updated {len(created_uris)} frame objects")
+                self.logger.debug(f"Successfully created/updated {len(created_uris)} frame objects")
                 
                 return CreateFrameResult(
                     success=True,
@@ -223,7 +223,7 @@ class KGEntityFrameCreateProcessor:
                 elif 'Edge_' in class_name:
                     edge_objects.append(obj)
         
-        self.logger.info(f"📦 Categorized objects: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges")
+        self.logger.debug(f"📦 Categorized objects: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges")
         
         return FrameObjectCategories(
             frame_objects=frame_objects,
@@ -250,12 +250,12 @@ class KGEntityFrameCreateProcessor:
         # Second pass: set grouping URIs (extracted from lines 995-1011)
         # CRITICAL: Set kGGraphURI on ALL objects, including hierarchical child frames
         for obj in frame_objects:
-            self.logger.info(f"🔍 Processing object {obj.__class__.__name__} with URI: {getattr(obj, 'URI', 'NO_URI')}")
+            self.logger.debug(f"🔍 Processing object {obj.__class__.__name__} with URI: {getattr(obj, 'URI', 'NO_URI')}")
             
             # Log object properties before modification
             try:
                 obj_dict = obj.to_json()
-                self.logger.info(f"🔍 Object before grouping URI assignment: {obj_dict}")
+                self.logger.debug(f"🔍 Object before grouping URI assignment: {obj_dict}")
             except Exception as e:
                 self.logger.warning(f"⚠️ Could not serialize object to JSON: {e}")
             
@@ -263,7 +263,7 @@ class KGEntityFrameCreateProcessor:
             # This is CRITICAL for hierarchical frames - all frames must have kGGraphURI set to the entity
             if hasattr(obj, 'kGGraphURI'):
                 obj.kGGraphURI = entity_uri
-                self.logger.info(f"🔧 Set kGGraphURI={entity_uri} for {obj.__class__.__name__}")
+                self.logger.debug(f"🔧 Set kGGraphURI={entity_uri} for {obj.__class__.__name__}")
             else:
                 self.logger.warning(f"⚠️ Object {obj.__class__.__name__} does not have kGGraphURI property")
             
@@ -274,7 +274,7 @@ class KGEntityFrameCreateProcessor:
                 # For frame objects, set frameGraphURI to their own URI
                 if 'KGFrame' in class_name:
                     obj.frameGraphURI = obj.URI
-                    self.logger.info(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
+                    self.logger.debug(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
                     
                 # For slots, set frameGraphURI to the frame they belong to
                 elif 'Slot' in class_name:
@@ -283,7 +283,7 @@ class KGEntityFrameCreateProcessor:
                     if frame_candidates:
                         target_frame = frame_candidates[0]  # Use first frame (simplified)
                         obj.frameGraphURI = target_frame.URI
-                        self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
+                        self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
                     else:
                         self.logger.warning(f"⚠️ No frame candidates found for slot {obj.URI}")
                 
@@ -295,14 +295,14 @@ class KGEntityFrameCreateProcessor:
                         target_frame = frame_candidates[0]  # Use first frame (simplified)
                         
                         obj.frameGraphURI = target_frame.URI
-                        self.logger.info(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
+                        self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
                     else:
                         self.logger.warning(f"⚠️ No frame candidates found for edge {obj.URI}")
             
             # Log object properties after modification
             try:
                 obj_dict_after = obj.to_json()
-                self.logger.info(f"🔍 Object after grouping URI assignment: {obj_dict_after}")
+                self.logger.debug(f"🔍 Object after grouping URI assignment: {obj_dict_after}")
             except Exception as e:
                 self.logger.warning(f"⚠️ Could not serialize modified object to JSON: {e}")
         
@@ -349,7 +349,7 @@ class KGEntityFrameCreateProcessor:
             
             entity_frame_edges.append(entity_frame_edge)
             
-            self.logger.info(f"🔗 Created entity-to-frame edge: {entity_uri} -> {frame_obj.URI}")
+            self.logger.debug(f"🔗 Created entity-to-frame edge: {entity_uri} -> {frame_obj.URI}")
         
         return entity_frame_edges
     
@@ -375,7 +375,7 @@ class KGEntityFrameCreateProcessor:
             bool: True if atomic update successful, False otherwise
         """
         try:
-            self.logger.info(f"🔄 Executing atomic frame {operation_mode} for {len(frame_objects)} frames")
+            self.logger.debug(f"🔄 Executing atomic frame {operation_mode} for {len(frame_objects)} frames")
             
             # Step 1: Build delete quads for existing frame data
             delete_quads = await self.build_delete_quads_for_frames(backend_adapter, space_id, graph_id, frame_objects)
@@ -387,7 +387,7 @@ class KGEntityFrameCreateProcessor:
             success = await backend_adapter.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             if success:
-                self.logger.info(f"✅ Atomic frame {operation_mode} completed successfully")
+                self.logger.debug(f"✅ Atomic frame {operation_mode} completed successfully")
                 return True
             else:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
@@ -418,10 +418,10 @@ class KGEntityFrameCreateProcessor:
             frame_uris = [str(obj.URI) for obj in frame_objects if hasattr(obj, 'URI')]
             
             if not frame_uris:
-                self.logger.info("🔍 No frame URIs found for delete quad building")
+                self.logger.debug("🔍 No frame URIs found for delete quad building")
                 return delete_quads
             
-            self.logger.info(f"🔍 Building delete quads for {len(frame_uris)} frames")
+            self.logger.debug(f"🔍 Building delete quads for {len(frame_uris)} frames")
             
             # For each frame, find all subjects that belong to it via frameGraphURI
             for frame_uri in frame_uris:
@@ -435,10 +435,10 @@ class KGEntityFrameCreateProcessor:
                 }}
                 """
                 
-                self.logger.info(f"🔍 Finding triples for frame: {frame_uri}")
-                self.logger.info(f"🔍 Delete query: {find_subjects_query}")
+                self.logger.debug(f"🔍 Finding triples for frame: {frame_uri}")
+                self.logger.debug(f"🔍 Delete query: {find_subjects_query}")
                 results = await backend_adapter.execute_sparql_query(space_id, find_subjects_query)
-                self.logger.info(f"🔍 Delete query results: {results}")
+                self.logger.debug(f"🔍 Delete query results: {results}")
                 
                 # Convert SPARQL results to delete quads - handle nested structure
                 bindings = []
@@ -456,7 +456,7 @@ class KGEntityFrameCreateProcessor:
                         if isinstance(result['object'], dict):
                             obj_dict = result['object']
                             if obj_dict.get('datatype') and 'float' in obj_dict.get('datatype', '').lower():
-                                self.logger.info(f"🔍 FLOAT VALUE from Fuseki: {obj_dict}")
+                                self.logger.debug(f"🔍 FLOAT VALUE from Fuseki: {obj_dict}")
                         
                         obj = str(result['object'].get('value', '')) if isinstance(result['object'], dict) else str(result['object'])
                         
@@ -489,7 +489,7 @@ class KGEntityFrameCreateProcessor:
                         if predicate and obj:
                             delete_quads.append((frame_uri, predicate, obj, graph_id))
             
-            self.logger.info(f"🔍 Built {len(delete_quads)} delete quads")
+            self.logger.debug(f"🔍 Built {len(delete_quads)} delete quads")
             return delete_quads
             
         except Exception as e:
@@ -508,7 +508,7 @@ class KGEntityFrameCreateProcessor:
             List[tuple]: List of quad tuples (subject, predicate, object, graph) to insert
         """
         try:
-            self.logger.info(f"🔍 Building insert quads for {len(all_objects)} objects")
+            self.logger.debug(f"🔍 Building insert quads for {len(all_objects)} objects")
             
             # Log each object type, URI, and check for kGGraphURI property
             for i, obj in enumerate(all_objects):
@@ -516,29 +516,29 @@ class KGEntityFrameCreateProcessor:
                 obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
                 has_kg_graph_uri = hasattr(obj, 'kGGraphURI')
                 kg_graph_uri_value = str(obj.kGGraphURI) if has_kg_graph_uri and obj.kGGraphURI else 'NOT_SET'
-                self.logger.info(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
-                self.logger.info(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
+                self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
+                self.logger.debug(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
             
             # Convert VitalSigns objects to triples
             triples = GraphObject.to_triples_list(all_objects)
             
-            self.logger.info(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
+            self.logger.debug(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
             
             # Check if hasKGGraphURI triples are present
             kg_graph_uri_triples = [t for t in triples if 'hasKGGraphURI' in str(t[1])]
             frame_graph_uri_triples = [t for t in triples if 'hasFrameGraphURI' in str(t[1])]
-            self.logger.info(f"🔍 Found {len(kg_graph_uri_triples)} hasKGGraphURI triples")
-            self.logger.info(f"🔍 Found {len(frame_graph_uri_triples)} hasFrameGraphURI triples")
+            self.logger.debug(f"🔍 Found {len(kg_graph_uri_triples)} hasKGGraphURI triples")
+            self.logger.debug(f"🔍 Found {len(frame_graph_uri_triples)} hasFrameGraphURI triples")
             
             for triple in kg_graph_uri_triples:
                 s, p, o = triple
-                self.logger.info(f"🔍   hasKGGraphURI triple: {s} -> {o}")
+                self.logger.debug(f"🔍   hasKGGraphURI triple: {s} -> {o}")
             
             for i, triple in enumerate(triples[:10]):  # Log first 10 triples
                 s, p, o = triple
-                self.logger.info(f"🔍   Triple {i+1}: {s} | {p} | {o}")
+                self.logger.debug(f"🔍   Triple {i+1}: {s} | {p} | {o}")
             if len(triples) > 10:
-                self.logger.info(f"🔍   ... and {len(triples) - 10} more triples")
+                self.logger.debug(f"🔍   ... and {len(triples) - 10} more triples")
             
             # Convert triples to quads by adding graph_id
             insert_quads = []
@@ -546,7 +546,7 @@ class KGEntityFrameCreateProcessor:
                 s, p, o = triple
                 insert_quads.append((str(s), str(p), str(o), graph_id))
             
-            self.logger.info(f"🔍 Built {len(insert_quads)} insert quads")
+            self.logger.debug(f"🔍 Built {len(insert_quads)} insert quads")
             return insert_quads
             
         except Exception as e:

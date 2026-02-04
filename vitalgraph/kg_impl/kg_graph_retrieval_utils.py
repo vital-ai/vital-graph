@@ -120,9 +120,9 @@ class GraphObjectRetriever:
         
         # Log raw SPARQL results to see format
         if results:
-            self.logger.info(f"🔍 RAW SPARQL RESULTS: {len(results)} rows")
+            self.logger.debug(f"🔍 RAW SPARQL RESULTS: {len(results)} rows")
             if len(results) > 0:
-                self.logger.info(f"  First row: {results[0]}")
+                self.logger.debug(f"  First row: {results[0]}")
         
         # Convert SPARQL results to RDFLib triple objects
         from rdflib import URIRef, Literal

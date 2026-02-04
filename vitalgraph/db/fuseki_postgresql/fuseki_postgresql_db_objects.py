@@ -102,7 +102,7 @@ class FusekiPostgreSQLDbObjects:
             if graph_id is None:
                 graph_id = "main"
             
-            self.logger.info(f"Getting {len(uris)} objects by URIs in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Getting {len(uris)} objects by URIs in space {space_id}, graph {graph_id}")
             
             if not uris:
                 self.logger.debug("No URIs provided, returning empty list")
@@ -122,7 +122,7 @@ class FusekiPostgreSQLDbObjects:
             vitalsigns = VitalSigns()
             graph_objects = vitalsigns.from_triples_list(triples)
             
-            self.logger.info(f"Successfully retrieved {len(graph_objects)} objects from {len(triples)} triples")
+            self.logger.debug(f"Successfully retrieved {len(graph_objects)} objects from {len(triples)} triples")
             return graph_objects
             
         except Exception as e:
@@ -147,7 +147,7 @@ class FusekiPostgreSQLDbObjects:
             if graph_id is None:
                 graph_id = "main"
             
-            self.logger.info(f"Getting {len(subject_uris)} objects as quads in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Getting {len(subject_uris)} objects as quads in space {space_id}, graph {graph_id}")
             
             if not subject_uris:
                 self.logger.debug("No subject URIs provided, returning empty list")

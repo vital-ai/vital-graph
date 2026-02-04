@@ -238,7 +238,7 @@ class EdgeMaterializationManager:
         
         total_edges = len(entity_frame_edges) + len(frame_frame_edges) + len(frame_slot_edges)
         if total_edges > 0:
-            self.logger.info(f"Detected {total_edges} edge objects: "
+            self.logger.debug(f"Detected {total_edges} edge objects: "
                            f"{len(entity_frame_edges)} entity-frame, "
                            f"{len(frame_frame_edges)} frame-frame, "
                            f"{len(frame_slot_edges)} frame-slot")
@@ -362,7 +362,7 @@ class EdgeMaterializationManager:
                         self.logger.debug(f"Graph object deletion detected: {subject} (type: {obj.split('#')[-1]})")
         
         if deleted_objects:
-            self.logger.info(f"Detected {len(deleted_objects)} graph object deletions requiring materialized edge cleanup")
+            self.logger.debug(f"Detected {len(deleted_objects)} graph object deletions requiring materialized edge cleanup")
         
         return deleted_objects
     
@@ -413,7 +413,7 @@ class EdgeMaterializationManager:
         sparql += "\n    UNION\n".join([f"  {{ {pattern} }}" for pattern in delete_patterns])
         sparql += "\n}"
         
-        self.logger.info(f"Generated cleanup SPARQL for {len(deleted_node_uris)} deleted nodes")
+        self.logger.debug(f"Generated cleanup SPARQL for {len(deleted_node_uris)} deleted nodes")
         
         return sparql
     
@@ -478,11 +478,11 @@ class EdgeMaterializationManager:
                 return True
             
             # Execute on Fuseki only
-            self.logger.info(f"Materializing direct properties: {total_insert} inserts, {total_delete} edge deletes, {len(deleted_objects)} object deletes")
+            self.logger.debug(f"Materializing direct properties: {total_insert} inserts, {total_delete} edge deletes, {len(deleted_objects)} object deletes")
             success = await self.fuseki_manager.update_dataset(space_id, combined_sparql)
             
             if success:
-                self.logger.info(f"Successfully materialized direct properties for space {space_id}")
+                self.logger.debug(f"Successfully materialized direct properties for space {space_id}")
             else:
                 self.logger.warning(f"Materialization SPARQL execution failed for space {space_id}")
             

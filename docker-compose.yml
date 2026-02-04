@@ -5,8 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        - VITALGRAPH_ENVIRONMENT=${VITALGRAPH_ENVIRONMENT:-local}
     container_name: vitalgraph-app
     ports:
       - "${PORT:-8001}:${PORT:-8001}"

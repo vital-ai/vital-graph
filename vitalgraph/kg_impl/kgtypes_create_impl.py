@@ -32,7 +32,7 @@ class KGTypesCreateProcessor:
             str: URI of the created KGType
         """
         try:
-            self.logger.info(f"🔄 Atomic KGType create: {kgtype_object.URI} in graph: {graph_id}")
+            self.logger.debug(f"🔄 Atomic KGType create: {kgtype_object.URI} in graph: {graph_id}")
             
             # Check if KGType already exists
             if await self.kgtype_exists(backend, space_id, graph_id, str(kgtype_object.URI)):
@@ -41,7 +41,7 @@ class KGTypesCreateProcessor:
             # Build insert quads for the new KGType
             insert_quads = self._build_insert_quads_for_kgtype(kgtype_object, graph_id)
             
-            self.logger.info(f"🔍 Built {len(insert_quads)} insert quads for KGType")
+            self.logger.debug(f"🔍 Built {len(insert_quads)} insert quads for KGType")
             
             # Perform atomic create using update_quads (no delete quads needed for CREATE)
             delete_quads = []  # Empty for CREATE operation
@@ -54,7 +54,7 @@ class KGTypesCreateProcessor:
             )
             
             if success:
-                self.logger.info(f"✅ Successfully created KGType atomically: {kgtype_object.URI}")
+                self.logger.debug(f"✅ Successfully created KGType atomically: {kgtype_object.URI}")
                 return str(kgtype_object.URI)
             else:
                 raise Exception("Failed to create KGType - update_quads returned False")
@@ -77,7 +77,7 @@ class KGTypesCreateProcessor:
             List[str]: List of URIs of the created KGTypes
         """
         try:
-            self.logger.info(f"🔄 Atomic KGTypes batch create: {len(kgtype_objects)} types in graph: {graph_id}")
+            self.logger.debug(f"🔄 Atomic KGTypes batch create: {len(kgtype_objects)} types in graph: {graph_id}")
             
             # Check for existing KGTypes
             for kgtype_obj in kgtype_objects:
@@ -93,7 +93,7 @@ class KGTypesCreateProcessor:
                 all_insert_quads.extend(insert_quads)
                 created_uris.append(str(kgtype_obj.URI))
             
-            self.logger.info(f"🔍 Built {len(all_insert_quads)} insert quads for {len(kgtype_objects)} KGTypes")
+            self.logger.debug(f"🔍 Built {len(all_insert_quads)} insert quads for {len(kgtype_objects)} KGTypes")
             
             # Perform atomic batch create using update_quads
             delete_quads = []  # Empty for CREATE operation
@@ -106,7 +106,7 @@ class KGTypesCreateProcessor:
             )
             
             if success:
-                self.logger.info(f"✅ Successfully created {len(kgtype_objects)} KGTypes atomically")
+                self.logger.debug(f"✅ Successfully created {len(kgtype_objects)} KGTypes atomically")
                 return created_uris
             else:
                 raise Exception("Failed to create KGTypes - update_quads returned False")
@@ -147,7 +147,7 @@ class KGTypesCreateProcessor:
             
             # If we get any results, the KGType exists
             exists = result and len(result) > 0
-            self.logger.info(f"🔍 KGType existence check: {exists} (URI: {kgtype_uri})")
+            self.logger.debug(f"🔍 KGType existence check: {exists} (URI: {kgtype_uri})")
             return exists
             
         except Exception as e:
@@ -171,14 +171,14 @@ class KGTypesCreateProcessor:
             
             # Log the actual URI value to debug the format issue
             actual_uri = str(kgtype_object.URI)
-            self.logger.info(f"🔍 KGType URI value: '{actual_uri}' (type: {type(kgtype_object.URI)})")
-            self.logger.info(f"🔍 VitalSigns to_triples() generated {len(triples)} triples for KGType: {actual_uri}")
+            self.logger.debug(f"🔍 KGType URI value: '{actual_uri}' (type: {type(kgtype_object.URI)})")
+            self.logger.debug(f"🔍 VitalSigns to_triples() generated {len(triples)} triples for KGType: {actual_uri}")
             
             # Log the first few triples for debugging
             for i, triple in enumerate(triples[:5]):
-                self.logger.info(f"  Triple {i+1}: {triple}")
+                self.logger.debug(f"  Triple {i+1}: {triple}")
             if len(triples) > 5:
-                self.logger.info(f"  ... and {len(triples) - 5} more triples")
+                self.logger.debug(f"  ... and {len(triples) - 5} more triples")
             
             # Convert triples to quads by adding graph_id
             # Extract proper URI from VitalSigns CombinedProperty objects
@@ -223,11 +223,11 @@ class KGTypesCreateProcessor:
                     
                     # Log first few quads for debugging
                     if i < 5:
-                        self.logger.info(f"  Quad {i+1}: {quad}")
+                        self.logger.debug(f"  Quad {i+1}: {quad}")
                 else:
                     self.logger.warning(f"Unexpected triple format: {triple}")
             
-            self.logger.info(f"🔍 Built {len(quads)} quads from {len(triples)} triples for KGType: {kgtype_object.URI}")
+            self.logger.debug(f"🔍 Built {len(quads)} quads from {len(triples)} triples for KGType: {kgtype_object.URI}")
             return quads
             
         except Exception as e:

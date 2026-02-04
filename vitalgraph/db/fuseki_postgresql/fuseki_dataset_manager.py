@@ -167,7 +167,7 @@ class FusekiDatasetManager:
         dataset_name = self.get_dataset_name(space_id)
         
         try:
-            logger.info(f"Creating Fuseki dataset: {dataset_name}")
+            logger.debug(f"Creating Fuseki dataset: {dataset_name}")
             
             # Create dataset using Fuseki admin API
             # Use URL parameters instead of form data
@@ -185,10 +185,10 @@ class FusekiDatasetManager:
                 headers=headers
             ) as response:
                 if response.status in [200, 201]:
-                    logger.info(f"Fuseki dataset created successfully: {dataset_name}")
+                    logger.debug(f"Fuseki dataset created successfully: {dataset_name}")
                     return True
                 elif response.status == 409:
-                    logger.info(f"Fuseki dataset already exists: {dataset_name}")
+                    logger.debug(f"Fuseki dataset already exists: {dataset_name}")
                     return True
                 else:
                     error_text = await response.text()
@@ -215,7 +215,7 @@ class FusekiDatasetManager:
         dataset_name = self.get_dataset_name(space_id)
         
         try:
-            logger.info(f"Deleting Fuseki dataset: {dataset_name}")
+            logger.debug(f"Deleting Fuseki dataset: {dataset_name}")
             
             # Get headers with authentication
             headers = await self._get_request_headers()
@@ -226,10 +226,10 @@ class FusekiDatasetManager:
                 headers=headers
             ) as response:
                 if response.status in [200, 204]:
-                    logger.info(f"Fuseki dataset deleted successfully: {dataset_name}")
+                    logger.debug(f"Fuseki dataset deleted successfully: {dataset_name}")
                     return True
                 elif response.status == 404:
-                    logger.info(f"Fuseki dataset not found (already deleted): {dataset_name}")
+                    logger.debug(f"Fuseki dataset not found (already deleted): {dataset_name}")
                     return True
                 else:
                     error_text = await response.text()
@@ -310,7 +310,7 @@ class FusekiDatasetManager:
                         ds_name = dataset.get('ds.name', '')
                         logger.debug(f"🔍 Found dataset: {ds_name}")
                         if ds_name == f"/{dataset_name}" or ds_name == dataset_name:
-                            logger.info(f"✅ Dataset {dataset_name} found!")
+                            logger.debug(f"✅ Dataset {dataset_name} found!")
                             return True
                     
                     logger.debug(f"❌ Dataset {dataset_name} not found in list")
@@ -344,15 +344,15 @@ class FusekiDatasetManager:
         
         try:
             logger.debug(f"Adding {len(quads)} quads to Fuseki dataset: {dataset_name}")
-            logger.info(f"🔍 add_quads_to_dataset: space_id={space_id}, dataset_name={dataset_name}")
+            logger.debug(f"🔍 add_quads_to_dataset: space_id={space_id}, dataset_name={dataset_name}")
             
             # Log the type of the first quad's components to diagnose the issue
             if quads:
                 first_quad = quads[0]
                 if len(first_quad) >= 4:
                     s, p, o, g = first_quad[:4]
-                    logger.info(f"🔍 First quad types: S={type(s).__name__}, P={type(p).__name__}, O={type(o).__name__}, G={type(g).__name__}")
-                    logger.info(f"🔍 First quad values: S={repr(s)}, P={repr(p)}, O={repr(o)[:100] if len(repr(o)) > 100 else repr(o)}")
+                    logger.debug(f"🔍 First quad types: S={type(s).__name__}, P={type(p).__name__}, O={type(o).__name__}, G={type(g).__name__}")
+                    logger.debug(f"🔍 First quad values: S={repr(s)}, P={repr(p)}, O={repr(o)[:100] if len(repr(o)) > 100 else repr(o)}")
             
             
             # Convert quads to SPARQL INSERT DATA format with optional float-to-decimal conversion
@@ -370,15 +370,15 @@ class FusekiDatasetManager:
             # logger.info(f"🔍 Generated SPARQL UPDATE query:\n{update_query}")
             
             fuseki_url = f"{self.server_url}/{dataset_name}/update"
-            logger.info(f"🔍 Fuseki request URL: {fuseki_url}")
-            logger.info(f"🔍 Dataset name: {dataset_name}")
-            logger.info(f"🔍 Space ID: {space_id}")
+            logger.debug(f"🔍 Fuseki request URL: {fuseki_url}")
+            logger.debug(f"🔍 Dataset name: {dataset_name}")
+            logger.debug(f"🔍 Space ID: {space_id}")
             # logger.info(f"🔍 Full SPARQL UPDATE request:\n{update_query}")
             
             # Get headers with authentication
             headers = await self._get_request_headers()
             headers['Content-Type'] = 'application/sparql-update'
-            logger.info(f"🔍 Request headers: {headers}")
+            logger.debug(f"🔍 Request headers: {headers}")
             
             async with self.session.post(
                 fuseki_url,
@@ -387,13 +387,13 @@ class FusekiDatasetManager:
             ) as response:
                 response_text = await response.text()
                 response_headers = dict(response.headers)
-                logger.info(f"🔍 Full Fuseki response:")
-                logger.info(f"🔍   Status: {response.status}")
-                logger.info(f"🔍   Headers: {response_headers}")
-                logger.info(f"🔍   Body: '{response_text}'")
+                logger.debug(f"🔍 Full Fuseki response:")
+                logger.debug(f"🔍   Status: {response.status}")
+                logger.debug(f"🔍   Headers: {response_headers}")
+                logger.debug(f"🔍   Body: '{response_text}'")
                 
                 if response.status in [200, 204]:
-                    logger.info(f"✅ Fuseki INSERT DATA successful: {dataset_name}")
+                    logger.debug(f"✅ Fuseki INSERT DATA successful: {dataset_name}")
                     return True
                 else:
                     logger.error(f"❌ Failed to add quads to dataset {dataset_name}: {response.status} - {response_text}")
@@ -559,14 +559,14 @@ class FusekiDatasetManager:
             # Get dataset stats using SPARQL query
             if graph_id:
                 count_query = f"SELECT (COUNT(*) AS ?count) WHERE {{ GRAPH <{graph_id}> {{ ?s ?p ?o }} }}"
-                logger.info(f"🔍 Counting triples in specific graph: {graph_id}")
+                logger.debug(f"🔍 Counting triples in specific graph: {graph_id}")
             else:
                 count_query = "SELECT (COUNT(*) AS ?count) WHERE { GRAPH ?g { ?s ?p ?o } }"
-                logger.info(f"🔍 Counting triples across all graphs using GRAPH ?g")
+                logger.debug(f"🔍 Counting triples across all graphs using GRAPH ?g")
             
             # Use POST method for SPARQL queries (standard approach)
             query_url = f"{self.server_url}/{dataset_name}/sparql"
-            logger.info(f"🔍 Querying dataset for count: {query_url}")
+            logger.debug(f"🔍 Querying dataset for count: {query_url}")
             
             # Get headers with authentication
             headers = await self._get_request_headers({
@@ -579,12 +579,12 @@ class FusekiDatasetManager:
                 data=count_query,
                 headers=headers
             ) as response:
-                logger.info(f"🔍 Fuseki query response status: {response.status}")
+                logger.debug(f"🔍 Fuseki query response status: {response.status}")
                 if response.status == 200:
                     result = await response.json()
-                    logger.info(f"🔍 Fuseki query result: {result}")
+                    logger.debug(f"🔍 Fuseki query result: {result}")
                     bindings = result.get('results', {}).get('bindings', [])
-                    logger.info(f"🔍 Bindings count: {len(bindings)}")
+                    logger.debug(f"🔍 Bindings count: {len(bindings)}")
                     
                     if bindings:
                         # Fuseki HTTP JSON responses always return dict bindings
@@ -673,7 +673,7 @@ class FusekiDatasetManager:
                 graph_stanzas.extend(triples)
                 graph_stanzas.append(f"                }}")
         
-        logger.info(f"🔍 Generated {len(graphs_data)} graph stanzas for {len(quads)} quads")
+        logger.debug(f"🔍 Generated {len(graphs_data)} graph stanzas for {len(quads)} quads")
         return '\n'.join(graph_stanzas)
     
     def _format_term(self, term: Any, convert_float_to_decimal: bool = False) -> Optional[str]:

@@ -301,10 +301,10 @@ class KGGroupingURIManager:
             for obj in objects:
                 obj.kGGraphURI = entity_uri
             
-            self.logger.info(f"Set kGGraphURI={entity_uri} on {len(objects)} objects")
+            self.logger.debug(f"Set kGGraphURI={entity_uri} on {len(objects)} objects")
             
             # Set frame-level grouping URIs using frame separation logic
-            self.logger.info(f"Processing {len(frames)} frames, {len(slots)} slots, {len(edges)} edges for frame grouping")
+            self.logger.debug(f"Processing {len(frames)} frames, {len(slots)} slots, {len(edges)} edges for frame grouping")
             
             for frame in frames:
                 frame_uri = str(frame.URI)
@@ -328,7 +328,7 @@ class KGGroupingURIManager:
                                 break
                 
                 if slots_found > 0:
-                    self.logger.info(f"Frame {frame_uri.split(':')[-2] if ':' in frame_uri else frame_uri}: found {slots_found} slots")
+                    self.logger.debug(f"Frame {frame_uri.split(':')[-2] if ':' in frame_uri else frame_uri}: found {slots_found} slots")
                 
                 # Set frame-level grouping URI on frame objects (including edges)
                 for obj in frame_objects:
@@ -339,7 +339,7 @@ class KGGroupingURIManager:
                 
                     obj.frameGraphURI = frame_uri
             
-            self.logger.info(f"Set dual grouping URIs for {len(objects)} objects with entity URI: {entity_uri}")
+            self.logger.debug(f"Set dual grouping URIs for {len(objects)} objects with entity URI: {entity_uri}")
             
         except Exception as e:
             self.logger.error(f"Error setting dual grouping URIs: {e}")
@@ -463,34 +463,34 @@ class KGHierarchicalFrameValidator:
             """
             
             debug_result = await self.backend.execute_sparql_query(space_id, debug_query)
-            self.logger.info(f"🔍 DEBUG: Frame {parent_frame_uri} properties: {debug_result}")
+            self.logger.debug(f"🔍 DEBUG: Frame {parent_frame_uri} properties: {debug_result}")
             
             # Execute validation query
             result = await self.backend.execute_sparql_query(space_id, validation_query)
-            self.logger.info(f"🔍 DEBUG: Validation query result for {parent_frame_uri}: {result}")
-            self.logger.info(f"🔍 DEBUG: Validation query was: {validation_query}")
+            self.logger.debug(f"🔍 DEBUG: Validation query result for {parent_frame_uri}: {result}")
+            self.logger.debug(f"🔍 DEBUG: Validation query was: {validation_query}")
             
             # Parse ASK query result
             if hasattr(result, 'boolean'):
                 validation_result = result.boolean
-                self.logger.info(f"🔍 DEBUG: Parsed boolean result: {validation_result}")
+                self.logger.debug(f"🔍 DEBUG: Parsed boolean result: {validation_result}")
                 return validation_result
             elif isinstance(result, dict):
                 # Check for nested boolean in results.bindings.boolean
                 if 'results' in result and 'bindings' in result['results'] and 'boolean' in result['results']['bindings']:
                     validation_result = result['results']['bindings']['boolean']
-                    self.logger.info(f"🔍 DEBUG: Parsed nested boolean result: {validation_result}")
+                    self.logger.debug(f"🔍 DEBUG: Parsed nested boolean result: {validation_result}")
                     return validation_result
                 # Check for direct boolean in result
                 elif 'boolean' in result:
                     validation_result = result['boolean']
-                    self.logger.info(f"🔍 DEBUG: Parsed dict boolean result: {validation_result}")
+                    self.logger.debug(f"🔍 DEBUG: Parsed dict boolean result: {validation_result}")
                     return validation_result
                 else:
                     self.logger.warning(f"Could not find boolean in result structure: {result}")
                     return False
             elif isinstance(result, bool):
-                self.logger.info(f"🔍 DEBUG: Direct boolean result: {result}")
+                self.logger.debug(f"🔍 DEBUG: Direct boolean result: {result}")
                 return result
             else:
                 # If we can't parse the result, assume invalid for safety
@@ -544,7 +544,7 @@ class KGHierarchicalFrameValidator:
                     validation_results[frame_uri] = False
                     self.logger.warning(f"Could not parse ownership validation result for {frame_uri}: {result}")
             
-            self.logger.info(f"Validated ownership for {len(frame_uris)} frames")
+            self.logger.debug(f"Validated ownership for {len(frame_uris)} frames")
             return validation_results
             
         except Exception as e:

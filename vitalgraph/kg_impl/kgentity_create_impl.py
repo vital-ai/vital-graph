@@ -63,14 +63,14 @@ class KGEntityCreateProcessor:
             EntityCreateResponse or EntityUpdateResponse based on operation mode
         """
         try:
-            self.logger.info(f"Processing KG entities in space '{space_id}', graph '{graph_id}', "
+            self.logger.debug(f"Processing KG entities in space '{space_id}', graph '{graph_id}', "
                            f"operation_mode='{operation_mode}', parent_uri='{parent_uri}'")
             
             # Step 1: Validate VitalSigns objects
             if not vitalsigns_objects:
                 return self._create_error_response(operation_mode, "No valid objects provided")
             
-            self.logger.info(f"Processing {len(vitalsigns_objects)} VitalSigns objects")
+            self.logger.debug(f"Processing {len(vitalsigns_objects)} VitalSigns objects")
             
             # Step 2: Extract and validate entities
             entities = [obj for obj in vitalsigns_objects if isinstance(obj, KGEntity)]
@@ -78,12 +78,12 @@ class KGEntityCreateProcessor:
             if not entities:
                 return self._create_error_response(operation_mode, "No KGEntity objects found in request")
             
-            self.logger.info(f"Found {len(entities)} KGEntity objects")
+            self.logger.debug(f"Found {len(entities)} KGEntity objects")
             
             # Step 3: Validate entity structure
-            self.logger.info(f"🔍 Step 3: Validating entity structure...")
+            self.logger.debug(f"🔍 Step 3: Validating entity structure...")
             validation_result = self.validator.validate_entity_structure(vitalsigns_objects)
-            self.logger.info(f"🔍 Validation result: valid={validation_result.valid}")
+            self.logger.debug(f"🔍 Validation result: valid={validation_result.valid}")
             if not validation_result.valid:
                 error_msg = f"Entity validation failed: {'; '.join(validation_result.errors)}"
                 self.logger.error(f"❌ Validation failed: {error_msg}")
@@ -91,27 +91,27 @@ class KGEntityCreateProcessor:
             
             # Step 4: Set dual grouping URIs
             entity_uri = str(entities[0].URI)
-            self.logger.info(f"🔍 Step 4: Setting dual grouping URIs for entity {entity_uri}")
+            self.logger.debug(f"🔍 Step 4: Setting dual grouping URIs for entity {entity_uri}")
             self.grouping_manager.set_dual_grouping_uris_with_frame_separation(vitalsigns_objects, entity_uri)
-            self.logger.info(f"🔍 Dual grouping URIs set successfully")
+            self.logger.debug(f"🔍 Dual grouping URIs set successfully")
             
             # Step 5: Handle parent relationships if specified
-            self.logger.info(f"🔍 Step 5: Handling parent relationships (parent_uri={parent_uri})")
+            self.logger.debug(f"🔍 Step 5: Handling parent relationships (parent_uri={parent_uri})")
             if parent_uri:
                 enhanced_objects = await self._handle_parent_relationships(
                     space_id, graph_id, entities, vitalsigns_objects, parent_uri
                 )
-                self.logger.info(f"🔍 Enhanced objects count: {len(enhanced_objects)}")
+                self.logger.debug(f"🔍 Enhanced objects count: {len(enhanced_objects)}")
             else:
                 enhanced_objects = vitalsigns_objects
-                self.logger.info(f"🔍 No parent URI, using original {len(enhanced_objects)} objects")
+                self.logger.debug(f"🔍 No parent URI, using original {len(enhanced_objects)} objects")
             
             # Step 6: Execute operation based on mode
-            self.logger.info(f"🔍 Step 6: Executing operation mode: {operation_mode}")
+            self.logger.debug(f"🔍 Step 6: Executing operation mode: {operation_mode}")
             if operation_mode == OperationMode.CREATE:
-                self.logger.info(f"🔍 Calling _handle_create_mode with {len(entities)} entities and {len(enhanced_objects)} objects")
+                self.logger.debug(f"🔍 Calling _handle_create_mode with {len(entities)} entities and {len(enhanced_objects)} objects")
                 result = await self._handle_create_mode(space_id, graph_id, entities, enhanced_objects)
-                self.logger.info(f"🔍 _handle_create_mode returned: created_count={result.created_count if hasattr(result, 'created_count') else 'N/A'}")
+                self.logger.debug(f"🔍 _handle_create_mode returned: created_count={result.created_count if hasattr(result, 'created_count') else 'N/A'}")
                 return result
             elif operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(space_id, graph_id, entities, enhanced_objects)
@@ -129,11 +129,11 @@ class KGEntityCreateProcessor:
         """Handle CREATE mode: verify none of the objects already exist."""
         try:
             # Check if any entities already exist
-            self.logger.info(f"🔍 Checking if {len(entities)} entities already exist...")
+            self.logger.debug(f"🔍 Checking if {len(entities)} entities already exist...")
             for entity in entities:
                 entity_uri = str(entity.URI)
                 exists = await self.backend.object_exists(space_id, graph_id, entity_uri)
-                self.logger.info(f"🔍 Entity {entity_uri} exists check: {exists}")
+                self.logger.debug(f"🔍 Entity {entity_uri} exists check: {exists}")
                 if exists:
                     self.logger.warning(f"❌ Entity {entity_uri} already exists - returning early")
                     return EntityCreateResponse(
@@ -143,9 +143,9 @@ class KGEntityCreateProcessor:
                     )
             
             # Store all objects
-            self.logger.info(f"🔥 CALLING BACKEND.STORE_OBJECTS with {len(objects)} objects")
+            self.logger.debug(f"🔥 CALLING BACKEND.STORE_OBJECTS with {len(objects)} objects")
             result = await self.backend.store_objects(space_id, graph_id, objects)
-            self.logger.info(f"🔥 BACKEND.STORE_OBJECTS RESULT: {result.success if result else 'None'}")
+            self.logger.debug(f"🔥 BACKEND.STORE_OBJECTS RESULT: {result.success if result else 'None'}")
             
             if result.success:
                 entity_uris = [str(entity.URI) for entity in entities]
@@ -277,7 +277,7 @@ class KGEntityCreateProcessor:
                 edge.kGGraphURI = entity_uri  # Entity-level grouping
                 
                 enhanced_objects.append(edge)
-                self.logger.info(f"Created parent-child edge: {parent_uri} -> {entity_uri}")
+                self.logger.debug(f"Created parent-child edge: {parent_uri} -> {entity_uri}")
             
             return enhanced_objects
             

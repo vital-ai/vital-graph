@@ -2,14 +2,13 @@
 VitalGraphDB Configuration Loader
 
 This module provides functionality to load and validate VitalGraphDB configuration
-from YAML files. It supports loading from multiple possible locations and provides
-default values for missing configuration sections.
+from environment variables. Supports profile-specific .env files.
+Configuration comes from environment variables with sensible defaults.
 """
 
 import os
-import yaml
-from pathlib import Path
 from typing import Dict, Any, Optional
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,48 +23,148 @@ class VitalGraphConfig:
     """
     VitalGraphDB configuration loader and manager.
     
-    Loads configuration from YAML files and provides access to configuration
-    sections with validation and default values.
+    Loads configuration entirely from environment variables with sensible defaults.
+    No YAML files required.
     """
     
-    def __init__(self, config_path: str):
+    def __init__(self):
         """
-        Initialize the configuration loader.
-        
-        Args:
-            config_path: Path to configuration file.
+        Initialize configuration from environment variables.
+        Uses VITALGRAPH_ENVIRONMENT to determine which profile prefix to use.
+        Example: VITALGRAPH_ENVIRONMENT=local uses LOCAL_* variables
         """
-        self.config_data: Dict[str, Any] = {}
-        self.config_path: Optional[str] = None
-        
-        self.load_config(config_path)
+        self.environment = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
+        self.config_data: Dict[str, Any] = self._load_from_env()
+        self.config_path: Optional[str] = None  # No file path
+        logger.info(f"Loaded configuration from {self.environment}_* environment variables")
     
-    def load_config(self, config_path: str) -> None:
+    def _get_profile_env(self, key: str, default: str = '') -> str:
         """
-        Load configuration from a specific file path.
+        Get environment variable with profile prefix.
+        
+        Example: If VITALGRAPH_ENVIRONMENT=local and key='DB_HOST',
+                 looks for LOCAL_DB_HOST, falls back to DB_HOST, then default.
         
         Args:
-            config_path: Path to the YAML configuration file
+            key: Environment variable key (without profile prefix)
+            default: Default value if not found
             
-        Raises:
-            ConfigurationError: If the file cannot be loaded or parsed
+        Returns:
+            Environment variable value
         """
-        config_file = Path(config_path)
+        # Try profile-prefixed variable first (e.g., LOCAL_DB_HOST)
+        profile_key = f"{self.environment}_{key}"
+        value = os.getenv(profile_key)
+        if value is not None:
+            return value
         
-        if not config_file.exists():
-            raise ConfigurationError(f"Configuration file not found: {config_path}")
+        # Fall back to unprefixed variable (e.g., DB_HOST)
+        value = os.getenv(key)
+        if value is not None:
+            return value
         
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                self.config_data = yaml.safe_load(f) or {}
-            
-            self.config_path = str(config_file.absolute())
-            logger.info(f"Loaded configuration from: {self.config_path}")
-            
-        except yaml.YAMLError as e:
-            raise ConfigurationError(f"Error parsing YAML configuration: {e}")
-        except Exception as e:
-            raise ConfigurationError(f"Error loading configuration file: {e}")
+        # Use default
+        return default
+    
+    def _load_from_env(self) -> Dict[str, Any]:
+        """
+        Load configuration from profile-prefixed environment variables.
+        
+        Uses VITALGRAPH_ENVIRONMENT to determine prefix (LOCAL_, PROD_, etc.)
+        Falls back to unprefixed variables, then defaults.
+        
+        Example:
+            VITALGRAPH_ENVIRONMENT=local
+            LOCAL_DB_HOST=localhost
+            LOCAL_DB_PORT=5432
+            LOCAL_FUSEKI_URL=http://localhost:3030
+        
+        Returns:
+            Complete configuration dictionary
+        """
+        return {
+            'backend': {
+                'type': self._get_profile_env('BACKEND_TYPE', 'fuseki_postgresql')
+            },
+            'database': {
+                'host': self._get_profile_env('DB_HOST', 'localhost'),
+                'port': int(self._get_profile_env('DB_PORT', '5432')),
+                'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
+                'username': self._get_profile_env('DB_USERNAME', 'postgres'),
+                'password': self._get_profile_env('DB_PASSWORD', ''),
+                'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
+                'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
+                'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600')),
+                'enable_quad_logging': self._get_profile_env('DB_ENABLE_QUAD_LOGGING', 'false').lower() == 'true'
+            },
+            'fuseki': {
+                'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
+                'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
+                'username': self._get_profile_env('FUSEKI_USERNAME', ''),
+                'password': self._get_profile_env('FUSEKI_PASSWORD', '')
+            },
+            'fuseki_postgresql': {
+                'database': {
+                    'host': self._get_profile_env('DB_HOST', 'localhost'),
+                    'port': int(self._get_profile_env('DB_PORT', '5432')),
+                    'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
+                    'username': self._get_profile_env('DB_USERNAME', 'postgres'),
+                    'password': self._get_profile_env('DB_PASSWORD', ''),
+                    'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                    'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
+                    'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
+                    'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600'))
+                },
+                'fuseki': {
+                    'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
+                    'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
+                    'username': self._get_profile_env('FUSEKI_USERNAME', ''),
+                    'password': self._get_profile_env('FUSEKI_PASSWORD', '')
+                },
+                'transaction': {
+                    'timeout': int(self._get_profile_env('TRANSACTION_TIMEOUT', '30')),
+                    'isolation_level': self._get_profile_env('TRANSACTION_ISOLATION', 'READ_COMMITTED')
+                },
+                'backup': {
+                    'enabled': self._get_profile_env('BACKUP_ENABLED', 'false').lower() == 'true',
+                    'directory': self._get_profile_env('BACKUP_DIR', '/var/backups/vitalgraph')
+                },
+                'sparql': {
+                    'query_timeout': int(self._get_profile_env('SPARQL_QUERY_TIMEOUT', '300')),
+                    'max_results': int(self._get_profile_env('SPARQL_MAX_RESULTS', '10000'))
+                },
+                'table_prefix': self._get_profile_env('TABLE_PREFIX', 'vitalgraph_')
+            },
+            'tables': {
+                'prefix': self._get_profile_env('TABLE_PREFIX', 'vg_')
+            },
+            'auth': {
+                'root_username': self._get_profile_env('AUTH_ROOT_USERNAME', 'admin'),
+                'root_password': self._get_profile_env('AUTH_ROOT_PASSWORD', 'admin')
+            },
+            'file_storage': {
+                'backend': self._get_profile_env('STORAGE_BACKEND', 'minio'),
+                'minio': {
+                    'endpoint_url': self._get_profile_env('STORAGE_ENDPOINT', 'http://localhost:9000'),
+                    'access_key_id': self._get_profile_env('STORAGE_ACCESS_KEY', 'minioadmin'),
+                    'secret_access_key': self._get_profile_env('STORAGE_SECRET_KEY', 'minioadmin'),
+                    'bucket_name': self._get_profile_env('STORAGE_BUCKET', 'vitalgraph-files'),
+                    'use_ssl': self._get_profile_env('STORAGE_USE_SSL', 'false').lower() == 'true'
+                },
+                's3': {
+                    'endpoint_url': self._get_profile_env('STORAGE_ENDPOINT', ''),
+                    'access_key_id': self._get_profile_env('STORAGE_ACCESS_KEY', ''),
+                    'secret_access_key': self._get_profile_env('STORAGE_SECRET_KEY', ''),
+                    'bucket_name': self._get_profile_env('STORAGE_BUCKET', 'vitalgraph-files'),
+                    'region': self._get_profile_env('STORAGE_REGION', 'us-east-1'),
+                    'use_ssl': self._get_profile_env('STORAGE_USE_SSL', 'true').lower() == 'true'
+                }
+            },
+            'app': {
+                'log_level': self._get_profile_env('LOG_LEVEL', 'INFO')
+            }
+        }
     
 
     
@@ -196,27 +295,24 @@ class VitalGraphConfig:
         """
         Build PostgreSQL database URL from configuration.
         
-        Supports environment variable overrides and automatic host.docker.internal resolution:
-        - VITALGRAPH_DB_HOST: Override database host
-        - VITALGRAPH_DB_PORT: Override database port
-        - VITALGRAPH_DB_NAME: Override database name
-        - VITALGRAPH_DB_USER: Override database username
-        - VITALGRAPH_DB_PASSWORD: Override database password
-        
-        Special handling:
-        - host.docker.internal is automatically resolved to localhost when running locally
+        Configuration is loaded from environment variables:
+        - VITALGRAPH_DB_HOST: Database host
+        - VITALGRAPH_DB_PORT: Database port
+        - VITALGRAPH_DB_NAME: Database name
+        - VITALGRAPH_DB_USERNAME: Database username
+        - VITALGRAPH_DB_PASSWORD: Database password
         
         Returns:
             PostgreSQL connection URL string
         """
         db_config = self.get_database_config()
         
-        # Get values from config with environment variable overrides
-        host = os.getenv('VITALGRAPH_DB_HOST', db_config.get('host', 'localhost'))
-        port = int(os.getenv('VITALGRAPH_DB_PORT', str(db_config.get('port', 5432))))
-        database = os.getenv('VITALGRAPH_DB_NAME', db_config.get('database', 'vitalgraphdb'))
-        username = os.getenv('VITALGRAPH_DB_USER', db_config.get('username', 'vitalgraph_user'))
-        password = os.getenv('VITALGRAPH_DB_PASSWORD', db_config.get('password', 'vitalgraph_password'))
+        # Get values from config (already loaded from environment variables)
+        host = db_config.get('host', 'localhost')
+        port = db_config.get('port', 5432)
+        database = db_config.get('database', 'vitalgraph')
+        username = db_config.get('username', 'postgres')
+        password = db_config.get('password', '')
          
         return f"postgresql://{username}:{password}@{host}:{port}/{database}"
     
@@ -284,38 +380,32 @@ class VitalGraphConfig:
 _config_instance: Optional[VitalGraphConfig] = None
 
 
-def get_config(config_path: Optional[str] = None) -> VitalGraphConfig:
+def get_config() -> VitalGraphConfig:
     """
     Get the global configuration instance.
     
-    Args:
-        config_path: Optional path to configuration file. Only used on first call.
-        
     Returns:
         VitalGraphConfig instance
     """
     global _config_instance
     
     if _config_instance is None:
-        _config_instance = VitalGraphConfig(config_path)
+        _config_instance = VitalGraphConfig()
         _config_instance.validate_config()
     
     return _config_instance
 
 
-def reload_config(config_path: Optional[str] = None) -> VitalGraphConfig:
+def reload_config() -> VitalGraphConfig:
     """
     Reload the global configuration instance.
     
-    Args:
-        config_path: Optional path to configuration file
-        
     Returns:
         New VitalGraphConfig instance
     """
     global _config_instance
     
-    _config_instance = VitalGraphConfig(config_path)
+    _config_instance = VitalGraphConfig()
     _config_instance.validate_config()
     
     return _config_instance

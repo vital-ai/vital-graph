@@ -84,7 +84,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
     async def connect(self) -> bool:
         """Establish PostgreSQL connection pool."""
         try:
-            logger.info("Connecting to PostgreSQL for FUSEKI_POSTGRESQL backend...")
+            logger.debug("Connecting to PostgreSQL for FUSEKI_POSTGRESQL backend...")
             
             # Create connection pool using asyncpg
             self.connection_pool = await asyncpg.create_pool(
@@ -106,7 +106,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 result = await conn.fetchval('SELECT 1')
                 if result == 1:
                     self.connected = True
-                    logger.info("PostgreSQL connection pool established successfully")
+                    logger.debug("PostgreSQL connection pool established successfully")
                     return True
                 else:
                     logger.error("PostgreSQL connection test failed")
@@ -121,18 +121,18 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
         """Close PostgreSQL connection pool with optimized cleanup."""
         try:
             if self.connection_pool:
-                logger.info("Closing PostgreSQL connection pool...")
+                logger.debug("Closing PostgreSQL connection pool...")
                 
                 # First try graceful close with shorter timeout
                 import asyncio
                 try:
                     await asyncio.wait_for(self.connection_pool.close(), timeout=3.0)
-                    logger.info("PostgreSQL connection pool closed gracefully")
+                    logger.debug("PostgreSQL connection pool closed gracefully")
                 except asyncio.TimeoutError:
                     logger.warning("Pool close timed out, forcing immediate termination...")
                     # Force terminate all connections immediately (synchronous)
                     self.connection_pool.terminate()
-                    logger.info("PostgreSQL connection pool terminated")
+                    logger.debug("PostgreSQL connection pool terminated")
                 
                 # Wait for all connections to be properly closed
                 try:
@@ -290,7 +290,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
     def set_signal_manager(self, signal_manager):
         """Set the signal manager for this database implementation."""
         self.signal_manager = signal_manager
-        logger.info("Signal manager set on FusekiPostgreSQLDbImpl")
+        logger.debug("Signal manager set on FusekiPostgreSQLDbImpl")
     
     def get_signal_manager(self):
         """Get the signal manager for this database implementation."""
@@ -717,13 +717,13 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
     async def create_space_data_tables(self, space_id: str) -> bool:
         """Create primary data tables for a specific space."""
         try:
-            logger.info(f"Creating primary data tables for space: {space_id}")
+            logger.debug(f"Creating primary data tables for space: {space_id}")
             
             space_table_statements = self.schema.create_space_tables_sql(space_id)
             for statement in space_table_statements:
                 await self.execute_update(statement)
             
-            logger.info(f"Primary data tables created for space: {space_id}")
+            logger.debug(f"Primary data tables created for space: {space_id}")
             return True
             
         except Exception as e:
@@ -733,13 +733,13 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
     async def drop_space_data_tables(self, space_id: str) -> bool:
         """Drop primary data tables for a specific space."""
         try:
-            logger.info(f"Dropping primary data tables for space: {space_id}")
+            logger.debug(f"Dropping primary data tables for space: {space_id}")
             
             drop_statements = self.schema.drop_space_tables_sql(space_id)
             for statement in drop_statements:
                 await self.execute_update(statement)
             
-            logger.info(f"Primary data tables dropped for space: {space_id}")
+            logger.debug(f"Primary data tables dropped for space: {space_id}")
             return True
             
         except Exception as e:
@@ -921,19 +921,19 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 placeholders = ','.join([f'${i+1}' for i in range(len(term_uuids))])
                 # Check with dataset='primary' since INSERT doesn't specify dataset (uses schema default)
                 check_query = f"SELECT term_uuid FROM {term_table} WHERE term_uuid IN ({placeholders}) AND dataset = 'primary'"
-                logger.info(f"Checking for {len(term_uuids)} existing terms with dataset='primary'")
+                logger.debug(f"Checking for {len(term_uuids)} existing terms with dataset='primary'")
                 existing_terms = await self.execute_query(check_query, term_uuids)
                 # Ensure UUIDs are strings to match terms_to_insert format
                 existing_uuids = {str(row['term_uuid']) for row in existing_terms}
-                logger.info(f"Found {len(existing_uuids)} existing terms out of {len(term_uuids)} checked")
+                logger.debug(f"Found {len(existing_uuids)} existing terms out of {len(term_uuids)} checked")
                 
                 # Filter out existing terms
                 new_terms = [t for t in terms_to_insert if t[0] not in existing_uuids]
-                logger.info(f"Will insert {len(new_terms)} new terms (filtered out {len(terms_to_insert) - len(new_terms)} existing)")
+                logger.debug(f"Will insert {len(new_terms)} new terms (filtered out {len(terms_to_insert) - len(new_terms)} existing)")
                 
                 # Batch insert new terms using INSERT ... ON CONFLICT DO NOTHING for safety
                 if new_terms:
-                    logger.info(f"Batch inserting {len(new_terms)} new terms (out of {len(terms_to_insert)} total)")
+                    logger.debug(f"Batch inserting {len(new_terms)} new terms (out of {len(terms_to_insert)} total)")
                     now = datetime.utcnow()
                     
                     # Use executemany for batch insert
@@ -1118,7 +1118,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                                     # Check if values are close (within 1% tolerance for float rounding)
                                     if abs(db_float - missing_float) / max(abs(db_float), abs(missing_float), 1) < 0.01:
                                         term_uuid_map[missing_term] = row['term_uuid']
-                                        logger.info(f"🔍 Float precision fix: '{missing_term}' → '{row['term_text']}'")
+                                        logger.debug(f"🔍 Float precision fix: '{missing_term}' → '{row['term_text']}'")
                                         break
                                 except (ValueError, TypeError):
                                     continue

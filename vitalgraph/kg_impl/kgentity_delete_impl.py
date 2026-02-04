@@ -41,7 +41,7 @@ class KGEntityDeleteProcessor:
             bool: True if deletion was successful, False otherwise
         """
         try:
-            self.logger.info(f"Deleting single entity: {entity_uri} from graph: {graph_id}")
+            self.logger.debug(f"Deleting single entity: {entity_uri} from graph: {graph_id}")
             
             # Use the proper graph URI for backend operations
             full_graph_uri = graph_id
@@ -103,7 +103,7 @@ class KGEntityDeleteProcessor:
             success = await backend.execute_sparql_update(space_id, delete_query)
             
             if success:
-                self.logger.info(f"Successfully deleted entity: {entity_uri}")
+                self.logger.debug(f"Successfully deleted entity: {entity_uri}")
             else:
                 self.logger.warning(f"Failed to delete entity: {entity_uri}")
                 
@@ -130,7 +130,7 @@ class KGEntityDeleteProcessor:
             int: Number of objects deleted (0 if failed)
         """
         try:
-            self.logger.info(f"Deleting entity graph for: {entity_uri} from graph: {graph_id}")
+            self.logger.debug(f"Deleting entity graph for: {entity_uri} from graph: {graph_id}")
             
             # Use the proper graph URI for backend operations
             full_graph_uri = graph_id
@@ -138,7 +138,7 @@ class KGEntityDeleteProcessor:
             # Use entity_uri as the kgGraphURI (they should be the same for entity graphs)
             kg_graph_uri = entity_uri
             
-            self.logger.info(f"Deleting all objects with kGGraphURI: {kg_graph_uri}")
+            self.logger.debug(f"Deleting all objects with kGGraphURI: {kg_graph_uri}")
             
             # First, find all subjects with this kGGraphURI
             find_subjects_query = f"""
@@ -167,7 +167,7 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No objects found with kGGraphURI: {kg_graph_uri}")
                 return 0
             
-            self.logger.info(f"Found {len(subject_uris)} objects with kGGraphURI: {kg_graph_uri}")
+            self.logger.debug(f"Found {len(subject_uris)} objects with kGGraphURI: {kg_graph_uri}")
             
             # Query to get all triples for all subjects in a single query
             subject_filter = ', '.join([f'<{str(uri).strip()}>' for uri in subject_uris])
@@ -201,7 +201,7 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No triples found for entity graph objects")
                 return 0
             
-            self.logger.info(f"Found {len(all_triples)} triples to delete")
+            self.logger.debug(f"Found {len(all_triples)} triples to delete")
             
             # Build DELETE DATA query with concrete triples
             delete_statements = []
@@ -226,12 +226,12 @@ class KGEntityDeleteProcessor:
             }}
             """
             
-            self.logger.info(f"Executing DELETE DATA for entity graph with {len(all_triples)} triples")
+            self.logger.debug(f"Executing DELETE DATA for entity graph with {len(all_triples)} triples")
             
             # Execute the batch delete
             result = await backend.execute_sparql_update(space_id, delete_query)
             
-            self.logger.info(f"Successfully deleted entity graph with kGGraphURI: {kg_graph_uri}")
+            self.logger.debug(f"Successfully deleted entity graph with kGGraphURI: {kg_graph_uri}")
             return result if isinstance(result, int) else 1
             
         except Exception as e:
@@ -254,7 +254,7 @@ class KGEntityDeleteProcessor:
             int: Number of entities successfully deleted
         """
         try:
-            self.logger.info(f"Deleting {len(entity_uris)} entities (entity_graph={delete_entity_graph})")
+            self.logger.debug(f"Deleting {len(entity_uris)} entities (entity_graph={delete_entity_graph})")
             
             deleted_count = 0
             
@@ -275,7 +275,7 @@ class KGEntityDeleteProcessor:
                     self.logger.error(f"Error deleting entity {entity_uri}: {e}")
                     continue
             
-            self.logger.info(f"Successfully deleted {deleted_count} out of {len(entity_uris)} entities")
+            self.logger.debug(f"Successfully deleted {deleted_count} out of {len(entity_uris)} entities")
             return deleted_count
             
         except Exception as e:

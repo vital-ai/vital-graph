@@ -129,7 +129,7 @@ class FusekiQueryUtils:
             logger.debug(f"Executing Phase 2 query for {len(subject_uris)} subjects")
             triples = await fuseki_manager.construct_dataset(space_id, sparql_query)
             
-            logger.info(f"Phase 2: Retrieved {len(triples)} triples for {len(subject_uris)} subjects")
+            logger.debug(f"Phase 2: Retrieved {len(triples)} triples for {len(subject_uris)} subjects")
             return triples
             
         except Exception as e:
@@ -160,7 +160,7 @@ class FusekiQueryUtils:
         all_triples = []
         total_batches = (len(subject_uris) + batch_size - 1) // batch_size
         
-        logger.info(f"Processing {len(subject_uris)} URIs in {total_batches} batches of {batch_size}")
+        logger.debug(f"Processing {len(subject_uris)} URIs in {total_batches} batches of {batch_size}")
         
         for i in range(0, len(subject_uris), batch_size):
             batch_num = (i // batch_size) + 1
@@ -173,7 +173,7 @@ class FusekiQueryUtils:
             )
             all_triples.extend(batch_triples)
         
-        logger.info(f"Batch processing complete: {len(all_triples)} total triples retrieved")
+        logger.debug(f"Batch processing complete: {len(all_triples)} total triples retrieved")
         return all_triples
     
     @staticmethod

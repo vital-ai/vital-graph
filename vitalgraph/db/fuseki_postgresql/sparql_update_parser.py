@@ -76,9 +76,9 @@ class SPARQLUpdateParser:
                         space_id, sparql_update
                     )
                     result['insert_triples'] = insert_triples
-                    logger.info(f"🔍 INSERT triples resolved for operation: {len(insert_triples)} triples")
+                    logger.debug(f"🔍 INSERT triples resolved for operation: {len(insert_triples)} triples")
                     for triple in insert_triples:
-                        logger.info(f"🔍 INSERT triple in result: {triple}")
+                        logger.debug(f"🔍 INSERT triple in result: {triple}")
                 else:
                     # For INSERT with WHERE, we need the concrete triples after variable binding
                     # This is complex - for now, we'll handle this in the dual-write coordinator
@@ -147,7 +147,7 @@ class SPARQLUpdateParser:
         3. Return the concrete triples for deletion from PostgreSQL
         """
         try:
-            logger.info("🔍 Resolving DELETE patterns from Fuseki...")
+            logger.debug("🔍 Resolving DELETE patterns from Fuseki...")
             
             # Convert DELETE to SELECT query
             select_query = self._convert_delete_to_select_query(sparql_update)
@@ -156,9 +156,9 @@ class SPARQLUpdateParser:
                 logger.error("❌ Could not convert DELETE to SELECT query")
                 return []
             
-            logger.info(f"✅ Converted to SELECT query:")
-            logger.info(f"   {select_query}")
-            logger.info(f"🔍 SELECT query length: {len(select_query)} characters")
+            logger.debug(f"✅ Converted to SELECT query:")
+            logger.debug(f"   {select_query}")
+            logger.debug(f"🔍 SELECT query length: {len(select_query)} characters")
             
             # For UPDATE operations, we need to query for the specific predicate/object pattern
             # not just variables, so let's create a more specific query
@@ -176,7 +176,7 @@ class SPARQLUpdateParser:
                     }}
                     """
                     select_query = specific_query
-                    logger.info(f"🔄 Using specific UPDATE query: {select_query}")
+                    logger.debug(f"🔄 Using specific UPDATE query: {select_query}")
             
             # Execute SELECT query against Fuseki to find concrete triples
             if self.fuseki_manager:
@@ -184,8 +184,8 @@ class SPARQLUpdateParser:
                 all_subjects = self._extract_all_subjects_from_delete_query(sparql_update)
                 graph_uri = self._extract_graph_from_delete_query(sparql_update)
                 
-                logger.info(f"🔍 Extracted {len(all_subjects)} subjects from DELETE query")
-                logger.info(f"🔍 Extracted graph URI from DELETE query: {graph_uri}")
+                logger.debug(f"🔍 Extracted {len(all_subjects)} subjects from DELETE query")
+                logger.debug(f"🔍 Extracted graph URI from DELETE query: {graph_uri}")
                 
                 # Graph URI is required for DELETE operations
                 if graph_uri is None:
@@ -205,9 +205,9 @@ class SPARQLUpdateParser:
                     }}
                     """
                     
-                    logger.info(f"🔍 Querying Fuseki for subject: {subject_uri}")
+                    logger.debug(f"🔍 Querying Fuseki for subject: {subject_uri}")
                     results = await self.fuseki_manager.query_dataset(space_id, subject_query)
-                    logger.info(f"📊 Found {len(results)} triples for subject {subject_uri}")
+                    logger.debug(f"📊 Found {len(results)} triples for subject {subject_uri}")
                     
                     for result in results:
                         # Handle SPARQL JSON result format: {'p': {...}, 'o': {...}}
@@ -232,7 +232,7 @@ class SPARQLUpdateParser:
                         triples.append(triple_tuple)
                         logger.debug(f"🔍 Resolved triple: {triple_tuple}")
                 
-                logger.info(f"✅ Resolved {len(triples)} concrete triples from DELETE pattern with {len(all_subjects)} subjects")
+                logger.debug(f"✅ Resolved {len(triples)} concrete triples from DELETE pattern with {len(all_subjects)} subjects")
                 return triples
             else:
                 logger.error("❌ No Fuseki manager available for pattern resolution")
@@ -254,13 +254,13 @@ class SPARQLUpdateParser:
             from rdflib.plugins.sparql.algebra import translateUpdate
             from rdflib import Variable
             
-            logger.info(f"🔍 Converting DELETE to SELECT for SPARQL:\n{sparql_update}")
+            logger.debug(f"🔍 Converting DELETE to SELECT for SPARQL:\n{sparql_update}")
             
             # Parse the DELETE query using RDFLib
             parsed_update = parseUpdate(sparql_update)
             algebra = translateUpdate(parsed_update)
             
-            logger.info(f"🔍 Parsed algebra structure: {algebra}")
+            logger.debug(f"🔍 Parsed algebra structure: {algebra}")
             
             # RDFLib returns an UpdateRequest object containing update operations
             if hasattr(algebra, 'request'):
@@ -270,7 +270,7 @@ class SPARQLUpdateParser:
             
             # Process each update operation to find DELETE operations
             for op in operations:
-                logger.info(f"🔍 Processing operation: {type(op)}")
+                logger.debug(f"🔍 Processing operation: {type(op)}")
                 
                 # Handle nested algebra structure - look for actual operations in algebra attribute
                 actual_ops = []
@@ -284,7 +284,7 @@ class SPARQLUpdateParser:
                 
                 # Process each actual operation
                 for actual_op in actual_ops:
-                    logger.info(f"🔍 Processing actual operation: {type(actual_op)}")
+                    logger.debug(f"🔍 Processing actual operation: {type(actual_op)}")
                     
                     # Check if this is a Modify operation with DELETE clause
                     if hasattr(actual_op, 'delete') and actual_op.delete is not None:
@@ -294,7 +294,7 @@ class SPARQLUpdateParser:
                         # Get variables from DELETE clause
                         delete_vars = self._extract_variables_from_clause(actual_op.delete)
                         variables.update(delete_vars)
-                        logger.info(f"🔍 Variables from DELETE clause: {delete_vars}")
+                        logger.debug(f"🔍 Variables from DELETE clause: {delete_vars}")
                         
                         # Get variables from WHERE clause if present
                         where_vars = set()
@@ -303,8 +303,8 @@ class SPARQLUpdateParser:
                             where_vars = self._extract_variables_from_clause(actual_op.where)
                             variables.update(where_vars)
                             where_pattern = self._algebra_to_sparql_pattern(actual_op.where)
-                            logger.info(f"🔍 Variables from WHERE clause: {where_vars}")
-                            logger.info(f"🔍 WHERE pattern: {where_pattern}")
+                            logger.debug(f"🔍 Variables from WHERE clause: {where_vars}")
+                            logger.debug(f"🔍 WHERE pattern: {where_pattern}")
                         
                         # Build SELECT query with extracted variables
                         if variables:
@@ -319,7 +319,7 @@ class SPARQLUpdateParser:
                             raise ValueError("Could not extract WHERE pattern from DELETE query")
                         
                         select_query = f"SELECT {select_vars} WHERE {{ {where_pattern} }}"
-                        logger.info(f"🔍 Generated SELECT query: {select_query}")
+                        logger.debug(f"🔍 Generated SELECT query: {select_query}")
                         return select_query
             
             logger.error("❌ Could not extract DELETE patterns from RDFLib algebra")
@@ -686,7 +686,7 @@ class SPARQLUpdateParser:
         and resolve any variables using the WHERE clause.
         """
         try:
-            logger.info("🔍 Resolving INSERT patterns from UPDATE operation...")
+            logger.debug("🔍 Resolving INSERT patterns from UPDATE operation...")
             
             # Extract INSERT triples from the SPARQL UPDATE query
             insert_triples = self._extract_insert_triples_from_update(sparql_update)
@@ -695,7 +695,7 @@ class SPARQLUpdateParser:
                 logger.warning("No INSERT triples found in UPDATE operation")
                 return []
             
-            logger.info(f"✅ Extracted {len(insert_triples)} INSERT triples from UPDATE operation")
+            logger.debug(f"✅ Extracted {len(insert_triples)} INSERT triples from UPDATE operation")
             return insert_triples
             
         except Exception as e:
@@ -740,7 +740,7 @@ class SPARQLUpdateParser:
                                         # The Fuseki manager will handle proper formatting based on object types
                                         triple_tuple = (s, p, o, graph_uri if isinstance(graph_uri, URIRef) else 'default')
                                         triples.append(triple_tuple)
-                                        logger.info(f"🔍 INSERT triple: {triple_tuple}")
+                                        logger.debug(f"🔍 INSERT triple: {triple_tuple}")
                                 return triples
             
             return []
@@ -778,16 +778,16 @@ class SPARQLUpdateParser:
         try:
             from rdflib import Variable, URIRef, Literal, BNode
             
-            logger.info(f"🔍 _algebra_to_sparql_pattern: Starting with node type: {type(algebra_node)}")
-            logger.info(f"🔍 Node attributes: {[attr for attr in dir(algebra_node) if not attr.startswith('_')]}")
+            logger.debug(f"🔍 _algebra_to_sparql_pattern: Starting with node type: {type(algebra_node)}")
+            logger.debug(f"🔍 Node attributes: {[attr for attr in dir(algebra_node) if not attr.startswith('_')]}")
             if hasattr(algebra_node, 'name'):
-                logger.info(f"🔍 Node name: {algebra_node.name}")
+                logger.debug(f"🔍 Node name: {algebra_node.name}")
             # For CompValue (dictionary-like), log the actual keys and values
             if hasattr(algebra_node, 'keys'):
-                logger.info(f"🔍 CompValue keys: {list(algebra_node.keys())}")
+                logger.debug(f"🔍 CompValue keys: {list(algebra_node.keys())}")
                 for key in algebra_node.keys():
                     value = algebra_node.get(key)
-                    logger.info(f"🔍   {key}: {type(value).__name__} = {value if not hasattr(value, 'name') else f'CompValue(name={value.name})'}")
+                    logger.debug(f"🔍   {key}: {type(value).__name__} = {value if not hasattr(value, 'name') else f'CompValue(name={value.name})'}")
             
             def format_term(term):
                 if isinstance(term, Variable):
@@ -878,15 +878,15 @@ class SPARQLUpdateParser:
             from rdflib.plugins.sparql.algebra import translateUpdate
             
             # Log the original query
-            logger.info(f"🔍 SPARQL Parser: Original query length: {len(query)}")
-            logger.info(f"🔍 SPARQL Parser: Original query first 200 chars: {repr(query[:200])}")
+            logger.debug(f"🔍 SPARQL Parser: Original query length: {len(query)}")
+            logger.debug(f"🔍 SPARQL Parser: Original query first 200 chars: {repr(query[:200])}")
             
             # Strip leading/trailing whitespace - RDFLib parser is sensitive to this
             query = query.strip()
             
             # Log the stripped query
-            logger.info(f"🔍 SPARQL Parser: Stripped query length: {len(query)}")
-            logger.info(f"🔍 SPARQL Parser: Stripped query first 200 chars: {repr(query[:200])}")
+            logger.debug(f"🔍 SPARQL Parser: Stripped query length: {len(query)}")
+            logger.debug(f"🔍 SPARQL Parser: Stripped query first 200 chars: {repr(query[:200])}")
             
             # Parse the UPDATE query using RDFLib
             parsed_update = parseUpdate(query)

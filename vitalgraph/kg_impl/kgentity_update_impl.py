@@ -54,7 +54,7 @@ class KGEntityUpdateProcessor:
             EntityUpdateResponse: Response indicating success/failure of update
         """
         try:
-            self.logger.info(f"🔄 Atomic entity update: {entity_uri} in graph: {graph_id}")
+            self.logger.debug(f"🔄 Atomic entity update: {entity_uri} in graph: {graph_id}")
             
             # Step 1: Build delete quads for existing entity data
             delete_quads = await self._build_delete_quads_for_entity(backend, space_id, graph_id, entity_uri)
@@ -66,7 +66,7 @@ class KGEntityUpdateProcessor:
             success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             if success:
-                self.logger.info(f"✅ Successfully updated entity atomically: {entity_uri}")
+                self.logger.debug(f"✅ Successfully updated entity atomically: {entity_uri}")
                 return EntityUpdateResponse(
                     message=f"Successfully updated entity: {entity_uri}",
                     updated_uri=entity_uri
@@ -100,7 +100,7 @@ class KGEntityUpdateProcessor:
             EntityUpdateResponse: Response indicating success/failure of batch update
         """
         try:
-            self.logger.info(f"Batch updating {len(entity_updates)} entities in graph: {graph_id}")
+            self.logger.debug(f"Batch updating {len(entity_updates)} entities in graph: {graph_id}")
             
             updated_uris = []
             failed_uris = []
@@ -122,7 +122,7 @@ class KGEntityUpdateProcessor:
             
             # Determine overall success
             if len(updated_uris) == len(entity_updates):
-                self.logger.info(f"Successfully updated all {len(updated_uris)} entities")
+                self.logger.debug(f"Successfully updated all {len(updated_uris)} entities")
                 return EntityUpdateResponse(
                     message=f"Successfully updated {len(updated_uris)} entities",
                     updated_uri=",".join(updated_uris)
@@ -193,7 +193,7 @@ class KGEntityUpdateProcessor:
         try:
             delete_quads = []
             
-            self.logger.info(f"🔍 Building delete quads for entity: {entity_uri}")
+            self.logger.debug(f"🔍 Building delete quads for entity: {entity_uri}")
             
             # Query to find all triples for this entity and related objects via kGGraphURI
             find_entity_data_query = f"""
@@ -220,7 +220,7 @@ class KGEntityUpdateProcessor:
             }}
             """
             
-            self.logger.info(f"🔍 Delete query for entity: {entity_uri}")
+            self.logger.debug(f"🔍 Delete query for entity: {entity_uri}")
             results = await backend.execute_sparql_query(space_id, find_entity_data_query)
             
             # Convert SPARQL results to delete quads
@@ -234,7 +234,7 @@ class KGEntityUpdateProcessor:
                         if subject and predicate and obj:
                             delete_quads.append((subject, predicate, obj, graph_id))
             
-            self.logger.info(f"🔍 Built {len(delete_quads)} delete quads for entity")
+            self.logger.debug(f"🔍 Built {len(delete_quads)} delete quads for entity")
             return delete_quads
             
         except Exception as e:
@@ -262,7 +262,7 @@ class KGEntityUpdateProcessor:
                 s, p, o = triple
                 insert_quads.append((str(s), str(p), str(o), graph_id))
             
-            self.logger.info(f"🔍 Built {len(insert_quads)} insert quads for entity")
+            self.logger.debug(f"🔍 Built {len(insert_quads)} insert quads for entity")
             return insert_quads
             
         except Exception as e:
