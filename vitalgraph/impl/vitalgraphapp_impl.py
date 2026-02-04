@@ -376,6 +376,14 @@ class VitalGraphAppImpl:
         async def refresh_token_wrapper(refresh_token: str = Body(..., embed=True), current_user: Dict = Depends(self.get_current_user)):
             return await self.refresh_token(refresh_token)
 
+        # Health check endpoint (no authentication required)
+        self.app.get(
+            "/health",
+            tags=["Health"],
+            summary="Health Check",
+            description="Check if the service is running"
+        )(self.health)
+        
         # Authentication routes
         self.app.post(
             "/api/login",
