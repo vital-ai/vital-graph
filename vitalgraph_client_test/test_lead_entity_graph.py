@@ -147,8 +147,8 @@ async def main():
     
     # Initialize client
     logger.info("\n🔌 Connecting to VitalGraph...")
-    config_path = project_root / "vitalgraphclient_config" / "vitalgraphclient-config.yaml"
-    client = VitalGraphClient(str(config_path))
+    # Configuration loaded from environment variables
+    client = VitalGraphClient()
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")

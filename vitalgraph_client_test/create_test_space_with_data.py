@@ -55,7 +55,8 @@ def create_test_space_with_data(config_path: str) -> bool:
     try:
         # Initialize and connect client with JWT
         print("\n1. Initializing and connecting JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")

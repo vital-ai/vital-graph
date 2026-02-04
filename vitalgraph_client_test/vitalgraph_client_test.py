@@ -55,8 +55,8 @@ def test_client_basic_operations(config_path: str) -> bool:
     try:
         # Test 1: Client initialization
         print("\n1. Testing JWT client initialization...")
-        print(f"   Using config file: {config_path}")
-        client = VitalGraphClient(config_path)
+        print("   Configuration loaded from environment variables")
+        client = VitalGraphClient()
         
         print(f"   ✓ Client initialized: {client}")
         server_info: Dict[str, Any] = client.get_server_info()
@@ -119,7 +119,8 @@ def test_space_crud_lifecycle(config_path: str) -> bool:
     try:
         # Initialize and connect client with JWT
         print("\n1. Initializing and connecting JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")

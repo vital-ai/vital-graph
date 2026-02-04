@@ -41,17 +41,39 @@ class VitalGraphClient(VitalGraphClientInterface):
     JWT-based authentication with automatic token refresh and connection management.
     """
     
-    def __init__(self, config_path: Optional[str] = None, *, config: Optional[VitalGraphClientConfig] = None, 
+    def __init__(self, *, config: Optional[VitalGraphClientConfig] = None, 
                  token_expiry_seconds: Optional[int] = None,
                  disable_proactive_refresh: bool = False):
         """
         Initialize the VitalGraph client.
         
+        Configuration is loaded from profile-prefixed environment variables.
+        Set VITALGRAPH_CLIENT_ENVIRONMENT to select profile (local, dev, staging, prod).
+        
         Args:
-            config_path: Path to the client configuration YAML file (optional if config provided)
-            config: Pre-configured VitalGraphClientConfig object (takes precedence over config_path)
+            config: Pre-configured VitalGraphClientConfig object (optional, for testing)
             token_expiry_seconds: Optional token expiry override in seconds for testing (max 1800 = 30 min)
             disable_proactive_refresh: If True, skip proactive token refresh to test reactive 401 retry (testing only)
+        
+        Environment Variables (profile-prefixed):
+            {PROFILE}_CLIENT_SERVER_URL: Server endpoint URL
+            {PROFILE}_CLIENT_AUTH_USERNAME: Authentication username
+            {PROFILE}_CLIENT_AUTH_PASSWORD: Authentication password
+            {PROFILE}_CLIENT_TIMEOUT: Request timeout in seconds
+            {PROFILE}_CLIENT_MAX_RETRIES: Maximum retry attempts
+            
+        Example:
+            # Use LOCAL profile
+            export VITALGRAPH_CLIENT_ENVIRONMENT=local
+            export LOCAL_CLIENT_SERVER_URL=http://localhost:8001
+            export LOCAL_CLIENT_AUTH_USERNAME=admin
+            export LOCAL_CLIENT_AUTH_PASSWORD=admin
+            client = VitalGraphClient()
+            
+            # Use PROD profile
+            export VITALGRAPH_CLIENT_ENVIRONMENT=prod
+            export PROD_CLIENT_SERVER_URL=https://api.production.com
+            client = VitalGraphClient()
         """
         self.config: Optional[VitalGraphClientConfig] = None
         self.session: Optional[httpx.Client] = None
@@ -66,20 +88,16 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.token_expiry_seconds: Optional[int] = token_expiry_seconds
         self.disable_proactive_refresh: bool = disable_proactive_refresh
         
-        # Load configuration with precedence: config object > config_path > defaults
+        # Load configuration from environment variables or provided config object
         try:
             if config is not None:
-                # Use provided config object
+                # Use provided config object (for testing)
                 self.config = config
                 logger.info(f"VitalGraph client initialized with provided config object: {self.config}")
-            elif config_path is not None:
-                # Load from config path
-                self.config = VitalGraphClientConfig(config_path)
-                logger.info(f"VitalGraph client initialized with config from {config_path}: {self.config}")
             else:
-                # Use defaults - try to find config file automatically
+                # Load from environment variables
                 self.config = VitalGraphClientConfig()
-                logger.info(f"VitalGraph client initialized with default config: {self.config}")
+                logger.info(f"VitalGraph client initialized with environment variable config: {self.config}")
         except ClientConfigurationError as e:
             logger.error(f"Failed to load client configuration: {e}")
             raise VitalGraphClientError(f"Configuration error: {e}")

@@ -14,7 +14,7 @@ import os
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from vitalgraph.store.sparql import VitalSparql
+from vitalgraph.utils.sparql_utils import VitalSparql
 from rdflib import URIRef, Literal, Namespace
 from rdflib.namespace import RDF, RDFS, FOAF, XSD
 

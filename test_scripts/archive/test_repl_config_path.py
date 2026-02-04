@@ -10,7 +10,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from vitalgraph_client.cmd.vitalgraph_repl import VitalGraphREPL
+from vitalgraph.client.cmd.vitalgraph_repl import VitalGraphREPL
 
 def test_config_path_calculation():
     """Test that the REPL calculates the correct default config path."""
@@ -31,7 +31,7 @@ def test_config_path_calculation():
     
     # Test VitalGraphClient initialization (without actually connecting)
     try:
-        from vitalgraph_client.client.vitalgraph_client import VitalGraphClient
+        from vitalgraph.client.vitalgraph_client import VitalGraphClient
         client = VitalGraphClient(str(expected_config_path))
         print("✅ VitalGraphClient initialized successfully with config path")
         return True

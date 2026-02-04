@@ -64,7 +64,8 @@ async def test_files_endpoint(config_path: str) -> bool:
     try:
         # Initialize and connect client with JWT
         print("\n1. Initializing and connecting JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
@@ -300,16 +301,10 @@ async def test_files_endpoint(config_path: str) -> bool:
 
 def main():
     """Main entry point for the test script."""
-    # Determine config path
-    config_path = Path(__file__).parent.parent / "vitalgraphclient_config" / "vitalgraphclient-config.yaml"
-    
-    if not config_path.exists():
-        print(f"❌ Config file not found: {config_path}")
-        print("   Please ensure the client configuration file exists.")
-        sys.exit(1)
+    # Configuration loaded from environment variables
     
     # Run tests
-    success = asyncio.run(test_files_endpoint(str(config_path)))
+    success = asyncio.run(test_files_endpoint())
     
     if success:
         print("\n🎉 All Files endpoint tests passed!")

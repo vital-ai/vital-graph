@@ -19,8 +19,8 @@ def list_all_spaces():
     """List all spaces and print details."""
     
     # Initialize client with config
-    config_path = project_root / "vitalgraphclient_config" / "vitalgraphclient-config.yaml"
-    client = VitalGraphClient(str(config_path))
+    # Configuration loaded from environment variables
+    client = VitalGraphClient()
     
     try:
         # Open connection

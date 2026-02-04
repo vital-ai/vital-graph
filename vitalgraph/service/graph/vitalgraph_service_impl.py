@@ -45,12 +45,14 @@ class VitalGraphServiceImpl(VitalGraphService):
             return uri_text[1:-1]
         return uri_text
     
-    def __init__(self, config_path: str = None, space_id: str = None, **kwargs):
+    def __init__(self, space_id: str = None, **kwargs):
         """
         Initialize the VitalGraph service implementation.
         
+        Configuration is loaded from profile-prefixed environment variables.
+        Set VITALGRAPH_CLIENT_ENVIRONMENT to select profile (local, dev, staging, prod).
+        
         Args:
-            config_path: Path to VitalGraphClient configuration file
             space_id: Fixed space ID for all operations (constant throughout service lifetime)
             **kwargs: Additional configuration parameters
         """
@@ -62,19 +64,15 @@ class VitalGraphServiceImpl(VitalGraphService):
         if not space_id:
             raise ValueError("space_id is required for VitalGraphServiceImpl")
         
-        # Initialize VitalGraphClient
+        # Initialize VitalGraphClient from environment variables
         self.client: Optional[VitalGraphClient] = None
-        self.config_path = config_path
         
-        if config_path:
-            try:
-                self.client = VitalGraphClient(config_path)
-                self.logger.info(f"VitalGraphClient initialized with config: {config_path}")
-            except VitalGraphClientError as e:
-                self.logger.error(f"Failed to initialize VitalGraphClient: {e}")
-                raise
-        else:
-            self.logger.warning("No config_path provided - VitalGraphClient not initialized")
+        try:
+            self.client = VitalGraphClient()
+            self.logger.info("VitalGraphClient initialized from environment variables")
+        except VitalGraphClientError as e:
+            self.logger.error(f"Failed to initialize VitalGraphClient: {e}")
+            raise
         
         self.logger.info(f"VitalGraphServiceImpl initialized with space_id: {space_id}")
     

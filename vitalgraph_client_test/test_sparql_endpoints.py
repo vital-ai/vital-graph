@@ -35,17 +35,17 @@ GLOBAL_GRAPH = "urn:___GLOBAL"  # Global graph with person data
 class SPARQLEndpointTester:
     """Test class for SPARQL endpoints."""
     
-    def __init__(self, base_url: str = BASE_URL, config_path: str = None):
+    def __init__(self, base_url: str = BASE_URL):
         self.base_url = base_url
         self.client = None
-        self.config_path = config_path or "/Users/hadfield/Local/vital-git/vital-graph/vitalgraphclient_config/vitalgraphclient-config.yaml"
         
     def connect(self) -> bool:
         """Connect to VitalGraph server using client."""
         print(f"\n🔐 Connecting to VitalGraph server...")
         
         try:
-            self.client = VitalGraphClient(self.config_path)
+            # Configuration loaded from environment variables
+            self.client = VitalGraphClient()
             self.client.open()
             print(f"   ✅ Connected successfully!")
             return True

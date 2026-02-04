@@ -50,12 +50,11 @@ logging.basicConfig(
 )
 
 
-async def test_kgentities_endpoint(config_path: str, delete_space_at_end: bool = False) -> bool:
+async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
     """
     Test the KGEntities endpoint operations using VitalGraph client.
     
     Args:
-        config_path: Path to client configuration file
         delete_space_at_end: Whether to delete the test space after tests complete (default: False)
         
     Returns:
@@ -71,7 +70,8 @@ async def test_kgentities_endpoint(config_path: str, delete_space_at_end: bool =
     try:
         # Initialize and connect client with JWT
         print("\n1. Initializing and connecting JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
@@ -366,18 +366,11 @@ def main():
     print("Starting VitalGraph KGEntities Endpoint Testing...")
     print("📋 Note: Using modular test cases with comprehensive coverage")
     
-    # Find config file
-    config_path = Path(__file__).parent.parent / "vitalgraphclient_config" / "vitalgraphclient-config.yaml"
-    
-    if not config_path.exists():
-        print(f"❌ Config file not found: {config_path}")
-        return False
-    
-    print(f"✓ Found config file: {config_path}")
+    # Configuration loaded from environment variables
     
     # Run tests
     import asyncio
-    success = asyncio.run(test_kgentities_endpoint(str(config_path)))
+    success = asyncio.run(test_kgentities_endpoint())
     
     if success:
         print("✅ All tests completed successfully!")

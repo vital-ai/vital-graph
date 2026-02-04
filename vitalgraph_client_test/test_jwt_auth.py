@@ -41,12 +41,10 @@ def test_jwt_authentication() -> bool:
         bool: True if authentication test was successful, False otherwise
     """
     
-    # Path to client configuration
-    config_path = "/Users/hadfield/Local/vital-git/vital-graph/vitalgraphclient_config/vitalgraphclient-config.yaml"
-    
     try:
         logger.info("🔧 Initializing VitalGraph JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         logger.info("🔌 Opening connection and authenticating with JWT...")
         client.open()

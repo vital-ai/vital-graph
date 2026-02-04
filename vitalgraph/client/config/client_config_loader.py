@@ -2,12 +2,10 @@
 VitalGraph Client Configuration Loader
 
 This module provides functionality to load and validate VitalGraph client configuration
-from YAML files for connecting to VitalGraph API servers.
+from profile-based environment variables for connecting to VitalGraph API servers.
 """
 
 import os
-import yaml
-from pathlib import Path
 from typing import Dict, Any, Optional
 import logging
 
@@ -23,96 +21,87 @@ class VitalGraphClientConfig:
     """
     VitalGraph client configuration loader and manager.
     
-    Loads configuration from YAML files and provides access to configuration
-    sections for connecting to VitalGraph API servers.
+    Loads configuration from profile-based environment variables.
+    Uses VITALGRAPH_CLIENT_ENVIRONMENT to determine which profile to load.
     """
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self):
         """
         Initialize the client configuration loader.
         
-        Args:
-            config_path: Path to configuration file. If None, uses default locations or empty config.
+        Configuration is loaded from profile-prefixed environment variables.
+        Set VITALGRAPH_CLIENT_ENVIRONMENT to select profile (local, dev, staging, prod).
+        
+        Example:
+            export VITALGRAPH_CLIENT_ENVIRONMENT=local
+            export LOCAL_CLIENT_SERVER_URL=http://localhost:8001
+            export LOCAL_CLIENT_AUTH_USERNAME=admin
+            export LOCAL_CLIENT_AUTH_PASSWORD=admin
         """
-        self.config_data: Dict[str, Any] = {}
+        self.environment = os.getenv('VITALGRAPH_CLIENT_ENVIRONMENT', 'local').upper()
+        self.config_data: Dict[str, Any] = self._load_from_env()
         self.config_path: Optional[str] = None
-        
-        if config_path is not None:
-            self.load_config(config_path)
-        else:
-            self._load_default_config()
+        logger.info(f"Loaded client configuration from {self.environment}_CLIENT_* environment variables")
     
-    def load_config(self, config_path: str) -> None:
+    def _get_profile_env(self, key: str, default: str = '') -> str:
         """
-        Load configuration from a specific file path.
+        Get environment variable with profile prefix.
+        
+        Example: If VITALGRAPH_CLIENT_ENVIRONMENT=local and key='SERVER_URL',
+                 looks for LOCAL_CLIENT_SERVER_URL, falls back to CLIENT_SERVER_URL, then default.
         
         Args:
-            config_path: Path to the YAML configuration file
+            key: Environment variable key (without profile prefix)
+            default: Default value if not found
             
-        Raises:
-            ClientConfigurationError: If the file cannot be loaded or parsed
+        Returns:
+            Environment variable value
         """
-        config_file = Path(config_path)
+        # Try profile-prefixed variable first (e.g., LOCAL_CLIENT_SERVER_URL)
+        profile_key = f"{self.environment}_CLIENT_{key}"
+        value = os.getenv(profile_key)
+        if value is not None:
+            return value
         
-        if not config_file.exists():
-            raise ClientConfigurationError(f"Configuration file not found: {config_path}")
+        # Fall back to unprefixed variable (e.g., CLIENT_SERVER_URL)
+        unprefixed_key = f"CLIENT_{key}"
+        value = os.getenv(unprefixed_key)
+        if value is not None:
+            return value
         
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                self.config_data = yaml.safe_load(f) or {}
-            
-            self.config_path = str(config_file.absolute())
-            logger.info(f"Loaded client configuration from: {self.config_path}")
-            
-        except yaml.YAMLError as e:
-            raise ClientConfigurationError(f"Error parsing YAML configuration: {e}")
-        except Exception as e:
-            raise ClientConfigurationError(f"Error loading configuration file: {e}")
+        # Use default
+        return default
     
-    def _load_default_config(self) -> None:
+    def _load_from_env(self) -> Dict[str, Any]:
         """
-        Load default configuration by searching standard locations or using built-in defaults.
+        Load configuration from profile-prefixed environment variables.
+        
+        Uses VITALGRAPH_CLIENT_ENVIRONMENT to determine prefix (LOCAL_, PROD_, etc.)
+        Falls back to unprefixed variables, then defaults.
+        
+        Returns:
+            Complete configuration dictionary
         """
-        # Try to find config file in standard locations
-        default_paths = [
-            "vitalgraphclient-config.yaml",
-            "vitalgraphclient_config/vitalgraphclient-config.yaml",
-            os.path.expanduser("~/.vitalgraph/vitalgraphclient-config.yaml"),
-            "/etc/vitalgraph/vitalgraphclient-config.yaml"
-        ]
-        
-        for path in default_paths:
-            if os.path.exists(path):
-                try:
-                    self.load_config(path)
-                    logger.info(f"Found and loaded default config from: {path}")
-                    return
-                except ClientConfigurationError:
-                    continue
-        
-        # No config file found, use built-in defaults
-        self.config_data = {
+        return {
             'server': {
-                'url': 'http://localhost:8001',
-                'api_base_path': '/api/v1'
+                'url': self._get_profile_env('SERVER_URL', 'http://localhost:8001'),
+                'api_base_path': self._get_profile_env('API_BASE_PATH', '/api/v1')
             },
             'auth': {
-                'username': 'admin',
-                'password': 'admin'
+                'username': self._get_profile_env('AUTH_USERNAME', 'admin'),
+                'password': self._get_profile_env('AUTH_PASSWORD', 'admin')
             },
             'client': {
-                'timeout': 30,
-                'max_retries': 3,
-                'retry_delay': 1,
-                'use_mock_client': False,
+                'timeout': int(self._get_profile_env('TIMEOUT', '30')),
+                'max_retries': int(self._get_profile_env('MAX_RETRIES', '3')),
+                'retry_delay': int(self._get_profile_env('RETRY_DELAY', '1')),
+                'use_mock_client': self._get_profile_env('USE_MOCK_CLIENT', 'false').lower() == 'true',
                 'mock': {
-                    'use_temp_storage': True,
-                    'filePath': None
+                    'use_temp_storage': self._get_profile_env('MOCK_USE_TEMP_STORAGE', 'true').lower() == 'true',
+                    'filePath': self._get_profile_env('MOCK_FILE_PATH', '') or None
                 }
             }
         }
-        self.config_path = "<built-in defaults>"
-        logger.info("Using built-in default configuration")
     
     def get_server_config(self) -> Dict[str, Any]:
         """
@@ -287,12 +276,11 @@ class VitalGraphClientConfig:
 _client_config_instance: Optional[VitalGraphClientConfig] = None
 
 
-def get_client_config(config_path: Optional[str] = None) -> VitalGraphClientConfig:
+def get_client_config() -> VitalGraphClientConfig:
     """
     Get the global client configuration instance.
     
-    Args:
-        config_path: Optional path to configuration file. Only used on first call.
+    Configuration is loaded from profile-based environment variables.
         
     Returns:
         VitalGraphClientConfig instance
@@ -300,25 +288,24 @@ def get_client_config(config_path: Optional[str] = None) -> VitalGraphClientConf
     global _client_config_instance
     
     if _client_config_instance is None:
-        _client_config_instance = VitalGraphClientConfig(config_path)
+        _client_config_instance = VitalGraphClientConfig()
         _client_config_instance.validate_config()
     
     return _client_config_instance
 
 
-def reload_client_config(config_path: Optional[str] = None) -> VitalGraphClientConfig:
+def reload_client_config() -> VitalGraphClientConfig:
     """
     Reload the global client configuration instance.
     
-    Args:
-        config_path: Optional path to configuration file
+    Useful when environment variables have changed.
         
     Returns:
         New VitalGraphClientConfig instance
     """
     global _client_config_instance
     
-    _client_config_instance = VitalGraphClientConfig(config_path)
+    _client_config_instance = VitalGraphClientConfig()
     _client_config_instance.validate_config()
     
     return _client_config_instance

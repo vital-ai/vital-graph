@@ -15,7 +15,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from vitalgraph_client.cmd.vitalgraph_repl import VitalGraphREPL
+from vitalgraph.client.cmd.vitalgraph_repl import VitalGraphREPL
 
 def test_repl_commands():
     """Test REPL command parsing and execution."""
@@ -61,7 +61,7 @@ def test_repl_cli():
     # Test help output
     try:
         result = subprocess.run([
-            python_path, "-m", "vitalgraph_client.cmd.vitalgraph_repl", "--help"
+            python_path, "-m", "vitalgraph.client.cmd.vitalgraph_repl", "--help"
         ], capture_output=True, text=True, cwd=project_root)
         
         if result.returncode == 0:
@@ -76,7 +76,7 @@ def test_repl_cli():
     # Test version output
     try:
         result = subprocess.run([
-            python_path, "-m", "vitalgraph_client.cmd.vitalgraph_repl", "--version"
+            python_path, "-m", "vitalgraph.client.cmd.vitalgraph_repl", "--version"
         ], capture_output=True, text=True, cwd=project_root)
         
         if result.returncode == 0 and "VitalGraph Client REPL 1.0.0" in result.stdout:

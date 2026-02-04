@@ -77,7 +77,8 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         print("\n1. Initializing and connecting JWT client...")
         print("   ⚠️  Using 15-second token expiry to test automatic token refresh")
         print("   ⚠️  Proactive refresh ENABLED - will refresh token before expiry")
-        client = VitalGraphClient(config_path, token_expiry_seconds=15)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient(token_expiry_seconds=15)
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")

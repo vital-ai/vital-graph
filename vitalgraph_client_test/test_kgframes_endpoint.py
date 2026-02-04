@@ -54,7 +54,7 @@ logging.basicConfig(
 )
 
 
-async def test_kgframes_endpoint(config_path: str) -> bool:
+async def test_kgframes_endpoint() -> bool:
     """
     Test the KGFrames endpoint operations using VitalGraph client.
     
@@ -74,7 +74,8 @@ async def test_kgframes_endpoint(config_path: str) -> bool:
     try:
         # Initialize and connect client with JWT
         print("\n1. Initializing and connecting JWT client...")
-        client = VitalGraphClient(config_path)
+        # Configuration loaded from environment variables
+        client = VitalGraphClient()
         
         client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
@@ -500,18 +501,11 @@ def main():
     print("Starting VitalGraph KGFrames Endpoint Testing...")
     print("📋 Note: Using direct client testing with basic operations")
     
-    # Find config file
-    config_path = Path(__file__).parent.parent / "vitalgraphclient_config" / "vitalgraphclient-config.yaml"
-    
-    if not config_path.exists():
-        print(f"❌ Config file not found: {config_path}")
-        return False
-    
-    print(f"✓ Found config file: {config_path}")
+    # Configuration loaded from environment variables
     
     # Run tests
     import asyncio
-    success = asyncio.run(test_kgframes_endpoint(str(config_path)))
+    success = asyncio.run(test_kgframes_endpoint())
     
     if success:
         print("✅ All tests completed successfully!")

@@ -11,7 +11,7 @@ import os
 # Add the parent directory to the path so we can import vitalgraph
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from vitalgraph.store.sparql import VitalSparql
+from vitalgraph.utils.sparql_utils import VitalSparql
 
 def setup_logging():
     """Set up logging configuration."""

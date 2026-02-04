@@ -24,7 +24,6 @@ from vitalgraph.model.sparql_model import SPARQLQueryResponse, SPARQLQueryReques
 BASE_URL = "http://localhost:8001"
 SPACE_ID = "wordnet_space"
 GRAPH_URI = "http://vital.ai/graph/wordnet"  # Use the WordNet graph
-CONFIG_PATH = "/Users/hadfield/Local/vital-git/vital-graph/vitalgraphclient_config/vitalgraphclient-config.yaml"
 N = 100  # Number of queries to run
 
 # Sample search terms to use in queries
@@ -52,7 +51,8 @@ class SPARQLQueryPerformanceTester:
         """
         print("🔐 Connecting to VitalGraph server...")
         try:
-            self.client = VitalGraphClient(CONFIG_PATH)
+            # Configuration loaded from environment variables
+            self.client = VitalGraphClient()
             self.client.open()
             print(f"   ✅ Connected to {self.base_url}")
             return True
