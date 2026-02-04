@@ -102,7 +102,16 @@ class VitalGraphConfig:
                 'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
                 'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
                 'username': self._get_profile_env('FUSEKI_USERNAME', ''),
-                'password': self._get_profile_env('FUSEKI_PASSWORD', '')
+                'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
+                'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
+                'keycloak': {
+                    'url': self._get_profile_env('KEYCLOAK_URL', ''),
+                    'realm': self._get_profile_env('KEYCLOAK_REALM', ''),
+                    'client_id': self._get_profile_env('KEYCLOAK_CLIENT_ID', ''),
+                    'client_secret': self._get_profile_env('KEYCLOAK_CLIENT_SECRET', ''),
+                    'username': self._get_profile_env('KEYCLOAK_USERNAME', ''),
+                    'password': self._get_profile_env('KEYCLOAK_PASSWORD', '')
+                }
             },
             'fuseki_postgresql': {
                 'database': {
@@ -120,7 +129,16 @@ class VitalGraphConfig:
                     'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
                     'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
                     'username': self._get_profile_env('FUSEKI_USERNAME', ''),
-                    'password': self._get_profile_env('FUSEKI_PASSWORD', '')
+                    'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
+                    'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
+                    'keycloak': {
+                        'url': self._get_profile_env('KEYCLOAK_URL', ''),
+                        'realm': self._get_profile_env('KEYCLOAK_REALM', ''),
+                        'client_id': self._get_profile_env('KEYCLOAK_CLIENT_ID', ''),
+                        'client_secret': self._get_profile_env('KEYCLOAK_CLIENT_SECRET', ''),
+                        'username': self._get_profile_env('KEYCLOAK_USERNAME', ''),
+                        'password': self._get_profile_env('KEYCLOAK_PASSWORD', '')
+                    }
                 },
                 'transaction': {
                     'timeout': int(self._get_profile_env('TRANSACTION_TIMEOUT', '30')),

@@ -21,6 +21,12 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from vitalgraph.config.config_loader import get_config
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -33,9 +39,8 @@ class FusekiDirectQueryTester:
     """Test direct Fuseki queries with JWT authentication."""
     
     def __init__(self):
-        """Initialize the tester by loading configuration from .env file."""
+        """Initialize the tester by loading configuration from VitalGraph config loader."""
         # Load .env from project root
-        project_root = Path(__file__).parent.parent
         env_path = project_root / '.env'
         
         if not env_path.exists():
@@ -44,16 +49,21 @@ class FusekiDirectQueryTester:
         load_dotenv(env_path)
         logger.info(f"✅ Loaded configuration from {env_path}\n")
         
-        # Keycloak configuration
-        self.keycloak_url = os.getenv('KEYCLOAK_URL')
-        self.keycloak_realm = os.getenv('KEYCLOAK_REALM')
-        self.keycloak_client_id = os.getenv('KEYCLOAK_CLIENT_ID')
-        self.keycloak_client_secret = os.getenv('KEYCLOAK_CLIENT_SECRET')
-        self.keycloak_username = os.getenv('KEYCLOAK_USERNAME')
-        self.keycloak_password = os.getenv('KEYCLOAK_PASSWORD')
+        # Load configuration using VitalGraph config loader (profile-based)
+        config = get_config()
+        fuseki_config = config.get_fuseki_config()
+        keycloak_config = fuseki_config.get('keycloak', {})
+        
+        # Keycloak configuration from profile-based config
+        self.keycloak_url = keycloak_config.get('url')
+        self.keycloak_realm = keycloak_config.get('realm')
+        self.keycloak_client_id = keycloak_config.get('client_id')
+        self.keycloak_client_secret = keycloak_config.get('client_secret')
+        self.keycloak_username = keycloak_config.get('username')
+        self.keycloak_password = keycloak_config.get('password')
         
         # Fuseki configuration
-        self.fuseki_url = os.getenv('FUSEKI_URL')
+        self.fuseki_url = fuseki_config.get('server_url')
         
         # Test space configuration
         self.space_id = "space_realistic_org_test"
