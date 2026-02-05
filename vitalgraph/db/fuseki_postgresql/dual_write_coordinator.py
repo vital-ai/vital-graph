@@ -9,6 +9,8 @@ from typing import Dict, Any, Optional, List
 import uuid
 from datetime import datetime
 
+from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+
 from .fuseki_dataset_manager import FusekiDatasetManager
 from .postgresql_db_impl import FusekiPostgreSQLDbImpl
 from .sparql_update_parser import SPARQLUpdateParser
@@ -60,10 +62,15 @@ class DualWriteCoordinator:
             True if both operations succeeded, False otherwise
         """
         try:
-            logger.debug(f" Executing SPARQL UPDATE for space {space_id}: {sparql_update[:100]}...")
+            import time
+            logger.info(f"🔥 DUAL_WRITE: Executing SPARQL UPDATE for space {space_id}: {sparql_update[:100]}...")
             
             # Step 1: Parse SPARQL UPDATE to determine affected triples
+            parse_start = time.time()
+            logger.info(f"🔥 DUAL_WRITE: Calling sparql_parser.parse_update_operation()...")
             parsed_operation = await self.sparql_parser.parse_update_operation(space_id, sparql_update)
+            parse_time = time.time() - parse_start
+            logger.info(f"🔥 DUAL_WRITE: SPARQL parsing completed in {parse_time:.3f}s")
             logger.debug(f" Parsed operation: {parsed_operation}")
             
             if 'error' in parsed_operation:
@@ -335,50 +342,66 @@ class DualWriteCoordinator:
         if not quads:
             return True
         
-        logger.debug(f"Dual-write: Removing {len(quads)} quads from space {space_id}")
+        import time
+        overall_start = time.time()
+        logger.info(f"🔥 REMOVE_QUADS: Starting removal of {len(quads)} quads from space {space_id}")
         
         # Determine transaction ownership
         if transaction:
             # Caller manages transaction
             pg_transaction = transaction
             should_commit = False
-            logger.debug(f"Using caller-provided transaction for remove_quads")
+            logger.debug(f"🔥 REMOVE_QUADS: Using caller-provided transaction")
         else:
             # We manage transaction
             pg_transaction = None
             should_commit = True
+            logger.debug(f"🔥 REMOVE_QUADS: Will manage own transaction")
         
         fuseki_success = False
         
         try:
             # Begin PostgreSQL transaction if we're managing it
             if should_commit:
+                tx_start = time.time()
                 pg_transaction = await self.postgresql_impl.begin_transaction()
+                tx_begin_time = time.time() - tx_start
+                logger.info(f"🔥 REMOVE_QUADS: PostgreSQL transaction started in {tx_begin_time:.3f}s")
             
             # Step 1: Remove from Fuseki dataset (primary)
+            fuseki_start = time.time()
+            logger.info(f"🔥 REMOVE_QUADS: Calling _remove_quads_from_fuseki()...")
             fuseki_success = await self._remove_quads_from_fuseki(space_id, quads)
+            fuseki_time = time.time() - fuseki_start
+            logger.info(f"🔥 REMOVE_QUADS: Fuseki delete completed in {fuseki_time:.3f}s (success={fuseki_success})")
             
             if not fuseki_success:
-                logger.error(f"Fuseki quad removal failed for space {space_id}")
+                logger.error(f"🔥 REMOVE_QUADS: Fuseki quad removal failed for space {space_id}")
                 if should_commit:
                     await self.postgresql_impl.rollback_transaction(pg_transaction)
                 return False
             
             # Step 2: Remove from PostgreSQL primary data tables
             # Filter out materialized triples before PostgreSQL deletion
+            filter_start = time.time()
             filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
+            filter_time = time.time() - filter_start
             if filtered_count > 0:
-                logger.debug(f"Filtered {filtered_count} materialized triples from remove_quads (only deleted from Fuseki)")
+                logger.info(f"🔥 REMOVE_QUADS: Filtered {filtered_count} materialized triples in {filter_time:.3f}s (only deleted from Fuseki)")
             
             # If all quads were materialized, skip PostgreSQL but deletion from Fuseki already succeeded
             if not filtered_quads:
-                logger.debug("All quads were materialized - skipping PostgreSQL deletion")
+                logger.info(f"🔥 REMOVE_QUADS: All quads were materialized - skipping PostgreSQL deletion")
                 pg_success = True  # Consider this successful
             else:
+                pg_delete_start = time.time()
+                logger.info(f"🔥 REMOVE_QUADS: Removing {len(filtered_quads)} quads from PostgreSQL...")
                 pg_success = await self._remove_quads_from_postgresql(space_id, filtered_quads, pg_transaction)
+                pg_delete_time = time.time() - pg_delete_start
+                logger.info(f"🔥 REMOVE_QUADS: PostgreSQL delete completed in {pg_delete_time:.3f}s (success={pg_success})")
             
             if not pg_success:
-                logger.error(f"PostgreSQL primary data removal failed for space {space_id}")
+                logger.error(f"🔥 REMOVE_QUADS: PostgreSQL primary data removal failed for space {space_id}")
                 # Rollback PostgreSQL transaction if we're managing it
                 if should_commit:
                     await self.postgresql_impl.rollback_transaction(pg_transaction)
@@ -388,10 +411,14 @@ class DualWriteCoordinator:
             
             # Step 3: Commit PostgreSQL transaction if we're managing it
             if should_commit:
+                commit_start = time.time()
+                logger.info(f"🔥 REMOVE_QUADS: Committing PostgreSQL transaction...")
                 commit_success = await self.postgresql_impl.commit_transaction(pg_transaction)
+                commit_time = time.time() - commit_start
+                logger.info(f"🔥 REMOVE_QUADS: PostgreSQL transaction committed in {commit_time:.3f}s (success={commit_success})")
                 
                 if not commit_success:
-                    logger.error(f"PostgreSQL commit failed for space {space_id}")
+                    logger.error(f"🔥 REMOVE_QUADS: PostgreSQL commit failed for space {space_id}")
                     # Restore quads to Fuseki
                     await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
                     return False
@@ -400,11 +427,13 @@ class DualWriteCoordinator:
             if should_commit:
                 await self._materialize_edge_properties(space_id, [], quads)
             
-            logger.debug(f"Dual-write removal successful: {len(quads)} quads removed from space {space_id}")
+            overall_time = time.time() - overall_start
+            logger.info(f"🔥 REMOVE_QUADS: Dual-write removal successful: {len(quads)} quads removed in {overall_time:.3f}s total")
             return True
             
         except Exception as e:
-            logger.error(f"Error in dual-write removal for space {space_id}: {e}")
+            overall_time = time.time() - overall_start
+            logger.error(f"🔥 REMOVE_QUADS: Error in dual-write removal after {overall_time:.3f}s: {e}")
             
             # Rollback PostgreSQL if we're managing the transaction
             if should_commit and pg_transaction:
@@ -724,43 +753,113 @@ class DualWriteCoordinator:
             True if removal succeeded, False otherwise
         """
         try:
-            # Convert quads to SPARQL DELETE query
-            delete_patterns = []
-            for quad in quads:
-                # Handle tuple format: (subject, predicate, object, graph)
-                if len(quad) >= 4:
+            import time
+            build_start = time.time()
+            
+            # Group quads by graph for proper DELETE DATA formatting
+            graph_quads = {}
+            for i, quad in enumerate(quads):
+                # Handle tuple format: (subject, predicate, object, graph, [object_type])
+                # 5-tuple: includes object_type as 5th element for explicit type info
+                # 4-tuple: standard quad, use _format_sparql_term for proper detection
+                if len(quad) >= 5:
+                    # 5-tuple with explicit type info from delete_entity_graph
+                    subject, predicate, obj, graph, obj_type = quad[:5]
+                    
+                    # Log first few quads to debug formatting issues
+                    if i < 3:
+                        logger.info(f"🔥 FUSEKI_DELETE: Quad {i}: 5-tuple, obj_type={obj_type}, obj={repr(obj)[:100]}")
+                    
+                    graph = str(graph)
+                    if graph not in graph_quads:
+                        graph_quads[graph] = []
+                    
+                    # Format with explicit type info
+                    subject_formatted = f"<{subject}>"
+                    predicate_formatted = f"<{predicate}>"
+                    
+                    if obj_type == 'literal':
+                        escaped_obj = str(obj).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                        obj_formatted = f'"{escaped_obj}"'
+                    else:
+                        obj_formatted = f"<{obj}>"
+                    
+                    if subject_formatted and predicate_formatted and obj_formatted:
+                        graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
+                
+                elif len(quad) >= 4:
+                    # 4-tuple: standard quad from other sources, use _format_sparql_term
                     subject, predicate, obj, graph = quad[:4]
+                    
+                    # Log first few quads to debug formatting issues
+                    if i < 3:
+                        logger.info(f"🔥 FUSEKI_DELETE: Quad {i}: 4-tuple, obj type={type(obj).__name__}, obj={repr(obj)[:100]}")
+                    
+                    graph = str(graph)
+                    if graph not in graph_quads:
+                        graph_quads[graph] = []
+                    
+                    # Use _format_sparql_term for proper type detection - DON'T call str() first
+                    # Let _format_sparql_term handle RDFLib objects directly
+                    subject_formatted = self._format_sparql_term(subject)
+                    predicate_formatted = self._format_sparql_term(predicate)
+                    obj_formatted = self._format_sparql_term(obj)
+                    
+                    # Log first few formatted triples to debug double < issue
+                    if i < 3:
+                        triple = f"{subject_formatted} {predicate_formatted} {obj_formatted}"
+                        logger.info(f"🔥 FUSEKI_DELETE: Formatted triple {i}: {triple[:200]}")
+                    
+                    if subject_formatted and predicate_formatted and obj_formatted:
+                        graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
+                
                 else:
+                    # 3-tuple: rare case
                     subject, predicate, obj = quad[:3]
                     graph = 'default'
-                
-                subject = self._format_sparql_term(str(subject))
-                predicate = self._format_sparql_term(str(predicate))
-                obj = self._format_sparql_term(str(obj))
-                graph = str(graph)
-                
-                if subject and predicate and obj:
-                    if graph:
-                        graph_formatted = self._format_sparql_term(graph)
-                        delete_patterns.append(f"GRAPH {graph_formatted} {{ {subject} {predicate} {obj} }}")
-                    else:
-                        delete_patterns.append(f"{subject} {predicate} {obj}")
+                    
+                    if graph not in graph_quads:
+                        graph_quads[graph] = []
+                    
+                    subject_formatted = self._format_sparql_term(str(subject))
+                    predicate_formatted = self._format_sparql_term(str(predicate))
+                    obj_formatted = self._format_sparql_term(obj)
+                    
+                    if subject_formatted and predicate_formatted and obj_formatted:
+                        graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
             
-            if delete_patterns:
-                delete_query = f"""
-                DELETE DATA {{
-                    {' . '.join(delete_patterns)}
-                }}
-                """
+            if graph_quads:
+                # Build DELETE DATA with proper graph blocks
+                graph_blocks = []
+                for graph, triples in graph_quads.items():
+                    if graph and graph != 'default':
+                        graph_formatted = self._format_sparql_term(graph)
+                        triples_str = " .\n        ".join(triples)
+                        graph_blocks.append(f"GRAPH {graph_formatted} {{\n        {triples_str}\n    }}")
+                    else:
+                        triples_str = " .\n    ".join(triples)
+                        graph_blocks.append(triples_str)
+                
+                delete_query = f"""DELETE DATA {{
+    {"\n    ".join(graph_blocks)}
+}}"""
+                
+                build_time = time.time() - build_start
+                logger.info(f"🔥 FUSEKI_DELETE: Built DELETE DATA query for {sum(len(t) for t in graph_quads.values())} triples in {len(graph_quads)} graph(s) in {build_time:.3f}s (query length: {len(delete_query)} chars)")
+                logger.info(f"🔥 FUSEKI_DELETE: Query preview (first 5000 chars):\n{delete_query[:5000]}")
                 
                 # Execute delete query on Fuseki dataset
-                result = await self.fuseki_manager.query_dataset(space_id, delete_query)
-                return True
+                exec_start = time.time()
+                logger.info(f"🔥 FUSEKI_DELETE: Executing DELETE DATA query on Fuseki...")
+                result = await self.fuseki_manager.update_dataset(space_id, delete_query)
+                exec_time = time.time() - exec_start
+                logger.info(f"🔥 FUSEKI_DELETE: Fuseki DELETE DATA execution completed in {exec_time:.3f}s (success={result})")
+                return result
             
             return True
             
         except Exception as e:
-            logger.error(f"Error removing quads from Fuseki for space {space_id}: {e}")
+            logger.error(f"🔥 FUSEKI_DELETE: Error removing quads from Fuseki for space {space_id}: {e}")
             return False
     
     async def _remove_quads_from_postgresql(self, space_id: str, quads: List[tuple], transaction: Any) -> bool:
@@ -949,7 +1048,7 @@ class DualWriteCoordinator:
         Format an RDF term for SPARQL queries.
         
         Args:
-            term: RDF term (URI, literal, or blank node)
+            term: RDF term (URI, literal, blank node, or RDFLib object)
             
         Returns:
             Formatted SPARQL term string or None
@@ -957,6 +1056,29 @@ class DualWriteCoordinator:
         if not term:
             return None
         
+        # Handle RDFLib objects
+        try:
+            from rdflib import URIRef, Literal, BNode
+            
+            if isinstance(term, URIRef):
+                return f"<{str(term)}>"
+            elif isinstance(term, Literal):
+                value = str(term)
+                # Escape special characters in literal values for SPARQL
+                escaped_value = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                
+                if term.language:
+                    return f'"{escaped_value}"@{term.language}'
+                elif term.datatype:
+                    return f'"{escaped_value}"^^<{term.datatype}>'
+                else:
+                    return f'"{escaped_value}"'
+            elif isinstance(term, BNode):
+                return f"_:{term}"
+        except ImportError:
+            pass
+        
+        # Handle dict format (from SPARQL query results)
         if isinstance(term, dict):
             term_type = term.get('type')
             value = term.get('value')
@@ -967,17 +1089,26 @@ class DualWriteCoordinator:
                 datatype = term.get('datatype')
                 language = term.get('language')
                 
+                # Escape special characters in literal values for SPARQL
+                escaped_value = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                
                 if language:
-                    return f'"{value}"@{language}'
+                    return f'"{escaped_value}"@{language}'
                 elif datatype:
-                    return f'"{value}"^^<{datatype}>'
+                    return f'"{escaped_value}"^^<{datatype}>'
                 else:
-                    return f'"{value}"'
+                    return f'"{escaped_value}"'
             elif term_type == 'bnode':
                 return f"_:{value}"
         
+        # Handle plain strings - detect if URI or literal using VitalSigns validation
         elif isinstance(term, str):
-            # Assume URI if string
-            return f"<{term}>"
+            # Use RFC 3986 compliant validation to detect if it's a URI
+            if validate_rfc3986(term, rule='URI'):
+                return f"<{term}>"
+            else:
+                # It's a literal value - escape and quote it
+                escaped_value = term.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                return f'"{escaped_value}"'
         
         return None

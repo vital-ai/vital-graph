@@ -33,10 +33,26 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Configure logging BEFORE imports to capture all module logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    logger.info(f"Loaded environment variables from {env_path}")
+else:
+    logger.warning(f".env file not found at {env_path}")
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
 from vitalgraph.model.spaces_model import Space
@@ -63,13 +79,6 @@ from vitalgraph_client_test.multi_kgentity.case_create_relations import create_a
 from vitalgraph_client_test.multi_kgentity.case_upload_files import UploadFilesTester
 from vitalgraph_client_test.multi_kgentity.case_download_files import DownloadFilesTester
 from vitalgraph_client_test.multi_kgentity.case_delete_files import DeleteFilesTester
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 def print_section(title: str):

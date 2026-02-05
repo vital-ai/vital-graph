@@ -753,7 +753,9 @@ class KGEntitiesEndpoint:
             
             if delete_entity_graph:
                 # Delete entire entity graph using processor
+                self.logger.info(f"🔥 ENDPOINT: Calling delete_processor.delete_entity_graph() for {uri}")
                 deleted_count = await delete_processor.delete_entity_graph(backend_adapter, space_id, graph_id, uri)
+                self.logger.info(f"🔥 ENDPOINT: delete_entity_graph returned: {deleted_count}")
                 deletion_type = "entity graph (via kgGraphURI)"
                 success = deleted_count > 0
                 self.logger.debug(f"🔍 DEBUG: delete_entity_graph returned: {deleted_count} (type: {type(deleted_count)})")
@@ -887,8 +889,8 @@ class KGEntitiesEndpoint:
                 space_id, graph_id, entity_uri, page_size, offset, search, parent_frame_uri
             )
             
-            self.logger.error(f"🔍 DEBUG: Frame query results: {frame_results}")
-            self.logger.error(f"🔍 DEBUG: Found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
+            self.logger.debug(f"🔍 DEBUG: Frame query results: {frame_results}")
+            self.logger.debug(f"🔍 DEBUG: Found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
             
             # Get all triples for the frame URIs and convert to VitalSigns objects
             frames = []
@@ -935,9 +937,9 @@ class KGEntitiesEndpoint:
             
             # Debug: Check what we're returning
             if hasattr(jsonld_response, 'graph'):
-                self.logger.error(f"🔍 DEBUG: Returning JsonLdDocument with {len(jsonld_response.graph)} objects in graph")
+                self.logger.debug(f"🔍 DEBUG: Returning JsonLdDocument with {len(jsonld_response.graph)} objects in graph")
             else:
-                self.logger.error(f"🔍 DEBUG: Returning JsonLdObject")
+                self.logger.debug(f"🔍 DEBUG: Returning JsonLdObject")
             
             response = FramesResponse(
                 frames=jsonld_response,
@@ -948,7 +950,7 @@ class KGEntitiesEndpoint:
             
             # Debug: Check the response after creation
             if hasattr(response.frames, 'graph'):
-                self.logger.error(f"🔍 DEBUG: FramesResponse.frames.graph has {len(response.frames.graph)} objects")
+                self.logger.debug(f"🔍 DEBUG: FramesResponse.frames.graph has {len(response.frames.graph)} objects")
             
             return response
             

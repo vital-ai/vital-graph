@@ -130,7 +130,9 @@ class KGEntityDeleteProcessor:
             int: Number of objects deleted (0 if failed)
         """
         try:
-            self.logger.debug(f"Deleting entity graph for: {entity_uri} from graph: {graph_id}")
+            import time
+            start_time = time.time()
+            self.logger.info(f"🔥 DELETE ENTITY GRAPH START: {entity_uri} from graph: {graph_id}")
             
             # Use the proper graph URI for backend operations
             full_graph_uri = graph_id
@@ -138,7 +140,7 @@ class KGEntityDeleteProcessor:
             # Use entity_uri as the kgGraphURI (they should be the same for entity graphs)
             kg_graph_uri = entity_uri
             
-            self.logger.debug(f"Deleting all objects with kGGraphURI: {kg_graph_uri}")
+            self.logger.info(f"🔥 STEP 1: Finding all objects with kGGraphURI: {kg_graph_uri}")
             
             # First, find all subjects with this kGGraphURI
             find_subjects_query = f"""
@@ -151,7 +153,11 @@ class KGEntityDeleteProcessor:
             }}
             """
             
+            step1_start = time.time()
+            self.logger.info(f"🔥 STEP 1: Executing SPARQL query to find subjects...")
             subjects_result = await backend.execute_sparql_query(space_id, find_subjects_query)
+            step1_time = time.time() - step1_start
+            self.logger.info(f"🔥 STEP 1: Query completed in {step1_time:.3f}s")
             
             # Extract subject URIs
             subject_uris = []
@@ -167,9 +173,10 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No objects found with kGGraphURI: {kg_graph_uri}")
                 return 0
             
-            self.logger.debug(f"Found {len(subject_uris)} objects with kGGraphURI: {kg_graph_uri}")
+            self.logger.info(f"🔥 STEP 1: Found {len(subject_uris)} objects with kGGraphURI")
             
             # Query to get all triples for all subjects in a single query
+            self.logger.info(f"🔥 STEP 2: Building FILTER IN query for {len(subject_uris)} subjects...")
             subject_filter = ', '.join([f'<{str(uri).strip()}>' for uri in subject_uris])
             
             triples_query = f"""
@@ -181,9 +188,14 @@ class KGEntityDeleteProcessor:
             }}
             """
             
+            step2_start = time.time()
+            self.logger.info(f"🔥 STEP 2: Executing SPARQL query to get all triples...")
             triples_result = await backend.execute_sparql_query(space_id, triples_query)
+            step2_time = time.time() - step2_start
+            self.logger.info(f"🔥 STEP 2: Query completed in {step2_time:.3f}s")
             
             # Extract triples
+            self.logger.info(f"🔥 STEP 2: Extracting triples from results...")
             all_triples = []
             if isinstance(triples_result, dict) and 'results' in triples_result:
                 bindings = triples_result['results'].get('bindings', [])
@@ -201,38 +213,34 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No triples found for entity graph objects")
                 return 0
             
-            self.logger.debug(f"Found {len(all_triples)} triples to delete")
+            self.logger.info(f"🔥 STEP 2: Found {len(all_triples)} triples to delete")
             
-            # Build DELETE DATA query with concrete triples
-            delete_statements = []
+            # Convert triples to quad tuples for direct deletion (bypasses SPARQL parsing!)
+            step3_start = time.time()
+            self.logger.info(f"🔥 STEP 3: Converting {len(all_triples)} triples to quads...")
+            quads = []
             for s, p, o, o_type in all_triples:
-                # Format object based on type
-                if o_type == 'literal':
-                    # Escape quotes in literals
-                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
-                    o_formatted = f'"{o_escaped}"'
-                elif o_type == 'uri':
-                    o_formatted = f'<{o}>'
-                else:
-                    o_formatted = f'<{o}>'
-                
-                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+                # Convert to quad tuple format: (subject, predicate, object, graph, object_type)
+                # Keep as 5-tuple with type info at the end for Fuseki formatting
+                quad = (s, p, o, full_graph_uri, o_type)
+                quads.append(quad)
             
-            delete_query = f"""
-            DELETE DATA {{
-                GRAPH <{full_graph_uri}> {{
-{chr(10).join(delete_statements)}
-                }}
-            }}
-            """
+            step3_time = time.time() - step3_start
+            self.logger.info(f"🔥 STEP 3: Converted to {len(quads)} quads in {step3_time:.3f}s")
             
-            self.logger.debug(f"Executing DELETE DATA for entity graph with {len(all_triples)} triples")
+            # Execute direct quad deletion (bypasses SPARQL parsing!)
+            step4_start = time.time()
+            self.logger.info(f"🔥 STEP 4: Executing direct quad deletion via backend.remove_rdf_quads_batch()...")
+            deleted_count = await backend.remove_rdf_quads_batch(space_id, quads)
+            step4_time = time.time() - step4_start
+            self.logger.info(f"🔥 STEP 4: Direct quad deletion completed in {step4_time:.3f}s (deleted {deleted_count} quads)")
             
-            # Execute the batch delete
-            result = await backend.execute_sparql_update(space_id, delete_query)
+            if deleted_count == 0:
+                self.logger.error(f"Failed to delete quads for entity graph")
+                return 0
             
             self.logger.debug(f"Successfully deleted entity graph with kGGraphURI: {kg_graph_uri}")
-            return result if isinstance(result, int) else 1
+            return len(subject_uris)
             
         except Exception as e:
             self.logger.error(f"Error deleting entity graph for {entity_uri}: {e}")

@@ -315,12 +315,12 @@ class KGSparqlQueryProcessor:
                 LIMIT 10
                 """
                 diagnostic_results = await self.backend.execute_sparql_query(space_id, diagnostic_query)
-                self.logger.error(f"🔍 DIAGNOSTIC: Objects connected to frame {frame_uri}:")
+                self.logger.debug(f"🔍 DIAGNOSTIC: Objects connected to frame {frame_uri}:")
                 if diagnostic_results and 'results' in diagnostic_results and 'bindings' in diagnostic_results['results']:
                     for binding in diagnostic_results['results']['bindings'][:5]:
                         subj = binding.get('subject', {}).get('value', 'N/A')
                         fgu = binding.get('frameGraphURI', {}).get('value', 'NONE')
-                        self.logger.error(f"🔍   {subj} -> hasFrameGraphURI: {fgu}")
+                        self.logger.debug(f"🔍   {subj} -> hasFrameGraphURI: {fgu}")
             
             return {
                 'frame_uri': frame_uri,
@@ -699,7 +699,7 @@ class KGSparqlQueryProcessor:
             # Build parent filter based on parent_frame_uri
             if parent_frame_uri:
                 # Query for child frames of a specific parent frame
-                self.logger.error(f"🔍 DEBUG: Querying for child frames of parent: {parent_frame_uri}")
+                self.logger.debug(f"🔍 DEBUG: Querying for child frames of parent: {parent_frame_uri}")
                 parent_filter = f"""
                     # Frame-to-frame connections (child frames of parent)
                     ?edge a haley:Edge_hasKGFrame ;
@@ -708,7 +708,7 @@ class KGSparqlQueryProcessor:
                 """
             else:
                 # Query for top-level frames (direct entity-to-frame connections)
-                self.logger.error(f"🔍 DEBUG: Querying for top-level frames of entity: {entity_uri}")
+                self.logger.debug(f"🔍 DEBUG: Querying for top-level frames of entity: {entity_uri}")
                 parent_filter = f"""
                     # Direct entity-to-frame connections only
                     ?edge a haley:Edge_hasEntityKGFrame ;
@@ -732,10 +732,10 @@ class KGSparqlQueryProcessor:
             """
             
             # Execute query to get frame URIs
-            self.logger.error(f"🔍 DEBUG: Executing frames query...")
+            self.logger.debug(f"🔍 DEBUG: Executing frames query...")
             results = await self.backend.execute_sparql_query(space_id, frames_query)
             frame_uris = self.utils.extract_uris_from_results(results, "frame")
-            self.logger.error(f"🔍 DEBUG: Found {len(frame_uris)} frame URIs: {frame_uris[:5]}")
+            self.logger.debug(f"🔍 DEBUG: Found {len(frame_uris)} frame URIs: {frame_uris[:5]}")
             
             # Get total count (without pagination)
             count_query = f"""

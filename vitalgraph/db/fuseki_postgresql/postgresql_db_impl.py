@@ -1186,29 +1186,56 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             
             logger.debug(f"Batch deleted {len(quad_uuids)} quads for space {space_id}")
             
-            # Step 3: Clean up orphaned terms (terms not referenced by any quads)
-            # This follows the existing PostgreSQL implementation pattern
+            # Step 6: Clean up orphaned terms (terms not referenced by any quads)
+            # Use a single batch query instead of checking each term individually for performance
+            import time
+            orphan_start = time.time()
             term_table = f"{space_id}_term"
-            for term_uuid in term_uuid_map.values():
+            term_uuid_list = list(term_uuid_map.values())
+            
+            if term_uuid_list:
+                logger.info(f"🧹 ORPHAN_CLEANUP: Checking {len(term_uuid_list)} terms for orphans...")
+                
+                # Find all orphaned terms in a single query
                 orphan_check_query = f"""
-                    SELECT COUNT(*) as count FROM {quad_table} 
-                    WHERE subject_uuid = $1 OR predicate_uuid = $1 OR object_uuid = $1 OR context_uuid = $1
+                    SELECT t.term_uuid 
+                    FROM {term_table} t
+                    WHERE t.term_uuid = ANY($1)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM {quad_table} q
+                        WHERE q.subject_uuid = t.term_uuid 
+                           OR q.predicate_uuid = t.term_uuid 
+                           OR q.object_uuid = t.term_uuid 
+                           OR q.context_uuid = t.term_uuid
+                    )
                 """
                 
-                # Use transaction connection if provided, else execute_query
+                # Execute orphan check using transaction connection or execute_query
                 if transaction:
                     conn = transaction.get_connection()
-                    result = await conn.fetch(orphan_check_query, term_uuid)
+                    orphaned_rows = await conn.fetch(orphan_check_query, term_uuid_list)
                 else:
-                    result = await self.execute_query(orphan_check_query, [term_uuid])
+                    orphaned_rows = await self.execute_query(orphan_check_query, [term_uuid_list])
                 
-                if result and result[0]['count'] == 0:
-                    # Term is orphaned, remove it
+                orphaned_uuids = [row['term_uuid'] for row in orphaned_rows]
+                
+                if orphaned_uuids:
+                    logger.info(f"🧹 ORPHAN_CLEANUP: Found {len(orphaned_uuids)} orphaned terms to delete")
+                    
+                    # Delete all orphaned terms in a single batch operation
+                    delete_orphans_query = f"DELETE FROM {term_table} WHERE term_uuid = ANY($1)"
+                    
                     if transaction:
                         conn = transaction.get_connection()
-                        await conn.execute(f"DELETE FROM {term_table} WHERE term_uuid = $1", term_uuid)
+                        await conn.execute(delete_orphans_query, orphaned_uuids)
                     else:
-                        await self.execute_update(f"DELETE FROM {term_table} WHERE term_uuid = $1", [term_uuid])
+                        await self.execute_update(delete_orphans_query, [orphaned_uuids])
+                    
+                    orphan_time = time.time() - orphan_start
+                    logger.info(f"🧹 ORPHAN_CLEANUP: Deleted {len(orphaned_uuids)} orphaned terms in {orphan_time:.3f}s")
+                else:
+                    orphan_time = time.time() - orphan_start
+                    logger.info(f"🧹 ORPHAN_CLEANUP: No orphaned terms found (checked in {orphan_time:.3f}s)")
             
             logger.debug(f"Successfully removed {len(quads)} quads for space {space_id}")
             return True

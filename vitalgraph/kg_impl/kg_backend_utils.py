@@ -538,6 +538,15 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             self.logger.error(f"Error executing SPARQL update: {e}")
             return False
     
+    async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
+        """Remove RDF quads directly without SPARQL parsing."""
+        try:
+            # Delegate to backend's db_ops remove_rdf_quads_batch method
+            return await self.backend.db_ops.remove_rdf_quads_batch(space_id, quads)
+        except Exception as e:
+            self.logger.error(f"Error removing quads batch: {e}")
+            return 0
+    
     
     async def validate_parent_connection(self, space_id: str, graph_id: str, 
                                        parent_uri: str, child_uri: str) -> bool:

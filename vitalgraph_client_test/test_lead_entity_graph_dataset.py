@@ -21,10 +21,26 @@ import sys
 import time
 from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Configure logging BEFORE imports to capture all module logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    logger.info(f"Loaded environment variables from {env_path}")
+else:
+    logger.warning(f".env file not found at {env_path}")
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
 from vitalgraph.model.spaces_model import Space
@@ -34,13 +50,6 @@ from vitalgraph_client_test.entity_graph_lead_dataset.case_bulk_load_dataset imp
 from vitalgraph_client_test.entity_graph_lead_dataset.case_list_and_query_entities import ListAndQueryEntitiesTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_retrieve_entity_graphs import RetrieveEntityGraphsTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_kgquery_lead_queries import KGQueryLeadQueriesTester
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 def print_section(title: str):
@@ -117,7 +126,6 @@ async def main():
     print_section("Lead Entity Graph Dataset Test Suite")
     
     # Configuration
-    base_url = "http://localhost:8000"
     space_id = "space_lead_dataset_test"
     graph_id = "urn:lead_entity_graph_dataset"
     lead_data_dir = Path(__file__).parent.parent / "lead_test_data"
@@ -131,7 +139,6 @@ async def main():
     # Number of entities to sample for detailed retrieval testing
     sample_size = 5
     
-    logger.info(f"Base URL: {base_url}")
     logger.info(f"Space ID: {space_id}")
     logger.info(f"Graph ID: {graph_id}")
     logger.info(f"Lead Data Directory: {lead_data_dir}")

@@ -50,11 +50,19 @@ class SPARQLUpdateParser:
         """
         
         # Strip leading/trailing whitespace at entry point - RDFLib is sensitive to this
+        import time
+        parse_start = time.time()
         sparql_update = sparql_update.strip()
+        strip_time = time.time() - parse_start
+        logger.info(f"🔥 PARSER: parse_update_operation() started, stripped whitespace in {strip_time:.3f}s")
         
         try:
+            identify_start = time.time()
+            logger.info(f"🔥 PARSER: Calling _identify_operation_type()...")
             operation_type = self._identify_operation_type(sparql_update)
-            logger.debug(f"🔍 SPARQL Parser: Detected operation type: {operation_type} for SPARQL: {sparql_update[:100]}...")
+            identify_time = time.time() - identify_start
+            logger.info(f"� PARSER: _identify_operation_type() completed in {identify_time:.3f}s, type={operation_type}")
+            
             result = {
                 'operation_type': operation_type,
                 'insert_triples': [],
@@ -63,7 +71,11 @@ class SPARQLUpdateParser:
             }
             
             # Extract patterns from the query
+            patterns_start = time.time()
+            logger.info(f"🔥 PARSER: Calling _extract_patterns_from_query()...")
             patterns = self._extract_patterns_from_query(sparql_update)
+            patterns_time = time.time() - patterns_start
+            logger.info(f"🔥 PARSER: _extract_patterns_from_query() completed in {patterns_time:.3f}s")
             
             # Handle INSERT operations  
             if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
@@ -88,7 +100,12 @@ class SPARQLUpdateParser:
             if operation_type in ['delete', 'delete_insert', 'delete_data', 'insert_delete_pattern']:
                 if operation_type == 'delete_data':
                     # For DELETE DATA, extract concrete triples directly
+                    import time
+                    extract_start = time.time()
+                    logger.info(f"🔥 PARSER: Calling _extract_delete_data_triples() for DELETE DATA...")
                     result['delete_triples'] = self._extract_delete_data_triples(sparql_update)
+                    extract_time = time.time() - extract_start
+                    logger.info(f"🔥 PARSER: _extract_delete_data_triples() completed in {extract_time:.3f}s, found {len(result['delete_triples'])} triples")
                 else:
                     # For DELETE with WHERE patterns, resolve to concrete triples
                     result['delete_triples'] = await self._resolve_delete_patterns_from_fuseki(
@@ -1277,25 +1294,39 @@ class SPARQLUpdateParser:
     def _extract_delete_data_triples(self, query: str) -> List[tuple]:
         """Extract concrete triples from DELETE DATA operation using RDFLib (following PostgreSQL backend pattern)."""
         try:
+            import time
             from rdflib import Graph, ConjunctiveGraph, URIRef
             from rdflib.plugins.sparql.processor import SPARQLUpdateProcessor
             
-            logger.debug(f"Parsing DELETE DATA query: {query}")
+            logger.info(f"🔥 RDFLIB: Starting DELETE DATA parsing (query length: {len(query)} chars)")
             
             # Create a temporary graph to capture the DELETE DATA triples
+            graph_start = time.time()
             temp_graph = ConjunctiveGraph()
+            graph_time = time.time() - graph_start
+            logger.info(f"🔥 RDFLIB: Created ConjunctiveGraph in {graph_time:.3f}s")
             
             # For DELETE DATA, we need to first populate the graph with the data to be deleted
             # Convert DELETE DATA to INSERT DATA for parsing purposes
+            convert_start = time.time()
             insert_query = query.replace('DELETE DATA', 'INSERT DATA', 1)
+            convert_time = time.time() - convert_start
+            logger.info(f"🔥 RDFLIB: Converted DELETE to INSERT in {convert_time:.3f}s")
             
             # Use RDFLib's SPARQL UPDATE processor to parse and extract the data
+            processor_start = time.time()
             processor = SPARQLUpdateProcessor(temp_graph)
+            processor_time = time.time() - processor_start
+            logger.info(f"🔥 RDFLIB: Created SPARQLUpdateProcessor in {processor_time:.3f}s")
             
             # Execute the insert version on the temporary graph to extract triples
+            update_start = time.time()
+            logger.info(f"🔥 RDFLIB: Calling processor.update() - THIS IS THE BOTTLENECK...")
             processor.update(insert_query)
+            update_time = time.time() - update_start
+            logger.info(f"🔥 RDFLIB: processor.update() completed in {update_time:.3f}s")
             
-            logger.debug(f"Temp graph has {len(temp_graph)} triples after parsing DELETE DATA")
+            logger.info(f"🔥 RDFLIB: Temp graph has {len(temp_graph)} triples after parsing")
             
             # Extract all quads from the temporary graph
             triples = []

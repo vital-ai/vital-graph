@@ -506,11 +506,11 @@ class KGSparqlQueryBuilder:
                 }}
             }}
             """
-            logger.error(f"🔍 Built frame graph query for {frame_uri}")
-            logger.error(f"🔍 Query will look for:")
-            logger.error(f"🔍   1. Frame itself: {frame_uri}")
-            logger.error(f"🔍   2. Objects with hasFrameGraphURI = {frame_uri}")
-            logger.error(f"🔍   3. Edges with hasFrameGraphURI = {frame_uri}")
+            logger.debug(f"🔍 Built frame graph query for {frame_uri}")
+            logger.debug(f"🔍 Query will look for:")
+            logger.debug(f"🔍   1. Frame itself: {frame_uri}")
+            logger.debug(f"🔍   2. Objects with hasFrameGraphURI = {frame_uri}")
+            logger.debug(f"🔍   3. Edges with hasFrameGraphURI = {frame_uri}")
             return query
         else:
             # Get only the frame itself

@@ -77,7 +77,7 @@ class FusekiPostgreSQLDbOps:
         
         Args:
             space_id: Space identifier
-            quads: List of quad dictionaries with 'subject', 'predicate', 'object', 'graph' keys
+            quads: List of quad tuples (subject, predicate, object, graph)
             transaction: Optional transaction context (for compatibility)
             auto_commit: Whether to auto-commit (ignored, handled by dual-write coordinator)
             
@@ -89,52 +89,25 @@ class FusekiPostgreSQLDbOps:
                 self.logger.debug("No quads provided for removal")
                 return 0
             
-            self.logger.debug(f"Removing {len(quads)} RDF quads from space {space_id} via dual-write")
+            import time
+            start_time = time.time()
+            self.logger.info(f"🔥 REMOVE_QUADS_BATCH: Removing {len(quads)} RDF quads from space {space_id} via dual-write")
             
-            # Convert quads to SPARQL DELETE DATA format
-            graph_blocks = {}
-            for quad in quads:
-                # Handle tuple format: (subject, predicate, object, graph)
-                if len(quad) >= 4:
-                    subject, predicate, obj, graph = quad[:4]
-                else:
-                    subject, predicate, obj = quad[:3]
-                    graph = 'default'
-                
-                if graph not in graph_blocks:
-                    graph_blocks[graph] = []
-                
-                # Format object based on its type
-                obj_str = self._format_sparql_term(obj)
-                graph_blocks[graph].append(f"<{subject}> <{predicate}> {obj_str} .")
+            # Bypass SPARQL parser entirely for simple DELETE operations
+            # Call dual-write coordinator directly with quads (SAME AS add_rdf_quads_batch!)
+            success = await self.dual_write_coordinator.remove_quads(space_id, quads)
             
-            # Build SPARQL DELETE DATA query
-            delete_blocks = []
-            for graph, triples in graph_blocks.items():
-                triples_str = "\n                ".join(triples)
-                if graph == 'default':
-                    delete_blocks.append(triples_str)
-                else:
-                    delete_blocks.append(f"GRAPH <{graph}> {{\n                {triples_str}\n            }}")
-            
-            delete_sparql = f"""
-            DELETE DATA {{
-                {chr(10).join(delete_blocks)}
-            }}
-            """
-            
-            # Execute via dual-write coordinator
-            success = await self.dual_write_coordinator.execute_sparql_update(space_id, delete_sparql)
+            elapsed_time = time.time() - start_time
             
             if success:
-                self.logger.debug(f"Successfully removed {len(quads)} quads via dual-write")
+                self.logger.info(f"🔥 REMOVE_QUADS_BATCH: Successfully removed {len(quads)} quads via dual-write in {elapsed_time:.3f}s")
                 return len(quads)
             else:
-                self.logger.error(f"Failed to remove quads via dual-write coordinator")
+                self.logger.error(f"🔥 REMOVE_QUADS_BATCH: Failed to remove quads via dual-write coordinator after {elapsed_time:.3f}s")
                 return 0
                 
         except Exception as e:
-            self.logger.error(f"Error removing RDF quads batch: {e}")
+            self.logger.error(f"🔥 REMOVE_QUADS_BATCH: Error removing RDF quads batch: {e}")
             return 0
     
     async def remove_quads_by_subject_uris(self, space_id: str, subject_uris: List[str], 

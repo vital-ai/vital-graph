@@ -19,10 +19,26 @@ import logging
 import sys
 from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
 
 # Add project root to Python path for imports
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# Configure logging BEFORE imports to capture all module logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+env_path = project_root / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    logger.info(f"Loaded environment variables from {env_path}")
+else:
+    logger.warning(f".env file not found at {env_path}")
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
 from vitalgraph.model.spaces_model import Space
@@ -33,13 +49,6 @@ from vitalgraph_client_test.entity_graph_lead.case_verify_lead_graph import Veri
 from vitalgraph_client_test.entity_graph_lead.case_query_lead_graph import QueryLeadGraphTester
 from vitalgraph_client_test.entity_graph_lead.case_frame_operations import LeadFrameOperationsTester
 from vitalgraph_client_test.entity_graph_lead.case_delete_lead_graph import DeleteLeadGraphTester
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s'
-)
-logger = logging.getLogger(__name__)
 
 
 def print_section(title: str):
@@ -116,7 +125,6 @@ async def main():
     print_section("Lead Entity Graph Test Suite")
     
     # Configuration
-    base_url = "http://localhost:8000"
     space_id = "space_lead_entity_graph_test"
     graph_id = "urn:lead_entity_graph"
     lead_data_dir = Path(__file__).parent.parent / "lead_test_data"
@@ -124,7 +132,6 @@ async def main():
     # Test with first N lead files (set to None to test all)
     test_file_limit = 3
     
-    logger.info(f"Base URL: {base_url}")
     logger.info(f"Space ID: {space_id}")
     logger.info(f"Graph ID: {graph_id}")
     logger.info(f"Lead Data Directory: {lead_data_dir}")
@@ -156,10 +163,10 @@ async def main():
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
-    logger.info("✅ Connected successfully\n")
+    logger.info(f"✅ Connected successfully\n")
     
     # Create test space
-    logger.info(f"\n📦 Creating test space '{space_id}'...")
+    logger.info(f"\n� Creating test space '{space_id}'...")
     try:
         # Delete space if it exists
         try:
