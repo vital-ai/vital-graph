@@ -5,6 +5,8 @@ Handles per-space Fuseki datasets and graph operations.
 
 import asyncio
 import logging
+import random
+import time
 from typing import Dict, Any, Optional, List
 import aiohttp
 import json
@@ -14,6 +16,19 @@ from ...utils.resource_manager import track_session
 from .fuseki_auth import FusekiAuthManager
 
 logger = logging.getLogger(__name__)
+
+# Transient HTTP status codes that warrant a retry
+RETRYABLE_STATUS_CODES = {502, 503, 504}
+
+# Transient exception types that warrant a retry
+RETRYABLE_EXCEPTIONS = (
+    aiohttp.ServerDisconnectedError,
+    aiohttp.ClientConnectorError,
+    aiohttp.ClientOSError,
+    ConnectionResetError,
+    ConnectionRefusedError,
+    asyncio.TimeoutError,
+)
 
 
 class FusekiDatasetManager:
@@ -56,18 +71,36 @@ class FusekiDatasetManager:
         if self.server_url.endswith('/'):
             self.server_url = self.server_url[:-1]
         
-        logger.info(f"FusekiDatasetManager initialized for server: {self.server_url}")
+        # Inter-request throttle: minimum milliseconds between Fuseki requests.
+        # Gives JVM GC breathing room during rapid sequential operations.
+        # 0 = no throttle (default for low-volume or local Fuseki).
+        self._min_request_interval_ms = int(fuseki_config.get('min_request_interval_ms', 100))
+        self._last_request_time = 0.0
+        
+        logger.info(f"FusekiDatasetManager initialized for server: {self.server_url} "
+                    f"(throttle={self._min_request_interval_ms}ms)")
     
     async def connect(self) -> bool:
         """Initialize HTTP session for Fuseki operations."""
         try:
             timeout = aiohttp.ClientTimeout(total=30)
             
+            # Configure TCPConnector for ALB compatibility:
+            # - keepalive_timeout < ALB idle timeout (default 60s) to avoid stale connections
+            # - limit: max simultaneous connections in the pool
+            # - enable_cleanup_closed: proactively clean up closed connections
+            connector = aiohttp.TCPConnector(
+                keepalive_timeout=15,
+                limit=20,
+                enable_cleanup_closed=True,
+            )
+            
             # Create HTTP session with appropriate authentication
             if self.enable_authentication and self.auth_manager:
                 # JWT authentication - no basic auth
                 self.session = aiohttp.ClientSession(
                     timeout=timeout,
+                    connector=connector,
                     headers={'Content-Type': 'application/json'}
                 )
                 
@@ -85,6 +118,7 @@ class FusekiDatasetManager:
                 self.session = aiohttp.ClientSession(
                     auth=auth,
                     timeout=timeout,
+                    connector=connector,
                     headers={'Content-Type': 'application/json'}
                 )
             
@@ -107,6 +141,123 @@ class FusekiDatasetManager:
         except Exception as e:
             logger.error(f"Failed to connect to Fuseki server: {e}")
             return False
+    
+    async def _request_with_retry(self, method: str, url: str, max_retries: int = 5,
+                                   retry_base_delay: float = 0.5,
+                                   additional_headers: Optional[Dict[str, str]] = None,
+                                   **kwargs) -> aiohttp.ClientResponse:
+        """
+        Execute an HTTP request with retry logic for transient failures.
+        
+        Retries on:
+        - HTTP 401 (expired JWT token — refreshes token before retry)
+        - HTTP 502, 503, 504 (ALB/proxy transient errors)
+        - aiohttp.ServerDisconnectedError (stale connection reuse)
+        - aiohttp.ClientConnectorError (connection refused/reset)
+        - ConnectionResetError, asyncio.TimeoutError
+        
+        Auth headers are refreshed on every attempt so retries never use
+        a stale JWT token.
+        
+        Uses exponential backoff with jitter between retries.
+        
+        Args:
+            method: HTTP method ('get', 'post', 'delete', etc.)
+            url: Request URL
+            max_retries: Maximum number of retry attempts (default: 5)
+            retry_base_delay: Base delay in seconds for exponential backoff (default: 0.5)
+            additional_headers: Extra headers (Content-Type, Accept, etc.) merged with
+                fresh auth headers on every attempt
+            **kwargs: Additional arguments passed to aiohttp request
+            
+        Returns:
+            aiohttp.ClientResponse on success
+            
+        Raises:
+            Last exception encountered if all retries exhausted
+        """
+        last_exception = None
+        # Remove any caller-supplied 'headers' from kwargs; we build them ourselves
+        kwargs.pop('headers', None)
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Inter-request throttle: wait if we're sending requests too rapidly
+                if self._min_request_interval_ms > 0:
+                    elapsed_ms = (time.monotonic() - self._last_request_time) * 1000
+                    if elapsed_ms < self._min_request_interval_ms:
+                        wait_s = (self._min_request_interval_ms - elapsed_ms) / 1000
+                        await asyncio.sleep(wait_s)
+                
+                # Refresh auth headers on every attempt so the JWT token is always current
+                headers = await self._get_request_headers(additional_headers)
+                
+                request_func = getattr(self.session, method)
+                response = await request_func(url, headers=headers, **kwargs)
+                self._last_request_time = time.monotonic()
+                
+                # Handle 401 (expired/invalid JWT) — force token refresh and retry
+                if response.status == 401 and attempt < max_retries:
+                    error_text = await response.text()
+                    response.release()
+                    if self.enable_authentication and self.auth_manager:
+                        logger.warning(
+                            f"Fuseki request {method.upper()} {url} returned 401 "
+                            f"(attempt {attempt + 1}/{max_retries + 1}), refreshing JWT token and retrying"
+                        )
+                        # Force token refresh by resetting expiry
+                        self.auth_manager.token_expiry = 0
+                        await self.auth_manager.get_token(self.session)
+                    else:
+                        logger.warning(
+                            f"Fuseki request {method.upper()} {url} returned 401 "
+                            f"(attempt {attempt + 1}/{max_retries + 1}), retrying: {error_text[:200]}"
+                        )
+                    delay = retry_base_delay + random.uniform(0, 0.5)
+                    await asyncio.sleep(delay)
+                    continue
+                
+                # Check for retryable HTTP status codes
+                if response.status in RETRYABLE_STATUS_CODES and attempt < max_retries:
+                    error_text = await response.text()
+                    response.release()
+                    delay = retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"Fuseki request {method.upper()} {url} returned {response.status} "
+                        f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s: {error_text[:200]}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                
+                # On the final attempt, log if we're still getting a retryable status
+                if response.status in RETRYABLE_STATUS_CODES or response.status == 401:
+                    logger.error(
+                        f"Fuseki request {method.upper()} {url} still returning {response.status} "
+                        f"after {max_retries + 1} attempts — returning error response"
+                    )
+                
+                return response
+                
+            except RETRYABLE_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < max_retries:
+                    delay = retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"Fuseki request {method.upper()} {url} failed with {type(e).__name__}: {e} "
+                        f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(
+                        f"Fuseki request {method.upper()} {url} failed after {max_retries + 1} attempts "
+                        f"with {type(e).__name__}: {e}"
+                    )
+                    raise
+        
+        # Should not reach here, but just in case
+        if last_exception:
+            raise last_exception
+        raise RuntimeError(f"Unexpected retry loop exit for {method.upper()} {url}")
     
     async def _get_request_headers(self, additional_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """
@@ -375,16 +526,15 @@ class FusekiDatasetManager:
             logger.debug(f"🔍 Space ID: {space_id}")
             # logger.info(f"🔍 Full SPARQL UPDATE request:\n{update_query}")
             
-            # Get headers with authentication
-            headers = await self._get_request_headers()
-            headers['Content-Type'] = 'application/sparql-update'
-            logger.debug(f"🔍 Request headers: {headers}")
+            logger.debug(f"🔍 Sending SPARQL UPDATE to: {fuseki_url}")
             
-            async with self.session.post(
+            response = await self._request_with_retry(
+                'post',
                 fuseki_url,
-                data=update_query,
-                headers=headers
-            ) as response:
+                additional_headers={'Content-Type': 'application/sparql-update'},
+                data=update_query
+            )
+            async with response:
                 response_text = await response.text()
                 response_headers = dict(response.headers)
                 logger.debug(f"🔍 Full Fuseki response:")
@@ -422,17 +572,16 @@ class FusekiDatasetManager:
         try:
             logger.debug(f"Executing SPARQL query on dataset: {dataset_name}")
             
-            # Get headers with authentication
-            headers = await self._get_request_headers({
-                'Content-Type': 'application/sparql-query',
-                'Accept': 'application/sparql-results+json'
-            })
-            
-            async with self.session.post(
+            response = await self._request_with_retry(
+                'post',
                 f"{self.server_url}/{dataset_name}/sparql",
-                data=sparql_query,
-                headers=headers
-            ) as response:
+                additional_headers={
+                    'Content-Type': 'application/sparql-query',
+                    'Accept': 'application/sparql-results+json'
+                },
+                data=sparql_query
+            )
+            async with response:
                 if response.status == 200:
                     result = await response.json()
                     # Handle ASK queries which return boolean results
@@ -468,16 +617,16 @@ class FusekiDatasetManager:
         try:
             logger.debug(f"Executing SPARQL CONSTRUCT query on dataset: {dataset_name}")
             
-            # Get headers with authentication
-            headers = await self._get_request_headers()
-            headers['Content-Type'] = 'application/sparql-query'
-            headers['Accept'] = 'application/n-triples'
-            
-            async with self.session.post(
+            response = await self._request_with_retry(
+                'post',
                 f"{self.server_url}/{dataset_name}/sparql",
-                data=sparql_construct,
-                headers=headers
-            ) as response:
+                additional_headers={
+                    'Content-Type': 'application/sparql-query',
+                    'Accept': 'application/n-triples'
+                },
+                data=sparql_construct
+            )
+            async with response:
                 if response.status == 200:
                     ntriples_text = await response.text()
                     # Parse N-Triples format using RDFLib to get proper RDF objects
@@ -518,16 +667,16 @@ class FusekiDatasetManager:
         try:
             logger.debug(f"Executing SPARQL UPDATE on dataset: {dataset_name}")
             
-            # Get headers with authentication
-            headers = await self._get_request_headers()
-            headers['Content-Type'] = 'application/sparql-update'
-            headers['Accept'] = 'application/json'
-            
-            async with self.session.post(
+            response = await self._request_with_retry(
+                'post',
                 f"{self.server_url}/{dataset_name}/update",
-                data=sparql_update,
-                headers=headers
-            ) as response:
+                additional_headers={
+                    'Content-Type': 'application/sparql-update',
+                    'Accept': 'application/json'
+                },
+                data=sparql_update
+            )
+            async with response:
                 if response.status in [200, 204]:
                     logger.debug(f"SPARQL UPDATE successful on dataset {dataset_name}")
                     return True
@@ -568,17 +717,16 @@ class FusekiDatasetManager:
             query_url = f"{self.server_url}/{dataset_name}/sparql"
             logger.debug(f"🔍 Querying dataset for count: {query_url}")
             
-            # Get headers with authentication
-            headers = await self._get_request_headers({
-                'Content-Type': 'application/sparql-query',
-                'Accept': 'application/json'
-            })
-            
-            async with self.session.post(
+            response = await self._request_with_retry(
+                'post',
                 query_url,
-                data=count_query,
-                headers=headers
-            ) as response:
+                additional_headers={
+                    'Content-Type': 'application/sparql-query',
+                    'Accept': 'application/json'
+                },
+                data=count_query
+            )
+            async with response:
                 logger.debug(f"🔍 Fuseki query response status: {response.status}")
                 if response.status == 200:
                     result = await response.json()
@@ -787,17 +935,17 @@ class FusekiDatasetManager:
             # Construct query URL for the dataset
             query_url = f"{self.server_url}/{dataset_name}/sparql"
             
-            # Get headers with authentication
-            headers = await self._get_request_headers()
-            headers['Content-Type'] = 'application/sparql-query'
-            headers['Accept'] = 'application/sparql-results+json'
-            
-            # Execute ASK query using POST with proper headers
-            async with self.session.post(
+            # Execute ASK query using POST with proper headers and retry
+            response = await self._request_with_retry(
+                'post',
                 query_url,
-                data=sparql_query,
-                headers=headers
-            ) as response:
+                additional_headers={
+                    'Content-Type': 'application/sparql-query',
+                    'Accept': 'application/sparql-results+json'
+                },
+                data=sparql_query
+            )
+            async with response:
                 if response.status == 200:
                     # Parse JSON response for ASK query
                     result = await response.json()

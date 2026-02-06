@@ -36,6 +36,7 @@ from ..kg_impl.kgentity_create_impl import KGEntityCreateProcessor, OperationMod
 from ..kg_impl.kgentity_get_impl import KGEntityGetProcessor
 from ..kg_impl.kgentity_list_impl import KGEntityListProcessor
 from ..kg_impl.kgentity_update_impl import KGEntityUpdateProcessor
+from ..kg_impl.kg_validation_utils import KGGroupingURIManager, KGOwnershipValidator
 from ..kg_impl.kgentity_delete_impl import KGEntityDeleteProcessor
 from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
 from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
@@ -631,10 +632,31 @@ class KGEntitiesEndpoint:
                         updated_uri=""
                     )
             
+            # Ownership check: verify sub-object URIs don't belong to a different entity.
+            # This prevents cross-entity data corruption from malicious or buggy clients.
+            ownership_validator = KGOwnershipValidator(backend_adapter, self.logger)
+            sub_object_uris = [str(obj.URI) for obj in updated_objects
+                               if hasattr(obj, 'URI') and obj.URI and not isinstance(obj, KGEntity)]
+            ownership_result = await ownership_validator.check_uri_ownership(
+                space_id, graph_id, entity_uris[0], sub_object_uris
+            )
+            if not ownership_result.valid:
+                return EntityUpdateResponse(
+                    message=f"Ownership conflict: {ownership_result.message}",
+                    updated_uri="",
+                    updated_count=0
+                )
+            
+            # Ownership enforcement: stamp kGGraphURI on all objects server-side.
+            # This ensures sub-objects (slots, edges, frames) are bound to the correct
+            # entity, regardless of what the client sends. Matches the create path.
+            grouping_manager = KGGroupingURIManager()
+            
             # Perform updates
             if len(entity_uris) == 1:
-                # Single entity update
+                # Single entity update — stamp all objects with the entity's URI
                 entity_uri = entity_uris[0]
+                grouping_manager.set_dual_grouping_uris_with_frame_separation(updated_objects, entity_uri)
                 result = await self.update_processor.update_entity(
                     backend_adapter, space_id, graph_id, entity_uri, updated_objects
                 )
@@ -648,6 +670,10 @@ class KGEntitiesEndpoint:
                         if obj_uri not in entity_updates:
                             entity_updates[obj_uri] = []
                         entity_updates[obj_uri].append(obj)
+                
+                # Stamp grouping URIs per entity
+                for ent_uri, ent_objects in entity_updates.items():
+                    grouping_manager.set_dual_grouping_uris_with_frame_separation(ent_objects, ent_uri)
                 
                 result = await self.update_processor.update_entities_batch(
                     backend_adapter, space_id, graph_id, entity_updates
@@ -670,19 +696,21 @@ class KGEntitiesEndpoint:
     def _extract_entity_uris(self, graph_objects: List[GraphObject]) -> List[str]:
         """
         Extract entity URIs from GraphObject instances.
+        Only returns URIs for actual KGEntity objects, not edges/slots/frames.
         """
         try:
             entity_uris = []
             for obj in graph_objects:
+                if not isinstance(obj, KGEntity):
+                    continue
                 if hasattr(obj, 'URI') and obj.URI:
-                    # Handle VitalSigns URI property which may be a Property object
                     uri_value = str(obj.URI) if obj.URI else None
                     if uri_value:
                         entity_uris.append(uri_value)
                 else:
-                    self.logger.warning(f"GraphObject missing URI: {type(obj)}")
+                    self.logger.warning(f"KGEntity missing URI: {type(obj)}")
             
-            self.logger.debug(f"Extracted {len(entity_uris)} entity URIs")
+            self.logger.info(f"Extracted {len(entity_uris)} entity URIs from {len(graph_objects)} total objects")
             return entity_uris
             
         except Exception as e:
@@ -1113,13 +1141,14 @@ class KGEntitiesEndpoint:
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
                 
-                # Return response in expected format (maintaining backward compatibility)
-                class FrameCreateResponse:
-                    def __init__(self, created_uris):
-                        self.created_uris = created_uris
-                        self.message = f"Successfully created {len(created_uris)} frames"
-                
-                return FrameCreateResponse(result.created_uris)
+                from ..model.kgframes_model import FrameCreateResponse
+                return FrameCreateResponse(
+                    success=True,
+                    message=f"Successfully created {len(result.created_uris)} frames",
+                    created_count=len(result.created_uris),
+                    created_uris=result.created_uris,
+                    fuseki_success=result.fuseki_success
+                )
             else:
                 # Handle processor failure
                 from ..model.kgframes_model import FrameCreateResponse
@@ -1127,7 +1156,8 @@ class KGEntitiesEndpoint:
                     success=False,
                     message=result.message,
                     created_count=0,
-                    created_uris=[]
+                    created_uris=[],
+                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -1137,7 +1167,8 @@ class KGEntitiesEndpoint:
                 success=False,
                 message=f"Failed to create/update frames: {str(e)}",
                 created_count=0,
-                created_uris=[]
+                created_uris=[],
+                fuseki_success=False
             )
     
     async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict = None):
@@ -1348,7 +1379,8 @@ class KGEntitiesEndpoint:
                     message=result.message,
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
-                    slots_created=0
+                    slots_created=0,
+                    fuseki_success=result.fuseki_success
                 )
             else:
                 return FrameCreateResponse(
@@ -1356,7 +1388,8 @@ class KGEntitiesEndpoint:
                     message=result.message,
                     created_count=0,
                     created_uris=[],
-                    slots_created=0
+                    slots_created=0,
+                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -1440,7 +1473,8 @@ class KGEntitiesEndpoint:
             return FrameDeleteResponse(
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
-                deleted_uris=result.deleted_frame_uris
+                deleted_uris=result.deleted_frame_uris,
+                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:
@@ -1698,6 +1732,12 @@ class KGEntitiesEndpoint:
             successful_updates = [r for r in update_results if r.success]
             failed_updates = [r for r in update_results if not r.success]
             
+            # Aggregate fuseki_success: False if any result has fuseki_success=False
+            any_fuseki_failure = any(
+                getattr(r, 'fuseki_success', None) is False for r in update_results
+            )
+            aggregated_fuseki_success = False if any_fuseki_failure else True
+            
             if successful_updates:
                 success_messages = [r.message for r in successful_updates]
                 failure_messages = [r.message for r in failed_updates] if failed_updates else []
@@ -1710,7 +1750,8 @@ class KGEntitiesEndpoint:
                 return FrameUpdateResponse(
                     message=message,
                     updated_uri=entity_uri,
-                    updated_count=len(successful_updates)
+                    updated_count=len(successful_updates),
+                    fuseki_success=aggregated_fuseki_success
                 )
             else:
                 error_messages = [r.message for r in failed_updates]
@@ -1718,7 +1759,8 @@ class KGEntitiesEndpoint:
                 return FrameUpdateResponse(
                     message=f"All frame updates failed: {'; '.join(error_messages)}",
                     updated_uri="",
-                    updated_count=0
+                    updated_count=0,
+                    fuseki_success=aggregated_fuseki_success
                 )
             
         except Exception as e:
@@ -2110,13 +2152,15 @@ class KGEntitiesEndpoint:
                 self.logger.debug(f"✅ Frame update successful for entity {entity_uri}")
                 return FrameUpdateResponse(
                     message=result.message,
-                    updated_uri=entity_uri
+                    updated_uri=entity_uri,
+                    fuseki_success=result.fuseki_success
                 )
             else:
                 self.logger.warning(f"⚠️ Frame update failed for entity {entity_uri}: {result.message}")
                 return FrameUpdateResponse(
                     message=f"Frame update failed: {result.message}",
-                    updated_uri=entity_uri
+                    updated_uri=entity_uri,
+                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -2173,7 +2217,8 @@ class KGEntitiesEndpoint:
             return FrameDeleteResponse(
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
-                deleted_uris=result.deleted_frame_uris
+                deleted_uris=result.deleted_frame_uris,
+                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:

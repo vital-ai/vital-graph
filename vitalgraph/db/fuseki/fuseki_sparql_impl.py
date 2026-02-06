@@ -8,13 +8,28 @@ All SPARQL operations are delegated to Fuseki via HTTP requests with proper
 graph URI validation to ensure operations target named graphs only.
 """
 
+import asyncio
 import logging
+import random
 import re
 from typing import Dict, List, Any
 import aiohttp
 
 # Import interface
 from ..space_backend_interface import SparqlBackendInterface
+
+# Transient HTTP status codes that warrant a retry
+_RETRYABLE_STATUS_CODES = {502, 503, 504}
+
+# Transient exception types that warrant a retry
+_RETRYABLE_EXCEPTIONS = (
+    aiohttp.ServerDisconnectedError,
+    aiohttp.ClientConnectorError,
+    aiohttp.ClientOSError,
+    ConnectionResetError,
+    ConnectionRefusedError,
+    asyncio.TimeoutError,
+)
 
 
 class FusekiSparqlImpl(SparqlBackendInterface):
@@ -42,6 +57,62 @@ class FusekiSparqlImpl(SparqlBackendInterface):
         self.update_url = space_impl.update_url
         
         self.logger.info(f"Initialized Fuseki SPARQL implementation for space: {space_id}")
+    
+    async def _request_with_retry(self, session: aiohttp.ClientSession, method: str, url: str,
+                                   max_retries: int = 5, retry_base_delay: float = 0.5,
+                                   **kwargs) -> aiohttp.ClientResponse:
+        """
+        Execute an HTTP request with retry logic for transient failures.
+        
+        Retries on HTTP 502/503/504 and connection-level exceptions with
+        exponential backoff and jitter.
+        """
+        last_exception = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                request_func = getattr(session, method)
+                response = await request_func(url, **kwargs)
+                
+                if response.status in _RETRYABLE_STATUS_CODES and attempt < max_retries:
+                    error_text = await response.text()
+                    response.release()
+                    delay = retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    self.logger.warning(
+                        f"Fuseki request {method.upper()} {url} returned {response.status} "
+                        f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s: {error_text[:200]}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                
+                # On the final attempt, log if we're still getting a retryable status
+                if response.status in _RETRYABLE_STATUS_CODES:
+                    self.logger.error(
+                        f"Fuseki request {method.upper()} {url} still returning {response.status} "
+                        f"after {max_retries + 1} attempts — returning error response"
+                    )
+                
+                return response
+                
+            except _RETRYABLE_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < max_retries:
+                    delay = retry_base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                    self.logger.warning(
+                        f"Fuseki request {method.upper()} {url} failed with {type(e).__name__}: {e} "
+                        f"(attempt {attempt + 1}/{max_retries + 1}), retrying in {delay:.2f}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(
+                        f"Fuseki request {method.upper()} {url} failed after {max_retries + 1} attempts "
+                        f"with {type(e).__name__}: {e}"
+                    )
+                    raise
+        
+        if last_exception:
+            raise last_exception
+        raise RuntimeError(f"Unexpected retry loop exit for {method.upper()} {url}")
     
     def _validate_graph_usage(self, sparql_query: str) -> bool:
         """
@@ -132,16 +203,18 @@ class FusekiSparqlImpl(SparqlBackendInterface):
             else:  # SELECT, DESCRIBE
                 accept_header = 'application/sparql-results+json'
             
-            # Execute query via HTTP
+            # Execute query via HTTP with retry
             session = await self.space_impl._get_session()
-            async with session.post(
+            response = await self._request_with_retry(
+                session, 'post',
                 self.query_url,
                 data=processed_query,
                 headers={
                     'Content-Type': 'application/sparql-query',
                     'Accept': accept_header
                 }
-            ) as response:
+            )
+            async with response:
                 
                 if response.status == 200:
                     result_data = await response.json()
@@ -187,13 +260,15 @@ class FusekiSparqlImpl(SparqlBackendInterface):
             # Rewrite graph URIs if needed
             processed_update = self._rewrite_graph_uris(sparql_update)
             
-            # Execute update via HTTP
+            # Execute update via HTTP with retry
             session = await self.space_impl._get_session()
-            async with session.post(
+            response = await self._request_with_retry(
+                session, 'post',
                 self.update_url,
                 data=processed_update,
                 headers={'Content-Type': 'application/sparql-update'}
-            ) as response:
+            )
+            async with response:
                 
                 if response.status == 200 or response.status == 204:
                     self.logger.info(f"SPARQL update executed successfully")

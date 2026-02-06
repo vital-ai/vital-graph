@@ -529,11 +529,16 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         """Query quads via backend - delegates to backend's query_quads method."""
         return await self.backend.query_quads(space_id, query)
     
-    async def execute_sparql_update(self, space_id: str, update_query: str) -> bool:
-        """Execute SPARQL update via backend."""
+    async def execute_sparql_update(self, space_id: str, update_query: str):
+        """Execute SPARQL update via backend.
+        
+        Returns:
+            Result from backend - may be a DualWriteResult (truthy when success=True,
+            with fuseki_success attribute) or bool.
+        """
         try:
-            await self.backend.execute_sparql_update(space_id, update_query)
-            return True
+            result = await self.backend.execute_sparql_update(space_id, update_query)
+            return result if result is not None else True
         except Exception as e:
             self.logger.error(f"Error executing SPARQL update: {e}")
             return False

@@ -21,7 +21,7 @@ from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
-from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, ValidationResult
+from .kg_validation_utils import KGEntityValidator, KGGroupingURIManager, KGOwnershipValidator, ValidationResult
 
 
 class OperationMode(str, Enum):
@@ -138,6 +138,22 @@ class KGEntityCreateProcessor:
                     self.logger.warning(f"❌ Entity {entity_uri} already exists - returning early")
                     return EntityCreateResponse(
                         message=f"Entity {entity_uri} already exists - cannot create in 'create' mode",
+                        created_count=0,
+                        created_uris=[]
+                    )
+            
+            # Existence check: verify sub-object URIs (frames, slots, edges) don't already exist
+            sub_object_uris = [str(obj.URI) for obj in objects
+                               if hasattr(obj, 'URI') and obj.URI and not isinstance(obj, KGEntity)]
+            if sub_object_uris:
+                existence_validator = KGOwnershipValidator(self.backend, self.logger)
+                existence_result = await existence_validator.check_uris_exist(
+                    space_id, graph_id, sub_object_uris
+                )
+                if not existence_result.valid:
+                    self.logger.warning(f"❌ Sub-object conflict: {existence_result.message}")
+                    return EntityCreateResponse(
+                        message=f"Cannot create entity graph: {existence_result.message}",
                         created_count=0,
                         created_uris=[]
                     )

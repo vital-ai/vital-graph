@@ -402,6 +402,144 @@ class KGGroupingURIManager:
             )
 
 
+class KGOwnershipValidator:
+    """
+    Validates that object URIs in a payload don't conflict with existing objects
+    owned by a different entity. Prevents cross-entity data corruption.
+    """
+    
+    HALEY_PREFIX = "http://vital.ai/ontology/haley-ai-kg#"
+    
+    def __init__(self, backend_adapter, logger: logging.Logger):
+        self.backend = backend_adapter
+        self.logger = logger
+    
+    async def check_uri_ownership(self, space_id: str, graph_id: str,
+                                   entity_uri: str, object_uris: List[str]
+                                   ) -> ValidationResult:
+        """
+        Check that none of the given object URIs already exist belonging to a
+        different entity (i.e. have a different kGGraphURI).
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: The entity URI that should own these objects
+            object_uris: URIs of all objects in the payload (excluding the entity itself)
+            
+        Returns:
+            ValidationResult: valid=True if no conflicts, errors list foreign-owned URIs
+        """
+        if not object_uris:
+            return ValidationResult(valid=True, message="No sub-object URIs to check")
+        
+        try:
+            # Build VALUES clause for batch lookup
+            values_clause = ' '.join(f'<{uri}>' for uri in object_uris)
+            
+            # Find any of these URIs that already exist with a DIFFERENT kGGraphURI
+            query = f"""
+            SELECT ?uri ?owner WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?uri {{ {values_clause} }}
+                    ?uri <{self.HALEY_PREFIX}hasKGGraphURI> ?owner .
+                    FILTER(?owner != <{entity_uri}>)
+                }}
+            }}
+            """
+            
+            results = await self.backend.execute_sparql_query(space_id, query)
+            
+            foreign_owned = {}
+            if isinstance(results, list):
+                for row in results:
+                    if isinstance(row, dict):
+                        uri = str(row.get('uri', {}).get('value', '')) if isinstance(row.get('uri'), dict) else str(row.get('uri', ''))
+                        owner = str(row.get('owner', {}).get('value', '')) if isinstance(row.get('owner'), dict) else str(row.get('owner', ''))
+                        if uri and owner:
+                            foreign_owned[uri] = owner
+            
+            if foreign_owned:
+                errors = [
+                    f"Object {uri} belongs to entity {owner}, not {entity_uri}"
+                    for uri, owner in foreign_owned.items()
+                ]
+                return ValidationResult(
+                    valid=False,
+                    message=f"{len(foreign_owned)} object(s) belong to a different entity",
+                    errors=errors,
+                    data={"foreign_owned": foreign_owned}
+                )
+            
+            return ValidationResult(valid=True, message="All object URIs pass ownership check")
+            
+        except Exception as e:
+            self.logger.error(f"Error checking URI ownership: {e}")
+            return ValidationResult(
+                valid=False,
+                message=f"Ownership check error: {str(e)}",
+                errors=[str(e)]
+            )
+    
+    async def check_uris_exist(self, space_id: str, graph_id: str,
+                                object_uris: List[str]) -> ValidationResult:
+        """
+        Check if any of the given URIs already exist in the graph.
+        Used by entity graph CREATE to prevent overwriting existing objects.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            object_uris: URIs to check for existence
+            
+        Returns:
+            ValidationResult: valid=True if NONE of the URIs exist (safe to create)
+        """
+        if not object_uris:
+            return ValidationResult(valid=True, message="No URIs to check")
+        
+        try:
+            values_clause = ' '.join(f'<{uri}>' for uri in object_uris)
+            
+            query = f"""
+            SELECT DISTINCT ?uri WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?uri {{ {values_clause} }}
+                    ?uri ?p ?o .
+                }}
+            }}
+            """
+            
+            results = await self.backend.execute_sparql_query(space_id, query)
+            
+            existing_uris = []
+            if isinstance(results, list):
+                for row in results:
+                    if isinstance(row, dict):
+                        uri = str(row.get('uri', {}).get('value', '')) if isinstance(row.get('uri'), dict) else str(row.get('uri', ''))
+                        if uri:
+                            existing_uris.append(uri)
+            
+            if existing_uris:
+                errors = [f"Object {uri} already exists" for uri in existing_uris]
+                return ValidationResult(
+                    valid=False,
+                    message=f"{len(existing_uris)} object(s) already exist in graph",
+                    errors=errors,
+                    data={"existing_uris": existing_uris}
+                )
+            
+            return ValidationResult(valid=True, message="No existing objects found")
+            
+        except Exception as e:
+            self.logger.error(f"Error checking URI existence: {e}")
+            return ValidationResult(
+                valid=False,
+                message=f"Existence check error: {str(e)}",
+                errors=[str(e)]
+            )
+
+
 class KGHierarchicalFrameValidator:
     """Validator for hierarchical frame operations and relationships."""
     

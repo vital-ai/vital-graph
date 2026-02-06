@@ -134,7 +134,7 @@ async def main():
     max_files = 100 # None
     
     # Skip data loading if data is already loaded (set to True to skip)
-    skip_load = True
+    skip_load = False
     
     # Number of entities to sample for detailed retrieval testing
     sample_size = 5

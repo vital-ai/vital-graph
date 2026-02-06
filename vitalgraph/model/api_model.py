@@ -30,6 +30,7 @@ class BaseCreateResponse(BaseModel):
     message: str = Field(..., description="Success message describing the creation operation")
     created_count: int = Field(..., description="Number of items created")
     created_uris: List[str] = Field(..., description="URIs of the created items")
+    fuseki_success: Optional[bool] = Field(None, description="Whether the Fuseki index was updated successfully. True means success. False means PostgreSQL succeeded but Fuseki sync failed.")
 
 
 class BaseUpdateResponse(BaseModel):
@@ -37,6 +38,7 @@ class BaseUpdateResponse(BaseModel):
     success: bool = Field(True, description="Whether the operation was successful")
     message: str = Field(..., description="Success message describing the update operation")
     updated_uri: Optional[str] = Field(None, description="URI of the updated item (None on error)")
+    fuseki_success: Optional[bool] = Field(None, description="Whether the Fuseki index was updated successfully. True means success. False means PostgreSQL succeeded but Fuseki sync failed.")
 
 
 class BaseDeleteResponse(BaseModel):
@@ -45,6 +47,7 @@ class BaseDeleteResponse(BaseModel):
     message: str = Field(..., description="Success message describing the deletion operation")
     deleted_count: int = Field(..., description="Number of items deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of the deleted items (when available)")
+    fuseki_success: Optional[bool] = Field(None, description="Whether the Fuseki index was updated successfully. True means success. False means PostgreSQL succeeded but Fuseki sync failed.")
 
 
 class BaseOperationResponse(BaseModel):

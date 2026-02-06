@@ -7,6 +7,7 @@ coordination (PostgreSQL first, then Fuseki).
 """
 
 import logging
+import time
 from typing import List, Optional, Dict, Any, Union
 from ..model.kgentities_model import EntityUpdateResponse
 
@@ -54,19 +55,27 @@ class KGEntityUpdateProcessor:
             EntityUpdateResponse: Response indicating success/failure of update
         """
         try:
-            self.logger.debug(f"🔄 Atomic entity update: {entity_uri} in graph: {graph_id}")
+            t0 = time.time()
+            self.logger.info(f"🔄 Entity update START: {entity_uri} ({len(updated_objects)} objects)")
             
             # Step 1: Build delete quads for existing entity data
+            t1 = time.time()
             delete_quads = await self._build_delete_quads_for_entity(backend, space_id, graph_id, entity_uri)
+            t2 = time.time()
+            self.logger.info(f"🔄 Step 1 build_delete_quads: {len(delete_quads)} quads in {t2-t1:.3f}s")
             
             # Step 2: Build insert quads for updated entity data
             insert_quads = await self._build_insert_quads_for_objects(updated_objects, graph_id)
+            t3 = time.time()
+            self.logger.info(f"🔄 Step 2 build_insert_quads: {len(insert_quads)} quads in {t3-t2:.3f}s")
             
             # Step 3: Execute atomic update using validated update_quads function
             success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
+            t4 = time.time()
+            self.logger.info(f"🔄 Step 3 update_quads: success={success} in {t4-t3:.3f}s")
+            self.logger.info(f"🔄 Entity update DONE: {entity_uri} total={t4-t0:.3f}s")
             
             if success:
-                self.logger.debug(f"✅ Successfully updated entity atomically: {entity_uri}")
                 return EntityUpdateResponse(
                     message=f"Successfully updated entity: {entity_uri}",
                     updated_uri=entity_uri
@@ -206,13 +215,7 @@ class KGEntityUpdateProcessor:
                     }}
                     UNION
                     {{
-                        # Get objects with same entity-level grouping URI
-                        ?subject <http://vital.ai/ontology/haley-ai-kg#kGGraphURI> <{entity_uri}> .
-                        ?subject ?predicate ?object .
-                    }}
-                    UNION
-                    {{
-                        # Also check for hasKGGraphURI variant
+                        # Get objects with hasKGGraphURI pointing to this entity
                         ?subject <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
                         ?subject ?predicate ?object .
                     }}

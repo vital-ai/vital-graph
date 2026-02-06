@@ -21,6 +21,7 @@ class DeleteFrameResult:
     validation_results: Dict[str, Any]
     message: str
     error: Optional[str] = None
+    fuseki_success: Optional[bool] = None
 
 
 class KGEntityFrameDeleteProcessor:
@@ -79,29 +80,45 @@ class KGEntityFrameDeleteProcessor:
             
             self.logger.info(f"🔍 Frame ownership validation: {len(validated_frame_uris)} valid, {len(invalid_frames)} invalid")
             
-            # Phase 2: Delete complete frame graphs
+            # Phase 2: Discover all triples to delete (frame content + entity-frame edges)
+            all_triples = []  # List of (s, p, o, o_type) tuples
             deleted_frame_uris = []
             total_deleted_components = 0
             
+            any_fuseki_failure = False
+            
             for frame_uri in validated_frame_uris:
                 try:
-                    # Delete complete frame graph using frameGraphURI
-                    deleted_components = await self.delete_frame_graph(space_id, graph_id, frame_uri)
+                    # Discover frame graph triples
+                    frame_triples, component_count = await self._discover_frame_graph_triples(space_id, graph_id, frame_uri)
                     
-                    if deleted_components > 0:
+                    if frame_triples:
+                        all_triples.extend(frame_triples)
                         deleted_frame_uris.append(frame_uri)
-                        total_deleted_components += deleted_components
-                        self.logger.info(f"🗑️ Deleted frame graph {frame_uri}: {deleted_components} components")
+                        total_deleted_components += component_count
+                        self.logger.info(f"� Frame {frame_uri}: {len(frame_triples)} triples, {component_count} components")
                     else:
                         self.logger.warning(f"⚠️ No components found for frame {frame_uri}")
                         
                 except Exception as e:
-                    self.logger.error(f"❌ Error deleting frame graph {frame_uri}: {e}")
+                    self.logger.error(f"❌ Error discovering frame graph {frame_uri}: {e}")
                     continue
             
-            # Phase 3: Delete entity-frame relationship edges
+            # Discover entity-frame edge triples
             if deleted_frame_uris:
-                await self.delete_entity_frame_edges(space_id, graph_id, entity_uri, deleted_frame_uris)
+                edge_triples = await self._discover_entity_frame_edge_triples(space_id, graph_id, entity_uri, deleted_frame_uris)
+                if edge_triples:
+                    all_triples.extend(edge_triples)
+                    self.logger.info(f"🔍 Found {len(edge_triples)} entity-frame edge triples")
+            
+            # Phase 3: Single batch delete of all collected triples
+            if all_triples:
+                fuseki_success = await self._batch_delete_triples(space_id, graph_id, all_triples)
+                if fuseki_success is False:
+                    any_fuseki_failure = True
+                self.logger.info(f"🗑️ Batch deleted {len(all_triples)} triples for {len(deleted_frame_uris)} frames")
+            else:
+                self.logger.warning(f"⚠️ No triples found to delete")
             
             validation_results = {
                 "valid_frames": len(validated_frame_uris),
@@ -115,12 +132,16 @@ class KGEntityFrameDeleteProcessor:
             if invalid_frames:
                 message += f", {len(invalid_frames)} frames skipped (ownership validation failed)"
             
+            # Determine overall fuseki_success: None if no issues, False if any Fuseki failure
+            overall_fuseki_success = False if any_fuseki_failure else True
+            
             return DeleteFrameResult(
                 success=success,
                 deleted_frame_uris=deleted_frame_uris,
                 deleted_component_count=total_deleted_components,
                 validation_results=validation_results,
-                message=message
+                message=message,
+                fuseki_success=overall_fuseki_success
             )
             
         except Exception as e:
@@ -131,7 +152,8 @@ class KGEntityFrameDeleteProcessor:
                 deleted_component_count=0,
                 validation_results={"valid_frames": 0, "invalid_frames": len(frame_uris)},
                 message=f"Frame deletion failed: {str(e)}",
-                error=str(e)
+                error=str(e),
+                fuseki_success=False
             )
     
     async def validate_frame_ownership(self, space_id: str, graph_id: str, entity_uri: str, 
@@ -206,23 +228,24 @@ class KGEntityFrameDeleteProcessor:
             self.logger.error(f"❌ Error validating frame ownership: {e}")
             return []
     
-    async def delete_frame_graph(self, space_id: str, graph_id: str, frame_uri: str) -> int:
+    async def _discover_frame_graph_triples(self, space_id: str, graph_id: str, frame_uri: str) -> tuple:
         """
-        Delete complete frame graph using frameGraphURI grouping.
+        Discover all triples belonging to a frame graph (without deleting).
         
-        This deletes all objects that have frameGraphURI pointing to the frame_uri,
-        including the frame itself, all slots, and internal edges.
+        Finds all subjects with frameGraphURI pointing to frame_uri,
+        then gets all their triples.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            frame_uri: Frame URI whose complete graph should be deleted
+            frame_uri: Frame URI whose graph triples to discover
             
         Returns:
-            Number of deleted components
+            Tuple of (triples_list, component_count) where triples_list is
+            list of (s, p, o, o_type) tuples
         """
         try:
-            # First, find all subjects that belong to this frame graph
+            # Find all subjects that belong to this frame graph
             find_components_query = f"""
             SELECT DISTINCT ?subject WHERE {{
                 GRAPH <{graph_id}> {{
@@ -242,11 +265,11 @@ class KGEntityFrameDeleteProcessor:
             
             if not component_uris:
                 self.logger.warning(f"⚠️ No components found for frame graph {frame_uri}")
-                return 0
+                return ([], 0)
             
-            self.logger.info(f"🔍 Found {len(component_uris)} components in frame graph {frame_uri}")
+            self.logger.debug(f"🔍 Found {len(component_uris)} components in frame graph {frame_uri}")
             
-            # Query Fuseki to get all triples for all components in a single query
+            # Get all triples for all components in a single query
             component_filter = ', '.join([f'<{str(uri).strip()}>' for uri in component_uris])
             
             triples_query = f"""
@@ -259,87 +282,35 @@ class KGEntityFrameDeleteProcessor:
             """
             
             results = await self.backend.execute_sparql_query(space_id, triples_query)
+            triples = self._extract_triples_from_results(results)
             
-            # Extract triples from results
-            all_triples = []
-            if isinstance(results, dict) and 'results' in results:
-                bindings = results['results'].get('bindings', [])
-                for binding in bindings:
-                    if 's' in binding and 'p' in binding and 'o' in binding:
-                        s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
-                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
-                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
-                        
-                        if s_value and p_value and o_value:
-                            all_triples.append((s_value, p_value, o_value, o_type))
-            
-            if not all_triples:
-                self.logger.warning(f"⚠️ No triples found for frame graph components")
-                return 0
-            
-            self.logger.info(f"🔍 Found {len(all_triples)} triples to delete")
-            
-            # Build DELETE DATA query with concrete triples
-            delete_statements = []
-            for s, p, o, o_type in all_triples:
-                # Format object based on type
-                if o_type == 'literal':
-                    # Escape quotes in literals
-                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
-                    o_formatted = f'"{o_escaped}"'
-                elif o_type == 'uri':
-                    o_formatted = f'<{o}>'
-                else:
-                    o_formatted = f'<{o}>'
-                
-                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
-            
-            delete_query = f"""
-            DELETE DATA {{
-                GRAPH <{graph_id}> {{
-{chr(10).join(delete_statements)}
-                }}
-            }}
-            """
-            
-            self.logger.debug(f"🗑️ Frame graph deletion query (DELETE DATA with {len(all_triples)} triples)")
-            
-            success = await self.backend.execute_sparql_update(space_id, delete_query)
-            
-            if success:
-                self.logger.info(f"🗑️ Successfully deleted frame graph {frame_uri} with {len(component_uris)} components")
-                return len(component_uris)
-            else:
-                self.logger.error(f"❌ Failed to delete frame graph {frame_uri}")
-                return 0
+            return (triples, len(component_uris))
                 
         except Exception as e:
-            self.logger.error(f"❌ Error deleting frame graph {frame_uri}: {e}")
-            return 0
+            self.logger.error(f"❌ Error discovering frame graph {frame_uri}: {e}")
+            return ([], 0)
     
-    async def delete_entity_frame_edges(self, space_id: str, graph_id: str, entity_uri: str, 
-                                      frame_uris: List[str]) -> bool:
+    async def _discover_entity_frame_edge_triples(self, space_id: str, graph_id: str, 
+                                                   entity_uri: str, frame_uris: List[str]) -> List[tuple]:
         """
-        Delete Edge_hasEntityKGFrame relationships between entity and frames.
+        Discover all triples for entity-frame edges (without deleting).
+        
+        Finds Edge_hasEntityKGFrame edges and returns all their triples.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
             entity_uri: Entity URI
-            frame_uris: List of frame URIs to remove relationships for
+            frame_uris: List of frame URIs whose edges to discover
             
         Returns:
-            True if successful, False otherwise
+            List of (s, p, o, o_type) tuples for all edge triples
         """
+        all_edge_triples = []
+        
         try:
-            # Delete edges one at a time to avoid SPARQL parsing issues with FILTER
-            all_success = True
-            deleted_count = 0
-            
             for frame_uri in frame_uris:
-                # First, find the edge URI, then delete all its triples
-                # This two-step approach avoids SPARQL parsing issues with variable subjects
+                # Find the edge URI
                 find_edge_query = f"""
                 SELECT ?edge WHERE {{
                     GRAPH <{graph_id}> {{
@@ -350,10 +321,9 @@ class KGEntityFrameDeleteProcessor:
                 }}
                 """
                 
-                # Find the edge URI
                 edge_results = await self.backend.execute_sparql_query(space_id, find_edge_query)
                 
-                # Extract edge URIs from results (variable name is 'edge', not 'subject')
+                # Extract edge URIs
                 edge_uris = []
                 if isinstance(edge_results, dict) and 'results' in edge_results:
                     bindings = edge_results['results'].get('bindings', [])
@@ -367,41 +337,117 @@ class KGEntityFrameDeleteProcessor:
                     self.logger.debug(f"No entity-frame edge found for frame {frame_uri}")
                     continue
                 
-                # Delete all triples for each found edge
-                for edge_uri in edge_uris:
-                    delete_edge_query = f"""
-                    DELETE {{
-                        GRAPH <{graph_id}> {{
-                            <{edge_uri}> ?p ?o .
-                        }}
+                # Get all triples for the edge(s)
+                edge_filter = ', '.join([f'<{uri}>' for uri in edge_uris])
+                edge_triples_query = f"""
+                SELECT ?s ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?s ?p ?o .
+                        FILTER(?s IN ({edge_filter}))
                     }}
-                    WHERE {{
-                        GRAPH <{graph_id}> {{
-                            <{edge_uri}> ?p ?o .
-                        }}
-                    }}
-                    """
+                }}
+                """
                 
-                self.logger.debug(f"🗑️ Deleting entity-frame edge for frame {frame_uri}")
-                
-                success = await self.backend.execute_sparql_update(space_id, delete_edge_query)
-                
-                if success:
-                    deleted_count += 1
-                else:
-                    self.logger.error(f"❌ Failed to delete entity-frame edge for {frame_uri}")
-                    all_success = False
-            
-            if all_success:
-                self.logger.info(f"🗑️ Successfully deleted {deleted_count} entity-frame edges")
-            else:
-                self.logger.warning(f"🗑️ Deleted {deleted_count}/{len(frame_uris)} entity-frame edges")
-                
-            return all_success
+                results = await self.backend.execute_sparql_query(space_id, edge_triples_query)
+                edge_triples = self._extract_triples_from_results(results)
+                all_edge_triples.extend(edge_triples)
+                self.logger.debug(f"🔍 Edge for frame {frame_uri}: {len(edge_triples)} triples")
             
         except Exception as e:
-            self.logger.error(f"❌ Error deleting entity-frame edges: {e}")
+            self.logger.error(f"❌ Error discovering entity-frame edge triples: {e}")
+        
+        return all_edge_triples
+    
+    async def _batch_delete_triples(self, space_id: str, graph_id: str, 
+                                     triples: List[tuple]) -> Optional[bool]:
+        """
+        Delete all collected triples in a single DELETE DATA call.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            triples: List of (s, p, o, o_type) tuples to delete
+            
+        Returns:
+            fuseki_success value (True/False/None)
+        """
+        try:
+            delete_statements = []
+            for triple in triples:
+                s, p, o, o_type = triple[0], triple[1], triple[2], triple[3]
+                o_datatype = triple[4] if len(triple) > 4 else ''
+                o_lang = triple[5] if len(triple) > 5 else ''
+                
+                if o_type == 'literal':
+                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
+                    if o_lang:
+                        o_formatted = f'"{o_escaped}"@{o_lang}'
+                    elif o_datatype:
+                        o_formatted = f'"{o_escaped}"^^<{o_datatype}>'
+                    else:
+                        o_formatted = f'"{o_escaped}"'
+                else:
+                    o_formatted = f'<{o}>'
+                
+                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+            
+            delete_query = f"""
+            DELETE DATA {{
+                GRAPH <{graph_id}> {{
+{chr(10).join(delete_statements)}
+                }}
+            }}
+            """
+            
+            self.logger.debug(f"🗑️ Batch DELETE DATA with {len(triples)} triples")
+            
+            result = await self.backend.execute_sparql_update(space_id, delete_query)
+            
+            fuseki_success = True
+            if hasattr(result, 'fuseki_success'):
+                fuseki_success = result.fuseki_success
+            
+            if result:
+                if fuseki_success is False:
+                    self.logger.error(f"⚠️ FUSEKI_SYNC_FAILURE: Triples deleted from PostgreSQL but Fuseki may be inconsistent")
+                return fuseki_success
+            else:
+                self.logger.error(f"❌ Batch delete failed")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error in batch delete: {e}")
             return False
+    
+    def _extract_triples_from_results(self, results: Dict[str, Any]) -> List[tuple]:
+        """
+        Extract (s, p, o, o_type, o_datatype, o_lang) tuples from SPARQL SELECT ?s ?p ?o results.
+        
+        Args:
+            results: SPARQL query results
+            
+        Returns:
+            List of (subject, predicate, object, object_type, datatype, language) tuples
+        """
+        triples = []
+        try:
+            if isinstance(results, dict) and 'results' in results:
+                bindings = results['results'].get('bindings', [])
+                for binding in bindings:
+                    if 's' in binding and 'p' in binding and 'o' in binding:
+                        s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
+                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        o_datatype = binding['o'].get('datatype', '') if isinstance(binding['o'], dict) else ''
+                        o_lang = binding['o'].get('xml:lang', '') if isinstance(binding['o'], dict) else ''
+                        
+                        if s_value and p_value and o_value:
+                            triples.append((s_value, p_value, o_value, o_type, o_datatype, o_lang))
+        except Exception as e:
+            self.logger.error(f"❌ Error extracting triples from results: {e}")
+        
+        return triples
     
     def _extract_frame_uris_from_results(self, results: Dict[str, Any]) -> List[str]:
         """

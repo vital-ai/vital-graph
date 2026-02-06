@@ -19,6 +19,21 @@ from .edge_materialization import EdgeMaterializationManager
 logger = logging.getLogger(__name__)
 
 
+class DualWriteResult:
+    """Result of a dual-write operation. Truthy when success=True, carries fuseki_success status."""
+    
+    def __init__(self, success: bool, fuseki_success: bool = True, message: str = ""):
+        self.success = success
+        self.fuseki_success = fuseki_success
+        self.message = message
+    
+    def __bool__(self):
+        return self.success
+    
+    def __repr__(self):
+        return f"DualWriteResult(success={self.success}, fuseki_success={self.fuseki_success}, message='{self.message}')"
+
+
 class DualWriteCoordinator:
     """
     Coordinates dual-write operations between Fuseki and PostgreSQL.
@@ -195,7 +210,7 @@ class DualWriteCoordinator:
                 fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
             
             if not fuseki_success:
-                logger.warning("Fuseki dataset update failed - data stored in PostgreSQL but Fuseki may be inconsistent")
+                logger.error(f"FUSEKI_SYNC_FAILURE: Fuseki {operation_type} failed for space {space_id} - data stored in PostgreSQL but Fuseki may be inconsistent")
                 # Don't rollback PostgreSQL - it's the authoritative store
             
             # Step 4: Materialize direct edge properties in Fuseki (after successful update)
@@ -207,7 +222,11 @@ class DualWriteCoordinator:
                 )
             
             logger.debug(f"SPARQL UPDATE dual-write successful for space {space_id}")
-            return True
+            return DualWriteResult(
+                success=True,
+                fuseki_success=fuseki_success,
+                message="" if fuseki_success else f"FUSEKI_SYNC_FAILURE: Fuseki {operation_type} failed for space {space_id}"
+            )
             
         except Exception as e:
             logger.error(f"Error in dual-write operation for space {space_id}: {e}")
@@ -300,17 +319,22 @@ class DualWriteCoordinator:
                 fuseki_success = await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
             
             if should_commit and not fuseki_success:
-                logger.error(f"Fuseki write failed for space {space_id}")
+                logger.error(f"FUSEKI_SYNC_FAILURE: Fuseki add_quads failed for space {space_id} - data stored in PostgreSQL but Fuseki may be inconsistent")
                 # Rollback PostgreSQL by removing the quads we just added
-                await self._rollback_postgresql_quads(space_id, filtered_quads)
-                return False
+                # await self._rollback_postgresql_quads(space_id, filtered_quads)
+                # return False
+                # Don't rollback PostgreSQL - it's the authoritative store
             
             # Step 4: Materialize direct edge properties in Fuseki (after successful write)
             if should_commit and fuseki_success:
                 await self._materialize_edge_properties(space_id, quads, [])
             
-            logger.debug(f"Dual-write successful: {len(quads)} quads added to space {space_id}")
-            return True
+            logger.debug(f"Dual-write completed: {len(quads)} quads added to space {space_id} (fuseki_success={fuseki_success})")
+            return DualWriteResult(
+                success=True,
+                fuseki_success=fuseki_success,
+                message="" if fuseki_success else f"FUSEKI_SYNC_FAILURE: Fuseki add_quads failed for space {space_id}"
+            )
             
         except Exception as e:
             logger.error(f"Error in dual-write operation for space {space_id}: {e}")
@@ -318,10 +342,6 @@ class DualWriteCoordinator:
             # Rollback PostgreSQL if we're managing the transaction
             if should_commit and pg_transaction:
                 await self.postgresql_impl.rollback_transaction(pg_transaction)
-            
-            # Rollback Fuseki if it succeeded and we committed
-            if should_commit and fuseki_success:
-                await self._rollback_fuseki_quads(space_id, quads)
             
             return False
     
@@ -358,30 +378,15 @@ class DualWriteCoordinator:
             should_commit = True
             logger.debug(f"🔥 REMOVE_QUADS: Will manage own transaction")
         
-        fuseki_success = False
-        
         try:
-            # Begin PostgreSQL transaction if we're managing it
+            # Step 1: Begin PostgreSQL transaction if we're managing it
             if should_commit:
                 tx_start = time.time()
                 pg_transaction = await self.postgresql_impl.begin_transaction()
                 tx_begin_time = time.time() - tx_start
                 logger.info(f"🔥 REMOVE_QUADS: PostgreSQL transaction started in {tx_begin_time:.3f}s")
             
-            # Step 1: Remove from Fuseki dataset (primary)
-            fuseki_start = time.time()
-            logger.info(f"🔥 REMOVE_QUADS: Calling _remove_quads_from_fuseki()...")
-            fuseki_success = await self._remove_quads_from_fuseki(space_id, quads)
-            fuseki_time = time.time() - fuseki_start
-            logger.info(f"🔥 REMOVE_QUADS: Fuseki delete completed in {fuseki_time:.3f}s (success={fuseki_success})")
-            
-            if not fuseki_success:
-                logger.error(f"🔥 REMOVE_QUADS: Fuseki quad removal failed for space {space_id}")
-                if should_commit:
-                    await self.postgresql_impl.rollback_transaction(pg_transaction)
-                return False
-            
-            # Step 2: Remove from PostgreSQL primary data tables
+            # Step 2: Remove from PostgreSQL primary data tables FIRST (authoritative store)
             # Filter out materialized triples before PostgreSQL deletion
             filter_start = time.time()
             filtered_quads, filtered_count = self.materialization_manager.filter_materialized_triples(quads)
@@ -389,10 +394,10 @@ class DualWriteCoordinator:
             if filtered_count > 0:
                 logger.info(f"🔥 REMOVE_QUADS: Filtered {filtered_count} materialized triples in {filter_time:.3f}s (only deleted from Fuseki)")
             
-            # If all quads were materialized, skip PostgreSQL but deletion from Fuseki already succeeded
+            # If all quads were materialized, skip PostgreSQL
             if not filtered_quads:
                 logger.info(f"🔥 REMOVE_QUADS: All quads were materialized - skipping PostgreSQL deletion")
-                pg_success = True  # Consider this successful
+                pg_success = True
             else:
                 pg_delete_start = time.time()
                 logger.info(f"🔥 REMOVE_QUADS: Removing {len(filtered_quads)} quads from PostgreSQL...")
@@ -402,14 +407,12 @@ class DualWriteCoordinator:
             
             if not pg_success:
                 logger.error(f"🔥 REMOVE_QUADS: PostgreSQL primary data removal failed for space {space_id}")
-                # Rollback PostgreSQL transaction if we're managing it
                 if should_commit:
                     await self.postgresql_impl.rollback_transaction(pg_transaction)
-                    # Restore quads to Fuseki
-                    await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
                 return False
             
-            # Step 3: Commit PostgreSQL transaction if we're managing it
+            # Step 3: Commit PostgreSQL transaction BEFORE Fuseki operation
+            # PostgreSQL is authoritative - must succeed for operation to proceed
             if should_commit:
                 commit_start = time.time()
                 logger.info(f"🔥 REMOVE_QUADS: Committing PostgreSQL transaction...")
@@ -418,18 +421,33 @@ class DualWriteCoordinator:
                 logger.info(f"🔥 REMOVE_QUADS: PostgreSQL transaction committed in {commit_time:.3f}s (success={commit_success})")
                 
                 if not commit_success:
-                    logger.error(f"🔥 REMOVE_QUADS: PostgreSQL commit failed for space {space_id}")
-                    # Restore quads to Fuseki
-                    await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
+                    logger.error(f"❌ REMOVE_QUADS: PostgreSQL primary storage commit failed - aborting operation")
                     return False
             
-            # Step 4: Remove materialized direct edge properties from Fuseki (after successful removal)
+            # Step 4: Remove from Fuseki dataset AFTER PostgreSQL success
+            fuseki_success = True
             if should_commit:
+                fuseki_start = time.time()
+                logger.info(f"🔥 REMOVE_QUADS: Calling _remove_quads_from_fuseki()...")
+                fuseki_success = await self._remove_quads_from_fuseki(space_id, quads)
+                fuseki_time = time.time() - fuseki_start
+                logger.info(f"🔥 REMOVE_QUADS: Fuseki delete completed in {fuseki_time:.3f}s (success={fuseki_success})")
+            
+            if not fuseki_success:
+                logger.error(f"FUSEKI_SYNC_FAILURE: Fuseki remove_quads failed for space {space_id} - data removed from PostgreSQL but Fuseki may be inconsistent")
+                # Don't rollback PostgreSQL - it's the authoritative store
+            
+            # Step 5: Remove materialized direct edge properties from Fuseki (after successful removal)
+            if should_commit and fuseki_success:
                 await self._materialize_edge_properties(space_id, [], quads)
             
             overall_time = time.time() - overall_start
-            logger.info(f"🔥 REMOVE_QUADS: Dual-write removal successful: {len(quads)} quads removed in {overall_time:.3f}s total")
-            return True
+            logger.info(f"🔥 REMOVE_QUADS: Dual-write removal completed: {len(quads)} quads removed in {overall_time:.3f}s total (fuseki_success={fuseki_success})")
+            return DualWriteResult(
+                success=True,
+                fuseki_success=fuseki_success,
+                message="" if fuseki_success else f"FUSEKI_SYNC_FAILURE: Fuseki remove_quads failed for space {space_id}"
+            )
             
         except Exception as e:
             overall_time = time.time() - overall_start
@@ -438,10 +456,6 @@ class DualWriteCoordinator:
             # Rollback PostgreSQL if we're managing the transaction
             if should_commit and pg_transaction:
                 await self.postgresql_impl.rollback_transaction(pg_transaction)
-            
-            # Restore Fuseki if removal succeeded and we committed
-            if should_commit and fuseki_success:
-                await self.fuseki_manager.add_quads_to_dataset(space_id, quads, convert_float_to_decimal=True)
             
             return False
     

@@ -96,9 +96,21 @@ class FusekiSpaceImpl(SpaceBackendInterface):
                 auth = aiohttp.BasicAuth(self.username, self.password)
             
             timeout = aiohttp.ClientTimeout(total=self.timeout)
+            
+            # Configure TCPConnector for ALB compatibility:
+            # - keepalive_timeout < ALB idle timeout (default 60s) to avoid stale connections
+            # - limit: max simultaneous connections in the pool
+            # - enable_cleanup_closed: proactively clean up closed connections
+            connector = aiohttp.TCPConnector(
+                keepalive_timeout=15,
+                limit=20,
+                enable_cleanup_closed=True,
+            )
+            
             self._session = aiohttp.ClientSession(
                 auth=auth,
                 timeout=timeout,
+                connector=connector,
                 headers={'Content-Type': 'application/sparql-update'}
             )
             

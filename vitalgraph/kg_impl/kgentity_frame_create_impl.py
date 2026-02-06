@@ -38,6 +38,7 @@ class CreateFrameResult:
     created_uris: List[str]
     message: str
     frame_count: int
+    fuseki_success: Optional[bool] = None
 
 
 class KGEntityFrameCreateProcessor:
@@ -135,12 +136,13 @@ class KGEntityFrameCreateProcessor:
                 all_objects.extend(entity_frame_edges)
             
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
+            fuseki_success = True
             if operation_mode and str(operation_mode).upper() in ['UPDATE', 'UPSERT']:
-                success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
+                success, fuseki_success = await self.execute_atomic_frame_update(backend_adapter, space_id, graph_id, 
                                                                categories.frame_objects, all_objects, operation_mode)
             else:
                 # Step 7: Execute atomic creation via backend (extracted from lines 1125-1145)
-                success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects)
+                success, fuseki_success = await self.execute_frame_creation(backend_adapter, space_id, graph_id, all_objects)
             
             if success:
                 created_uris = [str(obj.URI) for obj in all_objects if hasattr(obj, 'URI')]
@@ -150,14 +152,16 @@ class KGEntityFrameCreateProcessor:
                     success=True,
                     created_uris=created_uris,
                     message=f"Successfully created {len(categories.frame_objects)} frames",
-                    frame_count=len(categories.frame_objects)
+                    frame_count=len(categories.frame_objects),
+                    fuseki_success=fuseki_success
                 )
             else:
                 return CreateFrameResult(
                     success=False,
                     created_uris=[],
                     message="Failed to create/update frames",
-                    frame_count=0
+                    frame_count=0,
+                    fuseki_success=fuseki_success
                 )
                 
         except Exception as e:
@@ -166,7 +170,8 @@ class KGEntityFrameCreateProcessor:
                 success=False,
                 created_uris=[],
                 message=f"Error creating/updating frames: {str(e)}",
-                frame_count=0
+                frame_count=0,
+                fuseki_success=False
             )
     
     async def validate_entity_exists(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str, 
@@ -355,7 +360,7 @@ class KGEntityFrameCreateProcessor:
     
     async def execute_atomic_frame_update(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str,
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
-                                        operation_mode: str) -> bool:
+                                        operation_mode: str) -> tuple:
         """
         Execute atomic frame UPDATE/UPSERT using the validated update_quads function.
         
@@ -372,7 +377,7 @@ class KGEntityFrameCreateProcessor:
             operation_mode: 'UPDATE' or 'UPSERT'
             
         Returns:
-            bool: True if atomic update successful, False otherwise
+            Tuple of (success: bool, fuseki_success: Optional[bool])
         """
         try:
             self.logger.debug(f"🔄 Executing atomic frame {operation_mode} for {len(frame_objects)} frames")
@@ -388,14 +393,14 @@ class KGEntityFrameCreateProcessor:
             
             if success:
                 self.logger.debug(f"✅ Atomic frame {operation_mode} completed successfully")
-                return True
+                return (True, True)
             else:
                 self.logger.error(f"❌ Atomic frame {operation_mode} failed")
-                return False
+                return (False, False)
                 
         except Exception as e:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
-            return False
+            return (False, False)
     
     async def build_delete_quads_for_frames(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject]) -> List[tuple]:
@@ -747,8 +752,13 @@ class KGEntityFrameCreateProcessor:
             
             # Execute the insert (extracted from line 1145)
             self.logger.debug(f"🔍 Executing SPARQL INSERT with {len(triples)} triples...")
-            await backend_adapter.execute_sparql_update(space_id, insert_query)
+            insert_result = await backend_adapter.execute_sparql_update(space_id, insert_query)
             self.logger.debug(f"🔍 SPARQL INSERT execution completed")
+            
+            # Extract fuseki_success from DualWriteResult if available
+            _fuseki_success = True
+            if hasattr(insert_result, 'fuseki_success'):
+                _fuseki_success = insert_result.fuseki_success
             
             # Immediate verification: Check if edges were inserted
             verification_query = f"""
@@ -794,8 +804,8 @@ class KGEntityFrameCreateProcessor:
                     o = binding.get('o', {}).get('value', 'NO_OBJECT')
                     self.logger.debug(f"  Triple {i+1}: s={s}, p={p}, o={o}")
             
-            return True
+            return (True, _fuseki_success)
             
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")
-            return False
+            return (False, False)

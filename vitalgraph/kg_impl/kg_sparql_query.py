@@ -504,10 +504,29 @@ class KGSparqlQueryProcessor:
             
             self.logger.info(f"🔍 Phase 1 Results: {len(validated_frame_uris)} of {len(frame_uris)} frames validated")
             
-            # Security check: Track frames that don't belong to the entity
+            # Distinguish "frame doesn't exist" from "frame belongs to another entity"
             missing_frames = set(frame_uris) - set(validated_frame_uris)
             if missing_frames:
-                self.logger.warning(f"🔒 Cross-entity frame access attempted: {list(missing_frames)} do not belong to entity {entity_uri}")
+                missing_filter = ", ".join([self.utils.build_uri_reference(uri) for uri in missing_frames])
+                existence_query = f"""
+                {self.utils.build_prefixes()}
+                SELECT ?frame_uri WHERE {{
+                    {self.utils.build_graph_clause(graph_id)} {{
+                        ?frame_uri a haley:KGFrame .
+                        FILTER(?frame_uri IN ({missing_filter}))
+                    }}
+                }}
+                """
+                existence_results = await self.backend.execute_sparql_query(space_id, existence_query)
+                existing_uris = set(self.utils.extract_uris_from_results(existence_results, "frame_uri"))
+                
+                not_found = missing_frames - existing_uris
+                wrong_owner = missing_frames & existing_uris
+                
+                if not_found:
+                    self.logger.debug(f"� Frames not found in graph: {list(not_found)}")
+                if wrong_owner:
+                    self.logger.warning(f"�🔒 Cross-entity frame access attempted: {list(wrong_owner)} exist but do not belong to entity {entity_uri}")
             
             self.logger.info(f"🔍 Phase 2: Retrieving complete frame graphs for {len(validated_frame_uris)} frames")
             

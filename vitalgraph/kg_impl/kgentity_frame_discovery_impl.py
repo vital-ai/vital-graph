@@ -108,12 +108,20 @@ class KGEntityFrameDiscoveryProcessor:
         frame_uris = []
         
         try:
-            if isinstance(results, dict) and results.get("bindings"):
-                # Standard SPARQL JSON results format
-                for binding in results["bindings"]:
-                    frame_uri = binding.get("frame_uri", {}).get("value")
-                    if frame_uri:
-                        frame_uris.append(frame_uri)
+            # Unwrap nested dict format: {'success': ..., 'results': {'bindings': [...]}}
+            bindings = None
+            if isinstance(results, dict):
+                if 'results' in results and isinstance(results['results'], dict):
+                    bindings = results['results'].get('bindings', [])
+                elif 'bindings' in results:
+                    bindings = results['bindings']
+            
+            if bindings is not None:
+                for binding in bindings:
+                    if isinstance(binding, dict):
+                        frame_uri = binding.get("frame_uri", {}).get("value")
+                        if frame_uri:
+                            frame_uris.append(frame_uri)
             elif isinstance(results, list):
                 # List of result dictionaries
                 for result in results:

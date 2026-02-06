@@ -41,7 +41,7 @@ sys.path.insert(0, str(project_root))
 
 # Configure logging BEFORE imports to capture all module logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(message)s'
 )
 logger = logging.getLogger(__name__)
