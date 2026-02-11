@@ -83,7 +83,7 @@ async def main():
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
@@ -96,14 +96,14 @@ async def main():
     # List all spaces and delete test space if it exists
     logger.info(f"📦 Listing all spaces...")
     try:
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             logger.info(f"   Found {len(spaces_response.spaces)} spaces")
             existing_space = next((s for s in spaces_response.spaces if s.space == space_id), None)
             
             if existing_space:
                 logger.info(f"   Found existing test space '{space_id}', deleting...")
-                delete_response = client.spaces.delete_space(space_id)
+                delete_response = await client.spaces.delete_space(space_id)
                 if delete_response.is_success:
                     logger.info(f"   ✅ Existing test space deleted")
                 else:
@@ -120,7 +120,7 @@ async def main():
         space_description="Test space for KG frame-based entity queries",
         tenant="test_tenant"
     )
-    create_response = client.spaces.create_space(space_data)
+    create_response = await client.spaces.create_space(space_data)
     if not create_response.is_success:
         logger.error(f"❌ Failed to create space: {create_response.error_message}")
         return False
@@ -138,7 +138,7 @@ async def main():
         logger.info("=" * 80)
         
         org_tester = CreateOrganizationsTester(client)
-        org_results = org_tester.run_tests(space_id, graph_id)
+        org_results = await org_tester.run_tests(space_id, graph_id)
         all_results.append(org_results)
         
         if org_results["tests_failed"] > 0:
@@ -156,7 +156,7 @@ async def main():
         logger.info("=" * 80)
         
         event_tester = CreateBusinessEventsTester(client)
-        event_results = event_tester.run_tests(space_id, graph_id, organization_uris)
+        event_results = await event_tester.run_tests(space_id, graph_id, organization_uris)
         all_results.append(event_results)
         
         if event_results["tests_failed"] > 0:
@@ -195,7 +195,7 @@ async def main():
         logger.info("=" * 80)
         
         frame_tester = FrameQueriesTester(client)
-        frame_results = frame_tester.run_tests(space_id, graph_id, organization_uris, event_uris)
+        frame_results = await frame_tester.run_tests(space_id, graph_id, organization_uris, event_uris)
         all_results.append(frame_results)
         
         # ====================================================================
@@ -214,7 +214,7 @@ async def main():
         )}
         
         relation_tester = RelationQueriesTester(client)
-        relation_results = relation_tester.run_tests(space_id, graph_id, org_uri_map, product_uris, relation_type_uris)
+        relation_results = await relation_tester.run_tests(space_id, graph_id, org_uri_map, product_uris, relation_type_uris)
         all_results.append(relation_results)
         
         # ====================================================================
@@ -241,7 +241,7 @@ async def main():
         logger.info(f"   Note: Space will be deleted on next test run\n")
         
         logger.info("Closing client connection...")
-        client.close()
+        await client.close()
         logger.info("✅ Client closed\n")
 
 

@@ -24,7 +24,7 @@ class FrameOperationsTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str, 
+    async def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str, 
                   test_entity_name: str) -> Dict[str, Any]:
         """
         Run frame operation tests.
@@ -63,7 +63,7 @@ class FrameOperationsTester:
             logger.info("--- List Frames for Entity ---\n")
             
             # Use kgentities.get_kgentity_frames() which routes to /kgentities/kgframes endpoint
-            response = self.client.kgentities.get_kgentity_frames(
+            response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=test_entity_uri,
@@ -120,7 +120,7 @@ class FrameOperationsTester:
                 logger.info(f"Getting {len(test_frame_uris)} specific frames by URI")
                 
                 # This returns FrameGraphsResponse (different from EntityFramesResponse)
-                frame_graphs_response = self.client.kgentities.get_kgentity_frames(
+                frame_graphs_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -172,7 +172,7 @@ class FrameOperationsTester:
                 # Get the frame with its complete graph using entity frames endpoint
                 # Use frame_uris parameter to get specific frame with its graph
                 # This returns FrameGraphsResponse with frame_graphs dict
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -234,7 +234,7 @@ class FrameOperationsTester:
             
             if company_frame_uri:
                 # Get the frame with complete graph
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -274,7 +274,7 @@ class FrameOperationsTester:
                         logger.info(f"     [{i+1}] {obj_type}: {obj_uri}")
                     
                     # Update the frame
-                    update_response = self.client.kgentities.update_entity_frames(
+                    update_response = await self.client.kgentities.update_entity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=test_entity_uri,
@@ -286,7 +286,7 @@ class FrameOperationsTester:
                         
                         # Verify by re-fetching the frame
                         logger.info(f"   Verifying update by re-fetching frame...")
-                        verify_response = self.client.kgentities.get_kgentity_frames(
+                        verify_response = await self.client.kgentities.get_kgentity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=test_entity_uri,
@@ -345,7 +345,7 @@ class FrameOperationsTester:
         # Dump space info to see actual triples before deletion
         try:
             logger.info(f"\n--- Dumping Space Info Before Frame Deletion ---\n")
-            space_info = self.client.spaces.get_space(space_id=space_id)
+            space_info = await self.client.spaces.get_space(space_id=space_id)
             logger.info(f"   Space info retrieved (check server logs for quad dump)")
         except Exception as e:
             logger.warning(f"   Could not get space info: {e}")
@@ -368,7 +368,7 @@ class FrameOperationsTester:
                 logger.info(f"   Deleting frame: {company_frame_uri}")
                 
                 # Delete the frame
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -381,7 +381,7 @@ class FrameOperationsTester:
                     # Verify by attempting to get the deleted frame
                     logger.info(f"   Verifying deletion by attempting to get deleted frame...")
                     try:
-                        get_deleted_response = self.client.kgentities.get_kgentity_frames(
+                        get_deleted_response = await self.client.kgentities.get_kgentity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=test_entity_uri,
@@ -426,7 +426,7 @@ class FrameOperationsTester:
                     
                     # Verify by listing all frames for the entity
                     logger.info(f"   Verifying deletion by listing all frames...")
-                    list_response = self.client.kgentities.get_kgentity_frames(
+                    list_response = await self.client.kgentities.get_kgentity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=test_entity_uri

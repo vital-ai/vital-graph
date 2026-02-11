@@ -21,7 +21,7 @@ class GetBusinessEventsTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, event_uris: List[str]) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, event_uris: List[str]) -> Dict[str, Any]:
         """
         Run business event retrieval tests.
         
@@ -56,7 +56,7 @@ class GetBusinessEventsTester:
             event_uri = event_uris[0]
             logger.info(f"Test 1: Get event entity graph for {event_uri}...")
             
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=event_uri,
@@ -109,7 +109,7 @@ class GetBusinessEventsTester:
             
             success_count = 0
             for i, event_uri in enumerate(event_uris[:test_count], 1):
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=event_uri,
@@ -141,7 +141,7 @@ class GetBusinessEventsTester:
             event_uri = event_uris[0]
             logger.info(f"Test 3: Verify organization URI reference in event...")
             
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=event_uri,

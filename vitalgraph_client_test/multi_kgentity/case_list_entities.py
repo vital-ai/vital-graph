@@ -18,7 +18,7 @@ class ListEntitiesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, expected_count: int = 10) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, expected_count: int = 10) -> Dict[str, Any]:
         """
         Run entity listing tests.
         
@@ -45,7 +45,7 @@ class ListEntitiesTester:
         # Test 1: List all entities
         results["tests_run"] += 1
         try:
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=20
@@ -86,7 +86,7 @@ class ListEntitiesTester:
             logger.info("  Query Entities - Search by Name")
             logger.info("=" * 80)
             
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 search="Corp",  # Search for "Corp" which appears in multiple entity names

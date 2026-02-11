@@ -19,7 +19,7 @@ class ListEntityGraphsTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(
+    async def run_tests(
         self,
         space_id: str,
         graph_id: str,
@@ -62,7 +62,7 @@ class ListEntityGraphsTester:
             logger.info(f"Listing entities with include_entity_graph=True")
             
             # List entities with complete graphs - returns MultiEntityGraphResponse
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -123,7 +123,7 @@ class ListEntityGraphsTester:
             logger.info(f"\n--- Access Individual Entity Graphs ---\n")
             
             # Get entity graphs again
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=3,

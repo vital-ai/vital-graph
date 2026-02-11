@@ -17,7 +17,7 @@ class KGTypeDeleteTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, created_kgtypes: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, created_kgtypes: list = None) -> Dict[str, Any]:
         """
         Run KGType deletion tests.
         
@@ -38,16 +38,16 @@ class KGTypeDeleteTester:
             # Use first 2 KGTypes for delete tests (get tests have already completed)
             delete_kgtypes = created_kgtypes[:2]
             for i, kgtype_uri in enumerate(delete_kgtypes):
-                delete_result = self._test_delete_existing_kgtype(space_id, graph_id, kgtype_uri, i+1)
+                delete_result = await self._test_delete_existing_kgtype(space_id, graph_id, kgtype_uri, i+1)
                 results.append(delete_result)
         
         # Test delete non-existent KGType
-        nonexistent_result = self._test_delete_nonexistent_kgtype(space_id, graph_id)
+        nonexistent_result = await self._test_delete_nonexistent_kgtype(space_id, graph_id)
         results.append(nonexistent_result)
         
         # Test batch delete - use remaining KGTypes (starting from index 2)
         if created_kgtypes and len(created_kgtypes) > 2:
-            batch_result = self._test_batch_delete_kgtypes(space_id, graph_id, created_kgtypes[2:])
+            batch_result = await self._test_batch_delete_kgtypes(space_id, graph_id, created_kgtypes[2:])
             results.append(batch_result)
         
         passed_tests = sum(1 for r in results if r['passed'])
@@ -61,7 +61,7 @@ class KGTypeDeleteTester:
             'results': results
         }
     
-    def _test_delete_existing_kgtype(self, space_id: str, graph_id: str, kgtype_uri: str, index: int) -> Dict[str, Any]:
+    async def _test_delete_existing_kgtype(self, space_id: str, graph_id: str, kgtype_uri: str, index: int) -> Dict[str, Any]:
         """Test deleting an existing KGType."""
         logger.info(f"  Testing delete existing KGType: {kgtype_uri}")
         
@@ -73,7 +73,7 @@ class KGTypeDeleteTester:
             logger.info(f"      - KGType URI: {kgtype_uri}")
             
             # Delete KGType using client
-            response = self.client.delete_kgtype(space_id, graph_id, kgtype_uri)
+            response = await self.client.delete_kgtype(space_id, graph_id, kgtype_uri)
             
             # Log the response details
             logger.info(f"    📥 RESPONSE: DELETE KGType")
@@ -112,14 +112,14 @@ class KGTypeDeleteTester:
                 'error': f"Exception during KGType deletion: {e}"
             }
     
-    def _test_delete_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_delete_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test deleting a non-existent KGType."""
         logger.info("  Testing delete non-existent KGType...")
         
         nonexistent_uri = "http://vital.ai/test/kgtype/nonexistent_delete_12345"
         
         try:
-            response = self.client.delete_kgtype(space_id, graph_id, nonexistent_uri)
+            response = await self.client.delete_kgtype(space_id, graph_id, nonexistent_uri)
             
             # Deletion of non-existent KGType might succeed (no-op) or fail
             # Both behaviors are acceptable depending on implementation
@@ -140,7 +140,7 @@ class KGTypeDeleteTester:
                 'nonexistent_uri': nonexistent_uri
             }
     
-    def _test_batch_delete_kgtypes(self, space_id: str, graph_id: str, kgtype_uris: List[str]) -> Dict[str, Any]:
+    async def _test_batch_delete_kgtypes(self, space_id: str, graph_id: str, kgtype_uris: List[str]) -> Dict[str, Any]:
         """Test batch deletion of KGTypes."""
         logger.info(f"  Testing batch delete KGTypes: {len(kgtype_uris)} KGTypes...")
         
@@ -152,7 +152,7 @@ class KGTypeDeleteTester:
             # Delete each KGType individually (client might not support batch delete)
             for kgtype_uri in kgtype_uris:
                 try:
-                    response = self.client.delete_kgtype(space_id, graph_id, kgtype_uri)
+                    response = await self.client.delete_kgtype(space_id, graph_id, kgtype_uri)
                     if response and hasattr(response, 'deleted_count') and response.deleted_count > 0:
                         deleted_count += response.deleted_count
                         successful_deletes.append(kgtype_uri)

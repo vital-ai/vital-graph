@@ -64,7 +64,7 @@ class CreateRelationsTester:
     def __init__(self):
         self.data_creator = ClientTestDataCreator()
     
-    def create_relation_kgtypes(self, client, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def create_relation_kgtypes(self, client, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Create KGType definitions for relation types and ProductEntity.
         
@@ -116,7 +116,7 @@ class CreateRelationsTester:
         type_uris['supplies'] = str(supplies_type.URI)
         
         # Create all types - pass GraphObjects directly
-        response = client.kgtypes.create_kgtypes(space_id, graph_id, types_to_create)
+        response = await client.kgtypes.create_kgtypes(space_id, graph_id, types_to_create)
         
         if response.is_success:
             logger.info(f"✅ Created {len(types_to_create)} relation KGTypes")
@@ -127,7 +127,7 @@ class CreateRelationsTester:
         
         return type_uris
     
-    def create_product_entities(
+    async def create_product_entities(
         self, 
         client, 
         space_id: str, 
@@ -177,7 +177,7 @@ class CreateRelationsTester:
             objects.append(price_slot)
             
             # Create entity with slots
-            response = client.kgentities.create_kgentities(
+            response = await client.kgentities.create_kgentities(
                 space_id, 
                 graph_id, 
                 objects
@@ -192,7 +192,7 @@ class CreateRelationsTester:
         logger.info(f"\n✅ Created {len(product_uris)} product entities")
         return product_uris
     
-    def create_relation_instances(
+    async def create_relation_instances(
         self,
         client,
         space_id: str,
@@ -233,7 +233,7 @@ class CreateRelationsTester:
                 relation.edgeDestination = product_uris[product_name]
                 relation.kGRelationType = relation_type_uris['makes_product']
                 
-                response = client.kgrelations.create_relations(space_id, graph_id, [relation])
+                response = await client.kgrelations.create_relations(space_id, graph_id, [relation])
                 if response.is_success:
                     relation_uris['makes_product'].extend(response.created_uris)
                     logger.info(f"✅ Created MakesProduct: {org_name} → {product_name}")
@@ -254,7 +254,7 @@ class CreateRelationsTester:
                 relation.edgeDestination = org_uris[org2_name]
                 relation.kGRelationType = relation_type_uris['competitor_of']
                 
-                response = client.kgrelations.create_relations(space_id, graph_id, [relation])
+                response = await client.kgrelations.create_relations(space_id, graph_id, [relation])
                 if response.is_success:
                     relation_uris['competitor_of'].extend(response.created_uris)
                     logger.info(f"✅ Created CompetitorOf: {org1_name} → {org2_name}")
@@ -274,7 +274,7 @@ class CreateRelationsTester:
                 relation.edgeDestination = org_uris[org2_name]
                 relation.kGRelationType = relation_type_uris['partner_with']
                 
-                response = client.kgrelations.create_relations(space_id, graph_id, [relation])
+                response = await client.kgrelations.create_relations(space_id, graph_id, [relation])
                 if response.is_success:
                     relation_uris['partner_with'].extend(response.created_uris)
                     logger.info(f"✅ Created PartnerWith: {org1_name} → {org2_name}")
@@ -294,7 +294,7 @@ class CreateRelationsTester:
                 relation.edgeDestination = org_uris[org2_name]
                 relation.kGRelationType = relation_type_uris['supplies']
                 
-                response = client.kgrelations.create_relations(space_id, graph_id, [relation])
+                response = await client.kgrelations.create_relations(space_id, graph_id, [relation])
                 if response.is_success:
                     relation_uris['supplies'].extend(response.created_uris)
                     logger.info(f"✅ Created Supplies: {org1_name} → {org2_name}")
@@ -310,7 +310,7 @@ class CreateRelationsTester:
         return relation_uris
 
 
-def create_all_relation_data(
+async def create_all_relation_data(
     client,
     space_id: str,
     graph_id: str,
@@ -331,10 +331,10 @@ def create_all_relation_data(
     tester = CreateRelationsTester()
     
     # Create relation types
-    relation_type_uris = tester.create_relation_kgtypes(client, space_id, graph_id)
+    relation_type_uris = await tester.create_relation_kgtypes(client, space_id, graph_id)
     
     # Create product entities
-    product_uris = tester.create_product_entities(
+    product_uris = await tester.create_product_entities(
         client, 
         space_id, 
         graph_id,
@@ -342,7 +342,7 @@ def create_all_relation_data(
     )
     
     # Create relation instances
-    relation_uris = tester.create_relation_instances(
+    relation_uris = await tester.create_relation_instances(
         client,
         space_id,
         graph_id,

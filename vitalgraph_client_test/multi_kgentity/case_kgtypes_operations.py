@@ -21,7 +21,7 @@ class KGTypesOperationsTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run KGTypes operations tests.
         
@@ -41,19 +41,19 @@ class KGTypesOperationsTester:
         kgtypes_to_create = self._create_test_kgtypes()
         
         # Test 1: Create KGTypes
-        create_result = self._test_create_kgtypes(space_id, graph_id, kgtypes_to_create)
+        create_result = await self._test_create_kgtypes(space_id, graph_id, kgtypes_to_create)
         results.append(create_result)
         if not create_result['passed']:
             errors.append(create_result.get('error', 'KGType creation failed'))
         
         # Test 2: List all KGTypes
-        list_result = self._test_list_kgtypes(space_id, graph_id, expected_count=len(kgtypes_to_create))
+        list_result = await self._test_list_kgtypes(space_id, graph_id, expected_count=len(kgtypes_to_create))
         results.append(list_result)
         if not list_result['passed']:
             errors.append(list_result.get('error', 'KGType listing failed'))
         
         # Test 3: Verify specific KGTypes exist
-        verify_result = self._test_verify_kgtypes(space_id, graph_id, kgtypes_to_create)
+        verify_result = await self._test_verify_kgtypes(space_id, graph_id, kgtypes_to_create)
         results.append(verify_result)
         if not verify_result['passed']:
             errors.append(verify_result.get('error', 'KGType verification failed'))
@@ -115,13 +115,13 @@ class KGTypesOperationsTester:
         
         return kgtypes
     
-    def _test_create_kgtypes(self, space_id: str, graph_id: str, kgtypes: List[KGType]) -> Dict[str, Any]:
+    async def _test_create_kgtypes(self, space_id: str, graph_id: str, kgtypes: List[KGType]) -> Dict[str, Any]:
         """Test creating KGTypes."""
         logger.info(f"  Testing create {len(kgtypes)} KGTypes...")
         
         try:
             # Create using client - pass GraphObjects directly
-            response = self.client.kgtypes.create_kgtypes(space_id, graph_id, kgtypes)
+            response = await self.client.kgtypes.create_kgtypes(space_id, graph_id, kgtypes)
             
             if response.is_success:
                 logger.info(f"    ✅ Created {response.created_count} KGTypes")
@@ -145,12 +145,12 @@ class KGTypesOperationsTester:
                 'error': f"Exception during KGType creation: {e}"
             }
     
-    def _test_list_kgtypes(self, space_id: str, graph_id: str, expected_count: int) -> Dict[str, Any]:
+    async def _test_list_kgtypes(self, space_id: str, graph_id: str, expected_count: int) -> Dict[str, Any]:
         """Test listing all KGTypes."""
         logger.info(f"  Testing list KGTypes (expecting {expected_count})...")
         
         try:
-            response = self.client.kgtypes.list_kgtypes(space_id, graph_id, page_size=100)
+            response = await self.client.kgtypes.list_kgtypes(space_id, graph_id, page_size=100)
             
             if response.is_success:
                 actual_count = response.count
@@ -189,7 +189,7 @@ class KGTypesOperationsTester:
                 'error': f"Exception during KGType listing: {e}"
             }
     
-    def _test_verify_kgtypes(self, space_id: str, graph_id: str, kgtypes: List[KGType]) -> Dict[str, Any]:
+    async def _test_verify_kgtypes(self, space_id: str, graph_id: str, kgtypes: List[KGType]) -> Dict[str, Any]:
         """Test verifying specific KGTypes exist."""
         logger.info(f"  Testing verify specific KGTypes...")
         
@@ -198,7 +198,7 @@ class KGTypesOperationsTester:
             test_kgtype = kgtypes[0]
             test_uri = str(test_kgtype.URI)
             
-            response = self.client.kgtypes.get_kgtype(space_id, graph_id, test_uri)
+            response = await self.client.kgtypes.get_kgtype(space_id, graph_id, test_uri)
             
             if response.is_success and response.type:
                 logger.info(f"    ✅ Verified KGType exists: {test_uri}")

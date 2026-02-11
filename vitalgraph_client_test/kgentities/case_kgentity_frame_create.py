@@ -49,7 +49,7 @@ class KGEntityFrameCreateTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Frame Creation Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -64,7 +64,7 @@ class KGEntityFrameCreateTester:
             logger.info(f"✅ Created test entity: {entity_uri}")
             
             # Test frame retrieval to verify frames were created with the entity
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -104,7 +104,7 @@ class KGEntityFrameCreateTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Hierarchical Frame Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -119,7 +119,7 @@ class KGEntityFrameCreateTester:
             logger.info(f"✅ Created test entity: {entity_uri}")
             
             # Get existing frames from the created entity to use as parent frame
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -142,7 +142,7 @@ class KGEntityFrameCreateTester:
             child_entity_objects = self.test_data_creator.create_person_with_contact("Child Frame Test Person")
             
             # Modern client API expects GraphObjects directly
-            child_entity_response = self.client.kgentities.create_kgentities(
+            child_entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=child_entity_objects,
@@ -157,7 +157,7 @@ class KGEntityFrameCreateTester:
             self.created_entity_uris.append(child_entity_uri)
             
             # Get frames from the child entity to validate hierarchical structure
-            child_frames = self.client.kgentities.get_kgentity_frames(
+            child_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=child_entity_uri
@@ -199,7 +199,7 @@ class KGEntityFrameCreateTester:
             frame_objects = self.test_data_creator.create_employment_frame("Test Job", "Test Company")
             
             try:
-                invalid_response = self.client.kgentities.create_entity_frames(
+                invalid_response = await self.client.kgentities.create_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri="http://invalid.uri/nonexistent",
@@ -227,7 +227,7 @@ class KGEntityFrameCreateTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Validation Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects,
@@ -239,7 +239,7 @@ class KGEntityFrameCreateTester:
                 self.created_entity_uris.append(entity_uri)
                 
                 try:
-                    invalid_parent_response = self.client.kgentities.create_entity_frames(
+                    invalid_parent_response = await self.client.kgentities.create_entity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=entity_uri,
@@ -285,7 +285,7 @@ class KGEntityFrameCreateTester:
             # Delete created entities (which should cascade to frames)
             for entity_uri in self.created_entity_uris:
                 try:
-                    delete_response = self.client.kgentities.delete_kgentity(
+                    delete_response = await self.client.kgentities.delete_kgentity(
                         space_id=space_id,
                         graph_id=graph_id,
                         uri=entity_uri,

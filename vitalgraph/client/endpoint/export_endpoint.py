@@ -20,7 +20,7 @@ from ...model.export_model import (
 class ExportEndpoint(BaseEndpoint):
     """Client endpoint for Data Export operations."""
     
-    def create_export_job(self, export_job: ExportJob) -> ExportCreateResponse:
+    async def create_export_job(self, export_job: ExportJob) -> ExportCreateResponse:
         """
         Create new data export job.
         
@@ -38,9 +38,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export"
         
-        return self._make_typed_request('POST', url, ExportCreateResponse, json=export_job.model_dump())
+        return await self._make_typed_request('POST', url, ExportCreateResponse, json=export_job.model_dump())
     
-    def list_export_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
+    async def list_export_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
                         page_size: int = 100, offset: int = 0) -> ExportJobsResponse:
         """
         List all export jobs with optional filtering.
@@ -67,9 +67,9 @@ class ExportEndpoint(BaseEndpoint):
             offset=offset
         )
         
-        return self._make_typed_request('GET', url, ExportJobsResponse, params=params)
+        return await self._make_typed_request('GET', url, ExportJobsResponse, params=params)
     
-    def get_export_job(self, export_id: str) -> ExportJobResponse:
+    async def get_export_job(self, export_id: str) -> ExportJobResponse:
         """
         Get export job details by ID.
         
@@ -87,9 +87,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}"
         
-        return self._make_typed_request('GET', url, ExportJobResponse)
+        return await self._make_typed_request('GET', url, ExportJobResponse)
     
-    def update_export_job(self, export_id: str, export_job: ExportJob) -> ExportUpdateResponse:
+    async def update_export_job(self, export_id: str, export_job: ExportJob) -> ExportUpdateResponse:
         """
         Update export job.
         
@@ -108,9 +108,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}"
         
-        return self._make_typed_request('PUT', url, ExportUpdateResponse, json=export_job.model_dump())
+        return await self._make_typed_request('PUT', url, ExportUpdateResponse, json=export_job.model_dump())
     
-    def delete_export_job(self, export_id: str) -> ExportDeleteResponse:
+    async def delete_export_job(self, export_id: str) -> ExportDeleteResponse:
         """
         Delete export job.
         
@@ -128,9 +128,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}"
         
-        return self._make_typed_request('DELETE', url, ExportDeleteResponse)
+        return await self._make_typed_request('DELETE', url, ExportDeleteResponse)
     
-    def execute_export_job(self, export_id: str) -> ExportExecuteResponse:
+    async def execute_export_job(self, export_id: str) -> ExportExecuteResponse:
         """
         Execute export job.
         
@@ -148,9 +148,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}/execute"
         
-        return self._make_typed_request('POST', url, ExportExecuteResponse)
+        return await self._make_typed_request('POST', url, ExportExecuteResponse)
     
-    def get_export_status(self, export_id: str) -> ExportStatusResponse:
+    async def get_export_status(self, export_id: str) -> ExportStatusResponse:
         """
         Get export execution status.
         
@@ -168,9 +168,9 @@ class ExportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/export/{export_id}/status"
         
-        return self._make_typed_request('GET', url, ExportStatusResponse)
+        return await self._make_typed_request('GET', url, ExportStatusResponse)
     
-    def download_export_results(self, export_id: str, binary_id: str, output_path: str) -> bool:
+    async def download_export_results(self, export_id: str, binary_id: str, output_path: str) -> bool:
         """
         Download export results by binary ID.
         
@@ -193,7 +193,7 @@ class ExportEndpoint(BaseEndpoint):
             params = build_query_params(binary_id=binary_id)
             
             # Use authenticated request with token refresh
-            response = self._make_authenticated_request('GET', url, params=params, stream=True)
+            response = await self._make_authenticated_request('GET', url, params=params, stream=True)
             response.raise_for_status()
             
             # Save to file
@@ -210,7 +210,7 @@ class ExportEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to download export results: {e}")
     
-    def download_to_consumer(self, export_id: str, binary_id: str, 
+    async def download_to_consumer(self, export_id: str, binary_id: str, 
                             consumer: BinaryConsumer, chunk_size: int = 8192) -> Dict[str, Any]:
         """
         Download export results to a BinaryConsumer.
@@ -224,9 +224,9 @@ class ExportEndpoint(BaseEndpoint):
         Returns:
             Dictionary containing download result
         """
-        return self.download_export_results(export_id, binary_id, consumer, chunk_size)
+        return await self.download_export_results(export_id, binary_id, consumer, chunk_size)
     
-    def get_export_files(self, export_id: str) -> List[Dict[str, Any]]:
+    async def get_export_files(self, export_id: str) -> List[Dict[str, Any]]:
         """
         Get list of available export output files.
         
@@ -239,11 +239,11 @@ class ExportEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        job_details = self.get_export_job(export_id)
+        job_details = await self.get_export_job(export_id)
         export_job = job_details.get('export_job', {})
         return export_job.get('output_files', [])
     
-    def download_all_export_files(self, export_id: str, destination_dir: Union[str, Path],
+    async def download_all_export_files(self, export_id: str, destination_dir: Union[str, Path],
                                  chunk_size: int = 8192) -> Dict[str, Any]:
         """
         Download all export output files to a directory.
@@ -262,7 +262,7 @@ class ExportEndpoint(BaseEndpoint):
         destination_path = Path(destination_dir)
         destination_path.mkdir(parents=True, exist_ok=True)
         
-        output_files = self.get_export_files(export_id)
+        output_files = await self.get_export_files(export_id)
         results = []
         
         for file_info in output_files:
@@ -271,7 +271,7 @@ class ExportEndpoint(BaseEndpoint):
             
             if binary_id:
                 file_path = destination_path / filename
-                result = self.download_export_results(export_id, binary_id, file_path, chunk_size)
+                result = await self.download_export_results(export_id, binary_id, file_path, chunk_size)
                 results.append({
                     "binary_id": binary_id,
                     "filename": filename,

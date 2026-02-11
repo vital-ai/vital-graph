@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class KGQueriesEndpoint(BaseEndpoint):
     """Client endpoint for KG entity-to-entity connection queries."""
     
-    def query_connections(
+    async def query_connections(
         self,
         space_id: str,
         graph_id: str,
@@ -74,7 +74,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             logger.info(f"KGQuery Request Body: {request_dict}")
             
             # Make typed request
-            response = self._make_typed_request(
+            response = await self._make_typed_request(
                 'POST',
                 url,
                 KGQueryResponse,
@@ -94,7 +94,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             logger.error(f"Unexpected error querying connections: {e}")
             raise VitalGraphClientError(f"Failed to query connections: {str(e)}")
     
-    def query_frame_connections(
+    async def query_frame_connections(
         self,
         space_id: str,
         graph_id: str,
@@ -141,7 +141,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             exclude_self_connections=exclude_self_connections
         )
         
-        return self.query_connections(
+        return await self.query_connections(
             space_id=space_id,
             graph_id=graph_id,
             criteria=criteria,
@@ -149,7 +149,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             offset=offset
         )
     
-    def query_relation_connections(
+    async def query_relation_connections(
         self,
         space_id: str,
         graph_id: str,
@@ -205,7 +205,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             exclude_self_connections=exclude_self_connections
         )
         
-        return self.query_connections(
+        return await self.query_connections(
             space_id=space_id,
             graph_id=graph_id,
             criteria=criteria,

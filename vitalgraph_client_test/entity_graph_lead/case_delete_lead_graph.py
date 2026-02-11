@@ -16,7 +16,7 @@ class DeleteLeadGraphTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, entity_uri: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, entity_uri: str) -> Dict[str, Any]:
         """
         Run lead entity graph deletion tests.
         
@@ -48,7 +48,7 @@ class DeleteLeadGraphTester:
             logger.info(f"\n--- Delete Entity Graph ---\n")
             
             # Delete the entity with full graph
-            response = self.client.kgentities.delete_kgentity(
+            response = await self.client.kgentities.delete_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=entity_uri,
@@ -82,7 +82,7 @@ class DeleteLeadGraphTester:
             # Try to get the deleted entity
             logger.info(f"   Attempting to get deleted entity...")
             try:
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri
@@ -120,7 +120,7 @@ class DeleteLeadGraphTester:
             
             # List all entities to verify deletion
             logger.info(f"   Verifying deletion by listing all entities...")
-            list_response = self.client.kgentities.list_kgentities(
+            list_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100

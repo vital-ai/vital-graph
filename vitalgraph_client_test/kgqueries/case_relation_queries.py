@@ -17,7 +17,7 @@ class RelationQueriesTester:
         """Initialize with VitalGraph client."""
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, org_uris: Dict[str, str], 
+    async def run_tests(self, space_id: str, graph_id: str, org_uris: Dict[str, str], 
                   product_uris: Dict[str, str], relation_type_uris: Dict[str, str]) -> Dict:
         """
         Run relation query tests.
@@ -49,7 +49,7 @@ class RelationQueriesTester:
             if not makes_product_uri:
                 raise ValueError("MakesProduct relation type URI not found")
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 relation_type_uris=[makes_product_uri],
@@ -84,7 +84,7 @@ class RelationQueriesTester:
             if not techcorp_uri:
                 raise ValueError("TechCorp URI not found")
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 source_entity_uris=[techcorp_uri],
@@ -119,7 +119,7 @@ class RelationQueriesTester:
             if not competitor_uri:
                 raise ValueError("CompetitorOf relation type URI not found")
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 relation_type_uris=[competitor_uri],
@@ -158,7 +158,7 @@ class RelationQueriesTester:
             
             makes_product_uri = relation_type_uris.get('makes_product')
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 relation_type_uris=[makes_product_uri],
@@ -199,7 +199,7 @@ class RelationQueriesTester:
         try:
             from vitalgraph.model.kgentities_model import FrameCriteria, SlotCriteria
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 source_frame_criteria=[
@@ -252,7 +252,7 @@ class RelationQueriesTester:
                 ]
             )
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 relation_type_uris=[competitor_uri],
@@ -283,7 +283,7 @@ class RelationQueriesTester:
         try:
             from vitalgraph.model.kgentities_model import FrameCriteria, SlotCriteria
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 source_frame_criteria=[
@@ -325,7 +325,7 @@ class RelationQueriesTester:
             
             makes_product_uri = relation_type_uris.get('makes_product')
             
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 relation_type_uris=[makes_product_uri],

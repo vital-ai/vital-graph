@@ -38,6 +38,7 @@ class FilesEndpoint:
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.router = APIRouter()
+        self.logger = logging.getLogger(__name__)
         
         # Initialize FilesImpl for database operations
         from .impl.files_impl import FilesImpl
@@ -61,7 +62,7 @@ class FilesEndpoint:
                 self.file_manager = create_s3_file_manager_from_config(config_dict)
             except Exception as e:
                 # Log error but don't fail initialization
-                print(f"Warning: Could not initialize S3FileManager: {e}")
+                self.logger.warning(f"Could not initialize S3FileManager: {e}")
         
         self._setup_routes()
     
@@ -666,7 +667,7 @@ class FilesEndpoint:
                         graph_id=graph_id or "default"
                     )
                 except Exception as update_error:
-                    print(f"Failed to update FileNode properties: {update_error}")
+                    self.logger.error(f"Failed to update FileNode properties: {update_error}")
                 
                 return FileUploadResponse(
                     message=f"Successfully streamed file upload to MinIO",

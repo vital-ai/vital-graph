@@ -32,7 +32,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
         # Test 1: List all files in space
         logger.info("  Test 1: List all files in space")
         
-        response = client.files.list_files(
+        response = await client.files.list_files(
             space_id=space_id,
             graph_id=graph_id,
             page_size=100,
@@ -72,7 +72,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
         logger.info("  Test 2: List files with pagination")
         
         page_size = 2
-        response_page1 = client.files.list_files(
+        response_page1 = await client.files.list_files(
             space_id=space_id,
             graph_id=graph_id,
             page_size=page_size,
@@ -99,7 +99,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
             if response_page1.total_count > page_size:
                 logger.info("  Test 2b: List files page 2 with offset")
                 
-                response_page2 = client.files.list_files(
+                response_page2 = await client.files.list_files(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,
@@ -143,7 +143,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
         file_uri = created_file_uris[0] if created_file_uris else "haley:file_test_document_001"
         
         try:
-            response = client.files.get_file(
+            response = await client.files.get_file(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=file_uri

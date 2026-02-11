@@ -1,4 +1,5 @@
 
+import gc
 import os
 import json
 import logging
@@ -21,6 +22,7 @@ from vitalgraph.auth.vitalgraph_auth import VitalGraphAuth
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
 from vitalgraph.websocket.websocket_handler import ConnectionManager, websocket_endpoint
 from vitalgraph.signal.notification_bridge import setup_notification_bridge
+from vitalgraph.utils.event_loop_monitor import EventLoopMonitor
 from vitalgraph.model.users_model import User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
 from vitalgraph.model.spaces_model import Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse
 
@@ -85,10 +87,13 @@ class VitalGraphAppImpl:
         # Initialize WebSocket connection manager
         self.websocket_manager = ConnectionManager(self.auth)
         
+        # Event loop stall monitor
+        self.event_loop_monitor = EventLoopMonitor(threshold_ms=100, check_interval_ms=50)
+        
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
-        print(f"🔍 DEBUG: Retrieved space_manager from VitalGraphImpl: {self.space_manager}")
-        print(f"🔍 DEBUG: space_manager type: {type(self.space_manager)}")
+        self.logger.debug(f"🔍 Retrieved space_manager from VitalGraphImpl: {self.space_manager}")
+        self.logger.debug(f"🔍 space_manager type: {type(self.space_manager)}")
         
         # Initialize VitalGraph API with auth handler, database implementation, and space manager
         self.api = VitalGraphAPI(
@@ -96,7 +101,7 @@ class VitalGraphAppImpl:
             db_impl=self.db_impl, 
             space_manager=self.space_manager
         )
-        print(f"🔍 DEBUG: VitalGraphAPI initialized with space_manager: {self.api.space_manager}")
+        self.logger.debug(f"🔍 VitalGraphAPI initialized with space_manager: {self.api.space_manager}")
         
         # Add dependency for getting current user (needed before route setup)
         self.get_current_user = self.auth.create_get_current_user_dependency()
@@ -115,9 +120,11 @@ class VitalGraphAppImpl:
         # Add request logging middleware
         @self.app.middleware("http")
         async def log_requests(request: Request, call_next):
+            self.event_loop_monitor.record_request_activity()
             self.logger.debug(f"🔍 INCOMING REQUEST: {request.method} {request.url}")
             self.logger.debug(f"🔍 REQUEST HEADERS: {dict(request.headers)}")
             response = await call_next(request)
+            self.event_loop_monitor.record_request_activity()
             self.logger.debug(f"🔍 RESPONSE STATUS: {response.status_code}")
             return response
         
@@ -153,6 +160,18 @@ class VitalGraphAppImpl:
         @self.app.on_event("startup")
         async def startup_event():
             """Connect to database on server startup"""
+            # Re-apply log level after uvicorn has configured its own logging
+            try:
+                app_config = self.config.get_app_config()
+                log_level = app_config.get('log_level', 'INFO')
+                numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+                logging.getLogger().setLevel(numeric_level)
+                for logger_name in logging.Logger.manager.loggerDict:
+                    logging.getLogger(logger_name).setLevel(numeric_level)
+                self.logger.setLevel(numeric_level)
+            except (AttributeError, TypeError):
+                pass
+            
             if self.vital_graph_impl:
                 try:
                     self.logger.debug("About to connect database via VitalGraphImpl")
@@ -162,16 +181,16 @@ class VitalGraphAppImpl:
                     
                     # Update space_manager reference after database connection
                     self.space_manager = self.vital_graph_impl.get_space_manager()
-                    print(f"🔍 STARTUP DEBUG: Updated space_manager after DB connection: {self.space_manager}")
+                    self.logger.debug(f"🔍 STARTUP: Updated space_manager after DB connection: {self.space_manager}")
                     
                     # Set the space_manager on VitalGraphAPI now that it's available
                     if self.space_manager is not None:
                         self.api.space_manager = self.space_manager
-                        print(f"🔍 STARTUP DEBUG: Set space_manager on VitalGraphAPI: {self.api.space_manager}")
-                        print(f"🔍 STARTUP DEBUG: API object id: {id(self.api)}")
-                        print(f"🔍 STARTUP DEBUG: Endpoints already registered during init - they will use this updated API instance")
+                        self.logger.debug(f"🔍 STARTUP: Set space_manager on VitalGraphAPI: {self.api.space_manager}")
+                        self.logger.debug(f"🔍 STARTUP: API object id: {id(self.api)}")
+                        self.logger.debug(f"🔍 STARTUP: Endpoints already registered during init - they will use this updated API instance")
                     else:
-                        print(f"❌ STARTUP ERROR: space_manager is still None after database connection")
+                        self.logger.error(f"❌ STARTUP ERROR: space_manager is still None after database connection")
                     
                     # Ensure SpaceManager is initialized from database after connection
                     self.logger.debug("Checking SpaceManager for initialization...")
@@ -187,6 +206,18 @@ class VitalGraphAppImpl:
                         await self.space_manager.initialize_from_database()
                         self.logger.info(f"SpaceManager initialized with {len(self.space_manager)} spaces")
                         self.logger.debug(f"Available spaces: {list(self.space_manager._spaces.keys()) if hasattr(self.space_manager, '_spaces') else 'N/A'}")
+                        
+                        # Auto-register Fuseki datasets for all known spaces
+                        space_backend = getattr(self.vital_graph_impl, 'space_backend', None)
+                        fuseki_mgr = getattr(space_backend, 'fuseki_manager', None)
+                        if fuseki_mgr and hasattr(self.space_manager, '_spaces'):
+                            space_ids = list(self.space_manager._spaces.keys())
+                            if space_ids:
+                                try:
+                                    stats = await fuseki_mgr.ensure_datasets_registered(space_ids)
+                                    self.logger.info(f"Fuseki auto-register: {stats}")
+                                except Exception as e:
+                                    self.logger.warning(f"Fuseki auto-register failed: {e}")
                     else:
                         self.logger.warning("SpaceManager initialization skipped - conditions not met")
                     
@@ -223,6 +254,20 @@ class VitalGraphAppImpl:
                     
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
+            
+            # Freeze all current gen-2 objects so GC never scans them again.
+            # This dramatically reduces gen-2 pause duration by excluding the
+            # large set of long-lived startup objects (ORM metadata, caches, etc.)
+            gc.collect()  # collect garbage first
+            frozen_count = len(gc.get_objects(2))
+            gc.freeze()
+            self.logger.info(f"🧊 gc.freeze(): {frozen_count:,} gen-2 objects frozen — excluded from future GC scans")
+
+            # Start event loop stall monitor
+            try:
+                await self.event_loop_monitor.start()
+            except Exception as e:
+                self.logger.warning(f"Failed to start event loop monitor: {e}")
         
         @self.app.on_event("shutdown")
         async def shutdown_event():
@@ -230,6 +275,12 @@ class VitalGraphAppImpl:
             self.logger.info("🛑 Shutting down VitalGraph server...")
             
             try:
+                # Stop event loop monitor
+                try:
+                    await self.event_loop_monitor.stop()
+                except Exception as e:
+                    self.logger.warning(f"Error stopping event loop monitor: {e}")
+                
                 # Close signal manager (stops listen loops and closes connections)
                 if self.vital_graph_impl and self.vital_graph_impl.signal_manager:
                     self.logger.info("Closing signal manager...")

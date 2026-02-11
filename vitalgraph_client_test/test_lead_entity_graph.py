@@ -159,7 +159,7 @@ async def main():
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
@@ -170,7 +170,7 @@ async def main():
     try:
         # Delete space if it exists
         try:
-            delete_response = client.spaces.delete_space(space_id)
+            delete_response = await client.spaces.delete_space(space_id)
             if delete_response.is_success:
                 logger.info(f"   Deleted existing space")
         except:
@@ -178,7 +178,7 @@ async def main():
         
         # Create new space
         space = Space(space=space_id, space_name="Lead Entity Graph Test Space")
-        create_response = client.spaces.create_space(space)
+        create_response = await client.spaces.create_space(space)
         
         if not create_response.is_success:
             logger.error(f"Failed to create space: {create_response.error_message}")
@@ -202,7 +202,7 @@ async def main():
             # STEP 1: Load Lead Entity Graph
             # ====================================================================
             load_tester = LoadLeadGraphTester(client)
-            load_results = load_tester.run_tests(space_id, graph_id, str(lead_file))
+            load_results = await load_tester.run_tests(space_id, graph_id, str(lead_file))
             all_results.append(load_results)
             
             if load_results["tests_failed"] > 0:
@@ -218,7 +218,7 @@ async def main():
             # STEP 2: Verify Lead Entity Graph
             # ====================================================================
             verify_tester = VerifyLeadGraphTester(client)
-            verify_results = verify_tester.run_tests(
+            verify_results = await verify_tester.run_tests(
                 space_id, 
                 graph_id, 
                 entity_uri,
@@ -230,14 +230,14 @@ async def main():
             # STEP 3: Query Lead Entity Graph
             # ====================================================================
             query_tester = QueryLeadGraphTester(client)
-            query_results = query_tester.run_tests(space_id, graph_id, entity_uri)
+            query_results = await query_tester.run_tests(space_id, graph_id, entity_uri)
             all_results.append(query_results)
             
             # ====================================================================
             # STEP 4: Frame Operations
             # ====================================================================
             frame_tester = LeadFrameOperationsTester(client)
-            frame_results = frame_tester.run_tests(
+            frame_results = await frame_tester.run_tests(
                 space_id, 
                 graph_id, 
                 entity_uri,
@@ -249,7 +249,7 @@ async def main():
             # STEP 5: Delete Lead Entity Graph
             # ====================================================================
             delete_tester = DeleteLeadGraphTester(client)
-            delete_results = delete_tester.run_tests(space_id, graph_id, entity_uri)
+            delete_results = await delete_tester.run_tests(space_id, graph_id, entity_uri)
             all_results.append(delete_results)
         
         # ====================================================================
@@ -275,7 +275,7 @@ async def main():
         #     logger.warning(f"⚠️  Could not delete test space: {e}")
         logger.info(f"⚠️  Space '{space_id}' preserved for inspection")
         
-        client.close()
+        await client.close()
         logger.info("✅ Client closed")
 
 

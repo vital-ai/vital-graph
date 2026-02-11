@@ -27,7 +27,7 @@ class FrameOperationsResetTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str, 
+    async def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str, 
                   test_entity_name: str, update_value: str = "Advanced Technology Solutions") -> Dict[str, Any]:
         """
         Run frame operation tests (without deletion).
@@ -68,7 +68,7 @@ class FrameOperationsResetTester:
             logger.info("--- List Frames for Entity ---\n")
             
             # Use kgentities.get_kgentity_frames() which routes to /kgentities/kgframes endpoint
-            response = self.client.kgentities.get_kgentity_frames(
+            response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=test_entity_uri,
@@ -125,7 +125,7 @@ class FrameOperationsResetTester:
                 logger.info(f"Getting {len(test_frame_uris)} specific frames by URI")
                 
                 # This returns FrameGraphsResponse (different from EntityFramesResponse)
-                frame_graphs_response = self.client.kgentities.get_kgentity_frames(
+                frame_graphs_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -177,7 +177,7 @@ class FrameOperationsResetTester:
                 # Get the frame with its complete graph using entity frames endpoint
                 # Use frame_uris parameter to get specific frame with its graph
                 # This returns FrameGraphsResponse with frame_graphs dict
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -240,7 +240,7 @@ class FrameOperationsResetTester:
             if company_frame_uri:
                 # Get the frame with complete graph
                 t_get_start = time.time()
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -282,7 +282,7 @@ class FrameOperationsResetTester:
                     
                     # Update the frame
                     t_update_start = time.time()
-                    update_response = self.client.kgentities.update_entity_frames(
+                    update_response = await self.client.kgentities.update_entity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=test_entity_uri,
@@ -306,7 +306,7 @@ class FrameOperationsResetTester:
                         # Verify by re-fetching the frame
                         logger.info(f"   Verifying update by re-fetching frame...")
                         t_verify_start = time.time()
-                        verify_response = self.client.kgentities.get_kgentity_frames(
+                        verify_response = await self.client.kgentities.get_kgentity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=test_entity_uri,
@@ -388,7 +388,7 @@ class FrameOperationsResetTester:
             
             if company_frame_uri:
                 # Step 1: Get the current frame graph (to preserve structure for recreation)
-                pre_delete_response = self.client.kgentities.get_kgentity_frames(
+                pre_delete_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -403,7 +403,7 @@ class FrameOperationsResetTester:
                 
                 # Step 2: Delete the frame
                 t_delete_start = time.time()
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -431,7 +431,7 @@ class FrameOperationsResetTester:
                 
                 # Step 2b: Verify the frame is actually gone
                 t_delete_verify_start = time.time()
-                delete_verify_response = self.client.kgentities.get_kgentity_frames(
+                delete_verify_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -460,7 +460,7 @@ class FrameOperationsResetTester:
                 
                 # Step 4: Recreate the frame using create_entity_frames
                 t_recreate_start = time.time()
-                recreate_response = self.client.kgentities.create_entity_frames(
+                recreate_response = await self.client.kgentities.create_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,
@@ -488,7 +488,7 @@ class FrameOperationsResetTester:
                 
                 # Step 5: Verify the recreated frame has the new value
                 t_reverify_start = time.time()
-                reverify_response = self.client.kgentities.get_kgentity_frames(
+                reverify_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=test_entity_uri,

@@ -41,7 +41,7 @@ class BulkLoadDatasetTester:
             if error:
                 print(f"   Error: {error}")
     
-    def run_tests(self, space_id: str, graph_id: str, lead_files: List[Path]) -> dict:
+    async def run_tests(self, space_id: str, graph_id: str, lead_files: List[Path]) -> dict:
         """
         Run bulk load tests.
         
@@ -82,7 +82,7 @@ class BulkLoadDatasetTester:
                 graph_objects = vs.from_triples_list(triples)
                 
                 # Create entity via API - pass GraphObjects directly
-                response = self.client.kgentities.create_kgentities(
+                response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=graph_objects

@@ -21,7 +21,7 @@ class KGEntityUpdateTester:
         self.client = client
         self.data_creator = ClientTestDataCreator()
         
-    def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
         """
         Run KGEntity update tests.
         
@@ -51,7 +51,7 @@ class KGEntityUpdateTester:
                 person_objects = self.data_creator.create_person_with_contact("Update Test Person")
                 
                 # Modern client API expects GraphObjects directly
-                create_response = self.client.kgentities.create_kgentities(
+                create_response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=person_objects
@@ -89,7 +89,7 @@ class KGEntityUpdateTester:
             
             # Convert to JSON-LD for client
             # Modern client API expects GraphObjects directly
-            update_response = self.client.kgentities.update_kgentities(
+            update_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=updated_person_objects
@@ -125,7 +125,7 @@ class KGEntityUpdateTester:
                 
                 # Convert to JSON-LD for client
                 # Modern client API expects GraphObjects directly
-                parent_update_response = self.client.kgentities.update_kgentities(
+                parent_update_response = await self.client.kgentities.update_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=updated_org_objects,
@@ -177,7 +177,7 @@ class KGEntityUpdateTester:
             
             # Convert to JSON-LD for client
             # Modern client API expects GraphObjects directly
-            multi_update_response = self.client.kgentities.update_kgentities(
+            multi_update_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=all_objects
@@ -211,7 +211,7 @@ class KGEntityUpdateTester:
             
             # Convert to JSON-LD for client
             # Modern client API expects GraphObjects directly
-            nonexistent_response = self.client.kgentities.update_kgentities(
+            nonexistent_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=fake_project_objects
@@ -247,7 +247,7 @@ class KGEntityUpdateTester:
                 
                 # Convert to JSON-LD for client
                 # Modern client API expects GraphObjects directly
-                property_response = self.client.kgentities.update_kgentities(
+                property_response = await self.client.kgentities.update_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=property_person_objects

@@ -17,7 +17,7 @@ class ListBusinessEventsTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, expected_event_count: int = 10) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, expected_event_count: int = 10) -> Dict[str, Any]:
         """
         Run business event listing tests.
         
@@ -46,7 +46,7 @@ class ListBusinessEventsTester:
         try:
             logger.info("Test 1: List all business events by entity type...")
             
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_type_uri="http://vital.ai/ontology/haley-ai-kg#BusinessEventEntity",
@@ -80,7 +80,7 @@ class ListBusinessEventsTester:
         try:
             logger.info("Test 2: Search for 'NewCustomer' events...")
             
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_type_uri="http://vital.ai/ontology/haley-ai-kg#BusinessEventEntity",

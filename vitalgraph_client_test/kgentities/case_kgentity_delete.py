@@ -20,7 +20,7 @@ class KGEntityDeleteTester:
         self.client = client
         self.data_creator = ClientTestDataCreator()
         
-    def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
         """
         Run KGEntity deletion tests.
         
@@ -64,7 +64,7 @@ class KGEntityDeleteTester:
                 
                 for i, person_objects in enumerate([person_objects_1, person_objects_2]):
                     # Modern client API expects GraphObjects directly
-                    create_response = self.client.kgentities.create_kgentities(
+                    create_response = await self.client.kgentities.create_kgentities(
                         space_id=space_id,
                         graph_id=graph_id,
                         objects=person_objects
@@ -92,7 +92,7 @@ class KGEntityDeleteTester:
             if test_entities:
                 delete_uri = test_entities[0]
                 
-                delete_response = self.client.kgentities.delete_kgentity(
+                delete_response = await self.client.kgentities.delete_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=delete_uri
@@ -126,7 +126,7 @@ class KGEntityDeleteTester:
             if test_entities:
                 graph_delete_uri = test_entities[0]
                 
-                graph_delete_response = self.client.kgentities.delete_kgentity(
+                graph_delete_response = await self.client.kgentities.delete_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=graph_delete_uri,
@@ -178,7 +178,7 @@ class KGEntityDeleteTester:
                     batch_person_objects = self.data_creator.create_person_with_contact(f"Batch Delete Person {i+1}")
                     batch_person_objects[0].URI = batch_uri
                     
-                    create_response = self.client.kgentities.create_kgentities(
+                    create_response = await self.client.kgentities.create_kgentities(
                         space_id=space_id,
                         graph_id=graph_id,
                         objects=batch_person_objects
@@ -191,7 +191,7 @@ class KGEntityDeleteTester:
             
             if len(batch_entities) >= 2:
                 # Modern client API expects uri_list as a list, not comma-separated string
-                batch_delete_response = self.client.kgentities.delete_kgentities_batch(
+                batch_delete_response = await self.client.kgentities.delete_kgentities_batch(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri_list=batch_entities
@@ -227,7 +227,7 @@ class KGEntityDeleteTester:
         try:
             fake_uri = "http://vital.ai/test/client/nonexistent_delete_entity"
             
-            nonexistent_response = self.client.kgentities.delete_kgentity(
+            nonexistent_response = await self.client.kgentities.delete_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=fake_uri
@@ -261,7 +261,7 @@ class KGEntityDeleteTester:
                     verify_uri = deleted_entities[0]
                     
                     try:
-                        verify_response = self.client.kgentities.get_kgentity(
+                        verify_response = await self.client.kgentities.get_kgentity(
                             space_id=space_id,
                             graph_id=graph_id,
                             uri=verify_uri

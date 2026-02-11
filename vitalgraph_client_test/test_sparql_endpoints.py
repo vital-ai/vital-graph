@@ -39,14 +39,14 @@ class SPARQLEndpointTester:
         self.base_url = base_url
         self.client = None
         
-    def connect(self) -> bool:
+    async def connect(self) -> bool:
         """Connect to VitalGraph server using client."""
         print(f"\n🔐 Connecting to VitalGraph server...")
         
         try:
             # Configuration loaded from environment variables
             self.client = VitalGraphClient()
-            self.client.open()
+            await self.client.open()
             print(f"   ✅ Connected successfully!")
             return True
                 
@@ -54,13 +54,13 @@ class SPARQLEndpointTester:
             print(f"   ❌ Connection error: {e}")
             return False
     
-    def disconnect(self) -> None:
+    async def disconnect(self) -> None:
         """Disconnect from VitalGraph server."""
         if self.client:
-            self.client.close()
+            await self.client.close()
             self.client = None
     
-    def test_sparql_query(self) -> bool:
+    async def test_sparql_query(self) -> bool:
         """Test SPARQL query endpoint."""
         print(f"\n📊 Testing SPARQL Query Endpoint...")
         
@@ -79,7 +79,7 @@ class SPARQLEndpointTester:
             print("   Testing POST method...")
             start_time = time.time()
             query_request = SPARQLQueryRequest(query=query, format="json")
-            result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
+            result: SPARQLQueryResponse = await self.client.execute_sparql_query(SPACE_ID, query_request)
             end_time = time.time()
             
             print(f"   ✅ POST query successful!")
@@ -99,7 +99,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ Query test error: {e}")
             return False
     
-    def test_sparql_insert(self) -> bool:
+    async def test_sparql_insert(self) -> bool:
         """Test SPARQL insert endpoint."""
         print(f"\n📝 Testing SPARQL Insert Endpoint...")
         
@@ -117,7 +117,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             insert_request = SPARQLInsertRequest(update=insert_query)
-            result: SPARQLInsertResponse = self.client.execute_sparql_insert(SPACE_ID, insert_request)
+            result: SPARQLInsertResponse = await self.client.execute_sparql_insert(SPACE_ID, insert_request)
             end_time = time.time()
             
             # Check response success field
@@ -134,7 +134,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ Insert test error: {e}")
             return False
     
-    def test_sparql_update(self) -> bool:
+    async def test_sparql_update(self) -> bool:
         """Test SPARQL update endpoint."""
         print(f"\n🔄 Testing SPARQL Update Endpoint...")
         
@@ -162,7 +162,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             update_request = SPARQLUpdateRequest(update=update_query)
-            result: SPARQLUpdateResponse = self.client.execute_sparql_update(SPACE_ID, update_request)
+            result: SPARQLUpdateResponse = await self.client.execute_sparql_update(SPACE_ID, update_request)
             end_time = time.time()
             
             # Check response success field
@@ -179,7 +179,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ Update test error: {e}")
             return False
     
-    def test_sparql_delete(self) -> bool:
+    async def test_sparql_delete(self) -> bool:
         """Test SPARQL delete endpoint."""
         print(f"\n🗑️  Testing SPARQL Delete Endpoint...")
         
@@ -200,7 +200,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             delete_request = SPARQLDeleteRequest(update=delete_query)
-            result: SPARQLDeleteResponse = self.client.execute_sparql_delete(SPACE_ID, delete_request)
+            result: SPARQLDeleteResponse = await self.client.execute_sparql_delete(SPACE_ID, delete_request)
             end_time = time.time()
             
             # Check response success field
@@ -217,7 +217,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ Delete test error: {e}")
             return False
     
-    def test_sparql_delete_where_error(self) -> bool:
+    async def test_sparql_delete_where_error(self) -> bool:
         """Test that DELETE WHERE syntax (unsupported) returns an error."""
         print(f"\n⚠️  Testing DELETE WHERE Error Handling...")
         
@@ -233,7 +233,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             delete_request = SPARQLDeleteRequest(update=delete_where_query)
-            result: SPARQLDeleteResponse = self.client.execute_sparql_delete(SPACE_ID, delete_request)
+            result: SPARQLDeleteResponse = await self.client.execute_sparql_delete(SPACE_ID, delete_request)
             end_time = time.time()
             
             # Check if the operation failed (success=False in response)
@@ -256,7 +256,7 @@ class SPARQLEndpointTester:
             print(f"   📋 Error message: {str(e)[:100]}...")
             return True
     
-    def test_graph_management(self) -> bool:
+    async def test_graph_management(self) -> bool:
         """Test graph management endpoints."""
         print(f"\n🗂️  Testing Graph Management Endpoints...")
         
@@ -267,7 +267,7 @@ class SPARQLEndpointTester:
             
             # Check if list_graphs method exists
             if hasattr(self.client, 'list_graphs'):
-                graphs_response = self.client.list_graphs(SPACE_ID)
+                graphs_response = await self.client.list_graphs(SPACE_ID)
                 end_time = time.time()
                 
                 # Handle structured response
@@ -301,7 +301,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ Graph management test error: {e}")
             return False
     
-    def test_ask_query(self) -> bool:
+    async def test_ask_query(self) -> bool:
         """Test ASK query."""
         print(f"\n❓ Testing ASK Query...")
         
@@ -316,7 +316,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             query_request = SPARQLQueryRequest(query=ask_query, format="json")
-            result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
+            result: SPARQLQueryResponse = await self.client.execute_sparql_query(SPACE_ID, query_request)
             end_time = time.time()
             
             boolean_result = getattr(result, 'boolean', None)
@@ -329,7 +329,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ ASK query test error: {e}")
             return False
     
-    def test_construct_query(self) -> bool:
+    async def test_construct_query(self) -> bool:
         """Test CONSTRUCT query."""
         print(f"\n🏗️  Testing CONSTRUCT Query...")
         
@@ -351,7 +351,7 @@ class SPARQLEndpointTester:
         try:
             start_time = time.time()
             query_request = SPARQLQueryRequest(query=construct_query, format="json")
-            result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
+            result: SPARQLQueryResponse = await self.client.execute_sparql_query(SPACE_ID, query_request)
             end_time = time.time()
             
             print(f"   🔍 DEBUG: CONSTRUCT result type: {type(result)}")
@@ -378,7 +378,7 @@ class SPARQLEndpointTester:
             print(f"   ❌ CONSTRUCT query test error: {e}")
             return False
     
-    def test_comprehensive_queries(self) -> bool:
+    async def test_comprehensive_queries(self) -> bool:
         """Test comprehensive queries on our test dataset."""
         print(f"\n🔍 Testing Comprehensive Queries on Test Dataset...")
         
@@ -426,7 +426,7 @@ class SPARQLEndpointTester:
                 print(f"   Testing {query_name}...")
                 start_time = time.time()
                 query_request = SPARQLQueryRequest(query=query, format="json")
-                result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
+                result: SPARQLQueryResponse = await self.client.execute_sparql_query(SPACE_ID, query_request)
                 end_time = time.time()
                 
                 if result and result.results and 'bindings' in result.results:
@@ -444,20 +444,20 @@ class SPARQLEndpointTester:
             print(f"   ❌ Comprehensive queries test error: {e}")
             return False
     
-    def setup_test_space(self) -> bool:
+    async def setup_test_space(self) -> bool:
         """Set up test space - delete if exists, create fresh."""
         print(f"\n📦 Setting up test space: {SPACE_ID}")
         
         try:
             # List existing spaces
             print("   Listing existing spaces...")
-            spaces_response = self.client.spaces.list_spaces()
+            spaces_response = await self.client.spaces.list_spaces()
             if spaces_response.is_success:
                 existing_space = next((s for s in spaces_response.spaces if s.space == SPACE_ID), None)
                 
                 if existing_space:
                     print(f"   Found existing space, deleting...")
-                    delete_response = self.client.spaces.delete_space(SPACE_ID)
+                    delete_response = await self.client.spaces.delete_space(SPACE_ID)
                     if delete_response.is_success:
                         print(f"   ✅ Existing space deleted")
                     else:
@@ -477,7 +477,7 @@ class SPARQLEndpointTester:
                 space_description="Test space for SPARQL endpoint testing",
                 tenant="test_tenant"
             )
-            create_response = self.client.spaces.create_space(space_data)
+            create_response = await self.client.spaces.create_space(space_data)
             if not create_response.is_success:
                 print(f"   ❌ Failed to create space: {create_response.error_message}")
                 return False
@@ -492,19 +492,19 @@ class SPARQLEndpointTester:
             print(f"   ❌ Error creating test space: {e}")
             return False
     
-    def run_all_tests(self) -> bool:
+    async def run_all_tests(self) -> bool:
         """Run all SPARQL endpoint tests."""
         print("🧪 VitalGraph SPARQL Endpoints Test Suite")
         print("   Using typed SPARQLQueryResponse, SPARQLInsertResponse, and SPARQLUpdateResponse models")
         print("=" * 60)
         
         # Connect first
-        if not self.connect():
+        if not await self.connect():
             print("❌ Authentication failed - cannot proceed with tests")
             return False
         
         # Set up test space
-        if not self.setup_test_space():
+        if not await self.setup_test_space():
             print("❌ Test space setup failed - cannot proceed with tests")
             return False
         
@@ -525,7 +525,7 @@ class SPARQLEndpointTester:
         
         for test_name, test_func in tests:
             try:
-                results[test_name] = test_func()
+                results[test_name] = await test_func()
             except Exception as e:
                 print(f"   ❌ {test_name} test crashed: {e}")
                 results[test_name] = False
@@ -554,7 +554,7 @@ class SPARQLEndpointTester:
             return False
 
 
-def main() -> int:
+async def main() -> int:
     """Main function to run SPARQL endpoint tests.
     
     Returns:
@@ -569,7 +569,7 @@ def main() -> int:
     tester = SPARQLEndpointTester(BASE_URL)
     
     try:
-        success = tester.run_all_tests()
+        success = await tester.run_all_tests()
         
         if success:
             print("\n✅ All SPARQL endpoint tests completed successfully with typed client methods!")
@@ -586,10 +586,10 @@ def main() -> int:
     finally:
         # Always disconnect client
         if tester.client:
-            tester.disconnect()
+            await tester.disconnect()
             print("✅ Client closed")
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

@@ -17,7 +17,7 @@ class KGTypeUpdateTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, test_kgtypes: List, created_kgtypes: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, test_kgtypes: List, created_kgtypes: list = None) -> Dict[str, Any]:
         """
         Run KGType update tests.
         
@@ -36,16 +36,16 @@ class KGTypeUpdateTester:
         
         # Test basic KGType update
         if test_kgtypes:
-            update_result = self._test_basic_kgtype_update(space_id, graph_id, test_kgtypes[0])
+            update_result = await self._test_basic_kgtype_update(space_id, graph_id, test_kgtypes[0])
             results.append(update_result)
         
         # Test update with verification
         if test_kgtypes and len(test_kgtypes) > 1:
-            verify_result = self._test_kgtype_update_with_verification(space_id, graph_id, test_kgtypes[1])
+            verify_result = await self._test_kgtype_update_with_verification(space_id, graph_id, test_kgtypes[1])
             results.append(verify_result)
         
         # Test update non-existent KGType
-        nonexistent_result = self._test_update_nonexistent_kgtype(space_id, graph_id)
+        nonexistent_result = await self._test_update_nonexistent_kgtype(space_id, graph_id)
         results.append(nonexistent_result)
         
         passed_tests = sum(1 for r in results if r['passed'])
@@ -59,7 +59,7 @@ class KGTypeUpdateTester:
             'results': results
         }
     
-    def _test_basic_kgtype_update(self, space_id: str, graph_id: str, test_kgtype) -> Dict[str, Any]:
+    async def _test_basic_kgtype_update(self, space_id: str, graph_id: str, test_kgtype) -> Dict[str, Any]:
         """Test basic KGType update."""
         logger.info("  Testing basic KGType update...")
         
@@ -70,7 +70,7 @@ class KGTypeUpdateTester:
             test_kgtype.kGTypeVersion = "2.0"
             
             # Update using client - pass GraphObject directly
-            response = self.client.update_kgtypes(space_id, graph_id, [test_kgtype])
+            response = await self.client.update_kgtypes(space_id, graph_id, [test_kgtype])
             
             if response and hasattr(response, 'message'):
                 return {
@@ -97,7 +97,7 @@ class KGTypeUpdateTester:
                 'error': f"Exception during KGType update: {e}"
             }
     
-    def _test_kgtype_update_with_verification(self, space_id: str, graph_id: str, test_kgtype) -> Dict[str, Any]:
+    async def _test_kgtype_update_with_verification(self, space_id: str, graph_id: str, test_kgtype) -> Dict[str, Any]:
         """Test KGType update with verification."""
         logger.info("  Testing KGType update with verification...")
         
@@ -117,7 +117,7 @@ class KGTypeUpdateTester:
             logger.info(f"  KGType AFTER modification: {test_kgtype.to_json()}")
             
             # Update using client - pass GraphObject directly
-            update_response = self.client.update_kgtypes(space_id, graph_id, [test_kgtype])
+            update_response = await self.client.update_kgtypes(space_id, graph_id, [test_kgtype])
             
             if not update_response.is_success:
                 return {
@@ -128,7 +128,7 @@ class KGTypeUpdateTester:
             
             # Verify by retrieving the updated KGType
             try:
-                list_response = self.client.get_kgtype(space_id, graph_id, test_uri)
+                list_response = await self.client.get_kgtype(space_id, graph_id, test_uri)
                 if list_response.is_success and list_response.type:
                     retrieved_kgtype = list_response.type
                     
@@ -206,7 +206,7 @@ class KGTypeUpdateTester:
                 'error': f"Exception during KGType update with verification: {e}"
             }
     
-    def _test_update_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_update_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test updating a non-existent KGType."""
         logger.info("  Testing update non-existent KGType...")
         
@@ -220,7 +220,7 @@ class KGTypeUpdateTester:
             nonexistent_kgtype.kGModelVersion = "1.0"
             
             # Try to update using client - pass GraphObject directly
-            response = self.client.update_kgtypes(space_id, graph_id, [nonexistent_kgtype])
+            response = await self.client.update_kgtypes(space_id, graph_id, [nonexistent_kgtype])
             
             # Update of non-existent KGType might succeed (creating it) or fail
             # Both behaviors are acceptable depending on implementation

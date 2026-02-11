@@ -15,6 +15,7 @@ from .postgresql_signal_manager import PostgreSQLSignalManager
 from .dual_write_coordinator import DualWriteCoordinator
 from .sparql_update_parser import SPARQLUpdateParser
 from .fuseki_postgresql_space_graphs import FusekiPostgreSQLSpaceGraphs
+from .entity_lock_manager import EntityLockManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
         # Initialize graph management
         self.graphs = FusekiPostgreSQLSpaceGraphs(self)
         self.signal_manager = PostgreSQLSignalManager(postgresql_config)
+        self.entity_lock_manager = EntityLockManager(postgresql_config)
         
         # Initialize dual-write coordinator (graph manager set after initialization)
         self.dual_write_coordinator = DualWriteCoordinator(
@@ -103,6 +105,12 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
             if not signal_success:
                 logger.warning("Failed to connect signal manager (non-critical)")
             
+            # Connect entity lock manager
+            try:
+                await self.entity_lock_manager.connect()
+            except Exception as e:
+                logger.warning(f"Failed to connect entity lock manager (non-critical): {e}")
+            
             # Initialize PostgreSQL schema if needed
             schema_success = await self.postgresql_impl.initialize_schema()
             if not schema_success:
@@ -125,6 +133,13 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
             logger.info("Disconnecting FUSEKI_POSTGRESQL hybrid backend...")
             
             success = True
+            
+            # Disconnect entity lock manager
+            if hasattr(self, 'entity_lock_manager'):
+                try:
+                    await self.entity_lock_manager.disconnect()
+                except Exception as e:
+                    logger.warning(f"Error disconnecting entity lock manager: {e}")
             
             # Disconnect signal manager
             if hasattr(self, 'signal_manager'):

@@ -49,7 +49,7 @@ class KGEntityFrameUpdateTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Frame Update Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -64,7 +64,7 @@ class KGEntityFrameUpdateTester:
             logger.info(f"✅ Created test entity: {entity_uri}")
             
             # Get existing frames from entity to test update functionality
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -81,7 +81,7 @@ class KGEntityFrameUpdateTester:
             
             # Test update operation (using entity update as frame update proxy)
             # Modern client API expects GraphObjects directly
-            update_response = self.client.kgentities.update_kgentities(
+            update_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=updated_entity_objects
@@ -120,14 +120,14 @@ class KGEntityFrameUpdateTester:
             
             # Create two separate entities
             entity1_objects = self.test_data_creator.create_person_with_contact("Entity 1 Update Person")
-            entity1_response = self.client.kgentities.create_kgentities(
+            entity1_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity1_objects
             )
             
             entity2_objects = self.test_data_creator.create_person_with_contact("Entity 2 Update Person")
-            entity2_response = self.client.kgentities.create_kgentities(
+            entity2_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity2_objects
@@ -147,7 +147,7 @@ class KGEntityFrameUpdateTester:
             # Create frame for entity1
             frame_data = self.test_data_creator.create_employment_frame("Engineer", "Tech Corp")
             
-            frame_response = self.client.kgentities.create_entity_frames(
+            frame_response = await self.client.kgentities.create_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity1_uri,
@@ -164,7 +164,7 @@ class KGEntityFrameUpdateTester:
             updated_frame_data = self.test_data_creator.create_employment_frame("Senior Engineer", "Big Tech Corp")
             
             try:
-                invalid_update_response = self.client.kgentities.update_entity_frames(
+                invalid_update_response = await self.client.kgentities.update_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity2_uri,  # Wrong entity!
@@ -188,7 +188,7 @@ class KGEntityFrameUpdateTester:
                 logger.info(f"✅ Client-side validation caught ownership violation: {e}")
             
             # Now update the frames correctly using entity1
-            correct_update_response = self.client.kgentities.update_entity_frames(
+            correct_update_response = await self.client.kgentities.update_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity1_uri,  # Correct entity
@@ -226,7 +226,7 @@ class KGEntityFrameUpdateTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Validation Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -240,7 +240,7 @@ class KGEntityFrameUpdateTester:
             self.created_entity_uris.append(entity_uri)
             
             # Get existing frames from entity for hierarchical update test
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -274,7 +274,7 @@ class KGEntityFrameUpdateTester:
             
             # Create test entity with multiple frames
             entity_objects = self.test_data_creator.create_person_with_contact("Atomic Update Test Person")
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -289,7 +289,7 @@ class KGEntityFrameUpdateTester:
             
             # Create multiple frames to update atomically
             employment_frame = self.test_data_creator.create_employment_frame("Developer", "StartupCorp")
-            employment_response = self.client.kgentities.create_entity_frames(
+            employment_response = await self.client.kgentities.create_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -303,7 +303,7 @@ class KGEntityFrameUpdateTester:
             logger.info(f"✅ Created frames for atomic update test")
             
             # Get initial frame count
-            initial_frames = self.client.kgentities.get_kgentity_frames(
+            initial_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -315,7 +315,7 @@ class KGEntityFrameUpdateTester:
             # Perform atomic update with completely new frame structure
             new_frame_structure = self.test_data_creator.create_employment_frame("Senior Architect", "Enterprise Corp")
             
-            atomic_update_response = self.client.kgentities.update_entity_frames(
+            atomic_update_response = await self.client.kgentities.update_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -334,7 +334,7 @@ class KGEntityFrameUpdateTester:
             logger.info(f"✅ Atomic update successful: {atomic_update_response.updated_count} frames updated")
             
             # Verify atomicity by checking final frame count and content
-            final_frames = self.client.kgentities.get_kgentity_frames(
+            final_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -352,7 +352,7 @@ class KGEntityFrameUpdateTester:
                     return False
             
             # Verify content through frame retrieval
-            final_frames_response = self.client.kgentities.get_kgentity_frames(
+            final_frames_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -388,7 +388,7 @@ class KGEntityFrameUpdateTester:
             frame_data = self.test_data_creator.create_employment_frame("Test Job", "Test Company")
             
             try:
-                update_response = self.client.kgentities.update_entity_frames(
+                update_response = await self.client.kgentities.update_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=nonexistent_entity_uri,
@@ -435,7 +435,7 @@ class KGEntityFrameUpdateTester:
             # Delete created entities (which should cascade to frames)
             for entity_uri in self.created_entity_uris:
                 try:
-                    delete_response = self.client.kgentities.delete_kgentity(
+                    delete_response = await self.client.kgentities.delete_kgentity(
                         space_id=space_id,
                         graph_id=graph_id,
                         uri=entity_uri,

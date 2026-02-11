@@ -27,7 +27,7 @@ async def run_file_download_tests(client, space_id: str, graph_id: str, file_uri
         logger.info("  Test 1: Download file as bytes")
         
         start_time = time.perf_counter()
-        content = client.files.download_file_content(
+        content = await client.files.download_file_content(
             space_id=space_id,
             graph_id=graph_id,
             file_uri=file_uri,
@@ -55,7 +55,7 @@ async def run_file_download_tests(client, space_id: str, graph_id: str, file_uri
         stream = io.BytesIO()
         
         start_time = time.perf_counter()
-        result = client.files.download_file_content(
+        result = await client.files.download_file_content(
             space_id=space_id,
             graph_id=graph_id,
             file_uri=file_uri,

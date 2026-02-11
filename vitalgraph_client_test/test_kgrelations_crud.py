@@ -15,6 +15,7 @@ Uses organization data from multi_kgentity test but runs independently.
 
 import sys
 import logging
+import asyncio
 from typing import Dict, Any, List
 from datetime import datetime
 from pathlib import Path
@@ -59,7 +60,7 @@ class KGRelationsTestRunner:
         self.tests_failed = 0
         self.test_errors = []
     
-    def setup(self):
+    async def setup(self):
         """Set up test environment."""
         logger.info("=" * 80)
         logger.info("  KGRelations CRUD Test Suite")
@@ -67,7 +68,7 @@ class KGRelationsTestRunner:
         
         # Create client
         self.client = VitalGraphClient()
-        self.client.open()
+        await self.client.open()
         logger.info("✅ Client opened")
         
         # Create test space
@@ -78,35 +79,35 @@ class KGRelationsTestRunner:
             space_description="Test space for KGRelations CRUD operations",
             tenant="test_tenant"
         )
-        response = self.client.spaces.create_space(space_data)
+        response = await self.client.spaces.create_space(space_data)
         if response.is_success:
             logger.info(f"✅ Test space created: {self.space_id}")
         else:
             raise Exception(f"Failed to create test space: {response.error_message}")
     
-    def teardown(self):
+    async def teardown(self):
         """Clean up test environment."""
         logger.info("\n" + "=" * 80)
         logger.info("  🧹 Cleanup")
         logger.info("=" * 80)
         
         if self.space_id and self.client:
-            response = self.client.spaces.delete_space(self.space_id)
+            response = await self.client.spaces.delete_space(self.space_id)
             if response.is_success:
                 logger.info(f"✅ Test space deleted: {self.space_id}")
         
         if self.client:
-            self.client.close()
+            await self.client.close()
             logger.info("✅ Client closed")
     
-    def test_section(self, name: str, test_func):
+    async def test_section(self, name: str, test_func):
         """Run a test section and track results."""
         logger.info("\n" + "=" * 80)
         logger.info(f"  {name}")
         logger.info("=" * 80)
         
         try:
-            passed, failed, errors = test_func()
+            passed, failed, errors = await test_func()
             self.tests_passed += passed
             self.tests_failed += failed
             self.test_errors.extend(errors)
@@ -126,12 +127,12 @@ class KGRelationsTestRunner:
             self.tests_failed += 1
             self.test_errors.append(f"{name}: {str(e)}")
     
-    def create_organizations(self) -> tuple:
+    async def create_organizations(self) -> tuple:
         """Create organization entities for testing."""
         logger.info("\n--- Creating Organizations ---")
         
         org_tester = CreateOrganizationsTester(self.client)
-        results = org_tester.run_tests(
+        results = await org_tester.run_tests(
             self.space_id,
             self.graph_id
         )
@@ -150,7 +151,7 @@ class KGRelationsTestRunner:
         logger.info(f"✅ Created {passed} organizations")
         return passed, failed, errors
     
-    def create_relation_data(self) -> tuple:
+    async def create_relation_data(self) -> tuple:
         """Create relation types, products, and relation instances."""
         logger.info("\n--- Creating Relation Data ---")
         
@@ -168,7 +169,7 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def test_list_all_relations(self) -> tuple:
+    async def test_list_all_relations(self) -> tuple:
         """Test listing all relations."""
         logger.info("\n--- List All Relations ---")
         
@@ -177,7 +178,7 @@ class KGRelationsTestRunner:
         errors = []
         
         try:
-            response = self.client.kgrelations.list_relations(
+            response = await self.client.kgrelations.list_relations(
                 self.space_id,
                 self.graph_id,
                 page_size=50
@@ -204,7 +205,7 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def test_list_by_source(self) -> tuple:
+    async def test_list_by_source(self) -> tuple:
         """Test listing relations filtered by source entity."""
         logger.info("\n--- List Relations by Source Entity ---")
         
@@ -216,7 +217,7 @@ class KGRelationsTestRunner:
         techcorp_uri = self.org_uris.get("TechCorp Industries")
         if techcorp_uri:
             try:
-                response = self.client.kgrelations.list_relations(
+                response = await self.client.kgrelations.list_relations(
                     self.space_id,
                     self.graph_id,
                     entity_source_uri=techcorp_uri
@@ -245,7 +246,7 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def test_list_by_relation_type(self) -> tuple:
+    async def test_list_by_relation_type(self) -> tuple:
         """Test listing relations filtered by relation type."""
         logger.info("\n--- List Relations by Type ---")
         
@@ -257,7 +258,7 @@ class KGRelationsTestRunner:
         makes_product_type = self.relation_type_uris.get('makes_product')
         if makes_product_type:
             try:
-                response = self.client.kgrelations.list_relations(
+                response = await self.client.kgrelations.list_relations(
                     self.space_id,
                     self.graph_id,
                     relation_type_uri=makes_product_type
@@ -284,7 +285,7 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def test_get_relation(self) -> tuple:
+    async def test_get_relation(self) -> tuple:
         """Test getting individual relation."""
         logger.info("\n--- Get Individual Relation ---")
         
@@ -296,7 +297,7 @@ class KGRelationsTestRunner:
         if self.relation_uris['makes_product']:
             relation_uri = self.relation_uris['makes_product'][0]
             try:
-                response = self.client.kgrelations.get_relation(
+                response = await self.client.kgrelations.get_relation(
                     self.space_id,
                     self.graph_id,
                     relation_uri
@@ -316,7 +317,7 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def test_delete_relation(self) -> tuple:
+    async def test_delete_relation(self) -> tuple:
         """Test deleting relations."""
         logger.info("\n--- Delete Relation ---")
         
@@ -328,7 +329,7 @@ class KGRelationsTestRunner:
         if self.relation_uris['competitor_of']:
             relation_uri = self.relation_uris['competitor_of'][0]
             try:
-                response = self.client.kgrelations.delete_relations(
+                response = await self.client.kgrelations.delete_relations(
                     self.space_id,
                     self.graph_id,
                     [relation_uri]
@@ -339,7 +340,7 @@ class KGRelationsTestRunner:
                     passed += 1
                     
                     # Verify deletion by checking total count
-                    list_response = self.client.kgrelations.list_relations(
+                    list_response = await self.client.kgrelations.list_relations(
                         self.space_id,
                         self.graph_id,
                         page_size=50
@@ -364,27 +365,27 @@ class KGRelationsTestRunner:
         
         return passed, failed, errors
     
-    def run(self):
+    async def run(self):
         """Run all tests."""
         try:
-            self.setup()
+            await self.setup()
             
             # Create test data
-            self.test_section("Create Organizations", self.create_organizations)
-            self.test_section("Create Relation Data", self.create_relation_data)
+            await self.test_section("Create Organizations", self.create_organizations)
+            await self.test_section("Create Relation Data", self.create_relation_data)
             
             # Test CRUD operations
-            self.test_section("List All Relations", self.test_list_all_relations)
-            self.test_section("List by Source Entity", self.test_list_by_source)
-            self.test_section("List by Relation Type", self.test_list_by_relation_type)
-            self.test_section("Get Individual Relation", self.test_get_relation)
-            self.test_section("Delete Relation", self.test_delete_relation)
+            await self.test_section("List All Relations", self.test_list_all_relations)
+            await self.test_section("List by Source Entity", self.test_list_by_source)
+            await self.test_section("List by Relation Type", self.test_list_by_relation_type)
+            await self.test_section("Get Individual Relation", self.test_get_relation)
+            await self.test_section("Delete Relation", self.test_delete_relation)
             
             # Print summary
             self.print_summary()
             
         finally:
-            self.teardown()
+            await self.teardown()
     
     def print_summary(self):
         """Print test summary."""
@@ -408,4 +409,4 @@ class KGRelationsTestRunner:
 
 if __name__ == "__main__":
     runner = KGRelationsTestRunner()
-    runner.run()
+    asyncio.run(runner.run())

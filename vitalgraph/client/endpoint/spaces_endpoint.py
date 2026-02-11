@@ -24,7 +24,7 @@ from typing import List
 class SpacesEndpoint(BaseEndpoint):
     """Client endpoint for Spaces operations."""
     
-    def list_spaces(self, tenant: Optional[str] = None) -> SpacesListResponse:
+    async def list_spaces(self, tenant: Optional[str] = None) -> SpacesListResponse:
         """
         List all spaces.
         
@@ -43,7 +43,7 @@ class SpacesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url().rstrip('/')}/api/spaces"
             params = build_query_params(tenant=tenant)
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Extract spaces from server response
@@ -66,7 +66,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def create_space(self, space: Space) -> SpaceCreateResponse:
+    async def create_space(self, space: Space) -> SpaceCreateResponse:
         """
         Create a new space.
         
@@ -85,7 +85,7 @@ class SpacesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/spaces"
             
-            response = self._make_authenticated_request('POST', url, json=space.model_dump())
+            response = await self._make_authenticated_request('POST', url, json=space.model_dump())
             response_data = response.json()
             
             # Extract created space from server response
@@ -111,7 +111,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def add_space(self, space: Space) -> SpaceCreateResponse:
+    async def add_space(self, space: Space) -> SpaceCreateResponse:
         """
         Add a new space (deprecated - use create_space instead).
         
@@ -124,9 +124,9 @@ class SpacesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return self.create_space(space)
+        return await self.create_space(space)
     
-    def get_space(self, space_id: str) -> SpaceResponse:
+    async def get_space(self, space_id: str) -> SpaceResponse:
         """
         Get a space by ID.
         
@@ -145,7 +145,7 @@ class SpacesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
             
-            response = self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
             
             # Server now returns SpaceResponse structure
@@ -170,7 +170,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def get_space_info(self, space_id: str) -> SpaceInfoResponse:
+    async def get_space_info(self, space_id: str) -> SpaceInfoResponse:
         """
         Get detailed space information including statistics.
         
@@ -189,7 +189,7 @@ class SpacesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}/info"
             
-            response = self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
             
             # Server now returns SpaceInfoResponse structure
@@ -218,7 +218,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def update_space(self, space_id: str, space: Space) -> SpaceUpdateResponse:
+    async def update_space(self, space_id: str, space: Space) -> SpaceUpdateResponse:
         """
         Update a space.
         
@@ -238,7 +238,7 @@ class SpacesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
             
-            response = self._make_authenticated_request('PUT', url, json=space.model_dump())
+            response = await self._make_authenticated_request('PUT', url, json=space.model_dump())
             response_data = response.json()
             
             # Extract updated space from server response
@@ -262,7 +262,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def delete_space(self, space_id: str) -> SpaceDeleteResponse:
+    async def delete_space(self, space_id: str) -> SpaceDeleteResponse:
         """
         Delete a space.
         
@@ -281,7 +281,7 @@ class SpacesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
             
-            response = self._make_authenticated_request('DELETE', url)
+            response = await self._make_authenticated_request('DELETE', url)
             response_data = response.json()
             
             return SpaceDeleteResponse(
@@ -300,7 +300,7 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def filter_spaces(self, name_filter: str, tenant: Optional[str] = None) -> SpacesListResponse:
+    async def filter_spaces(self, name_filter: str, tenant: Optional[str] = None) -> SpacesListResponse:
         """
         Filter spaces by name.
         
@@ -321,7 +321,7 @@ class SpacesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url().rstrip('/')}/api/spaces/filter/{name_filter}"
             params = build_query_params(tenant=tenant)
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Extract spaces from server response

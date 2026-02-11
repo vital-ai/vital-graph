@@ -18,7 +18,7 @@ class VerifyUpdatesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
                   updates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Run update verification tests.
@@ -53,7 +53,7 @@ class VerifyUpdatesTester:
                 logger.info(f"\nVerifying {update_info['name']}...")
                 
                 # Get entity with full graph
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri,

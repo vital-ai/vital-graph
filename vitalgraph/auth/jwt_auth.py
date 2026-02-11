@@ -6,7 +6,7 @@ for secure authentication in the VitalGraph system.
 """
 
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 from fastapi import HTTPException, status
 
@@ -49,9 +49,9 @@ class JWTAuth:
         
         # Use custom expiry if provided, otherwise use default minutes
         if expiry_seconds is not None:
-            expire = datetime.utcnow() + timedelta(seconds=expiry_seconds)
+            expire = datetime.now(timezone.utc) + timedelta(seconds=expiry_seconds)
         else:
-            expire = datetime.utcnow() + timedelta(minutes=self.access_token_expire_minutes)
+            expire = datetime.now(timezone.utc) + timedelta(minutes=self.access_token_expire_minutes)
             
         to_encode.update({"exp": expire, "type": "access"})
         return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
@@ -67,7 +67,7 @@ class JWTAuth:
             Encoded JWT refresh token
         """
         to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(days=self.refresh_token_expire_days)
+        expire = datetime.now(timezone.utc) + timedelta(days=self.refresh_token_expire_days)
         to_encode.update({"exp": expire, "type": "refresh"})
         return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
     

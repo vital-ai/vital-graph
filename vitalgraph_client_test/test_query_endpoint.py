@@ -14,6 +14,7 @@ import sys
 import time
 import statistics
 import random
+import asyncio
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -43,7 +44,7 @@ class SPARQLQueryPerformanceTester:
         self.client = None
         self.query_times = []
         
-    def connect(self) -> bool:
+    async def connect(self) -> bool:
         """Connect to VitalGraph server.
         
         Returns:
@@ -53,20 +54,20 @@ class SPARQLQueryPerformanceTester:
         try:
             # Configuration loaded from environment variables
             self.client = VitalGraphClient()
-            self.client.open()
+            await self.client.open()
             print(f"   ✅ Connected to {self.base_url}")
             return True
         except Exception as e:
             print(f"   ❌ Connection failed: {e}")
             return False
     
-    def disconnect(self) -> None:
+    async def disconnect(self) -> None:
         """Disconnect from VitalGraph server."""
         if self.client:
-            self.client.close()
+            await self.client.close()
             print("   🔌 Disconnected from server")
     
-    def run_performance_test(self, num_queries: int = 100) -> Dict[str, Any]:
+    async def run_performance_test(self, num_queries: int = 100) -> Dict[str, Any]:
         """
         Run performance test with multiple queries.
         
@@ -108,7 +109,7 @@ class SPARQLQueryPerformanceTester:
             start_time = time.time()
             try:
                 query_request = SPARQLQueryRequest(query=query, format="json")
-                result: SPARQLQueryResponse = self.client.execute_sparql_query(SPACE_ID, query_request)
+                result: SPARQLQueryResponse = await self.client.execute_sparql_query(SPACE_ID, query_request)
                 end_time = time.time()
                 
                 query_time = end_time - start_time
@@ -220,7 +221,7 @@ class SPARQLQueryPerformanceTester:
         
         print("\n" + "=" * 60)
 
-def main() -> int:
+async def main() -> int:
     """Main function to run the performance test.
     
     Returns:
@@ -239,17 +240,17 @@ def main() -> int:
     
     try:
         # Connect to server
-        if not tester.connect():
+        if not await tester.connect():
             return 1
         
         # Run performance test
-        stats = tester.run_performance_test(num_queries)
+        stats = await tester.run_performance_test(num_queries)
         
         # Print results
         tester.print_performance_report(stats)
         
         # Disconnect
-        tester.disconnect()
+        await tester.disconnect()
         
         print("\n✅ Performance test completed successfully with typed client methods!")
         print("   Used SPARQLQueryResponse models for full type safety.")
@@ -257,13 +258,13 @@ def main() -> int:
         
     except KeyboardInterrupt:
         print("\n⚠️  Test interrupted by user")
-        tester.disconnect()
+        await tester.disconnect()
         return 1
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
-        tester.disconnect()
+        await tester.disconnect()
         return 1
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

@@ -134,7 +134,7 @@ async def main():
     max_files = 100 # None
     
     # Skip data loading if data is already loaded (set to True to skip)
-    skip_load = False
+    skip_load = True
     
     # Number of entities to sample for detailed retrieval testing
     sample_size = 5
@@ -167,7 +167,7 @@ async def main():
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
@@ -178,14 +178,14 @@ async def main():
         # List all spaces and delete test space if it exists
         logger.info(f"📦 Listing all spaces...")
         try:
-            spaces_response = client.spaces.list_spaces()
+            spaces_response = await client.spaces.list_spaces()
             if spaces_response.is_success:
                 logger.info(f"   Found {len(spaces_response.spaces)} spaces")
                 existing_space = next((s for s in spaces_response.spaces if s.space == space_id), None)
                 
                 if existing_space:
                     logger.info(f"   Found existing test space '{space_id}', deleting...")
-                    delete_response = client.spaces.delete_space(space_id)
+                    delete_response = await client.spaces.delete_space(space_id)
                     if delete_response.is_success:
                         logger.info(f"   ✅ Existing test space deleted")
                     else:
@@ -197,7 +197,7 @@ async def main():
         logger.info(f"\n📦 Creating test space '{space_id}'...")
         try:
             space = Space(space=space_id, space_name="Lead Entity Graph Dataset Test Space")
-            create_response = client.spaces.create_space(space)
+            create_response = await client.spaces.create_space(space)
             
             if not create_response.is_success:
                 logger.error(f"Failed to create space: {create_response.error_message}")
@@ -236,7 +236,7 @@ async def main():
             all_results.append(bulk_load_results)
         else:
             bulk_load_tester = BulkLoadDatasetTester(client)
-            bulk_load_results = bulk_load_tester.run_tests(space_id, graph_id, lead_files)
+            bulk_load_results = await bulk_load_tester.run_tests(space_id, graph_id, lead_files)
             all_results.append(bulk_load_results)
             
             if bulk_load_results["tests_failed"] > 0:
@@ -256,7 +256,7 @@ async def main():
         # STEP 2: List and Query Entities
         # ====================================================================
         list_query_tester = ListAndQueryEntitiesTester(client)
-        list_query_results = list_query_tester.run_tests(space_id, graph_id, entity_count)
+        list_query_results = await list_query_tester.run_tests(space_id, graph_id, entity_count)
         all_results.append(list_query_results)
         
         entity_uris = list_query_results.get("entity_uris", [])
@@ -265,7 +265,7 @@ async def main():
         # STEP 3: Retrieve Entity Graphs and Frames
         # ====================================================================
         retrieve_tester = RetrieveEntityGraphsTester(client)
-        retrieve_results = retrieve_tester.run_tests(
+        retrieve_results = await retrieve_tester.run_tests(
             space_id, 
             graph_id, 
             entity_uris if entity_uris else [e['uri'] for e in loaded_entities],
@@ -277,7 +277,7 @@ async def main():
         # STEP 4: KGQuery Frame-Based Queries
         # ====================================================================
         kgquery_tester = KGQueryLeadQueriesTester(client)
-        kgquery_results = kgquery_tester.run_tests(space_id, graph_id, entity_count)
+        kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, entity_count)
         all_results.append(kgquery_results)
         
         # ====================================================================
@@ -310,7 +310,7 @@ async def main():
         logger.info(f"   Graph ID: {graph_id}")
         logger.info(f"   Note: Space will be deleted on next test run\n")
         
-        client.close()
+        await client.close()
         logger.info("✅ Client closed")
 
 

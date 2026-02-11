@@ -96,20 +96,27 @@ class KGEntityFrameCreateProcessor:
             CreateFrameResult with created URIs and metadata
         """
         try:
+            import time as _time
+            _p0 = _time.time()
             if parent_frame_uri:
                 self.logger.debug(f"Creating/updating CHILD frames for entity {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}, operation_mode={operation_mode}")
             else:
                 self.logger.debug(f"Creating/updating TOP-LEVEL frames for entity {entity_uri} in space {space_id}, graph {graph_id}, operation_mode={operation_mode}")
             
             # Step 1: Validate entity exists (extracted from lines 957-959)
-            entity_exists = await self.validate_entity_exists(backend_adapter, space_id, graph_id, entity_uri)
-            if not entity_exists:
-                return CreateFrameResult(
-                    success=False,
-                    created_uris=[],
-                    message=f"Target entity {entity_uri} not found in space {space_id}",
-                    frame_count=0
-                )
+            # Skip for UPDATE/UPSERT — validate_frame_ownership already confirmed entity exists upstream
+            if not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']:
+                entity_exists = await self.validate_entity_exists(backend_adapter, space_id, graph_id, entity_uri)
+                if not entity_exists:
+                    return CreateFrameResult(
+                        success=False,
+                        created_uris=[],
+                        message=f"Target entity {entity_uri} not found in space {space_id}",
+                        frame_count=0
+                    )
+            
+            _p1 = _time.time()
+            self.logger.info(f"⏱️ PROCESSOR validate_entity: {_p1-_p0:.3f}s")
             
             # Step 2: Categorize frame objects (extracted from lines 980-993)
             categories = await self.categorize_frame_objects(frame_objects)
@@ -134,6 +141,9 @@ class KGEntityFrameCreateProcessor:
             if not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']:
                 entity_frame_edges = await self.create_entity_frame_edges(entity_uri, categories.frame_objects)
                 all_objects.extend(entity_frame_edges)
+            
+            _p2 = _time.time()
+            self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
             
             # Step 6: Execute atomic UPDATE/UPSERT or CREATE operation
             fuseki_success = True
@@ -380,16 +390,33 @@ class KGEntityFrameCreateProcessor:
             Tuple of (success: bool, fuseki_success: Optional[bool])
         """
         try:
+            import time
+            t0 = time.time()
             self.logger.debug(f"🔄 Executing atomic frame {operation_mode} for {len(frame_objects)} frames")
             
             # Step 1: Build delete quads for existing frame data
             delete_quads = await self.build_delete_quads_for_frames(backend_adapter, space_id, graph_id, frame_objects)
+            t1 = time.time()
+            self.logger.info(f"⏱️ FRAME_UPDATE step1 build_delete_quads: {t1-t0:.3f}s ({len(delete_quads)} quads)")
             
             # Step 2: Build insert quads for new frame data
             insert_quads = await self.build_insert_quads_for_objects(all_objects, graph_id)
+            t2 = time.time()
+            self.logger.info(f"⏱️ FRAME_UPDATE step2 build_insert_quads: {t2-t1:.3f}s ({len(insert_quads)} quads)")
             
-            # Step 3: Execute atomic update using validated update_quads function
-            success = await backend_adapter.update_quads(space_id, graph_id, delete_quads, insert_quads)
+            # Step 2.5: Diff — only delete removed quads, only insert added quads
+            old_set = set(tuple(q) for q in delete_quads)
+            new_set = set(tuple(q) for q in insert_quads)
+            unchanged = old_set & new_set
+            actual_deletes = list(old_set - new_set)
+            actual_inserts = list(new_set - old_set)
+            self.logger.info(f"⏱️ FRAME_UPDATE diff: {len(unchanged)} unchanged, {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
+            
+            # Step 3: Execute atomic update with only the changed quads
+            success = await backend_adapter.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
+            t3 = time.time()
+            self.logger.info(f"⏱️ FRAME_UPDATE step3 update_quads: {t3-t2:.3f}s")
+            self.logger.info(f"⏱️ FRAME_UPDATE total: {t3-t0:.3f}s")
             
             if success:
                 self.logger.debug(f"✅ Atomic frame {operation_mode} completed successfully")

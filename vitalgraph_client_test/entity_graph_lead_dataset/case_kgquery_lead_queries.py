@@ -62,7 +62,7 @@ class KGQueryLeadQueriesTester:
                 "passed": passed
             })
     
-    def run_tests(self, space_id: str, graph_id: str, expected_entity_count: int) -> dict:
+    async def run_tests(self, space_id: str, graph_id: str, expected_entity_count: int) -> dict:
         """
         Run KGQuery lead queries tests.
         
@@ -81,18 +81,18 @@ class KGQueryLeadQueriesTester:
         print(f"\n📊 Running frame-based queries on {expected_entity_count} lead entities...")
         
         # Run all query tests
-        self._test_find_mql_leads(space_id, graph_id)
-        self._test_hierarchical_frame_query(space_id, graph_id)
-        self._test_find_leads_in_california(space_id, graph_id)
-        self._test_find_leads_in_los_angeles(space_id, graph_id)
-        self._test_find_high_rated_leads(space_id, graph_id)
-        self._test_find_leads_with_biz_accounts(space_id, graph_id)
-        self._test_find_converted_leads(space_id, graph_id)
-        self._test_find_abandoned_leads(space_id, graph_id)
-        self._test_multi_criteria_query(space_id, graph_id)
-        self._test_range_query_multiple_filters(space_id, graph_id)
-        self._test_pagination(space_id, graph_id)
-        self._test_empty_results(space_id, graph_id)
+        await self._test_find_mql_leads(space_id, graph_id)
+        await self._test_hierarchical_frame_query(space_id, graph_id)
+        await self._test_find_leads_in_california(space_id, graph_id)
+        await self._test_find_leads_in_los_angeles(space_id, graph_id)
+        await self._test_find_high_rated_leads(space_id, graph_id)
+        await self._test_find_leads_with_biz_accounts(space_id, graph_id)
+        await self._test_find_converted_leads(space_id, graph_id)
+        await self._test_find_abandoned_leads(space_id, graph_id)
+        await self._test_multi_criteria_query(space_id, graph_id)
+        await self._test_range_query_multiple_filters(space_id, graph_id)
+        await self._test_pagination(space_id, graph_id)
+        await self._test_empty_results(space_id, graph_id)
         
         # Print query time summary
         if self.query_times:
@@ -118,7 +118,7 @@ class KGQueryLeadQueriesTester:
             "total_query_time": sum(qt["query_time"] for qt in self.query_times) if self.query_times else 0
         }
     
-    def _test_find_mql_leads(self, space_id: str, graph_id: str):
+    async def _test_find_mql_leads(self, space_id: str, graph_id: str):
         """Test finding Marketing Qualified Leads (MQL=true)."""
         print(f"\n  Test 1: Find MQL (Marketing Qualified Leads)...")
         
@@ -159,7 +159,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -183,7 +183,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find MQL leads", False, str(e))
     
-    def _test_hierarchical_frame_query(self, space_id: str, graph_id: str):
+    async def _test_hierarchical_frame_query(self, space_id: str, graph_id: str):
         """Test hierarchical frame query (Entity → Parent Frame → Child Frame → Slot)."""
         print(f"\n  Test 2: Hierarchical Frame Query (Parent → Child Frame)...")
         
@@ -225,7 +225,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -249,7 +249,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Hierarchical frame query", False, str(e))
     
-    def _test_find_leads_in_california(self, space_id: str, graph_id: str):
+    async def _test_find_leads_in_california(self, space_id: str, graph_id: str):
         """Test finding leads with companies in California."""
         print(f"\n  Test 3: Find leads in California...")
         
@@ -289,7 +289,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -313,7 +313,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find leads in California", False, str(e))
     
-    def _test_find_leads_in_los_angeles(self, space_id: str, graph_id: str):
+    async def _test_find_leads_in_los_angeles(self, space_id: str, graph_id: str):
         """Test finding leads with companies in Los Angeles."""
         print(f"\n  Test 4: Find leads in Los Angeles...")
         
@@ -353,7 +353,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -377,7 +377,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find leads in Los Angeles", False, str(e))
     
-    def _test_find_high_rated_leads(self, space_id: str, graph_id: str):
+    async def _test_find_high_rated_leads(self, space_id: str, graph_id: str):
         """Test finding leads with high MQL rating (>= 65)."""
         print(f"\n  Test 5: Find high-rated leads (MQL rating >= 65)...")
         
@@ -417,7 +417,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -441,7 +441,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find high-rated leads", False, str(e))
     
-    def _test_find_leads_with_biz_accounts(self, space_id: str, graph_id: str):
+    async def _test_find_leads_with_biz_accounts(self, space_id: str, graph_id: str):
         """Test finding leads with business bank accounts."""
         print(f"\n  Test 6: Find leads with business bank accounts...")
         
@@ -481,7 +481,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -505,7 +505,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find leads with business accounts", False, str(e))
     
-    def _test_find_converted_leads(self, space_id: str, graph_id: str):
+    async def _test_find_converted_leads(self, space_id: str, graph_id: str):
         """Test finding converted leads."""
         print(f"\n  Test 7: Find converted leads...")
         
@@ -545,7 +545,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -569,7 +569,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find converted leads", False, str(e))
     
-    def _test_find_abandoned_leads(self, space_id: str, graph_id: str):
+    async def _test_find_abandoned_leads(self, space_id: str, graph_id: str):
         """Test finding abandoned leads."""
         print(f"\n  Test 8: Find abandoned leads...")
         
@@ -609,7 +609,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -633,7 +633,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Find abandoned leads", False, str(e))
     
-    def _test_multi_criteria_query(self, space_id: str, graph_id: str):
+    async def _test_multi_criteria_query(self, space_id: str, graph_id: str):
         """Test multi-criteria query: MQL leads in California with high rating."""
         print(f"\n  Test 9: Multi-criteria query (MQL + California + high rating)...")
         
@@ -695,7 +695,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -719,7 +719,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Multi-criteria query", False, str(e))
     
-    def _test_range_query_multiple_filters(self, space_id: str, graph_id: str):
+    async def _test_range_query_multiple_filters(self, space_id: str, graph_id: str):
         """Test range query with multiple numeric FILTER variables (MQLRating between 50 and 80)."""
         print(f"\n  Test 9b: Range query with multiple FILTERs (50 <= MQLRating <= 80)...")
         
@@ -767,7 +767,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -791,7 +791,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Range query with multiple FILTERs", False, str(e))
     
-    def _test_pagination(self, space_id: str, graph_id: str):
+    async def _test_pagination(self, space_id: str, graph_id: str):
         """Test pagination of query results."""
         print(f"\n  Test 10: Pagination...")
         
@@ -833,7 +833,7 @@ class KGQueryLeadQueriesTester:
             start_time = time.time()
             
             # First page
-            response1 = self.client.kgqueries.query_connections(
+            response1 = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -849,7 +849,7 @@ class KGQueryLeadQueriesTester:
             page1_count = len(response1.frame_connections) if response1.frame_connections else 0
             
             # Second page
-            response2 = self.client.kgqueries.query_connections(
+            response2 = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -873,7 +873,7 @@ class KGQueryLeadQueriesTester:
             print(f"     ❌ Exception: {e}")
             self._record_test("Pagination", False, str(e))
     
-    def _test_empty_results(self, space_id: str, graph_id: str):
+    async def _test_empty_results(self, space_id: str, graph_id: str):
         """Test query that should return empty results."""
         print(f"\n  Test 11: Empty results (non-existent criteria)...")
         
@@ -908,7 +908,7 @@ class KGQueryLeadQueriesTester:
             
             # Time the query execution
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,

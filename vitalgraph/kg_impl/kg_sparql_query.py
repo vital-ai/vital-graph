@@ -6,6 +6,7 @@ Processor for handling SPARQL query generation and execution for KG operations.
 Refactored from KGEntities endpoint to reduce code complexity and improve reusability.
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
@@ -245,21 +246,16 @@ class KGSparqlQueryProcessor:
                                   frame_uris: List[str]) -> Dict[str, Any]:
         """Get specific frames by URI."""
         try:
-            frame_results = {}
-            
-            for frame_uri in frame_uris:
-                # Get frame and its complete graph
+            async def _fetch_frame(frame_uri):
                 frame_query = self.query_builder.build_frame_graph_query(
                     graph_id, frame_uri, include_frame_graph=True
                 )
-                
                 results = await self.backend.execute_sparql_query(space_id, frame_query)
                 subject_uris = self.utils.extract_subject_uris_from_results(results)
-                
-                frame_results[frame_uri] = {
-                    'subject_uris': subject_uris,
-                    'frame_query': frame_query
-                }
+                return frame_uri, {'subject_uris': subject_uris, 'frame_query': frame_query}
+            
+            fetch_results = await asyncio.gather(*[_fetch_frame(uri) for uri in frame_uris])
+            frame_results = dict(fetch_results)
             
             return {
                 'frame_results': frame_results,
@@ -530,19 +526,31 @@ class KGSparqlQueryProcessor:
             
             self.logger.info(f"🔍 Phase 2: Retrieving complete frame graphs for {len(validated_frame_uris)} frames")
             
-            # Phase 2: Retrieve complete frame graphs
+            # Phase 2: Retrieve complete frame graphs concurrently
             frame_graphs = {}
             
-            # Process all requested frames (both valid and invalid)
+            # Separate valid and invalid frames
             for frame_uri in frame_uris:
-                if frame_uri in validated_frame_uris:
-                    # Valid frame - retrieve its graph using processor method
+                if frame_uri not in validated_frame_uris:
+                    frame_graphs[frame_uri] = {
+                        "error": "frame_not_owned_by_entity",
+                        "message": f"Frame {frame_uri} does not belong to entity {entity_uri}",
+                        "frame_uri": frame_uri,
+                        "entity_uri": entity_uri
+                    }
+                    self.logger.info(f"🔒 Frame {frame_uri}: Access denied (not owned by entity)")
+            
+            # Fetch all valid frames concurrently
+            valid_frame_uris = [uri for uri in frame_uris if uri in validated_frame_uris]
+            
+            async def _fetch_frame_graph(frame_uri):
+                """Fetch a single frame's complete graph (two SPARQL queries)."""
+                try:
                     frame_data = await self.get_individual_frame(space_id, graph_id, frame_uri, include_frame_graph=True)
                     
                     self.logger.debug(f"🔍 Frame {frame_uri}: get_individual_frame returned {len(frame_data.get('subject_uris', [])) if frame_data else 0} subject URIs")
                     
                     if frame_data and frame_data.get('subject_uris'):
-                        # Get triples for all subject URIs (frame, slots, and edges)
                         subject_uris = frame_data.get('subject_uris', [])
                         subject_uris_filter = ", ".join([self.utils.build_uri_reference(uri) for uri in subject_uris])
                         
@@ -563,35 +571,30 @@ class KGSparqlQueryProcessor:
                         graph_results = await self.backend.execute_sparql_query(space_id, frame_graph_query)
                         
                         if graph_results:
-                            # Extract triples for VitalSigns processing
                             self.logger.info(f"🔍 Frame {frame_uri}: graph_results type={type(graph_results)}, has 'results' key={isinstance(graph_results, dict) and 'results' in graph_results}")
                             if isinstance(graph_results, dict) and 'results' in graph_results:
                                 self.logger.info(f"🔍 Frame {frame_uri}: results has 'bindings' key={'bindings' in graph_results.get('results', {})}")
                             triples = self.utils.extract_triples_from_sparql_results(graph_results)
-                            frame_graphs[frame_uri] = {
-                                'triples': triples,
-                                'object_count': len(frame_data.get('subject_uris', []))
-                            }
                             self.logger.info(f"🔍 Frame {frame_uri}: Retrieved {len(triples)} triples")
                             for i, (s, p, o) in enumerate(triples[:15]):
                                 self.logger.info(f"🔍   Triple {i+1}: {s} | {p} | {o}")
                             if len(triples) > 15:
                                 self.logger.info(f"🔍   ... and {len(triples) - 15} more triples")
+                            return frame_uri, {'triples': triples, 'object_count': len(subject_uris)}
                         else:
-                            frame_graphs[frame_uri] = {'triples': [], 'object_count': 0}
                             self.logger.info(f"🔍 Frame {frame_uri}: No graph data found")
+                            return frame_uri, {'triples': [], 'object_count': 0}
                     else:
-                        frame_graphs[frame_uri] = {'triples': [], 'object_count': 0}
                         self.logger.info(f"🔍 Frame {frame_uri}: Empty result")
-                else:
-                    # Invalid frame - doesn't belong to entity
-                    frame_graphs[frame_uri] = {
-                        "error": "frame_not_owned_by_entity",
-                        "message": f"Frame {frame_uri} does not belong to entity {entity_uri}",
-                        "frame_uri": frame_uri,
-                        "entity_uri": entity_uri
-                    }
-                    self.logger.info(f"🔒 Frame {frame_uri}: Access denied (not owned by entity)")
+                        return frame_uri, {'triples': [], 'object_count': 0}
+                except Exception as e:
+                    self.logger.warning(f"Error fetching frame graph {frame_uri}: {e}")
+                    return frame_uri, {'triples': [], 'object_count': 0}
+            
+            if valid_frame_uris:
+                fetch_results = await asyncio.gather(*[_fetch_frame_graph(uri) for uri in valid_frame_uris])
+                for frame_uri, frame_data in fetch_results:
+                    frame_graphs[frame_uri] = frame_data
             
             # Prepare response with error information
             response = {

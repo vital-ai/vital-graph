@@ -208,7 +208,7 @@ async def query_graph_triples(client: VitalGraphClient, space_id: str, graph_id:
             query_request = SPARQLQueryRequest(query=query)
             
             # Execute SPARQL query via client
-            result = client.sparql.execute_sparql_query(space_id=space_id, request=query_request)
+            result = await client.sparql.execute_sparql_query(space_id=space_id, request=query_request)
             
             # SPARQLQueryResponse doesn't have 'success' field, check for 'error' instead
             if hasattr(result, 'error') and result.error:
@@ -323,7 +323,7 @@ async def validation_checkpoint(client: VitalGraphClient, space_id: str, graph_i
     # Get space info to trigger quad logging
     print(f"\n📦 Getting space info (triggers quad logging if enabled)...")
     try:
-        space_response = client.spaces.get_space(space_id)
+        space_response = await client.spaces.get_space(space_id)
         
         # Handle different response formats
         if space_response.is_success and space_response.space:
@@ -370,7 +370,7 @@ async def main():
     
     # Connect
     print("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         print("❌ Connection failed!")
         return False
@@ -384,7 +384,7 @@ async def main():
     if DELETE_EXISTING_SPACE:
         print(f"🗑️  Deleting existing space '{space_id}' if it exists...")
         try:
-            delete_response = client.spaces.delete_space(space_id)
+            delete_response = await client.spaces.delete_space(space_id)
             if delete_response.is_success:
                 print(f"✅ Existing space deleted\n")
             else:
@@ -403,7 +403,7 @@ async def main():
         space_description="Realistic Organization Test Space",
         tenant="test_tenant"
     )
-    create_response = client.spaces.create_space(space_data)
+    create_response = await client.spaces.create_space(space_data)
     if not create_response.is_success:
         print(f"❌ Failed to create space: {create_response.error_message}")
         return False
@@ -454,7 +454,7 @@ async def main():
         await validation_checkpoint(client, space_id, graph_id, "Before Entity Insert")
         
         # Create entity graph - pass GraphObjects directly
-        response = client.kgentities.create_kgentities(
+        response = await client.kgentities.create_kgentities(
             space_id=space_id,
             graph_id=graph_id,
             objects=org_objects
@@ -475,7 +475,7 @@ async def main():
         # ============================================================================
         print_section("STEP 2: View Initial Entity Graph")
         
-        response = client.kgentities.get_kgentity(
+        response = await client.kgentities.get_kgentity(
             space_id=space_id,
             graph_id=graph_id,
             uri=org_entity_uri,
@@ -493,7 +493,7 @@ async def main():
         # ============================================================================
         print_section("STEP 3: List All Organization Frames")
         
-        frames_response = client.kgframes.list_kgframes(
+        frames_response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             entity_uri=org_entity_uri,
@@ -516,7 +516,7 @@ async def main():
         # ============================================================================
         print_section("STEP 4: View Management Frame Details")
         
-        management_response = client.kgframes.get_kgframe(
+        management_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=management_frame_uri,
@@ -549,7 +549,7 @@ async def main():
         print(f"🔍 DEBUG: CEO frame URI = {ceo_frame_uri}")
         
         # Get current CEO frame with slots
-        ceo_response = client.kgframes.get_kgframe(
+        ceo_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=ceo_frame_uri,
@@ -595,7 +595,7 @@ async def main():
                     slot_jsonld = slot_jsonld['@graph'][0]
                 
                 from vitalgraph.model.jsonld_model import JsonLdObject
-                update_response = client.kgframes.update_frame_slots(
+                update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=ceo_frame_uri,
@@ -625,7 +625,7 @@ async def main():
                     slot_jsonld = slot_jsonld['@graph'][0]
                 
                 from vitalgraph.model.jsonld_model import JsonLdObject
-                update_response = client.kgframes.update_frame_slots(
+                update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=ceo_frame_uri,
@@ -650,7 +650,7 @@ async def main():
         
         # View updated CEO frame
         print_subsection("Updated CEO Frame")
-        ceo_updated_response = client.kgframes.get_kgframe(
+        ceo_updated_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=ceo_frame_uri,
@@ -678,7 +678,7 @@ async def main():
         print("   New Employee Count: 1,200\n")
         
         # Get company frame with slots
-        company_response = client.kgframes.get_kgframe(
+        company_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=company_frame_uri,
@@ -714,7 +714,7 @@ async def main():
                     slot_jsonld = slot_jsonld['@graph'][0]
                 
                 from vitalgraph.model.jsonld_model import JsonLdObject
-                update_response = client.kgframes.update_frame_slots(
+                update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=company_frame_uri,
@@ -735,7 +735,7 @@ async def main():
         
         # View updated company frame
         print_subsection("Updated Company Info Frame")
-        company_updated_response = client.kgframes.get_kgframe(
+        company_updated_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=company_frame_uri,
@@ -763,7 +763,7 @@ async def main():
         print("   New Address: 456 Innovation Blvd, San Francisco, CA 94105\n")
         
         # Get address frame with slots
-        address_response = client.kgframes.get_kgframe(
+        address_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=address_frame_uri,
@@ -803,7 +803,7 @@ async def main():
                     slot_jsonld = slot_jsonld['@graph'][0]
                 
                 from vitalgraph.model.jsonld_model import JsonLdObject
-                update_response = client.kgframes.update_frame_slots(
+                update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=address_frame_uri,
@@ -832,7 +832,7 @@ async def main():
                     slot_jsonld = slot_jsonld['@graph'][0]
                 
                 from vitalgraph.model.jsonld_model import JsonLdObject
-                update_response = client.kgframes.update_frame_slots(
+                update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=address_frame_uri,
@@ -853,7 +853,7 @@ async def main():
         
         # View updated address frame
         print_subsection("Updated Address Frame")
-        address_updated_response = client.kgframes.get_kgframe(
+        address_updated_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=address_frame_uri,
@@ -878,7 +878,7 @@ async def main():
         
         print("📊 Retrieving complete entity graph with all updates...\n")
         
-        final_entity_response = client.kgentities.get_kgentity(
+        final_entity_response = await client.kgentities.get_kgentity(
             space_id=space_id,
             graph_id=graph_id,
             uri=org_entity_uri,
@@ -922,7 +922,7 @@ async def main():
         print(f"📂 Listing files in space '{space_id}'...\n")
         
         try:
-            files_response = client.files.list_files(space_id=space_id)
+            files_response = await client.files.list_files(space_id=space_id)
             
             # Handle response - files_response.files is a list of tuples or objects
             if hasattr(files_response, 'files') and files_response.files:
@@ -981,7 +981,7 @@ async def main():
                 if file_exists:
                     print(f"   🗑️  Deleting existing file {filename} - URI: {file_uri}")
                     try:
-                        client.files.delete_file(
+                        await client.files.delete_file(
                             space_id=space_id,
                             graph_id=graph_id,
                             uri=file_uri
@@ -1002,14 +1002,14 @@ async def main():
                     file_node.name = filename
                     
                     # Create file with GraphObject
-                    create_response = client.files.create_file(
+                    create_response = await client.files.create_file(
                         space_id=space_id,
                         graph_id=graph_id,
                         objects=[file_node]
                     )
                     
                     # Then upload file content
-                    upload_response = client.files.upload_file_content(
+                    upload_response = await client.files.upload_file_content(
                         space_id=space_id,
                         graph_id=graph_id,
                         file_uri=file_uri,
@@ -1028,7 +1028,7 @@ async def main():
         print(f"📂 Listing files in space '{space_id}' after upload...\n")
         
         try:
-            files_response = client.files.list_files(space_id=space_id)
+            files_response = await client.files.list_files(space_id=space_id)
             
             if hasattr(files_response, 'files') and files_response.files:
                 all_files = files_response.files
@@ -1067,7 +1067,7 @@ async def main():
             
             try:
                 # Download file content
-                file_content = client.files.download_file_content(
+                file_content = await client.files.download_file_content(
                     space_id=space_id,
                     graph_id=graph_id,
                     file_uri=file_uri
@@ -1160,7 +1160,7 @@ async def main():
         print("\n💾 Keeping space persistent (not deleting)")
         print(f"   Space '{space_id}' will remain for future runs")
         
-        client.close()
+        await client.close()
         print("✅ Client closed")
 
 

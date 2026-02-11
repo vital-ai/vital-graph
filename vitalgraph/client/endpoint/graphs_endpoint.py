@@ -22,7 +22,7 @@ from ..response.client_response import (
 class GraphsEndpoint(BaseEndpoint):
     """Client endpoint for Graph management operations."""
     
-    def list_graphs(self, space_id: str) -> GraphsListResponse:
+    async def list_graphs(self, space_id: str) -> GraphsListResponse:
         """
         List graphs in a space.
         
@@ -41,7 +41,7 @@ class GraphsEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graphs"
             
-            response = self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
             
             # Parse each item in the list as a GraphInfo object
@@ -71,7 +71,7 @@ class GraphsEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def get_graph_info(self, space_id: str, graph_uri: str) -> GraphResponse:
+    async def get_graph_info(self, space_id: str, graph_uri: str) -> GraphResponse:
         """
         Get information about a specific graph.
         
@@ -91,7 +91,7 @@ class GraphsEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
             
-            response = self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
             
             # Handle case where server returns null for non-existent graphs
@@ -148,7 +148,7 @@ class GraphsEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def create_graph(self, space_id: str, graph_uri: str) -> GraphCreateResponse:
+    async def create_graph(self, space_id: str, graph_uri: str) -> GraphCreateResponse:
         """
         Create a new graph.
         
@@ -168,7 +168,7 @@ class GraphsEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
             
-            response = self._make_authenticated_request('PUT', url)
+            response = await self._make_authenticated_request('PUT', url)
             response_data = response.json()
             
             return GraphCreateResponse(
@@ -187,7 +187,7 @@ class GraphsEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> GraphDeleteResponse:
+    async def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> GraphDeleteResponse:
         """
         Drop (delete) a graph.
         
@@ -209,7 +209,7 @@ class GraphsEndpoint(BaseEndpoint):
             url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
             params = {"silent": silent} if silent else None
             
-            response = self._make_authenticated_request('DELETE', url, params=params)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
             
             return GraphDeleteResponse(
@@ -228,7 +228,7 @@ class GraphsEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
-    def clear_graph(self, space_id: str, graph_uri: str) -> GraphClearResponse:
+    async def clear_graph(self, space_id: str, graph_uri: str) -> GraphClearResponse:
         """
         Clear a graph (remove all triples but keep the graph).
         
@@ -254,7 +254,7 @@ class GraphsEndpoint(BaseEndpoint):
                 target_graph_uri=graph_uri
             )
             
-            response = self._make_authenticated_request('POST', url, json=request_data.model_dump())
+            response = await self._make_authenticated_request('POST', url, json=request_data.model_dump())
             response_data = response.json()
             
             return GraphClearResponse(

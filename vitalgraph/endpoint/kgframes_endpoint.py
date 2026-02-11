@@ -12,6 +12,7 @@ Follows MockKGFramesEndpoint patterns with proper VitalSigns integration:
 - Complete sub-endpoint support
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends
@@ -998,16 +999,20 @@ class KGFramesEndpoint:
             # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
             
-            # Retrieve frames for each URI
-            all_objects = []
-            for frame_uri in frame_uris:
+            # Retrieve all frames concurrently
+            async def _fetch_frame(frame_uri):
                 try:
-                    result = await backend_adapter.get_object(space_id, graph_id, frame_uri)
-                    # get_object returns BackendOperationResult with objects attribute
-                    if result and hasattr(result, 'objects') and result.objects:
-                        all_objects.extend(result.objects)
+                    return await backend_adapter.get_object(space_id, graph_id, frame_uri)
                 except Exception as e:
                     self.logger.warning(f"Failed to retrieve frame {frame_uri}: {e}")
+                    return None
+            
+            results = await asyncio.gather(*[_fetch_frame(uri) for uri in frame_uris])
+            
+            all_objects = []
+            for result in results:
+                if result and hasattr(result, 'objects') and result.objects:
+                    all_objects.extend(result.objects)
             
             # Convert VitalSigns objects to JSON-LD document
             if all_objects:
@@ -1045,6 +1050,8 @@ class KGFramesEndpoint:
             op_mode = OperationMode.CREATE
         
         try:
+            import time as _time
+            _t0 = _time.time()
             self.logger.info(f"🔍 Processing frames with operation_mode {op_mode} in space {space_id}, graph {graph_id}")
             self.logger.info(f"🔍 Request type: {type(request)}")
             self.logger.info(f"🔍 Request content preview: {str(request)[:200]}...")
@@ -1087,6 +1094,9 @@ class KGFramesEndpoint:
                         updated_uri=""
                     )
             
+            _t1 = _time.time()
+            self.logger.info(f"⏱️ ENDPOINT get_backend: {_t1-_t0:.3f}s")
+            
             # Wrap backend with adapter to provide update_quads method for UPDATE operations
             from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
             backend = FusekiPostgreSQLBackendAdapter(backend_impl)
@@ -1102,6 +1112,9 @@ class KGFramesEndpoint:
             else:
                 # Handle JsonLdDocument
                 vitalsigns_objects = self._jsonld_document_to_vitalsigns_objects(request)
+            
+            _t2 = _time.time()
+            self.logger.info(f"⏱️ ENDPOINT jsonld_to_vitalsigns: {_t2-_t1:.3f}s ({len(vitalsigns_objects)} objects)")
             
             # Extract frames and validate
             frames = [obj for obj in vitalsigns_objects if isinstance(obj, KGFrame)]
@@ -1141,8 +1154,14 @@ class KGFramesEndpoint:
                         updated_uri=""
                     )
             
+            _t3 = _time.time()
+            self.logger.info(f"⏱️ ENDPOINT validate_structure: {_t3-_t2:.3f}s")
+            
             # Handle parent relationships and create edges
             enhanced_objects = await self._handle_parent_relationships(backend, space_id, graph_id, frames, vitalsigns_objects, effective_parent_uri)
+            
+            _t4 = _time.time()
+            self.logger.info(f"⏱️ ENDPOINT parent_relationships: {_t4-_t3:.3f}s")
             
             # Execute operation based on mode
             if op_mode == OperationMode.CREATE:

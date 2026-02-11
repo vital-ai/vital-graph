@@ -30,7 +30,7 @@ async def run_file_upload_tests(client, space_id: str, graph_id: str, file_uri: 
         file_size = len(test_content)
         
         start_time = time.perf_counter()
-        response = client.files.upload_file_content(
+        response = await client.files.upload_file_content(
             space_id=space_id,
             graph_id=graph_id,
             file_uri=file_uri,
@@ -62,7 +62,7 @@ async def run_file_upload_tests(client, space_id: str, graph_id: str, file_uri: 
         stream = io.BytesIO(stream_content)
         
         start_time = time.perf_counter()
-        response = client.files.upload_file_content(
+        response = await client.files.upload_file_content(
             space_id=space_id,
             graph_id=graph_id,
             file_uri=file_uri,
@@ -92,7 +92,7 @@ async def run_file_upload_tests(client, space_id: str, graph_id: str, file_uri: 
         file_size = len(large_content)
         
         start_time = time.perf_counter()
-        response = client.files.upload_file_content(
+        response = await client.files.upload_file_content(
             space_id=space_id,
             graph_id=graph_id,
             file_uri=file_uri,

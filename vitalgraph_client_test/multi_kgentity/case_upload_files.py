@@ -161,7 +161,7 @@ class UploadFilesTester:
             file_node.name = file_name
             
             # Create file node metadata
-            create_response = self.client.files.create_file(
+            create_response = await self.client.files.create_file(
                 space_id=space_id,
                 objects=[file_node],
                 graph_id=graph_id

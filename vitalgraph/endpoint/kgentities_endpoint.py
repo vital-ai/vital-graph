@@ -5,6 +5,7 @@ This module provides REST API endpoints for managing KG entities using JSON-LD 1
 KG entities represent knowledge graph entities with their associated triples and frame relationships.
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends
@@ -418,13 +419,11 @@ class KGEntitiesEndpoint:
             else:
                 raise ValueError("Either uris or reference_ids must be provided")
             
-            # Get each entity individually using _get_entity_by_uri
-            all_entities = []
-            
-            for identifier in identifiers:
+            # Get all entities concurrently using asyncio.gather()
+            async def _fetch_by_identifier(identifier):
                 try:
                     if use_reference_ids:
-                        entity_doc = await self._get_entity_by_uri(
+                        return await self._get_entity_by_uri(
                             space_id=space_id,
                             graph_id=graph_id,
                             uri=None,
@@ -433,33 +432,33 @@ class KGEntitiesEndpoint:
                             reference_id=identifier
                         )
                     else:
-                        entity_doc = await self._get_entity_by_uri(
+                        return await self._get_entity_by_uri(
                             space_id=space_id,
                             graph_id=graph_id,
                             uri=identifier,
                             include_entity_graph=include_entity_graph,
                             current_user=current_user
                         )
-                    
-                    # Handle both JsonLdObject and JsonLdDocument return types
-                    if entity_doc:
-                        if hasattr(entity_doc, 'graph') and entity_doc.graph:
-                            # JsonLdDocument with graph array
-                            self.logger.debug(f"🔍 Adding {len(entity_doc.graph)} objects from JsonLdDocument")
-                            all_entities.extend(entity_doc.graph)
-                        elif hasattr(entity_doc, 'model_dump'):
-                            # JsonLdObject - convert to dict and add as single object
-                            entity_dict = entity_doc.model_dump(by_alias=True)
-                            self.logger.debug(f"🔍 Adding 1 object from JsonLdObject")
-                            all_entities.append(entity_dict)
-                        else:
-                            self.logger.warning(f"🔍 Unknown entity doc type: {type(entity_doc)}")
-                    else:
-                        self.logger.warning(f"🔍 No entity doc returned for {uri}")
-                        
                 except Exception as e:
-                    self.logger.warning(f"Failed to get entity {uri}: {e}")
-                    continue
+                    self.logger.warning(f"Failed to get entity {identifier}: {e}")
+                    return None
+            
+            results = await asyncio.gather(*[_fetch_by_identifier(ident) for ident in identifiers])
+            
+            all_entities = []
+            for identifier, entity_doc in zip(identifiers, results):
+                if entity_doc:
+                    if hasattr(entity_doc, 'graph') and entity_doc.graph:
+                        self.logger.debug(f"\U0001f50d Adding {len(entity_doc.graph)} objects from JsonLdDocument")
+                        all_entities.extend(entity_doc.graph)
+                    elif hasattr(entity_doc, 'model_dump'):
+                        entity_dict = entity_doc.model_dump(by_alias=True)
+                        self.logger.debug(f"\U0001f50d Adding 1 object from JsonLdObject")
+                        all_entities.append(entity_dict)
+                    else:
+                        self.logger.warning(f"\U0001f50d Unknown entity doc type: {type(entity_doc)}")
+                else:
+                    self.logger.warning(f"\U0001f50d No entity doc returned for {identifier}")
             
             # Return JsonLdDocument with all found entities
             return JsonLdDocument(
@@ -473,6 +472,7 @@ class KGEntitiesEndpoint:
     
     async def _create_or_update_entities(self, space_id: str, graph_id: str, request: JsonLdRequest, operation_mode: OperationMode, parent_uri: Optional[str], current_user: Dict) -> Union[EntityCreateResponse, EntityUpdateResponse]:
         """Create or update KG entities using refactored kg_impl implementation."""
+        _lock_ctxs = []  # list of (entity_uri, lock_ctx) for cleanup
         try:
             self.logger.debug(f"Processing KG entities in space '{space_id}', graph '{graph_id}', operation_mode='{operation_mode}', parent_uri='{parent_uri}'")
             
@@ -561,6 +561,22 @@ class KGEntitiesEndpoint:
                         updated_count=0
                     )
             
+            # Acquire entity-level advisory locks for all entities in the request.
+            # Sort URIs to prevent deadlocks when multiple requests lock the same set.
+            _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
+            if _lm:
+                entity_uris_to_lock = sorted(set(
+                    str(obj.URI) for obj in vitalsigns_objects
+                    if isinstance(obj, KGEntity) and hasattr(obj, 'URI') and obj.URI
+                ))
+                for _euri in entity_uris_to_lock:
+                    try:
+                        _lctx = _lm.lock(_euri)
+                        await _lctx.__aenter__()
+                        _lock_ctxs.append((_euri, _lctx))
+                    except Exception as _le:
+                        self.logger.warning(f"⚠️ Could not acquire entity lock for {_euri}: {_le}")
+            
             # Use appropriate processor based on operation mode
             if operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
@@ -597,6 +613,13 @@ class KGEntitiesEndpoint:
                     updated_uri="",
                     updated_count=0
                 )
+        finally:
+            # Release all entity locks in reverse order
+            for _euri, _lctx in reversed(_lock_ctxs):
+                try:
+                    await _lctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for {_euri}: {_ue}")
     
     async def _handle_update_mode(self, backend_adapter, space_id: str, graph_id: str, 
                                  vitalsigns_objects: List[GraphObject], current_user: Dict) -> EntityUpdateResponse:
@@ -732,7 +755,7 @@ class KGEntitiesEndpoint:
     async def _delete_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, delete_entity_graph: bool, current_user: Dict) -> EntityDeleteResponse:
         """Delete single KG entity by URI using KGEntityDeleteProcessor."""
         from ..model.kgentities_model import EntityDeleteResponse
-        
+        _lock_ctx = None
         try:
             self.logger.debug(f"Deleting KG entity '{uri}' from space '{space_id}', graph '{graph_id}', delete_entity_graph={delete_entity_graph}")
             
@@ -812,6 +835,12 @@ class KGEntitiesEndpoint:
                 deleted_count=0,
                 deleted_uris=[]
             )
+        finally:
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for {uri}: {_ue}")
     
     async def _delete_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], delete_entity_graph: bool, current_user: Dict) -> EntityDeleteResponse:
         """Delete multiple KG entities by URI list using KGEntityDeleteProcessor."""
@@ -850,18 +879,52 @@ class KGEntitiesEndpoint:
             
             # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
+            _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
             
-            # Delete entities using processor batch method
-            deleted_count = await delete_processor.delete_entities_batch(
-                backend_adapter, space_id, graph_id, uris, delete_entity_graph
-            )
+            # Per-entity coroutine: acquire lock, delete, release
+            async def _locked_delete(entity_uri: str) -> bool:
+                _lctx = None
+                try:
+                    if _lm:
+                        try:
+                            _lctx = _lm.lock(entity_uri)
+                            await _lctx.__aenter__()
+                        except Exception:
+                            _lctx = None
+                    
+                    if delete_entity_graph:
+                        count = await delete_processor.delete_entity_graph(
+                            backend_adapter, space_id, graph_id, entity_uri
+                        )
+                        return count > 0
+                    else:
+                        result = await delete_processor.delete_entity(
+                            backend_adapter, space_id, graph_id, entity_uri
+                        )
+                        return result.success if hasattr(result, 'success') else bool(result)
+                except Exception as e:
+                    self.logger.error(f"Error deleting entity {entity_uri}: {e}")
+                    return False
+                finally:
+                    if _lctx is not None:
+                        try:
+                            await _lctx.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+            
+            # Run all deletions in parallel with per-entity locking
+            import asyncio
+            results = await asyncio.gather(*[_locked_delete(u) for u in uris])
+            
+            deleted_uris_list = [str(u) for u, ok in zip(uris, results) if ok]
+            deleted_count = len(deleted_uris_list)
             
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
             return EntityDeleteResponse(
                 message=f"Successfully deleted {deleted_count} KG entities from graph '{graph_id}' in space '{space_id}'",
                 deleted_count=deleted_count,
-                deleted_uris=[str(uri) for uri in uris[:deleted_count]]  # Cast URIs to strings and only return the URIs that were actually deleted
+                deleted_uris=deleted_uris_list
             )
             
         except Exception as e:
@@ -1057,6 +1120,7 @@ class KGEntitiesEndpoint:
     
     async def _create_or_update_frames(self, space_id: str, graph_id: str, request: Any, operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None):
         """Create or update frames for KGEntities integration using KGEntityFrameCreateProcessor."""
+        _lock_ctx = None
         try:
             # Validate required parameters for KGEntities frame operations
             if not entity_uri:
@@ -1091,6 +1155,17 @@ class KGEntitiesEndpoint:
                     created_count=0,
                     created_uris=[]
                 )
+            
+            # Acquire entity-level advisory lock
+            if entity_uri:
+                _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
+                try:
+                    if _lm:
+                        _lock_ctx = _lm.lock(entity_uri)
+                        await _lock_ctx.__aenter__()
+                except Exception as _le:
+                    self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
+                    _lock_ctx = None
             
             # Create backend adapter
             backend_adapter = create_backend_adapter(backend_impl)
@@ -1170,9 +1245,16 @@ class KGEntitiesEndpoint:
                 created_uris=[],
                 fuseki_success=False
             )
+        finally:
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock: {_ue}")
     
     async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict = None):
         """Delete a frame by URI using SPARQL query processor."""
+        _lock_ctx = None
         try:
             self.logger.debug(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
             
@@ -1205,6 +1287,27 @@ class KGEntitiesEndpoint:
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
             
+            # Look up owning entity via kGGraphURI and lock it
+            _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
+            if _lm:
+                try:
+                    haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
+                    owner_query = f"""SELECT ?entity WHERE {{
+                        GRAPH <{graph_id}> {{
+                            <{uri}> <{haley_prefix}hasKGGraphURI> ?entity .
+                        }}
+                    }} LIMIT 1"""
+                    owner_results = await backend_adapter.execute_sparql_query(space_id, owner_query)
+                    bindings = owner_results.get('results', {}).get('bindings', []) if isinstance(owner_results, dict) else []
+                    if bindings:
+                        entity_uri = bindings[0].get('entity', {}).get('value', '')
+                        if entity_uri:
+                            _lock_ctx = _lm.lock(entity_uri)
+                            await _lock_ctx.__aenter__()
+                except Exception as _le:
+                    self.logger.warning(f"⚠️ Could not acquire entity lock for frame {uri}: {_le}")
+                    _lock_ctx = None
+            
             # Use processor to delete frame
             delete_result = await sparql_processor.delete_frame(space_id, graph_id, uri)
             
@@ -1227,11 +1330,18 @@ class KGEntitiesEndpoint:
                 deleted_count=0,
                 deleted_uris=[]
             )
+        finally:
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for frame {uri}: {_ue}")
     
     async def _create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
                                    request: JsonLdDocument, operation_mode: OperationMode, current_user: Dict, 
                                    parent_frame_uri: Optional[str] = None) -> FrameCreateResponse:
         """Create or update frames within entity context using Edge_hasEntityKGFrame relationships."""
+        _lock_ctx = None
         try:
             # Handle both OperationMode enum and string types
             mode_str = operation_mode.value if hasattr(operation_mode, 'value') else str(operation_mode)
@@ -1256,6 +1366,16 @@ class KGEntitiesEndpoint:
                     created_count=0,
                     created_uris=[]
                 )
+            
+            # Acquire entity-level advisory lock
+            _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
+            try:
+                if _lm:
+                    _lock_ctx = _lm.lock(entity_uri)
+                    await _lock_ctx.__aenter__()
+            except Exception as _le:
+                self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
+                _lock_ctx = None
             
             # Convert JSON-LD to VitalSigns graph objects via triples
             from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -1401,10 +1521,17 @@ class KGEntitiesEndpoint:
                 created_uris=[],
                 slots_created=0
             )
+        finally:
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_ue}")
     
     
     async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
         """Delete frames within entity context using Edge_hasEntityKGFrame relationships."""
+        _lock_ctx = None
         try:
             self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}")
             
@@ -1429,6 +1556,16 @@ class KGEntitiesEndpoint:
                     deleted_count=0,
                     deleted_uris=[]
                 )
+            
+            # Acquire entity-level advisory lock
+            _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
+            try:
+                if _lm:
+                    _lock_ctx = _lm.lock(entity_uri)
+                    await _lock_ctx.__aenter__()
+            except Exception as _le:
+                self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
+                _lock_ctx = None
             
             # Get the proper space-specific graph URI
             if hasattr(backend, '_get_space_graph_uri'):
@@ -1486,12 +1623,21 @@ class KGEntitiesEndpoint:
                 deleted_count=0,
                 deleted_uris=[]
             )
+        finally:
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _ue:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_ue}")
     
     async def _update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
                                    request: JsonLdDocument, current_user: Dict, 
                                    parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
         """Update frames within entity context using complete frame replacement."""
+        _lock_ctx = None
         try:
+            import time as _time
+            _u0 = _time.time()
             if parent_frame_uri:
                 self.logger.debug(f"Updating CHILD entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri={parent_frame_uri}")
             else:
@@ -1517,6 +1663,9 @@ class KGEntitiesEndpoint:
                     updated_count=0
                 )
             
+            _u1 = _time.time()
+            self.logger.info(f"⏱️ UPDATE_ENDPOINT get_backend: {_u1-_u0:.3f}s")
+            
             # Convert JSON-LD to VitalSigns graph objects
             from vital_ai_vitalsigns.vitalsigns import VitalSigns
             from ai_haley_kg_domain.model.KGFrame import KGFrame
@@ -1530,6 +1679,19 @@ class KGEntitiesEndpoint:
                 obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
                 self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
             
+            _u2 = _time.time()
+            self.logger.info(f"⏱️ UPDATE_ENDPOINT jsonld_to_vitalsigns: {_u2-_u1:.3f}s ({len(graph_objects)} objects)")
+            
+            # Acquire entity-level advisory lock to prevent concurrent modifications
+            _lock_manager = getattr(space_impl.backend, 'entity_lock_manager', None)
+            try:
+                if _lock_manager:
+                    _lock_ctx = _lock_manager.lock(entity_uri)
+                    await _lock_ctx.__aenter__()
+            except Exception as _lock_err:
+                self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_lock_err}")
+                _lock_ctx = None
+            
             # Create backend adapter for frame operations
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend)
@@ -1539,6 +1701,8 @@ class KGEntitiesEndpoint:
             
             discovery_processor = KGEntityFrameDiscoveryProcessor(backend_adapter, self.logger)
             existing_frames = await discovery_processor.discover_entity_frames(space_id, graph_id, entity_uri)
+            _u3 = _time.time()
+            self.logger.info(f"⏱️ UPDATE_ENDPOINT discover_frames: {_u3-_u2:.3f}s ({len(existing_frames)} frames)")
             
             # Group incoming objects by frame for atomic operations (including connecting edges)
             frame_groups = {}
@@ -1697,6 +1861,9 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"🔍 Frame groups to update: {list(frame_groups.keys())}")
             self.logger.debug(f"🔍 Total frame groups: {len(frame_groups)}")
             
+            _u4 = _time.time()
+            self.logger.info(f"⏱️ UPDATE_ENDPOINT group_objects: {_u4-_u3:.3f}s ({len(frame_groups)} groups)")
+            
             for frame_uri, frame_group in frame_groups.items():
                 frame_objects = frame_group['frame_objects']
                 connecting_edges = frame_group['connecting_edges']
@@ -1771,6 +1938,13 @@ class KGEntitiesEndpoint:
                 updated_uri="",
                 updated_count=0
             )
+        finally:
+            # Release entity advisory lock
+            if _lock_ctx is not None:
+                try:
+                    await _lock_ctx.__aexit__(None, None, None)
+                except Exception as _unlock_err:
+                    self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_unlock_err}")
     
     async def _validate_entity_frame_relationships(self, space_id: str, graph_id: str, 
                                                  entity_uri: str, backend_adapter) -> bool:
@@ -1834,16 +2008,24 @@ class KGEntitiesEndpoint:
                 from ..kg_impl.kgentity_get_impl import KGEntityGetProcessor
                 processor = KGEntityGetProcessor(self.logger)
                 
-                # Fetch each entity
+                # Fetch all entities concurrently
+                async def _fetch_query_entity(uri):
+                    try:
+                        return await processor.get_entity(
+                            space_id=space_id,
+                            graph_id=graph_id,
+                            entity_uri=uri,
+                            include_entity_graph=False,
+                            backend_adapter=backend_adapter
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Error fetching entity {uri}: {e}")
+                        return None
+                
+                fetch_results = await asyncio.gather(*[_fetch_query_entity(uri) for uri in entity_uris])
+                
                 entities = []
-                for uri in entity_uris:
-                    entity_list = await processor.get_entity(
-                        space_id=space_id,
-                        graph_id=graph_id,
-                        entity_uri=uri,
-                        include_entity_graph=False,
-                        backend_adapter=backend_adapter
-                    )
+                for entity_list in fetch_results:
                     if entity_list:
                         entities.extend(entity_list)
                 

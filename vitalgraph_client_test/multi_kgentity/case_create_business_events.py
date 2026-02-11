@@ -79,7 +79,7 @@ class CreateBusinessEventsTester:
         self.client = client
         self.data_creator = ClientTestDataCreator()
         
-    def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str]) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str]) -> Dict[str, Any]:
         """
         Run business event creation tests.
         
@@ -147,7 +147,7 @@ class CreateBusinessEventsTester:
                 logger.info(f"Event VitalSigns objects structure:")
                 logger.info(json.dumps(objects_json, indent=2))
                 
-                response = self.client.kgentities.create_kgentities(
+                response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=event_objects

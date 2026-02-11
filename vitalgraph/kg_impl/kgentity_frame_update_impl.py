@@ -9,7 +9,8 @@ Handles frame property updates, slot modifications, and frame graph URI preserva
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 # VitalSigns imports
@@ -39,6 +40,34 @@ class KGEntityFrameUpdateProcessor:
     Handles frame property updates, slot modifications, and frame graph URI preservation
     while maintaining entity-frame relationships and grouping URI consistency.
     """
+    
+    # Class-level ownership cache: (space_id, frame_uri) → (entity_uri, timestamp)
+    # Frames never switch entities, so a positive hit is reliable until the frame is deleted.
+    # TTL bounds staleness from cross-instance deletes.
+    _ownership_cache: Dict[Tuple[str, str], Tuple[str, float]] = {}
+    _OWNERSHIP_TTL_SECONDS: float = 300  # 5 minutes
+    
+    @classmethod
+    def cache_ownership(cls, space_id: str, frame_uri: str, entity_uri: str):
+        """Cache that entity_uri owns frame_uri."""
+        cls._ownership_cache[(space_id, frame_uri)] = (entity_uri, time.time())
+    
+    @classmethod
+    def lookup_ownership(cls, space_id: str, frame_uri: str) -> Optional[str]:
+        """Return owning entity_uri if cached and not expired, else None."""
+        entry = cls._ownership_cache.get((space_id, frame_uri))
+        if entry is None:
+            return None
+        entity_uri, ts = entry
+        if time.time() - ts > cls._OWNERSHIP_TTL_SECONDS:
+            del cls._ownership_cache[(space_id, frame_uri)]
+            return None
+        return entity_uri
+    
+    @classmethod
+    def invalidate_ownership(cls, space_id: str, frame_uri: str):
+        """Remove cached ownership for a deleted frame."""
+        cls._ownership_cache.pop((space_id, frame_uri), None)
     
     def __init__(self, backend: FusekiPostgreSQLBackendAdapter, logger: logging.Logger):
         """
@@ -75,8 +104,9 @@ class KGEntityFrameUpdateProcessor:
             else:
                 self.logger.info(f"🔄 Starting TOP-LEVEL frame update for entity {entity_uri}: {len(frame_objects)} frame objects")
             
-            # Phase 1: Validate frame ownership (security)
-            frame_uris = [str(obj.URI) for obj in frame_objects if hasattr(obj, 'URI')]
+            # Phase 1: Validate frame ownership (security) — only check KGFrame URIs
+            from ai_haley_kg_domain.model.KGFrame import KGFrame
+            frame_uris = [str(obj.URI) for obj in frame_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
             validated_frame_uris = await self.validate_frame_ownership(space_id, graph_id, entity_uri, frame_uris)
             
             if not validated_frame_uris:
@@ -175,7 +205,8 @@ class KGEntityFrameUpdateProcessor:
         """
         Validate that frames belong to the specified entity (security check).
         
-        Reuses the same validation logic as the frame delete processor.
+        Uses a class-level cache for positive ownership hits since frames never
+        switch entities. Only uncached frame URIs are queried via SPARQL.
         
         Args:
             space_id: Space identifier
@@ -187,10 +218,34 @@ class KGEntityFrameUpdateProcessor:
             List of validated frame URIs that belong to the entity
         """
         try:
-            # Build frame URIs filter for SPARQL query
-            frame_uris_filter = ', '.join([f'<{uri}>' for uri in frame_uris])
+            # Check cache: owns(entity, frame) → skip, owns(other, frame) → fail fast
+            validated_from_cache = []
+            rejected_from_cache = []
+            uncached = []
             
-            # Phase 1 SPARQL query: Validate frame ownership
+            for uri in frame_uris:
+                cached_owner = self.lookup_ownership(space_id, uri)
+                if cached_owner is not None:
+                    if cached_owner == entity_uri:
+                        validated_from_cache.append(uri)
+                    else:
+                        rejected_from_cache.append(uri)
+                else:
+                    uncached.append(uri)
+            
+            if rejected_from_cache:
+                self.logger.info(f"⏱️ OWNERSHIP cache reject: {len(rejected_from_cache)} frames owned by other entities")
+            
+            if not uncached:
+                self.logger.info(f"⏱️ OWNERSHIP cache hit: {len(validated_from_cache)} validated, {len(rejected_from_cache)} rejected, 0 queried")
+                return validated_from_cache
+            
+            self.logger.info(f"⏱️ OWNERSHIP cache: {len(validated_from_cache)} cached, {len(rejected_from_cache)} rejected, {len(uncached)} to query")
+            
+            # Build frame URIs filter for SPARQL query (only uncached)
+            frame_uris_filter = ', '.join([f'<{uri}>' for uri in uncached])
+            
+            # SPARQL query: Validate frame ownership
             # Include both direct entity-frame connections and hierarchical parent-child connections
             ownership_query = f"""
             SELECT DISTINCT ?frame_uri WHERE {{
@@ -219,9 +274,13 @@ class KGEntityFrameUpdateProcessor:
             ownership_results = await self.backend.execute_sparql_query(space_id, ownership_query)
             self.logger.debug(f"🔍 Ownership query results: {ownership_results}")
             
-            validated_frame_uris = self._extract_frame_uris_from_results(ownership_results)
+            validated_from_query = self._extract_frame_uris_from_results(ownership_results)
             
-            return validated_frame_uris
+            # Cache positive ownership results
+            for uri in validated_from_query:
+                self.cache_ownership(space_id, uri, entity_uri)
+            
+            return validated_from_cache + validated_from_query
             
         except Exception as e:
             self.logger.error(f"❌ Error validating frame ownership: {e}")

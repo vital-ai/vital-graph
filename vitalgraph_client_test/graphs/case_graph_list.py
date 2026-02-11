@@ -38,7 +38,7 @@ class GraphListTester:
         """
         self.client = client
         
-    def test_graph_listing(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
+    async def test_graph_listing(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
         """
         Test graph listing operations.
         
@@ -60,7 +60,7 @@ class GraphListTester:
         }
         
         # Test 1: List all graphs
-        list_all_result = self._test_list_all_graphs(space_id, created_graphs)
+        list_all_result = await self._test_list_all_graphs(space_id, created_graphs)
         results['test_details'].append(list_all_result)
         results['total_tests'] += 1
         if list_all_result['passed']:
@@ -71,7 +71,7 @@ class GraphListTester:
         
         # Test 2: Verify created graphs are listed
         if created_graphs:
-            verify_result = self._test_verify_created_graphs_listed(space_id, created_graphs)
+            verify_result = await self._test_verify_created_graphs_listed(space_id, created_graphs)
             results['test_details'].append(verify_result)
             results['total_tests'] += 1
             if verify_result['passed']:
@@ -82,7 +82,7 @@ class GraphListTester:
         
         # Test 3: Empty space listing (if no graphs expected)
         if not created_graphs:
-            empty_result = self._test_empty_graph_listing(space_id)
+            empty_result = await self._test_empty_graph_listing(space_id)
             results['test_details'].append(empty_result)
             results['total_tests'] += 1
             if empty_result['passed']:
@@ -94,13 +94,13 @@ class GraphListTester:
         logger.info(f"✅ Graph listing tests completed: {results['passed_tests']}/{results['total_tests']} passed")
         return results
     
-    def _test_list_all_graphs(self, space_id: str, expected_graphs: List[str] = None) -> Dict[str, Any]:
+    async def _test_list_all_graphs(self, space_id: str, expected_graphs: List[str] = None) -> Dict[str, Any]:
         """Test listing all graphs in a space."""
         logger.info("  Testing list all graphs...")
         
         try:
             # List graphs using client
-            graphs_response = self.client.list_graphs(space_id)
+            graphs_response = await self.client.list_graphs(space_id)
             
             if graphs_response is not None:
                 # Handle different response formats
@@ -136,13 +136,13 @@ class GraphListTester:
                 'error': f"Exception during graph listing: {e}"
             }
     
-    def _test_verify_created_graphs_listed(self, space_id: str, expected_graphs: List[str]) -> Dict[str, Any]:
+    async def _test_verify_created_graphs_listed(self, space_id: str, expected_graphs: List[str]) -> Dict[str, Any]:
         """Test that created graphs appear in the listing."""
         logger.info("  Testing verification of created graphs in listing...")
         
         try:
             # List graphs using client
-            graphs_response = self.client.graphs.list_graphs(space_id)
+            graphs_response = await self.client.graphs.list_graphs(space_id)
             
             if not graphs_response.is_success:
                 return {
@@ -198,13 +198,13 @@ class GraphListTester:
                 'error': f"Exception during graph listing verification: {e}"
             }
     
-    def _test_empty_graph_listing(self, space_id: str) -> Dict[str, Any]:
+    async def _test_empty_graph_listing(self, space_id: str) -> Dict[str, Any]:
         """Test listing graphs in an empty space."""
         logger.info("  Testing empty graph listing...")
         
         try:
             # List graphs using client
-            graphs_response = self.client.graphs.list_graphs(space_id)
+            graphs_response = await self.client.graphs.list_graphs(space_id)
             
             if graphs_response.is_success:
                 graphs = graphs_response.graphs

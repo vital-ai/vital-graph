@@ -18,7 +18,7 @@ class KGTypeCreateTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
         """
         Run KGType creation tests.
         
@@ -35,11 +35,11 @@ class KGTypeCreateTester:
         results = []
         
         # Test basic KGType creation
-        basic_result = self._test_basic_kgtype_creation(space_id, graph_id, test_kgtypes)
+        basic_result = await self._test_basic_kgtype_creation(space_id, graph_id, test_kgtypes)
         results.append(basic_result)
         
         # Test batch KGType creation
-        batch_result = self._test_batch_kgtype_creation(space_id, graph_id, test_kgtypes)
+        batch_result = await self._test_batch_kgtype_creation(space_id, graph_id, test_kgtypes)
         results.append(batch_result)
         
         # Skip verification test since all KGTypes are now created in batch test
@@ -57,7 +57,7 @@ class KGTypeCreateTester:
             'results': results
         }
     
-    def _test_basic_kgtype_creation(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
+    async def _test_basic_kgtype_creation(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
         """Test basic KGType creation."""
         logger.info("  Testing basic KGType creation...")
         
@@ -81,7 +81,7 @@ class KGTypeCreateTester:
                 }
             
             # Create using client - pass GraphObject directly
-            response = self.client.create_kgtypes(space_id, graph_id, [test_kgtypes[0]])
+            response = await self.client.create_kgtypes(space_id, graph_id, [test_kgtypes[0]])
             
             # Log the response details
             logger.info(f"    📥 RESPONSE: CREATE KGTypes")
@@ -126,7 +126,7 @@ class KGTypeCreateTester:
                 'error': f"Exception during KGType creation: {e}"
             }
     
-    def _test_batch_kgtype_creation(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
+    async def _test_batch_kgtype_creation(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
         """Test batch KGType creation."""
         logger.info("  Testing batch KGType creation...")
         
@@ -142,7 +142,7 @@ class KGTypeCreateTester:
             batch_kgtypes = test_kgtypes[1:]  # Use all KGTypes except the first one (already created in basic test)
             
             # Create using client - pass GraphObjects directly
-            response = self.client.create_kgtypes(space_id, graph_id, batch_kgtypes)
+            response = await self.client.create_kgtypes(space_id, graph_id, batch_kgtypes)
             
             if response.is_success and response.created_count >= len(batch_kgtypes):
                 return {
@@ -169,7 +169,7 @@ class KGTypeCreateTester:
                 'error': f"Exception during batch KGType creation: {e}"
             }
     
-    def _test_kgtype_creation_with_verification(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
+    async def _test_kgtype_creation_with_verification(self, space_id: str, graph_id: str, test_kgtypes: List) -> Dict[str, Any]:
         """Test KGType creation with verification."""
         logger.info("  Testing KGType creation with verification...")
         
@@ -191,7 +191,7 @@ class KGTypeCreateTester:
             # Create using client - use JsonLdObject for single KGType
             from vitalgraph.model.jsonld_model import JsonLdObject
             jsonld_obj = JsonLdObject(**jsonld_data)
-            create_response = self.client.create_kgtypes(space_id, graph_id, jsonld_obj)
+            create_response = await self.client.create_kgtypes(space_id, graph_id, jsonld_obj)
             
             if not create_response or not (hasattr(create_response, 'created_count') and create_response.created_count > 0):
                 error_msg = create_response.message if create_response and hasattr(create_response, 'message') else 'Unknown error'
@@ -203,7 +203,7 @@ class KGTypeCreateTester:
             
             # Verify by listing KGTypes and checking if our KGType exists
             try:
-                list_response = self.client.list_kgtypes(space_id, graph_id, page_size=100)
+                list_response = await self.client.list_kgtypes(space_id, graph_id, page_size=100)
                 if list_response and hasattr(list_response, 'data') and list_response.data:
                     # Handle both JsonLdObject (single) and JsonLdDocument (multiple)
                     from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument

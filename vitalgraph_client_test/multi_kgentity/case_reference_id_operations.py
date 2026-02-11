@@ -18,7 +18,7 @@ class ReferenceIdOperationsTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
                   entity_names: List[str], reference_ids: List[str]) -> Dict[str, Any]:
         """
         Run reference ID retrieval tests.
@@ -54,7 +54,7 @@ class ReferenceIdOperationsTester:
             
             logger.info(f"   Getting entity with reference ID: {ref_id}")
             
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 reference_id=ref_id,
@@ -98,7 +98,7 @@ class ReferenceIdOperationsTester:
             
             logger.info(f"   Getting entities with reference IDs: {ref_ids}")
             
-            response = self.client.kgentities.get_kgentities_by_reference_ids(
+            response = await self.client.kgentities.get_kgentities_by_reference_ids(
                 space_id=space_id,
                 graph_id=graph_id,
                 reference_ids=ref_ids,
@@ -138,7 +138,7 @@ class ReferenceIdOperationsTester:
             
             logger.info(f"   Getting entity graph with reference ID: {ref_id}")
             
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 reference_id=ref_id,
@@ -185,7 +185,7 @@ class ReferenceIdOperationsTester:
             # This should raise an error
             error_raised = False
             try:
-                self.client.kgentities.get_kgentity(
+                await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uris[0],
@@ -223,7 +223,7 @@ class ReferenceIdOperationsTester:
             # This should return empty or raise an error
             error_or_empty = False
             try:
-                get_response = self.client.kgentities.get_kgentity(
+                get_response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     reference_id=non_existent_ref_id,

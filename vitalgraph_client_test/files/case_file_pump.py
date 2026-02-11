@@ -19,7 +19,7 @@ async def run_file_pump_tests(client, space_id: str, graph_id: str, source_uri: 
         # Test 1: Pump file from source to target
         logger.info("  Test 1: Pump file from source to target")
         
-        result = client.files.pump_file(
+        result = await client.files.pump_file(
             source_space_id=space_id,
             source_graph_id=graph_id,
             source_file_uri=source_uri,

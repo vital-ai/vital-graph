@@ -16,7 +16,7 @@ class VerifyLeadGraphTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, entity_uri: str, 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uri: str, 
                   expected_triple_count: int = None) -> Dict[str, Any]:
         """
         Run lead entity graph verification tests.
@@ -51,7 +51,7 @@ class VerifyLeadGraphTester:
             logger.info(f"\n--- Get Entity Graph ---\n")
             
             # Get the complete entity graph
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=entity_uri,
@@ -102,7 +102,7 @@ class VerifyLeadGraphTester:
             logger.info(f"\n--- Verify Entity Exists ---\n")
             
             # Get just the entity (without full graph)
-            entity_response = self.client.kgentities.get_kgentity(
+            entity_response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=entity_uri,
@@ -132,7 +132,7 @@ class VerifyLeadGraphTester:
             logger.info(f"\n--- Verify Entity in List ---\n")
             
             # List entities to confirm it's there
-            list_response = self.client.kgentities.list_kgentities(
+            list_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100

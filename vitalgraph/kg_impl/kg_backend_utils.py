@@ -6,6 +6,7 @@ This module provides a unified interface for KG operations across different back
 details and provides a consistent API for KG endpoint implementations.
 """
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Union
@@ -469,7 +470,7 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             vs = VitalSigns()
             
             # Use VitalSigns from_triples_list to convert all triples at once
-            objects = vs.from_triples_list(triples)
+            objects = await asyncio.to_thread(vs.from_triples_list, triples)
             
             self.logger.debug(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
             return objects
@@ -581,33 +582,25 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     async def update_quads(self, space_id: str, graph_id: str, 
                           delete_quads: List[tuple], insert_quads: List[tuple]) -> bool:
         """
-        Atomically update quads using proper transactional operations.
+        Atomically update quads via the dual-write coordinator.
         
-        Note: This is used by KGSlotUpdateProcessor. For direct slot updates,
-        use the transactional pattern in _update_frame_slots_in_backend instead.
+        DELETE and INSERT share a single PostgreSQL transaction so orphan-cleanup
+        from the delete is never visible to concurrent requests until the insert
+        also completes.
         """
+        self.logger.debug(f"🔄 ATOMIC UPDATE: delete={len(delete_quads)}, insert={len(insert_quads)} for space {space_id}")
+        
         try:
-            self.logger.debug(f"🔄 ATOMIC UPDATE: Starting update_quads for space {space_id}, graph {graph_id}")
-            self.logger.debug(f"🔄 Delete quads: {len(delete_quads)}, Insert quads: {len(insert_quads)}")
+            coordinator = self.backend.db_ops.dual_write_coordinator
+            result = await coordinator.update_quads(space_id, delete_quads, insert_quads)
             
-            # Use backend's existing transactional methods
-            # Delete operations first
-            if delete_quads:
-                success = await self.backend.remove_rdf_quads_batch(space_id, delete_quads)
-                if not success:
-                    raise Exception("Failed to delete quads")
-                self.logger.debug(f"🔄 Deleted {len(delete_quads)} quads")
-            
-            # Insert operations second
-            if insert_quads:
-                success = await self.backend.add_rdf_quads_batch(space_id, insert_quads)
-                if not success:
-                    raise Exception("Failed to insert quads")
-                self.logger.debug(f"🔄 Inserted {len(insert_quads)} quads")
-            
-            self.logger.debug("🔄 update_quads completed successfully")
-            return True
-            
+            if result:
+                self.logger.debug("🔄 update_quads completed successfully")
+                return True
+            else:
+                self.logger.error("🔄 update_quads failed")
+                return False
+                
         except Exception as e:
             self.logger.error(f"🔄 update_quads failed: {e}")
             return False

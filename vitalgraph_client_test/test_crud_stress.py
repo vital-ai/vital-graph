@@ -122,7 +122,7 @@ async def main():
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
@@ -135,13 +135,13 @@ async def main():
     # Check if space already exists and delete it
     logger.info(f"📦 Checking for existing test space: {space_id}")
     try:
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             existing_space = next((s for s in spaces_response.spaces if s.space == space_id), None)
             
             if existing_space:
                 logger.info(f"   Found existing space, deleting...")
-                delete_response = client.spaces.delete_space(space_id)
+                delete_response = await client.spaces.delete_space(space_id)
                 if delete_response.is_success:
                     logger.info(f"   ✅ Existing space deleted")
     except Exception as e:
@@ -154,7 +154,7 @@ async def main():
         space_description="Test space for multiple organization CRUD operations",
         tenant="test_tenant"
     )
-    create_response = client.spaces.create_space(space_data)
+    create_response = await client.spaces.create_space(space_data)
     if not create_response.is_success:
         logger.error(f"❌ Failed to create space: {create_response.error_message}")
         return False
@@ -171,7 +171,7 @@ async def main():
         # STEP 2: Create Organizations (with file references)
         # ====================================================================
         create_tester = CreateOrganizationsTester(client)
-        create_results = create_tester.run_tests(space_id, graph_id, file_uris=file_uris)
+        create_results = await create_tester.run_tests(space_id, graph_id, file_uris=file_uris)
         all_results.append(create_results)
         
         if create_results["tests_failed"] > 0:
@@ -188,7 +188,7 @@ async def main():
         # STEP 8: Update Entities
         # ====================================================================
         update_tester = UpdateEntitiesTester(client)
-        update_results = update_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
+        update_results = await update_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
         all_results.append(update_results)
         
         # ====================================================================
@@ -196,7 +196,7 @@ async def main():
         # ====================================================================
         if update_results.get("updates"):
             verify_tester = VerifyUpdatesTester(client)
-            verify_results = verify_tester.run_tests(space_id, graph_id, created_entity_uris, 
+            verify_results = await verify_tester.run_tests(space_id, graph_id, created_entity_uris, 
                                                      update_results["updates"])
             all_results.append(verify_results)
         
@@ -237,7 +237,7 @@ async def main():
                 try:
                     company_frame_uri = f"{created_entity_uris[0].replace('/organization/', '/frame/')}_company"
                     # Step 1: Fetch stale frame objects from Fuseki (they may still exist there)
-                    fetch_resp = client.kgentities.get_kgentity_frames(
+                    fetch_resp = await client.kgentities.get_kgentity_frames(
                         space_id=space_id, graph_id=graph_id,
                         entity_uri=created_entity_uris[0],
                         frame_uris=[company_frame_uri]
@@ -246,7 +246,7 @@ async def main():
                     logger.info(f"🔄 RECOVERY: Fetched {len(saved_objects)} stale frame objects")
                     
                     # Step 2: Delete to clean up stale Fuseki data
-                    del_resp = client.kgentities.delete_entity_frames(
+                    del_resp = await client.kgentities.delete_entity_frames(
                         space_id=space_id, graph_id=graph_id,
                         entity_uri=created_entity_uris[0],
                         frame_uris=[company_frame_uri]
@@ -256,7 +256,7 @@ async def main():
                     
                     # Step 3: Recreate the frame in both PG and Fuseki
                     if saved_objects:
-                        create_resp = client.kgentities.create_entity_frames(
+                        create_resp = await client.kgentities.create_entity_frames(
                             space_id=space_id, graph_id=graph_id,
                             entity_uri=created_entity_uris[0],
                             objects=saved_objects
@@ -271,7 +271,7 @@ async def main():
                     logger.error(f"🔄 RECOVERY: Failed to resync: {e}")
             
             # Run frame operations without deletion, with randomized value
-            frame_results = frame_reset_tester.run_tests(
+            frame_results = await frame_reset_tester.run_tests(
                 space_id, graph_id, 
                 created_entity_uris[0], entity_names[0],
                 update_value=update_value
@@ -375,7 +375,7 @@ async def main():
         logger.info(f"  Listing Entities Before Deletion")
         logger.info(f"{'='*80}\n")
         
-        list_before_response = client.kgentities.list_kgentities(
+        list_before_response = await client.kgentities.list_kgentities(
             space_id=space_id,
             graph_id=graph_id,
             page_size=20,
@@ -399,7 +399,7 @@ async def main():
         # ====================================================================
         # DeleteEntitiesTester only deletes last 3 entities, so expect 7 remaining
         delete_tester = DeleteEntitiesTester(client)
-        delete_results = delete_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names, 
+        delete_results = await delete_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names, 
                                                   expected_remaining=7)
         all_results.append(delete_results)
         
@@ -410,7 +410,7 @@ async def main():
         logger.info(f"  Diagnosing Remaining Entities")
         logger.info(f"{'='*80}\n")
         
-        list_response = client.kgentities.list_kgentities(
+        list_response = await client.kgentities.list_kgentities(
             space_id=space_id,
             graph_id=graph_id,
             page_size=20,
@@ -451,7 +451,7 @@ async def main():
         #     logger.warning(f"⚠️  Could not delete space: {delete_response.error_message}")
         logger.info(f"⚠️  Skipping space deletion - space '{space_id}' preserved for inspection")
         
-        client.close()
+        await client.close()
         logger.info("✅ Client closed")
 
 

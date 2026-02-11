@@ -20,7 +20,7 @@ from ...model.jsonld_model import JsonLdDocument, JsonLdObject
 class KGFramesEndpoint(BaseEndpoint):
     """Client endpoint for KGFrames operations."""
     
-    def _make_request(self, method: str, url: str, params=None, json=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -33,13 +33,13 @@ class KGFramesEndpoint(BaseEndpoint):
             if json:
                 kwargs['json'] = json
             
-            response = self._make_authenticated_request(method, url, **kwargs)
+            response = await self._make_authenticated_request(method, url, **kwargs)
             return response
             
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
-    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> FramesResponse:
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> FramesResponse:
         """
         List KGFrames with pagination and optional search.
         
@@ -72,9 +72,9 @@ class KGFramesEndpoint(BaseEndpoint):
             search=search
         )
         
-        return self._make_typed_request('GET', url, FramesResponse, params=params)
+        return await self._make_typed_request('GET', url, FramesResponse, params=params)
     
-    def get_kgframe(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> FrameGraphResponse:
+    async def get_kgframe(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> FrameGraphResponse:
         """
         Get a specific KGFrame by URI with optional complete graph.
         
@@ -101,9 +101,9 @@ class KGFramesEndpoint(BaseEndpoint):
             include_frame_graph=include_frame_graph
         )
         
-        return self._make_typed_request('GET', url, FrameGraphResponse, params=params)
+        return await self._make_typed_request('GET', url, FrameGraphResponse, params=params)
     
-    def create_kgframes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
+    async def create_kgframes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
                        entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> FrameCreateResponse:
         """
         Create KGFrames from JSON-LD document or object with automatic grouping URI assignment.
@@ -147,9 +147,9 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        return self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=payload)
+        return await self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=payload)
     
-    def update_kgframes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
+    async def update_kgframes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
                        entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> FrameUpdateResponse:
         """
         Update KGFrames from JSON-LD document or object with grouping URI management.
@@ -192,9 +192,9 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        return self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=payload)
+        return await self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=payload)
     
-    def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> FrameDeleteResponse:
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> FrameDeleteResponse:
         """
         Delete a KGFrame by URI.
         
@@ -219,9 +219,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri=uri
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
     
-    def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
         """
         Delete multiple KGFrames by URI list.
         
@@ -246,12 +246,12 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list=uri_list
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
     
     # KGFrames with Slots operations
     # Note: Server-side implementation may not be complete yet
     
-    def get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str] = None, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> FramesResponse:
+    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str] = None, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> FramesResponse:
         """
         Get KGFrames with their associated slots.
         
@@ -285,9 +285,9 @@ class KGFramesEndpoint(BaseEndpoint):
             search=search
         )
         
-        return self._make_typed_request('GET', url, FramesResponse, params=params)
+        return await self._make_typed_request('GET', url, FramesResponse, params=params)
     
-    def create_kgframes_with_slots(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
+    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
                                   entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> FrameCreateResponse:
         """
         Create KGFrames with their associated slots from JSON-LD document or object with automatic grouping URI assignment.
@@ -331,9 +331,9 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        return self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=payload)
+        return await self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=payload)
     
-    def update_kgframes_with_slots(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
+    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument],
                                   entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> FrameUpdateResponse:
         """
         Update KGFrames with their associated slots from JSON-LD document or object with grouping URI management.
@@ -376,9 +376,9 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        return self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=payload)
+        return await self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=payload)
     
-    def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
         """
         Delete KGFrames with their associated slots by URI list.
         
@@ -403,9 +403,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list=uri_list
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
     
-    def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
+    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
         """
         Delete KGFrames by URI list.
         
@@ -430,11 +430,11 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list=uri_list
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
 
     # Frame-Slot Sub-Endpoint Operations
     
-    def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, data: Union[JsonLdObject, JsonLdDocument], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> SlotCreateResponse:
+    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, data: Union[JsonLdObject, JsonLdDocument], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> SlotCreateResponse:
         """
         Create slots for a specific frame.
         
@@ -477,10 +477,10 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        response = self._make_request('POST', url, params=params, json=payload)
+        response = await self._make_request('POST', url, params=params, json=payload)
         return SlotCreateResponse(**response.json())
     
-    def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, data: Union[JsonLdObject, JsonLdDocument], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> SlotUpdateResponse:
+    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, data: Union[JsonLdObject, JsonLdDocument], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> SlotUpdateResponse:
         """
         Update slots for a specific frame.
         
@@ -522,9 +522,9 @@ class KGFramesEndpoint(BaseEndpoint):
         )
         
         payload = data.model_dump(by_alias=True)
-        return self._make_typed_request('POST', url, SlotUpdateResponse, params=params, json=payload)
+        return await self._make_typed_request('POST', url, SlotUpdateResponse, params=params, json=payload)
     
-    def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: list[str]) -> SlotDeleteResponse:
+    async def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: list[str]) -> SlotDeleteResponse:
         """
         Delete specific slots from a frame.
         
@@ -551,9 +551,9 @@ class KGFramesEndpoint(BaseEndpoint):
             slot_uris=','.join(slot_uris)
         )
         
-        return self._make_typed_request('DELETE', url, SlotDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, SlotDeleteResponse, params=params)
     
-    def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_type: Optional[str] = None) -> JsonLdDocument:
+    async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_type: Optional[str] = None) -> JsonLdDocument:
         """
         Get slots for a specific frame, optionally filtered by slot type.
         
@@ -584,11 +584,11 @@ class KGFramesEndpoint(BaseEndpoint):
             slot_type=slot_type
         )
         
-        return self._make_typed_request('GET', url, JsonLdDocument, params=params)
+        return await self._make_typed_request('GET', url, JsonLdDocument, params=params)
     
     # Frame-to-Frame Sub-Endpoint Operations
     
-    def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, data: Union[JsonLdObject, JsonLdDocument]) -> FrameCreateResponse:
+    async def create_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, data: Union[JsonLdObject, JsonLdDocument]) -> FrameCreateResponse:
         """
         Create child frames for a parent frame.
         
@@ -625,9 +625,9 @@ class KGFramesEndpoint(BaseEndpoint):
             parent_uri=parent_frame_uri
         )
         
-        return self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=data.model_dump(by_alias=True))
+        return await self._make_typed_request('POST', url, FrameCreateResponse, params=params, json=data.model_dump(by_alias=True))
     
-    def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, data: Union[JsonLdObject, JsonLdDocument]) -> FrameUpdateResponse:
+    async def update_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, data: Union[JsonLdObject, JsonLdDocument]) -> FrameUpdateResponse:
         """
         Update child frames for a parent frame.
         
@@ -663,9 +663,9 @@ class KGFramesEndpoint(BaseEndpoint):
             operation_mode='update'
         )
         
-        return self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=data.model_dump(by_alias=True))
+        return await self._make_typed_request('POST', url, FrameUpdateResponse, params=params, json=data.model_dump(by_alias=True))
     
-    def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_uris: list[str]) -> FrameDeleteResponse:
+    async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_uris: list[str]) -> FrameDeleteResponse:
         """
         Delete child frames from a parent frame.
         
@@ -691,9 +691,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list=','.join(frame_uris)
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
     
-    def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None) -> JsonLdDocument:
+    async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None) -> JsonLdDocument:
         """
         Get child frames for a parent frame, optionally filtered by frame type.
         
@@ -720,9 +720,9 @@ class KGFramesEndpoint(BaseEndpoint):
             frame_type=frame_type
         )
         
-        return self._make_typed_request('GET', url, JsonLdDocument, params=params)
+        return await self._make_typed_request('GET', url, JsonLdDocument, params=params)
     
-    def list_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None, 
+    async def list_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None, 
                          page_size: int = 10, offset: int = 0) -> FramesResponse:
         """
         List child frames for a parent frame with pagination.
@@ -754,11 +754,11 @@ class KGFramesEndpoint(BaseEndpoint):
             offset=offset
         )
         
-        return self._make_typed_request('GET', url, FramesResponse, params=params)
+        return await self._make_typed_request('GET', url, FramesResponse, params=params)
     
     # Enhanced Graph Operations
     
-    def query_frames(self, space_id: str, graph_id: str, query_request: FrameQueryRequest) -> FrameQueryResponse:
+    async def query_frames(self, space_id: str, graph_id: str, query_request: FrameQueryRequest) -> FrameQueryResponse:
         """
         Query KGFrames using criteria-based search.
         
@@ -782,9 +782,9 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id=graph_id
         )
         
-        return self._make_typed_request('POST', url, FrameQueryResponse, params=params, json=query_request.model_dump())
+        return await self._make_typed_request('POST', url, FrameQueryResponse, params=params, json=query_request.model_dump())
     
-    def list_kgframes_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+    async def list_kgframes_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
                                  search: Optional[str] = None, include_frame_graphs: bool = False) -> FramesGraphResponse:
         """
         List KGFrames with optional complete graphs.
@@ -816,9 +816,9 @@ class KGFramesEndpoint(BaseEndpoint):
             include_frame_graphs=include_frame_graphs
         )
         
-        return self._make_typed_request('GET', url, FramesGraphResponse, params=params)
+        return await self._make_typed_request('GET', url, FramesGraphResponse, params=params)
     
-    def get_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
+    async def get_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
         """
         Get complete graph for a specific KGFrame including all connected objects.
         
@@ -844,9 +844,9 @@ class KGFramesEndpoint(BaseEndpoint):
             include_frame_graph=True
         )
         
-        return self._make_typed_request('GET', url, FrameGraphResponse, params=params)
+        return await self._make_typed_request('GET', url, FrameGraphResponse, params=params)
     
-    def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameDeleteResponse:
+    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> FrameDeleteResponse:
         """
         Delete a KGFrame and its complete graph including all connected objects.
         
@@ -871,9 +871,9 @@ class KGFramesEndpoint(BaseEndpoint):
             uri=uri
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
     
-    def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
+    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str) -> FrameDeleteResponse:
         """
         Delete multiple KGFrames and their complete graphs.
         
@@ -898,4 +898,4 @@ class KGFramesEndpoint(BaseEndpoint):
             uri_list=uri_list
         )
         
-        return self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)
+        return await self._make_typed_request('DELETE', url, FrameDeleteResponse, params=params)

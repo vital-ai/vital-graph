@@ -39,7 +39,7 @@ class GraphCreateTester:
         """
         self.client = client
         
-    def test_graph_creation(self, space_id: str) -> Dict[str, Any]:
+    async def test_graph_creation(self, space_id: str) -> Dict[str, Any]:
         """
         Test graph creation operations.
         
@@ -61,7 +61,7 @@ class GraphCreateTester:
         }
         
         # Test 1: Basic graph creation
-        create_result = self._test_basic_graph_creation(space_id)
+        create_result = await self._test_basic_graph_creation(space_id)
         results['test_details'].append(create_result)
         results['total_tests'] += 1
         if create_result['passed']:
@@ -73,7 +73,7 @@ class GraphCreateTester:
             results['failed_tests'].append(create_result['name'])
         
         # Test 2: Graph creation with verification
-        verify_result = self._test_graph_creation_with_verification(space_id)
+        verify_result = await self._test_graph_creation_with_verification(space_id)
         results['test_details'].append(verify_result)
         results['total_tests'] += 1
         if verify_result['passed']:
@@ -85,7 +85,7 @@ class GraphCreateTester:
             results['failed_tests'].append(verify_result['name'])
         
         # Test 3: Duplicate graph creation (should handle gracefully)
-        duplicate_result = self._test_duplicate_graph_creation(space_id)
+        duplicate_result = await self._test_duplicate_graph_creation(space_id)
         results['test_details'].append(duplicate_result)
         results['total_tests'] += 1
         if duplicate_result['passed']:
@@ -97,7 +97,7 @@ class GraphCreateTester:
         logger.info(f"✅ Graph creation tests completed: {results['passed_tests']}/{results['total_tests']} passed")
         return results
     
-    def _test_basic_graph_creation(self, space_id: str) -> Dict[str, Any]:
+    async def _test_basic_graph_creation(self, space_id: str) -> Dict[str, Any]:
         """Test basic graph creation."""
         logger.info("  Testing basic graph creation...")
         
@@ -105,7 +105,7 @@ class GraphCreateTester:
         
         try:
             # Create graph using client
-            response = self.client.graphs.create_graph(space_id, test_graph_uri)
+            response = await self.client.graphs.create_graph(space_id, test_graph_uri)
             
             if response.is_success:
                 return {
@@ -130,7 +130,7 @@ class GraphCreateTester:
                 'error': f"Exception during graph creation: {e}"
             }
     
-    def _test_graph_creation_with_verification(self, space_id: str) -> Dict[str, Any]:
+    async def _test_graph_creation_with_verification(self, space_id: str) -> Dict[str, Any]:
         """Test graph creation with verification."""
         logger.info("  Testing graph creation with verification...")
         
@@ -138,7 +138,7 @@ class GraphCreateTester:
         
         try:
             # Create graph using client
-            create_response = self.client.graphs.create_graph(space_id, test_graph_uri)
+            create_response = await self.client.graphs.create_graph(space_id, test_graph_uri)
             
             if not create_response.is_success:
                 return {
@@ -149,7 +149,7 @@ class GraphCreateTester:
             
             # Verify graph exists by getting its info
             try:
-                info_response = self.client.graphs.get_graph_info(space_id, test_graph_uri)
+                info_response = await self.client.graphs.get_graph_info(space_id, test_graph_uri)
                 if info_response.is_success and info_response.graph:
                     return {
                         'name': 'Graph Creation with Verification',
@@ -179,7 +179,7 @@ class GraphCreateTester:
                 'error': f"Exception during graph creation with verification: {e}"
             }
     
-    def _test_duplicate_graph_creation(self, space_id: str) -> Dict[str, Any]:
+    async def _test_duplicate_graph_creation(self, space_id: str) -> Dict[str, Any]:
         """Test duplicate graph creation handling."""
         logger.info("  Testing duplicate graph creation handling...")
         
@@ -187,7 +187,7 @@ class GraphCreateTester:
         
         try:
             # Create graph first time
-            first_response = self.client.graphs.create_graph(space_id, test_graph_uri)
+            first_response = await self.client.graphs.create_graph(space_id, test_graph_uri)
             
             if not first_response.is_success:
                 return {
@@ -197,7 +197,7 @@ class GraphCreateTester:
                 }
             
             # Try to create the same graph again
-            second_response = self.client.graphs.create_graph(space_id, test_graph_uri)
+            second_response = await self.client.graphs.create_graph(space_id, test_graph_uri)
             
             # This should either succeed (idempotent) or fail gracefully
             if second_response:

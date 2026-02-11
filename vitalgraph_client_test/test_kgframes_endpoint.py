@@ -77,7 +77,7 @@ async def test_kgframes_endpoint() -> bool:
         # Configuration loaded from environment variables
         client = VitalGraphClient()
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -93,14 +93,14 @@ async def test_kgframes_endpoint() -> bool:
         test_graph_id = "urn:test_kgframes"
         
         # Check if space already exists
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         existing_spaces = spaces_response.spaces
         existing_space = next((s for s in existing_spaces if s.space == test_space_id), None)
         
         if existing_space:
             print(f"   ⚠️  Found existing test space '{test_space_id}', deleting it first...")
             try:
-                delete_response = client.spaces.delete_space(test_space_id)
+                delete_response = await client.spaces.delete_space(test_space_id)
                 if delete_response and (
                     (hasattr(delete_response, 'success') and delete_response.success) or
                     (hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message))
@@ -124,7 +124,7 @@ async def test_kgframes_endpoint() -> bool:
                 tenant="test_tenant"
             )
             
-            create_response = client.spaces.add_space(space_data)
+            create_response = await client.spaces.add_space(space_data)
             if create_response and (
                 (hasattr(create_response, 'success') and create_response.success) or
                 (hasattr(create_response, 'created_count') and create_response.created_count == 1) or
@@ -175,7 +175,7 @@ async def test_kgframes_endpoint() -> bool:
                 entity_document_dict = GraphObject.to_jsonld_list(entity_objects)
                 from vitalgraph.model.jsonld_model import JsonLdDocument
                 entity_document = JsonLdDocument(**entity_document_dict)
-                entity_response = client.kgentities.create_kgentities(
+                entity_response = await client.kgentities.create_kgentities(
                     space_id=test_space_id,
                     graph_id=test_graph_id,
                     data=entity_document
@@ -443,7 +443,7 @@ async def test_kgframes_endpoint() -> bool:
         # Cleanup test space
         print(f"\n15. Cleaning up test space...")
         try:
-            delete_response = client.spaces.delete_space(test_space_id)
+            delete_response = await client.spaces.delete_space(test_space_id)
             if delete_response and hasattr(delete_response, 'success') and delete_response.success:
                 print(f"   ✓ Test space deleted successfully: {test_space_id}")
             elif delete_response and hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message):
@@ -456,7 +456,7 @@ async def test_kgframes_endpoint() -> bool:
         
         # Close client
         print(f"\n16. Client closed successfully")
-        client.close()
+        await client.close()
         
         # Print comprehensive test summary
         print(f"\n✅ KGFrames endpoint testing completed!")

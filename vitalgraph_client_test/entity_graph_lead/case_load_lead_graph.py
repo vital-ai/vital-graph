@@ -19,7 +19,7 @@ class LoadLeadGraphTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, nt_file_path: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, nt_file_path: str) -> Dict[str, Any]:
         """
         Run lead entity graph loading tests.
         
@@ -117,7 +117,7 @@ class LoadLeadGraphTester:
             logger.info(f"   Uploading entity graph to {graph_id}")
             
             # Create entity with graph - pass GraphObjects directly
-            response = self.client.kgentities.create_kgentities(
+            response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=graph_objects

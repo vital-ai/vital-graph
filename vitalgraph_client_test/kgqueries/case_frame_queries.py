@@ -18,7 +18,7 @@ class FrameQueriesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """
         Run frame query tests.
         
@@ -39,43 +39,43 @@ class FrameQueriesTester:
         errors = []
         
         # Test 1: Find events for a specific organization
-        test1 = self._test_find_events_for_organization(space_id, graph_id, organization_uris, event_uris)
+        test1 = await self._test_find_events_for_organization(space_id, graph_id, organization_uris, event_uris)
         results.append(test1)
         if not test1['passed']:
             errors.append(test1.get('error', 'Find events for organization failed'))
         
         # Test 3: Find events for multiple organizations
-        test3 = self._test_find_events_for_multiple_orgs(space_id, graph_id, organization_uris, event_uris)
+        test3 = await self._test_find_events_for_multiple_orgs(space_id, graph_id, organization_uris, event_uris)
         results.append(test3)
         if not test3['passed']:
             errors.append(test3.get('error', 'Find events for multiple orgs failed'))
         
         # Test 4: Filter by event entity type
-        test4 = self._test_filter_by_event_type(space_id, graph_id, organization_uris, event_uris)
+        test4 = await self._test_filter_by_event_type(space_id, graph_id, organization_uris, event_uris)
         results.append(test4)
         if not test4['passed']:
             errors.append(test4.get('error', 'Filter by event type failed'))
         
         # Test 5: Filter by frame type
-        test5 = self._test_filter_by_frame_type(space_id, graph_id, organization_uris, event_uris)
+        test5 = await self._test_filter_by_frame_type(space_id, graph_id, organization_uris, event_uris)
         results.append(test5)
         if not test5['passed']:
             errors.append(test5.get('error', 'Filter by frame type failed'))
         
         # Test 6: Pagination
-        test6 = self._test_pagination(space_id, graph_id, organization_uris, event_uris)
+        test6 = await self._test_pagination(space_id, graph_id, organization_uris, event_uris)
         results.append(test6)
         if not test6['passed']:
             errors.append(test6.get('error', 'Pagination failed'))
         
         # Test 7: Empty results
-        test7 = self._test_empty_results(space_id, graph_id)
+        test7 = await self._test_empty_results(space_id, graph_id)
         results.append(test7)
         if not test7['passed']:
             errors.append(test7.get('error', 'Empty results test failed'))
         
         # Test 8: Exclude self-connections
-        test8 = self._test_exclude_self_connections(space_id, graph_id, organization_uris, event_uris)
+        test8 = await self._test_exclude_self_connections(space_id, graph_id, organization_uris, event_uris)
         results.append(test8)
         if not test8['passed']:
             errors.append(test8.get('error', 'Exclude self-connections failed'))
@@ -92,7 +92,7 @@ class FrameQueriesTester:
             'results': results
         }
     
-    def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
+    async def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
                                           organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test finding events that reference a specific organization."""
         logger.info("\n  Test 1: Find events for specific organization...")
@@ -137,7 +137,7 @@ class FrameQueriesTester:
             )
             
             # Execute query
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -176,7 +176,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_find_organization_for_event(self, space_id: str, graph_id: str,
+    async def _test_find_organization_for_event(self, space_id: str, graph_id: str,
                                          organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test finding the organization referenced by a specific event (reverse lookup)."""
         logger.info("\n  Test 2: Find organization for specific event...")
@@ -196,7 +196,7 @@ class FrameQueriesTester:
             )
             
             # Execute query
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -229,7 +229,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_find_events_for_multiple_orgs(self, space_id: str, graph_id: str,
+    async def _test_find_events_for_multiple_orgs(self, space_id: str, graph_id: str,
                                            organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test finding events with multiple slot criteria across different frames."""
         logger.info("\n  Test 3: Find events with multiple frame slot criteria...")
@@ -283,7 +283,7 @@ class FrameQueriesTester:
             )
             
             # Execute query
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -328,7 +328,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_filter_by_event_type(self, space_id: str, graph_id: str,
+    async def _test_filter_by_event_type(self, space_id: str, graph_id: str,
                                    organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test filtering by event entity type."""
         logger.info("\n  Test 4: Filter by event entity type...")
@@ -350,7 +350,7 @@ class FrameQueriesTester:
                 exclude_self_connections=True
             )
             
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -382,7 +382,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_filter_by_frame_type(self, space_id: str, graph_id: str,
+    async def _test_filter_by_frame_type(self, space_id: str, graph_id: str,
                                    organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test filtering by frame type."""
         logger.info("\n  Test 5: Filter by frame type...")
@@ -408,7 +408,7 @@ class FrameQueriesTester:
                 exclude_self_connections=True
             )
             
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -449,7 +449,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_pagination(self, space_id: str, graph_id: str,
+    async def _test_pagination(self, space_id: str, graph_id: str,
                         organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test pagination with page_size and offset."""
         logger.info("\n  Test 6: Test pagination...")
@@ -464,7 +464,7 @@ class FrameQueriesTester:
             
             # First page
             logger.info(f"    Querying page 1 (page_size=5, offset=0)")
-            response1 = self.client.kgqueries.query_connections(
+            response1 = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -474,7 +474,7 @@ class FrameQueriesTester:
             
             # Second page
             logger.info(f"    Querying page 2 (page_size=5, offset=5)")
-            response2 = self.client.kgqueries.query_connections(
+            response2 = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -503,7 +503,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test querying for non-existent organization (empty results)."""
         logger.info("\n  Test 7: Test empty results...")
         
@@ -520,7 +520,7 @@ class FrameQueriesTester:
                 exclude_self_connections=True
             )
             
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -552,7 +552,7 @@ class FrameQueriesTester:
                 'error': str(e)
             }
     
-    def _test_exclude_self_connections(self, space_id: str, graph_id: str,
+    async def _test_exclude_self_connections(self, space_id: str, graph_id: str,
                                        organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test that self-connections are excluded."""
         logger.info("\n  Test 8: Test exclude self-connections...")
@@ -567,7 +567,7 @@ class FrameQueriesTester:
                 exclude_self_connections=True
             )
             
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,

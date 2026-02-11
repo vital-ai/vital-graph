@@ -73,7 +73,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         # Configuration loaded from environment variables
         client = VitalGraphClient()
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -89,14 +89,14 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         test_graph_id = "urn:test_kgentities"
         
         # Check if space already exists
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             existing_space = next((s for s in spaces_response.spaces if s.space == test_space_id), None)
             
             if existing_space:
                 print(f"   ⚠️  Found existing test space '{test_space_id}', deleting it first...")
                 try:
-                    delete_response = client.spaces.delete_space(test_space_id)
+                    delete_response = await client.spaces.delete_space(test_space_id)
                     if delete_response.is_success:
                         print(f"   ✓ Existing space deleted successfully")
                     else:
@@ -118,7 +118,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
                 tenant="test_tenant"
             )
             
-            create_response = client.spaces.create_space(space_data)
+            create_response = await client.spaces.create_space(space_data)
             if create_response.is_success:
                 print(f"   ✓ Test space created successfully: {create_response.space.space}")
             else:
@@ -138,7 +138,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         # Run modular test cases - CREATE FIRST so other tests have entities to work with
         print("\n3. Running KGEntity Create Tests...")
         create_tester = KGEntityCreateTester(client)
-        create_results = create_tester.run_tests(test_space_id, test_graph_id)
+        create_results = await create_tester.run_tests(test_space_id, test_graph_id)
         all_results.append(create_results)
         total_tests += create_results["tests_run"]
         total_passed += create_results["tests_passed"]
@@ -149,7 +149,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print("\n4. Running KGEntity List Tests...")
         list_tester = KGEntityListTester(client)
-        list_results = list_tester.run_tests(test_space_id, test_graph_id)
+        list_results = await list_tester.run_tests(test_space_id, test_graph_id)
         all_results.append(list_results)
         total_tests += list_results["tests_run"]
         total_passed += list_results["tests_passed"]
@@ -157,7 +157,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print("\n5. Running KGEntity Get Tests...")
         get_tester = KGEntityGetTester(client)
-        get_results = get_tester.run_tests(test_space_id, test_graph_id, created_entities)
+        get_results = await get_tester.run_tests(test_space_id, test_graph_id, created_entities)
         all_results.append(get_results)
         total_tests += get_results["tests_run"]
         total_passed += get_results["tests_passed"]
@@ -165,7 +165,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print("\n6. Running KGEntity Query Tests...")
         query_tester = KGEntityQueryTester(client)
-        query_results = query_tester.run_tests(test_space_id, test_graph_id)
+        query_results = await query_tester.run_tests(test_space_id, test_graph_id)
         all_results.append(query_results)
         total_tests += query_results["tests_run"]
         total_passed += query_results["tests_passed"]
@@ -173,7 +173,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print("\n7. Running KGEntity Update Tests...")
         update_tester = KGEntityUpdateTester(client)
-        update_results = update_tester.run_tests(test_space_id, test_graph_id, created_entities)
+        update_results = await update_tester.run_tests(test_space_id, test_graph_id, created_entities)
         all_results.append(update_results)
         total_tests += update_results["tests_run"]
         total_passed += update_results["tests_passed"]
@@ -181,7 +181,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print("\n8. Running KGEntity Delete Tests...")
         delete_tester = KGEntityDeleteTester(client)
-        delete_results = delete_tester.run_tests(test_space_id, test_graph_id, created_entities)
+        delete_results = await delete_tester.run_tests(test_space_id, test_graph_id, created_entities)
         all_results.append(delete_results)
         total_tests += delete_results["tests_run"]
         total_passed += delete_results["tests_passed"]
@@ -266,7 +266,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         print(f"\n10. Cleaning up remaining test entities...")
         try:
             # List remaining entities
-            list_response = client.kgentities.list_kgentities(test_space_id, test_graph_id, page_size=100)
+            list_response = await client.kgentities.list_kgentities(test_space_id, test_graph_id, page_size=100)
             
             # Handle Union response type
             from vitalgraph.model.jsonld_model import JsonLdDocument
@@ -284,7 +284,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
                 try:
                     entity_uri = entity.get('@id') or entity.get('URI')
                     if entity_uri and 'test' in entity_uri.lower():  # Only clean up test entities
-                        client.kgentities.delete_kgentity(test_space_id, test_graph_id, entity_uri)
+                        await client.kgentities.delete_kgentity(test_space_id, test_graph_id, entity_uri)
                         cleanup_count += 1
                 except Exception:
                     pass  # Continue cleanup even if individual deletions fail
@@ -300,7 +300,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         print(f"\n10. Cleaning up test space...")
         if delete_space_at_end:
             try:
-                delete_response = client.spaces.delete_space(test_space_id)
+                delete_response = await client.spaces.delete_space(test_space_id)
                 if delete_response.is_success:
                     print(f"   ✓ Test space deleted successfully: {delete_response.space_id}")
                 else:
@@ -313,7 +313,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         # Close client
         print(f"\n11. Client closed successfully")
-        client.close()
+        await client.close()
         
         # Print comprehensive test summary
         print(f"\n✅ KGEntities endpoint testing completed!")

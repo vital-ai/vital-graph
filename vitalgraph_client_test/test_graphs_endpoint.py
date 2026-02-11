@@ -25,6 +25,7 @@ import sys
 import json
 import logging
 import uuid
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -54,7 +55,7 @@ def setup_logging():
     )
 
 
-def test_graphs_endpoint(config_path: str) -> bool:
+async def test_graphs_endpoint(config_path: str) -> bool:
     """
     Test the graphs endpoint operations using VitalGraph client.
     
@@ -86,7 +87,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Configuration loaded from environment variables
         client = VitalGraphClient()
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -101,14 +102,14 @@ def test_graphs_endpoint(config_path: str) -> bool:
         test_space_id = "space_client_test"  # Dedicated space for client tests
         
         # Check if space already exists
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             existing_space = next((s for s in spaces_response.spaces if s.space == test_space_id), None)
             
             if existing_space:
                 print(f"   ⚠️  Found existing test space '{test_space_id}', deleting it first...")
                 try:
-                    delete_response = client.spaces.delete_space(test_space_id)
+                    delete_response = await client.spaces.delete_space(test_space_id)
                     if delete_response.is_success:
                         print(f"   ✓ Existing space deleted successfully")
                     else:
@@ -129,7 +130,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
                 tenant="test_tenant"
             )
             
-            create_response = client.spaces.create_space(space_data)
+            create_response = await client.spaces.create_space(space_data)
             if create_response.is_success:
                 print(f"   ✓ Test space created successfully: {create_response.space.space if create_response.space else test_space_id}")
             else:
@@ -142,7 +143,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Test 1: Graph Creation
         print("\n3. Testing graph creation using client graphs endpoint...")
         create_tester = GraphCreateTester(client)
-        create_results = create_tester.test_graph_creation(test_space_id)
+        create_results = await create_tester.test_graph_creation(test_space_id)
         
         # Track created graphs for cleanup
         if 'created_graphs' in create_results:
@@ -162,7 +163,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Test 2: Graph Listing
         print("\n4. Testing graph listing using client graphs endpoint...")
         list_tester = GraphListTester(client)
-        list_results = list_tester.test_graph_listing(test_space_id, created_graphs)
+        list_results = await list_tester.test_graph_listing(test_space_id, created_graphs)
         
         # Update test results
         test_results['total_tests'] += list_results['total_tests']
@@ -178,7 +179,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Test 3: Graph Information Retrieval
         print("\n5. Testing graph info retrieval using client graphs endpoint...")
         get_tester = GraphGetTester(client)
-        get_results = get_tester.test_graph_retrieval(test_space_id, created_graphs)
+        get_results = await get_tester.test_graph_retrieval(test_space_id, created_graphs)
         
         # Update test results
         test_results['total_tests'] += get_results['total_tests']
@@ -194,7 +195,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Test 4: Graph Clearing
         print("\n6. Testing graph clearing using client graphs endpoint...")
         clear_tester = GraphClearTester(client)
-        clear_results = clear_tester.test_graph_clearing(test_space_id, created_graphs)
+        clear_results = await clear_tester.test_graph_clearing(test_space_id, created_graphs)
         
         # Update test results
         test_results['total_tests'] += clear_results['total_tests']
@@ -210,7 +211,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Test 5: Graph Deletion
         print("\n7. Testing graph deletion using client graphs endpoint...")
         delete_tester = GraphDeleteTester(client)
-        delete_results = delete_tester.test_graph_deletion(test_space_id, created_graphs)
+        delete_results = await delete_tester.test_graph_deletion(test_space_id, created_graphs)
         
         # Update test results
         test_results['total_tests'] += delete_results['total_tests']
@@ -228,7 +229,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         cleanup_count = 0
         for graph_uri in created_graphs[:]:  # Use slice copy to avoid modification during iteration
             try:
-                client.drop_graph(test_space_id, graph_uri)
+                await client.drop_graph(test_space_id, graph_uri)
                 print(f"   🗑️ Cleaned up graph: {graph_uri}")
                 created_graphs.remove(graph_uri)
                 cleanup_count += 1
@@ -243,7 +244,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         # Cleanup test space
         print(f"\n9. Cleaning up test space...")
         try:
-            delete_response = client.spaces.delete_space(test_space_id)
+            delete_response = await client.spaces.delete_space(test_space_id)
             if delete_response.is_success:
                 print(f"   ✓ Test space deleted successfully: {delete_response.space_id}")
             else:
@@ -252,7 +253,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
             print(f"   ⚠️  Exception deleting test space: {e}")
         
         # Close client
-        client.close()
+        await client.close()
         print(f"\n10. Client closed successfully")
         
         # Print comprehensive test summary
@@ -301,7 +302,7 @@ def test_graphs_endpoint(config_path: str) -> bool:
         return False
 
 
-def main() -> int:
+async def main() -> int:
     """Main function to test graphs endpoint.
     
     Returns:
@@ -326,7 +327,7 @@ def main() -> int:
         return 1
     
     # Run graphs endpoint tests
-    success = test_graphs_endpoint(config_path)
+    success = await test_graphs_endpoint(config_path)
     
     if success:
         print("\n🎉 Graphs endpoint testing completed successfully!")
@@ -341,5 +342,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

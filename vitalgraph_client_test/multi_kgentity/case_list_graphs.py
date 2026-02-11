@@ -32,7 +32,7 @@ class ListGraphsTester:
         """
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run graph listing and verification tests.
         
@@ -58,7 +58,7 @@ class ListGraphsTester:
         
         # Test 1: List all graphs in the space
         logger.info("\n--- List All Graphs ---\n")
-        list_result = self._test_list_graphs(space_id, graph_id)
+        list_result = await self._test_list_graphs(space_id, graph_id)
         results["details"].append(list_result)
         results["tests_run"] += 1
         
@@ -74,7 +74,7 @@ class ListGraphsTester:
         
         # Test 2: Get graph info for the entity graph
         logger.info("\n--- Get Graph Info ---\n")
-        info_result = self._test_get_graph_info(space_id, graph_id)
+        info_result = await self._test_get_graph_info(space_id, graph_id)
         results["details"].append(info_result)
         results["tests_run"] += 1
         
@@ -96,7 +96,7 @@ class ListGraphsTester:
         
         return results
     
-    def _test_list_graphs(self, space_id: str, expected_graph_id: str) -> Dict[str, Any]:
+    async def _test_list_graphs(self, space_id: str, expected_graph_id: str) -> Dict[str, Any]:
         """
         Test listing graphs and verify expected graph is present.
         
@@ -111,7 +111,7 @@ class ListGraphsTester:
             logger.info(f"Listing graphs in space: {space_id}")
             
             # List graphs using the new Graphs API
-            response = self.client.graphs.list_graphs(space_id)
+            response = await self.client.graphs.list_graphs(space_id)
             
             if not response.is_success:
                 return {
@@ -157,7 +157,7 @@ class ListGraphsTester:
                 "error": f"Exception: {str(e)}"
             }
     
-    def _test_get_graph_info(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_get_graph_info(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Test getting graph info for the entity graph.
         
@@ -172,7 +172,7 @@ class ListGraphsTester:
             logger.info(f"Getting graph info for: {graph_id}")
             
             # Get graph info using the new Graphs API
-            response = self.client.graphs.get_graph_info(space_id, graph_id)
+            response = await self.client.graphs.get_graph_info(space_id, graph_id)
             
             if not response.is_success:
                 return {

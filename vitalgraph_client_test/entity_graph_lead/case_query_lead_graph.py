@@ -17,7 +17,7 @@ class QueryLeadGraphTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, entity_uri: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, entity_uri: str) -> Dict[str, Any]:
         """
         Run lead entity graph query tests.
         
@@ -53,7 +53,7 @@ class QueryLeadGraphTester:
             logger.info(f"\n--- List Entity Frames ---\n")
             
             # Get all frames for the entity
-            frames_response = self.client.kgentities.get_kgentity_frames(
+            frames_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -98,7 +98,7 @@ class QueryLeadGraphTester:
                 test_frame_uri = results["frame_uris"][0]
                 logger.info(f"   Getting frame: {test_frame_uri.split(':')[-1]}")
                 
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,

@@ -20,7 +20,7 @@ class KGQueryRelationQueriesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str,
+    async def run_tests(self, space_id: str, graph_id: str,
                   org_uri_map: Dict[str, str],
                   product_uris: Dict[str, str],
                   relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
@@ -45,49 +45,49 @@ class KGQueryRelationQueriesTester:
         errors = []
         
         # Test 1: Find all MakesProduct relations
-        test1 = self._test_find_makes_product_relations(space_id, graph_id, relation_type_uris)
+        test1 = await self._test_find_makes_product_relations(space_id, graph_id, relation_type_uris)
         results.append(test1)
         if not test1['passed']:
             errors.append(test1.get('error', 'Find MakesProduct relations failed'))
         
         # Test 2: Find relations from specific organization
-        test2 = self._test_find_relations_from_org(space_id, graph_id, org_uri_map, relation_type_uris)
+        test2 = await self._test_find_relations_from_org(space_id, graph_id, org_uri_map, relation_type_uris)
         results.append(test2)
         if not test2['passed']:
             errors.append(test2.get('error', 'Find relations from org failed'))
         
         # Test 3: Find CompetitorOf relations
-        test3 = self._test_find_competitor_relations(space_id, graph_id, relation_type_uris)
+        test3 = await self._test_find_competitor_relations(space_id, graph_id, relation_type_uris)
         results.append(test3)
         if not test3['passed']:
             errors.append(test3.get('error', 'Find CompetitorOf relations failed'))
         
         # Test 4: Find PartnerWith relations
-        test4 = self._test_find_partner_relations(space_id, graph_id, relation_type_uris)
+        test4 = await self._test_find_partner_relations(space_id, graph_id, relation_type_uris)
         results.append(test4)
         if not test4['passed']:
             errors.append(test4.get('error', 'Find PartnerWith relations failed'))
         
         # Test 5: Find Supplies relations
-        test5 = self._test_find_supplies_relations(space_id, graph_id, relation_type_uris)
+        test5 = await self._test_find_supplies_relations(space_id, graph_id, relation_type_uris)
         results.append(test5)
         if not test5['passed']:
             errors.append(test5.get('error', 'Find Supplies relations failed'))
         
         # Test 6: Filter by direction (outgoing)
-        test6 = self._test_filter_by_direction(space_id, graph_id, org_uri_map, relation_type_uris)
+        test6 = await self._test_filter_by_direction(space_id, graph_id, org_uri_map, relation_type_uris)
         results.append(test6)
         if not test6['passed']:
             errors.append(test6.get('error', 'Filter by direction failed'))
         
         # Test 7: Pagination
-        test7 = self._test_pagination(space_id, graph_id, relation_type_uris)
+        test7 = await self._test_pagination(space_id, graph_id, relation_type_uris)
         results.append(test7)
         if not test7['passed']:
             errors.append(test7.get('error', 'Pagination failed'))
         
         # Test 8: Empty results
-        test8 = self._test_empty_results(space_id, graph_id)
+        test8 = await self._test_empty_results(space_id, graph_id)
         results.append(test8)
         if not test8['passed']:
             errors.append(test8.get('error', 'Empty results test failed'))
@@ -122,7 +122,7 @@ class KGQueryRelationQueriesTester:
             }
         }
     
-    def _test_find_makes_product_relations(self, space_id: str, graph_id: str,
+    async def _test_find_makes_product_relations(self, space_id: str, graph_id: str,
                                           relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding all MakesProduct relations."""
         logger.info("\n  Test 1: Find all MakesProduct relations...")
@@ -134,7 +134,7 @@ class KGQueryRelationQueriesTester:
                 return {'passed': True, 'skipped': True, 'elapsed_time': 0}
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id, 
                 graph_id,
                 relation_type_uris=[makes_product_type],
@@ -160,7 +160,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Find MakesProduct Relations', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_find_relations_from_org(self, space_id: str, graph_id: str,
+    async def _test_find_relations_from_org(self, space_id: str, graph_id: str,
                                      org_uri_map: Dict[str, str],
                                      relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding relations from a specific organization."""
@@ -174,7 +174,7 @@ class KGQueryRelationQueriesTester:
                 return {'passed': True, 'skipped': True, 'elapsed_time': 0}
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 source_entity_uris=[techcorp_uri],
@@ -201,7 +201,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Find Relations from Organization', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_find_competitor_relations(self, space_id: str, graph_id: str,
+    async def _test_find_competitor_relations(self, space_id: str, graph_id: str,
                                        relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding CompetitorOf relations."""
         logger.info("\n  Test 3: Find CompetitorOf relations...")
@@ -213,7 +213,7 @@ class KGQueryRelationQueriesTester:
                 return {'passed': True, 'skipped': True, 'elapsed_time': 0}
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 relation_type_uris=[competitor_type],
@@ -239,7 +239,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Find CompetitorOf Relations', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_find_partner_relations(self, space_id: str, graph_id: str,
+    async def _test_find_partner_relations(self, space_id: str, graph_id: str,
                                     relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding PartnerWith relations."""
         logger.info("\n  Test 4: Find PartnerWith relations...")
@@ -251,7 +251,7 @@ class KGQueryRelationQueriesTester:
                 return {'passed': True, 'skipped': True, 'elapsed_time': 0}
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 relation_type_uris=[partner_type],
@@ -277,7 +277,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Find PartnerWith Relations', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_find_supplies_relations(self, space_id: str, graph_id: str,
+    async def _test_find_supplies_relations(self, space_id: str, graph_id: str,
                                      relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding Supplies relations."""
         logger.info("\n  Test 5: Find Supplies relations...")
@@ -289,7 +289,7 @@ class KGQueryRelationQueriesTester:
                 return {'passed': True, 'skipped': True, 'elapsed_time': 0}
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 relation_type_uris=[supplies_type],
@@ -315,7 +315,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Find Supplies Relations', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_filter_by_direction(self, space_id: str, graph_id: str,
+    async def _test_filter_by_direction(self, space_id: str, graph_id: str,
                                   org_uri_map: Dict[str, str],
                                   relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test filtering relations by direction."""
@@ -326,7 +326,7 @@ class KGQueryRelationQueriesTester:
             first_org_uri = next(iter(org_uri_map.values()))
             
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 source_entity_uris=[first_org_uri],
@@ -353,7 +353,7 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Filter by Direction (Outgoing)', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_pagination(self, space_id: str, graph_id: str,
+    async def _test_pagination(self, space_id: str, graph_id: str,
                         relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test pagination of relation query results."""
         logger.info("\n  Test 7: Pagination...")
@@ -361,7 +361,7 @@ class KGQueryRelationQueriesTester:
         try:
             # First page
             start_time = time.time()
-            response1 = self.client.kgqueries.query_relation_connections(
+            response1 = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 page_size=5,
@@ -380,7 +380,7 @@ class KGQueryRelationQueriesTester:
             
             # Second page
             start_time = time.time()
-            response2 = self.client.kgqueries.query_relation_connections(
+            response2 = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 page_size=5,
@@ -404,14 +404,14 @@ class KGQueryRelationQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Pagination Test', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
-    def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test query that should return empty results."""
         logger.info("\n  Test 8: Empty results query...")
         
         try:
             # Query for non-existent relation type
             start_time = time.time()
-            response = self.client.kgqueries.query_relation_connections(
+            response = await self.client.kgqueries.query_relation_connections(
                 space_id,
                 graph_id,
                 relation_type_uris=["http://nonexistent.uri/relation/NonExistentRelation"],

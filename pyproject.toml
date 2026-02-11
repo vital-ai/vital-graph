@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vital-graph"
-version = "0.0.9"
+version = "0.0.11"
 authors = [
     {name = "Marc Hadfield", email = "marc@vital.ai"},
 ]

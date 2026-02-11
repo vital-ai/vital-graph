@@ -278,7 +278,7 @@ async def main():
     """
     
     # Example implementation:
-    client = VitalGraphClient(config_path)
+    client = VitalGraphClient()
     client.open()
     
     # Create test space

@@ -36,7 +36,7 @@ class ListAndQueryEntitiesTester:
             if error:
                 print(f"   Error: {error}")
     
-    def run_tests(self, space_id: str, graph_id: str, expected_entity_count: int) -> dict:
+    async def run_tests(self, space_id: str, graph_id: str, expected_entity_count: int) -> dict:
         """
         Run list and query tests.
         
@@ -67,7 +67,7 @@ class ListAndQueryEntitiesTester:
         
         while True:
             try:
-                response = self.client.kgentities.list_kgentities(
+                response = await self.client.kgentities.list_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,
@@ -116,7 +116,7 @@ class ListAndQueryEntitiesTester:
         print(f"\n--- List Entities (Small Pages) ---\n")
         
         try:
-            small_page_response = self.client.kgentities.list_kgentities(
+            small_page_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -149,7 +149,7 @@ class ListAndQueryEntitiesTester:
         print(f"\n--- List Entities (With Offset) ---\n")
         
         try:
-            offset_response = self.client.kgentities.list_kgentities(
+            offset_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=10,
@@ -191,7 +191,7 @@ class ListAndQueryEntitiesTester:
             
             # Instead, just verify we can list entities
             start_time = time.time()
-            verify_response = self.client.kgentities.list_kgentities(
+            verify_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=1,

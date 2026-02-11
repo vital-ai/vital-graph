@@ -17,7 +17,7 @@ from ...model.users_model import (
 class UsersEndpoint(BaseEndpoint):
     """Client endpoint for Users operations."""
     
-    def list_users(self, tenant: Optional[str] = None) -> UsersListResponse:
+    async def list_users(self, tenant: Optional[str] = None) -> UsersListResponse:
         """
         List all users.
         
@@ -35,9 +35,9 @@ class UsersEndpoint(BaseEndpoint):
         url = f"{self._get_server_url().rstrip('/')}/api/users"
         params = build_query_params(tenant=tenant)
         
-        return self._make_typed_request('GET', url, UsersListResponse, params=params)
+        return await self._make_typed_request('GET', url, UsersListResponse, params=params)
     
-    def add_user(self, user: User) -> UserCreateResponse:
+    async def add_user(self, user: User) -> UserCreateResponse:
         """
         Add a new user.
         
@@ -55,9 +55,9 @@ class UsersEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/users"
         
-        return self._make_typed_request('POST', url, UserCreateResponse, json=user.model_dump())
+        return await self._make_typed_request('POST', url, UserCreateResponse, json=user.model_dump())
     
-    def get_user(self, user_id: str) -> User:
+    async def get_user(self, user_id: str) -> User:
         """
         Get a user by ID.
         
@@ -75,9 +75,9 @@ class UsersEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
         
-        return self._make_typed_request('GET', url, User)
+        return await self._make_typed_request('GET', url, User)
     
-    def update_user(self, user_id: str, user: User) -> UserUpdateResponse:
+    async def update_user(self, user_id: str, user: User) -> UserUpdateResponse:
         """
         Update a user.
         
@@ -96,9 +96,9 @@ class UsersEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
         
-        return self._make_typed_request('PUT', url, UserUpdateResponse, json=user.model_dump())
+        return await self._make_typed_request('PUT', url, UserUpdateResponse, json=user.model_dump())
     
-    def delete_user(self, user_id: str) -> UserDeleteResponse:
+    async def delete_user(self, user_id: str) -> UserDeleteResponse:
         """
         Delete a user.
         
@@ -116,9 +116,9 @@ class UsersEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
         
-        return self._make_typed_request('DELETE', url, UserDeleteResponse)
+        return await self._make_typed_request('DELETE', url, UserDeleteResponse)
     
-    def filter_users(self, name_filter: str, tenant: Optional[str] = None) -> UsersListResponse:
+    async def filter_users(self, name_filter: str, tenant: Optional[str] = None) -> UsersListResponse:
         """
         Filter users by name.
         
@@ -138,4 +138,4 @@ class UsersEndpoint(BaseEndpoint):
         url = f"{self._get_server_url().rstrip('/')}/api/users/filter/{name_filter}"
         params = build_query_params(tenant=tenant)
         
-        return self._make_typed_request('GET', url, UsersListResponse, params=params)
+        return await self._make_typed_request('GET', url, UsersListResponse, params=params)

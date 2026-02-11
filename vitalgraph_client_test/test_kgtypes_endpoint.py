@@ -11,6 +11,7 @@ Architecture: Uses client-based testing with modular test cases and proper space
 import sys
 import os
 import logging
+import asyncio
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -43,7 +44,7 @@ logging.basicConfig(
 )
 
 
-def test_kgtypes_endpoint(config_path: str) -> bool:
+async def test_kgtypes_endpoint(config_path: str) -> bool:
     """
     Test the KGTypes endpoint operations using VitalGraph client.
     
@@ -80,7 +81,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Configuration loaded from environment variables
         client = VitalGraphClient(token_expiry_seconds=15)
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -96,14 +97,14 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         test_space_id = "space_client_test"  # Dedicated space for client tests
         
         # Check if space already exists
-        spaces_response: SpacesListResponse = client.list_spaces()
+        spaces_response: SpacesListResponse = await client.list_spaces()
         existing_spaces = spaces_response.spaces
         existing_space = next((s for s in existing_spaces if s.space == test_space_id), None)
         
         if existing_space:
             print(f"   ⚠️  Found existing test space '{test_space_id}', deleting it first...")
             try:
-                delete_response = client.delete_space(test_space_id)
+                delete_response = await client.delete_space(test_space_id)
                 if delete_response and hasattr(delete_response, 'success') and delete_response.success:
                     print(f"   ✓ Existing space deleted successfully")
                 else:
@@ -125,7 +126,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
                 tenant="test_tenant"
             )
             
-            create_response = client.add_space(space_data)
+            create_response = await client.add_space(space_data)
             if create_response and create_response.created_count == 1:
                 print(f"   ✓ Test space created successfully: {test_space_id}")
             else:
@@ -147,7 +148,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Test 1: KGType creation using client KGTypes endpoint
         print("\n3. Testing KGType creation using client KGTypes endpoint...")
         create_tester = KGTypeCreateTester(client)
-        create_results = create_tester.run_tests(test_space_id, test_graph_id, test_kgtypes)
+        create_results = await create_tester.run_tests(test_space_id, test_graph_id, test_kgtypes)
         test_results['test_details'].append(create_results)
         test_results['total_tests'] += create_results['total_tests']
         test_results['passed_tests'] += create_results['passed_tests']
@@ -161,7 +162,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Test 2: KGType listing using client KGTypes endpoint
         print("\n4. Testing KGType listing using client KGTypes endpoint...")
         list_tester = KGTypeListTester(client)
-        list_results = list_tester.run_tests(test_space_id, test_graph_id)
+        list_results = await list_tester.run_tests(test_space_id, test_graph_id)
         test_results['test_details'].append(list_results)
         test_results['total_tests'] += list_results['total_tests']
         test_results['passed_tests'] += list_results['passed_tests']
@@ -181,7 +182,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Test 3: KGType retrieval using client KGTypes endpoint (BEFORE deletion tests)
         print("\n5. Testing KGType retrieval using client KGTypes endpoint...")
         get_tester = KGTypeGetTester(client)
-        get_results = get_tester.run_tests(test_space_id, test_graph_id, created_kgtypes)
+        get_results = await get_tester.run_tests(test_space_id, test_graph_id, created_kgtypes)
         test_results['test_details'].append(get_results)
         test_results['total_tests'] += get_results['total_tests']
         test_results['passed_tests'] += get_results['passed_tests']
@@ -195,7 +196,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Test 4: KGType updating using client KGTypes endpoint
         print("\n6. Testing KGType updating using client KGTypes endpoint...")
         update_tester = KGTypeUpdateTester(client)
-        update_results = update_tester.run_tests(test_space_id, test_graph_id, test_kgtypes, created_kgtypes)
+        update_results = await update_tester.run_tests(test_space_id, test_graph_id, test_kgtypes, created_kgtypes)
         test_results['test_details'].append(update_results)
         test_results['total_tests'] += update_results['total_tests']
         test_results['passed_tests'] += update_results['passed_tests']
@@ -209,7 +210,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Test 5: KGType deletion using client KGTypes endpoint (AFTER get tests)
         print("\n7. Testing KGType deletion using client KGTypes endpoint...")
         delete_tester = KGTypeDeleteTester(client)
-        delete_results = delete_tester.run_tests(test_space_id, test_graph_id, created_kgtypes)
+        delete_results = await delete_tester.run_tests(test_space_id, test_graph_id, created_kgtypes)
         test_results['test_details'].append(delete_results)
         test_results['total_tests'] += delete_results['total_tests']
         test_results['passed_tests'] += delete_results['passed_tests']
@@ -224,7 +225,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         print(f"\n8. Cleaning up remaining test KGTypes...")
         try:
             # List remaining KGTypes
-            list_response = client.list_kgtypes(test_space_id, test_graph_id, page_size=100)
+            list_response = await client.list_kgtypes(test_space_id, test_graph_id, page_size=100)
             
             # KGTypesListResponse has 'types' attribute, not 'data'
             remaining_kgtypes = list_response.types if hasattr(list_response, 'types') else []
@@ -234,7 +235,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
                 try:
                     kgtype_uri = kgtype.get('@id') or kgtype.get('URI')
                     if kgtype_uri:
-                        client.delete_kgtype(test_space_id, test_graph_id, kgtype_uri)
+                        await client.delete_kgtype(test_space_id, test_graph_id, kgtype_uri)
                         cleanup_count += 1
                 except Exception:
                     pass  # Continue cleanup even if individual deletions fail
@@ -249,7 +250,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
         # Cleanup test space
         print(f"\n9. Cleaning up test space...")
         try:
-            delete_response = client.delete_space(test_space_id)
+            delete_response = await client.delete_space(test_space_id)
             if delete_response and hasattr(delete_response, 'success') and delete_response.success:
                 print(f"   ✓ Test space deleted successfully: {test_space_id}")
             elif delete_response and hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message):
@@ -262,7 +263,7 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
             print(f"   ⚠️  Exception deleting test space: {e}")
         
         # Close client
-        client.close()
+        await client.close()
         print(f"\n10. Client closed successfully")
         
         # Print comprehensive test summary
@@ -315,13 +316,13 @@ def test_kgtypes_endpoint(config_path: str) -> bool:
     finally:
         if client:
             try:
-                client.close()
+                await client.close()
                 print(f"   ✓ Client connection closed")
             except Exception:
                 pass
 
 
-def main():
+async def main():
     """Main entry point for the test script."""
     logger = logging.getLogger(__name__)
     
@@ -341,7 +342,7 @@ def main():
         return 1
     
     # Run KGTypes endpoint tests
-    success = test_kgtypes_endpoint(config_path)
+    success = await test_kgtypes_endpoint(config_path)
     
     if success:
         print("\n🎉 KGTypes endpoint testing completed successfully!")
@@ -356,5 +357,5 @@ def main():
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

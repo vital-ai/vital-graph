@@ -17,7 +17,7 @@ class KGTypeListTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run KGType listing tests.
         
@@ -33,15 +33,15 @@ class KGTypeListTester:
         results = []
         
         # Test list all KGTypes
-        list_result = self._test_list_all_kgtypes(space_id, graph_id)
+        list_result = await self._test_list_all_kgtypes(space_id, graph_id)
         results.append(list_result)
         
         # Test list with pagination
-        pagination_result = self._test_list_with_pagination(space_id, graph_id)
+        pagination_result = await self._test_list_with_pagination(space_id, graph_id)
         results.append(pagination_result)
         
         # Test list with search
-        search_result = self._test_list_with_search(space_id, graph_id)
+        search_result = await self._test_list_with_search(space_id, graph_id)
         results.append(search_result)
         
         passed_tests = sum(1 for r in results if r['passed'])
@@ -55,12 +55,12 @@ class KGTypeListTester:
             'results': results
         }
     
-    def _test_list_all_kgtypes(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_list_all_kgtypes(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test listing all KGTypes."""
         logger.info("  Testing list all KGTypes...")
         
         try:
-            response = self.client.list_kgtypes(space_id, graph_id, page_size=100)
+            response = await self.client.list_kgtypes(space_id, graph_id, page_size=100)
             
             if response.is_success:
                 return {
@@ -86,13 +86,13 @@ class KGTypeListTester:
                 'error': f"Exception during KGType listing: {e}"
             }
     
-    def _test_list_with_pagination(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_list_with_pagination(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test listing KGTypes with pagination."""
         logger.info("  Testing list KGTypes with pagination...")
         
         try:
             # Test with small page size
-            response = self.client.list_kgtypes(space_id, graph_id, page_size=2, offset=0)
+            response = await self.client.list_kgtypes(space_id, graph_id, page_size=2, offset=0)
             
             if response.is_success:
                 returned_count = len(response.types)
@@ -122,13 +122,13 @@ class KGTypeListTester:
                 'error': f"Exception during paginated KGType listing: {e}"
             }
     
-    def _test_list_with_search(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_list_with_search(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test listing KGTypes with search."""
         logger.info("  Testing list KGTypes with search...")
         
         try:
             # Search for KGTypes containing "type" in description
-            response = self.client.list_kgtypes(space_id, graph_id, search="type", page_size=10)
+            response = await self.client.list_kgtypes(space_id, graph_id, search="type", page_size=10)
             
             if response.is_success:
                 return {

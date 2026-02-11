@@ -403,23 +403,23 @@ class VitalGraphAPI:
         try:
             created_user = await self.db.add_user(user_data)
             if created_user:
-                print(f"   ✅ Created user result: {created_user}")
+                logger.debug(f"Created user result: {created_user}")
                 return created_user  # Return the created user data directly
             else:
-                print(f"   ❌ Add failed - could not create user")
+                logger.error(f"Add failed - could not create user")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Failed to add user"
                 )
         except ValueError as e:
             # Handle uniqueness constraint violations
-            print(f"   ❌ Validation error: {str(e)}")
+            logger.warning(f"Validation error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)
             )
         except Exception as e:
-            print(f"   ❌ Add exception: {str(e)}")
+            logger.error(f"Add exception: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error adding user: {str(e)}"

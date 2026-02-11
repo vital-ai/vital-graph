@@ -39,7 +39,7 @@ class GraphGetTester:
         """
         self.client = client
         
-    def test_graph_retrieval(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
+    async def test_graph_retrieval(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
         """
         Test graph information retrieval operations.
         
@@ -63,7 +63,7 @@ class GraphGetTester:
         # Test 1: Get info for existing graphs
         if created_graphs:
             for graph_uri in created_graphs:
-                get_result = self._test_get_existing_graph_info(space_id, graph_uri)
+                get_result = await self._test_get_existing_graph_info(space_id, graph_uri)
                 results['test_details'].append(get_result)
                 results['total_tests'] += 1
                 if get_result['passed']:
@@ -73,7 +73,7 @@ class GraphGetTester:
                     results['failed_tests'].append(get_result['name'])
         
         # Test 2: Get info for non-existent graph
-        nonexistent_result = self._test_get_nonexistent_graph_info(space_id)
+        nonexistent_result = await self._test_get_nonexistent_graph_info(space_id)
         results['test_details'].append(nonexistent_result)
         results['total_tests'] += 1
         if nonexistent_result['passed']:
@@ -83,7 +83,7 @@ class GraphGetTester:
             results['failed_tests'].append(nonexistent_result['name'])
         
         # Test 3: Get info with invalid graph URI
-        invalid_result = self._test_get_invalid_graph_info(space_id)
+        invalid_result = await self._test_get_invalid_graph_info(space_id)
         results['test_details'].append(invalid_result)
         results['total_tests'] += 1
         if invalid_result['passed']:
@@ -95,13 +95,13 @@ class GraphGetTester:
         logger.info(f"✅ Graph retrieval tests completed: {results['passed_tests']}/{results['total_tests']} passed")
         return results
     
-    def _test_get_existing_graph_info(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
+    async def _test_get_existing_graph_info(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
         """Test getting info for an existing graph."""
         logger.info(f"  Testing get info for existing graph: {graph_uri}")
         
         try:
             # Get graph info using client
-            info_response = self.client.graphs.get_graph_info(space_id, graph_uri)
+            info_response = await self.client.graphs.get_graph_info(space_id, graph_uri)
             
             if info_response.is_success and info_response.graph:
                 return {
@@ -125,7 +125,7 @@ class GraphGetTester:
                 'error': f"Exception during graph info retrieval: {e}"
             }
     
-    def _test_get_nonexistent_graph_info(self, space_id: str) -> Dict[str, Any]:
+    async def _test_get_nonexistent_graph_info(self, space_id: str) -> Dict[str, Any]:
         """Test getting info for a non-existent graph."""
         logger.info("  Testing get info for non-existent graph...")
         
@@ -133,7 +133,7 @@ class GraphGetTester:
         
         try:
             # Get graph info using client
-            info_response = self.client.graphs.get_graph_info(space_id, nonexistent_graph_uri)
+            info_response = await self.client.graphs.get_graph_info(space_id, nonexistent_graph_uri)
             
             # This should either return None or raise an exception
             if not info_response.is_success or info_response.graph is None:
@@ -160,7 +160,7 @@ class GraphGetTester:
                 'graph_uri': nonexistent_graph_uri
             }
     
-    def _test_get_invalid_graph_info(self, space_id: str) -> Dict[str, Any]:
+    async def _test_get_invalid_graph_info(self, space_id: str) -> Dict[str, Any]:
         """Test getting info with invalid graph URI."""
         logger.info("  Testing get info with invalid graph URI...")
         
@@ -168,7 +168,7 @@ class GraphGetTester:
         
         try:
             # Get graph info using client
-            info_response = self.client.graphs.get_graph_info(space_id, invalid_graph_uri)
+            info_response = await self.client.graphs.get_graph_info(space_id, invalid_graph_uri)
             
             # This should either return None or raise an exception
             if not info_response.is_success or info_response.graph is None:

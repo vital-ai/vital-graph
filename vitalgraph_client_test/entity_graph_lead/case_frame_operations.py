@@ -17,7 +17,7 @@ class LeadFrameOperationsTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, entity_uri: str, lead_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, entity_uri: str, lead_id: str) -> Dict[str, Any]:
         """
         Run lead frame operation tests.
         
@@ -52,7 +52,7 @@ class LeadFrameOperationsTester:
             logger.info(f"\n--- Comprehensive Frame Hierarchy Test ---\n")
             
             # Get all top-level frames
-            top_level_response = self.client.kgentities.get_kgentity_frames(
+            top_level_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -80,7 +80,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"\n   Top-level frame: {top_frame_name}")
                 
                 # Get child frames of this parent
-                child_response = self.client.kgentities.get_kgentity_frames(
+                child_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -102,7 +102,7 @@ class LeadFrameOperationsTester:
                     child_name = child_uri.split(':')[-2] if ':' in child_uri else child_uri
                     
                     # Get the complete frame graph
-                    frame_graph_response = self.client.kgentities.get_kgentity_frames(
+                    frame_graph_response = await self.client.kgentities.get_kgentity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=entity_uri,
@@ -162,7 +162,7 @@ class LeadFrameOperationsTester:
             logger.info(f"\n--- List All Frames ---\n")
             
             # Get all frames for the entity
-            response = self.client.kgentities.get_kgentity_frames(
+            response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -223,7 +223,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   Getting frame: {frame_name}")
                 
                 # Get specific frame with full graph
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -270,7 +270,7 @@ class LeadFrameOperationsTester:
                 
                 # Get the frame with complete graph using frame_uris parameter
                 # Include parent_frame_uri if this is a child frame
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -327,7 +327,7 @@ class LeadFrameOperationsTester:
                         logger.info(f"   Updating {slot_type} slot: {old_value} → {new_value}")
                         
                         # Update the frame - pass GraphObjects directly
-                        update_response = self.client.kgentities.update_entity_frames(
+                        update_response = await self.client.kgentities.update_entity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=entity_uri,
@@ -339,7 +339,7 @@ class LeadFrameOperationsTester:
                             logger.info(f"   ✅ Frame updated successfully")
                             
                             # Verify the update - use same parent_frame_uri as the update
-                            verify_response = self.client.kgentities.get_kgentity_frames(
+                            verify_response = await self.client.kgentities.get_kgentity_frames(
                                 space_id=space_id,
                                 graph_id=graph_id,
                                 entity_uri=entity_uri,
@@ -438,7 +438,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   Deleting frame: {frame_name}")
                 
                 # Delete the frame (include parent_frame_uri for child frames)
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -450,7 +450,7 @@ class LeadFrameOperationsTester:
                     logger.info(f"   ✅ Frame deleted successfully")
                     
                     # Verify deletion by attempting to get the frame
-                    verify_response = self.client.kgentities.get_kgentity_frames(
+                    verify_response = await self.client.kgentities.get_kgentity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=entity_uri,
@@ -493,7 +493,7 @@ class LeadFrameOperationsTester:
             logger.info(f"\n--- List Top-Level Frames (No Parent) ---\n")
             
             # Get top-level frames (children of entity)
-            top_frames_response = self.client.kgentities.get_kgentity_frames(
+            top_frames_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -557,7 +557,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   Parent frame: {parent_name}")
                 
                 # Get child frames of the parent
-                child_response = self.client.kgentities.get_kgentity_frames(
+                child_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -616,7 +616,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   With parent: {parent_name}")
                 
                 # Get specific child frame with parent validation
-                child_response = self.client.kgentities.get_kgentity_frames(
+                child_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -656,7 +656,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   Scoped to parent: {parent_name}")
                 
                 # First get the child frame
-                frame_response = self.client.kgentities.get_kgentity_frames(
+                frame_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -728,7 +728,7 @@ class LeadFrameOperationsTester:
                         logger.info(f"   Updating {slot_type} slot: {old_value} → {new_value}")
                         
                         # Update with parent scoping - pass GraphObjects directly
-                        update_response = self.client.kgentities.update_entity_frames(
+                        update_response = await self.client.kgentities.update_entity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=entity_uri,
@@ -773,7 +773,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   With parent validation: {parent_name}")
                 
                 # Delete child frame with parent validation
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -816,7 +816,7 @@ class LeadFrameOperationsTester:
                 logger.info(f"   With wrong parent: {wrong_parent_name}")
                 
                 # This should fail validation
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,

@@ -36,7 +36,7 @@ class RetrieveEntityGraphsTester:
             if error:
                 print(f"   Error: {error}")
     
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: list, sample_size: int = 5) -> dict:
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: list, sample_size: int = 5) -> dict:
         """
         Run retrieve entity graphs and frames tests.
         
@@ -79,7 +79,7 @@ class RetrieveEntityGraphsTester:
             # ================================================================
             try:
                 start_time = time.time()
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri,
@@ -106,7 +106,7 @@ class RetrieveEntityGraphsTester:
             # ================================================================
             try:
                 start_time = time.time()
-                frames_response = self.client.kgentities.get_kgentity_frames(
+                frames_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -146,7 +146,7 @@ class RetrieveEntityGraphsTester:
                         
                         try:
                             # List child frames of this parent
-                            child_frames_response = self.client.kgentities.get_kgentity_frames(
+                            child_frames_response = await self.client.kgentities.get_kgentity_frames(
                                 space_id=space_id,
                                 graph_id=graph_id,
                                 entity_uri=entity_uri,
@@ -174,7 +174,7 @@ class RetrieveEntityGraphsTester:
                                 try:
                                     start_time = time.time()
                                     # Use get_kgentity_frames with frame_uris parameter (working pattern)
-                                    child_frame_response = self.client.kgentities.get_kgentity_frames(
+                                    child_frame_response = await self.client.kgentities.get_kgentity_frames(
                                         space_id=space_id,
                                         graph_id=graph_id,
                                         entity_uri=entity_uri,

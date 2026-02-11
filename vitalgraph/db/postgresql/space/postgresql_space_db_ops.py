@@ -731,9 +731,9 @@ class PostgreSQLSpaceDBOps:
                 missing_terms.append((g_value, g_type, g_lang, g_datatype_id, 'graph'))
             
             # DEBUG: Print missing terms info
-            print(f"🔍 DEBUG add_rdf_quad: Found {len(missing_terms)} missing terms:")
+            self.logger.debug(f"🔍 add_rdf_quad: Found {len(missing_terms)} missing terms")
             for term_value, term_type, lang, datatype_id, role in missing_terms:
-                print(f"  - {role}: '{term_value}' (type: {term_type}, lang: {lang}, dt_id: {datatype_id})")
+                self.logger.debug(f"  - {role}: '{term_value}' (type: {term_type}, lang: {lang}, dt_id: {datatype_id})")
             
             # Insert missing terms if any
             if missing_terms:

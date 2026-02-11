@@ -18,7 +18,7 @@ class DeleteEntitiesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
                   entity_names: List[str], expected_remaining: int = None) -> Dict[str, Any]:
         """
         Run entity deletion tests.
@@ -60,7 +60,7 @@ class DeleteEntitiesTester:
             try:
                 logger.info(f"\nDeleting {delete_info['name']}...")
                 
-                response = self.client.kgentities.delete_kgentity(
+                response = await self.client.kgentities.delete_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri
@@ -90,7 +90,7 @@ class DeleteEntitiesTester:
         # Test 1: Verify count
         results["tests_run"] += 1
         try:
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=20
@@ -124,7 +124,7 @@ class DeleteEntitiesTester:
             try:
                 logger.info(f"\nVerifying {delete_info['name']} is deleted...")
                 
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri,

@@ -459,6 +459,121 @@ class DualWriteCoordinator:
             
             return False
     
+    async def update_quads(self, space_id: str,
+                          delete_quads: List[tuple], insert_quads: List[tuple]) -> bool:
+        """
+        Atomically delete and insert quads using a single PostgreSQL transaction.
+        
+        Both operations share one transaction so orphan-cleanup from the delete
+        is never visible to concurrent requests until the insert also completes.
+        Fuseki operations happen after the PG commit.
+        
+        Args:
+            space_id: Space identifier
+            delete_quads: Quads to remove
+            insert_quads: Quads to add
+            
+        Returns:
+            True if PostgreSQL operations succeeded, False otherwise
+        """
+        import time
+        overall_start = time.time()
+        logger.info(f"🔄 UPDATE_QUADS: delete={len(delete_quads)}, insert={len(insert_quads)} for space {space_id}")
+        
+        pg_transaction = None
+        try:
+            # Single PG transaction for both delete and insert
+            pg_transaction = await self.postgresql_impl.begin_transaction()
+            
+            # --- PostgreSQL DELETE (filtered) ---
+            if delete_quads:
+                del_filtered, del_filtered_count = self.materialization_manager.filter_materialized_triples(delete_quads)
+                if del_filtered_count > 0:
+                    logger.debug(f"🔄 UPDATE_QUADS: Filtered {del_filtered_count} materialized triples from DELETE")
+                if del_filtered:
+                    pg_del_ok = await self._remove_quads_from_postgresql(
+                        space_id, del_filtered, pg_transaction, skip_orphan_cleanup=True)
+                    if not pg_del_ok:
+                        raise Exception("PostgreSQL DELETE failed")
+            
+            # --- PostgreSQL INSERT (filtered) ---
+            if insert_quads:
+                ins_filtered, ins_filtered_count = self.materialization_manager.filter_materialized_triples(insert_quads)
+                if ins_filtered_count > 0:
+                    logger.debug(f"🔄 UPDATE_QUADS: Filtered {ins_filtered_count} materialized triples from INSERT")
+                
+                # Auto-register graphs
+                graph_uris = self._extract_graph_uris_from_quads(insert_quads)
+                if graph_uris:
+                    for graph_uri in graph_uris:
+                        await self._ensure_graph_registered(space_id, graph_uri)
+                
+                if ins_filtered:
+                    pg_ins_ok = await self._store_quads_to_postgresql(space_id, ins_filtered, pg_transaction)
+                    if not pg_ins_ok:
+                        raise Exception("PostgreSQL INSERT failed")
+            
+            # Commit after both PG operations succeed
+            commit_ok = await self.postgresql_impl.commit_transaction(pg_transaction)
+            pg_transaction = None
+            if not commit_ok:
+                raise Exception("PostgreSQL COMMIT failed")
+            
+            pg_time = time.time() - overall_start
+            logger.info(f"🔄 UPDATE_QUADS: PG committed in {pg_time:.3f}s")
+            
+        except Exception as e:
+            logger.error(f"🔄 UPDATE_QUADS: PG failed: {e}")
+            if pg_transaction:
+                try:
+                    await self.postgresql_impl.rollback_transaction(pg_transaction)
+                except Exception as rb_err:
+                    logger.error(f"🔄 UPDATE_QUADS: Rollback failed: {rb_err}")
+            return False
+        
+        # --- Fuseki operations (after PG commit, outside PG error handling) ---
+        # Combine DELETE DATA + INSERT DATA into a single atomic SPARQL UPDATE
+        # to prevent concurrent reads from seeing intermediate state (value deleted
+        # but not yet re-inserted).
+        fuseki_success = True
+        try:
+            combined_parts = []
+            
+            if delete_quads:
+                delete_body = self._build_delete_data_body(delete_quads)
+                if delete_body:
+                    combined_parts.append(f"DELETE DATA {{\n{delete_body}\n}}")
+            
+            if insert_quads:
+                insert_body = self.fuseki_manager._quads_to_sparql_insert_data(
+                    insert_quads, convert_float_to_decimal=True)
+                if insert_body:
+                    formatted = insert_body.strip()
+                    combined_parts.append(f"INSERT DATA {{\n{formatted}\n}}")
+            
+            if combined_parts:
+                combined_query = " ;\n".join(combined_parts)
+                logger.info(f"\U0001f504 UPDATE_QUADS: Sending atomic Fuseki update "
+                            f"({len(combined_parts)} part(s), {len(combined_query)} chars)")
+                result = await self.fuseki_manager.update_dataset(space_id, combined_query)
+                if not result:
+                    logger.error(f"FUSEKI_SYNC_FAILURE: Atomic Fuseki update failed for space {space_id}")
+                    fuseki_success = False
+            
+            if fuseki_success:
+                await self._materialize_edge_properties(space_id, insert_quads, delete_quads)
+        except Exception as e:
+            logger.error(f"FUSEKI_SYNC_FAILURE: Fuseki operation raised exception: {e}")
+            fuseki_success = False
+        
+        overall_time = time.time() - overall_start
+        logger.info(f"🔄 UPDATE_QUADS: Completed in {overall_time:.3f}s (fuseki_success={fuseki_success})")
+        return DualWriteResult(
+            success=True,
+            fuseki_success=fuseki_success,
+            message="" if fuseki_success else "FUSEKI_SYNC_FAILURE"
+        )
+
     async def create_space_storage(self, space_id: str) -> bool:
         """
         Create storage for a new space in both Fuseki and PostgreSQL.
@@ -876,7 +991,8 @@ class DualWriteCoordinator:
             logger.error(f"🔥 FUSEKI_DELETE: Error removing quads from Fuseki for space {space_id}: {e}")
             return False
     
-    async def _remove_quads_from_postgresql(self, space_id: str, quads: List[tuple], transaction: Any) -> bool:
+    async def _remove_quads_from_postgresql(self, space_id: str, quads: List[tuple], transaction: Any,
+                                              skip_orphan_cleanup: bool = False) -> bool:
         """
         Remove RDF quads from PostgreSQL primary data tables within a transaction.
         
@@ -884,6 +1000,7 @@ class DualWriteCoordinator:
             space_id: Space identifier
             quads: List of RDF quads to remove
             transaction: PostgreSQL transaction context
+            skip_orphan_cleanup: If True, skip orphan term cleanup (used by update_quads)
             
         Returns:
             True if removal succeeded, False otherwise
@@ -891,7 +1008,8 @@ class DualWriteCoordinator:
         try:
             # Use PostgreSQL implementation to remove quads
             logger.debug(f"Removing {len(quads)} quads from PostgreSQL primary data for space {space_id}")
-            success = await self.postgresql_impl.remove_quads_from_postgresql(space_id, quads, transaction)
+            success = await self.postgresql_impl.remove_quads_from_postgresql(
+                space_id, quads, transaction, skip_orphan_cleanup=skip_orphan_cleanup)
             return success
             
         except Exception as e:
@@ -1057,6 +1175,63 @@ class DualWriteCoordinator:
             # Don't fail the operation - materialization is optimization
             return True
     
+    def _build_delete_data_body(self, quads: List[tuple]) -> Optional[str]:
+        """
+        Build the body of a DELETE DATA query from quads (without the
+        DELETE DATA { ... } wrapper).  Returns None when there are no
+        formattable quads.
+        """
+        graph_quads: Dict[str, list] = {}
+        for i, quad in enumerate(quads):
+            if len(quad) >= 5:
+                subject, predicate, obj, graph, obj_type = quad[:5]
+                graph = str(graph)
+                if graph not in graph_quads:
+                    graph_quads[graph] = []
+                subject_formatted = f"<{subject}>"
+                predicate_formatted = f"<{predicate}>"
+                if obj_type == 'literal':
+                    escaped = str(obj).replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                    obj_formatted = f'"{escaped}"'
+                else:
+                    obj_formatted = f"<{obj}>"
+                if subject_formatted and predicate_formatted and obj_formatted:
+                    graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
+            elif len(quad) >= 4:
+                subject, predicate, obj, graph = quad[:4]
+                graph = str(graph)
+                if graph not in graph_quads:
+                    graph_quads[graph] = []
+                subject_formatted = self._format_sparql_term(subject)
+                predicate_formatted = self._format_sparql_term(predicate)
+                obj_formatted = self._format_sparql_term(obj)
+                if subject_formatted and predicate_formatted and obj_formatted:
+                    graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
+            else:
+                subject, predicate, obj = quad[:3]
+                graph = 'default'
+                if graph not in graph_quads:
+                    graph_quads[graph] = []
+                subject_formatted = self._format_sparql_term(str(subject))
+                predicate_formatted = self._format_sparql_term(str(predicate))
+                obj_formatted = self._format_sparql_term(obj)
+                if subject_formatted and predicate_formatted and obj_formatted:
+                    graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
+
+        if not graph_quads:
+            return None
+
+        graph_blocks = []
+        for graph, triples in graph_quads.items():
+            if graph and graph != 'default':
+                graph_formatted = self._format_sparql_term(graph)
+                triples_str = " .\n        ".join(triples)
+                graph_blocks.append(f"GRAPH {graph_formatted} {{\n        {triples_str}\n    }}")
+            else:
+                triples_str = " .\n    ".join(triples)
+                graph_blocks.append(triples_str)
+        return "    " + "\n    ".join(graph_blocks)
+
     def _format_sparql_term(self, term: Any) -> Optional[str]:
         """
         Format an RDF term for SPARQL queries.

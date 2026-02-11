@@ -51,7 +51,7 @@ class KGEntityHierarchicalFrameTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Hierarchical Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -66,7 +66,7 @@ class KGEntityHierarchicalFrameTester:
             logger.info(f"✅ Created test entity: {entity_uri}")
             
             # Step 1: Get existing frames from entity to use as parent frames
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -100,7 +100,7 @@ class KGEntityHierarchicalFrameTester:
                 child_entity_objects = self.test_data_creator.create_person_with_contact(f"{role} {name}")
                 
                 # Modern client API expects GraphObjects directly
-                child_entity_response = self.client.kgentities.create_kgentities(
+                child_entity_response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=child_entity_objects
@@ -139,7 +139,7 @@ class KGEntityHierarchicalFrameTester:
             entity_objects = self.test_data_creator.create_organization_with_address("Multi-Level Corp")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -153,7 +153,7 @@ class KGEntityHierarchicalFrameTester:
             self.created_entity_uris.append(entity_uri)
             
             # Get existing frames from entity for multi-level hierarchy test
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -190,7 +190,7 @@ class KGEntityHierarchicalFrameTester:
             entity_objects = self.test_data_creator.create_organization_with_address("Validation Test Corp")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -204,7 +204,7 @@ class KGEntityHierarchicalFrameTester:
             self.created_entity_uris.append(entity_uri)
             
             # Get existing frames from entity for hierarchical validation test
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -238,7 +238,7 @@ class KGEntityHierarchicalFrameTester:
             
             # Create entity with hierarchical structure for deletion testing
             entity_objects = self.test_data_creator.create_organization_with_address("Deletion Test Corp")
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -253,7 +253,7 @@ class KGEntityHierarchicalFrameTester:
             
             # Create hierarchical structure
             parent_frame_data = self.test_data_creator.create_management_frame()
-            parent_response = self.client.kgentities.create_entity_frames(
+            parent_response = await self.client.kgentities.create_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -266,7 +266,7 @@ class KGEntityHierarchicalFrameTester:
             # Create child frames
             for i in range(2):
                 child_frame_data = self.test_data_creator.create_officer_frame(f"Officer {i+1}", f"Person {i+1}")
-                child_response = self.client.kgentities.create_entity_frames(
+                child_response = await self.client.kgentities.create_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -280,7 +280,7 @@ class KGEntityHierarchicalFrameTester:
             logger.info(f"✅ Created deletion test structure: 1 parent + {len(child_frame_uris)} children")
             
             # Get initial frame count
-            initial_frames = self.client.kgentities.get_kgentity_frames(
+            initial_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -289,7 +289,7 @@ class KGEntityHierarchicalFrameTester:
             
             # Test 1: Delete child frames first
             for child_uri in child_frame_uris:
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -303,7 +303,7 @@ class KGEntityHierarchicalFrameTester:
                     return False
             
             # Test 2: Delete parent frame
-            parent_delete_response = self.client.kgentities.delete_entity_frames(
+            parent_delete_response = await self.client.kgentities.delete_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -317,7 +317,7 @@ class KGEntityHierarchicalFrameTester:
                 return False
             
             # Verify deletion by checking final count
-            final_frames = self.client.kgentities.get_kgentity_frames(
+            final_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -355,7 +355,7 @@ class KGEntityHierarchicalFrameTester:
             
             # Create test entity
             entity_objects = self.test_data_creator.create_person_with_contact("Validation Test Person")
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -375,7 +375,7 @@ class KGEntityHierarchicalFrameTester:
             nonexistent_parent_uri = "http://vital.ai/test/nonexistent/frame/12345"
             
             try:
-                invalid_response = self.client.kgentities.create_entity_frames(
+                invalid_response = await self.client.kgentities.create_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -404,7 +404,7 @@ class KGEntityHierarchicalFrameTester:
             
             # Create another entity with a frame
             other_entity_objects = self.test_data_creator.create_organization_with_address("Other Corp")
-            other_entity_response = self.client.kgentities.create_kgentities(
+            other_entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=other_entity_objects
@@ -416,7 +416,7 @@ class KGEntityHierarchicalFrameTester:
                 
                 # Create frame in other entity
                 other_frame_data = self.test_data_creator.create_management_frame()
-                other_frame_response = self.client.kgentities.create_entity_frames(
+                other_frame_response = await self.client.kgentities.create_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=other_entity_uri,
@@ -428,7 +428,7 @@ class KGEntityHierarchicalFrameTester:
                     
                     # Try to use other entity's frame as parent for first entity
                     try:
-                        cross_entity_response = self.client.kgentities.create_entity_frames(
+                        cross_entity_response = await self.client.kgentities.create_entity_frames(
                             space_id=space_id,
                             graph_id=graph_id,
                             entity_uri=entity_uri,  # First entity
@@ -476,7 +476,7 @@ class KGEntityHierarchicalFrameTester:
             # Delete created entities (which should cascade to frames)
             for entity_uri in self.created_entity_uris:
                 try:
-                    delete_response = self.client.kgentities.delete_kgentity(
+                    delete_response = await self.client.kgentities.delete_kgentity(
                         space_id=space_id,
                         graph_id=graph_id,
                         uri=entity_uri,

@@ -25,16 +25,16 @@ class SpacesEndpoint:
     
     async def list_spaces(self, current_user: Dict):
         """List all spaces for the current user."""
-        print(f"🔍 ENDPOINT: list_spaces method called")
-        print(f"🔍 ENDPOINT: current_user: {current_user}")
-        print(f"🔍 ENDPOINT: self.api: {type(self.api)}")
-        print(f"🔍 ENDPOINT: self.api object id: {id(self.api)}")
-        print(f"🔍 ENDPOINT: self.api.space_manager: {getattr(self.api, 'space_manager', 'NOT_SET')}")
-        print(f"🔍 ENDPOINT: About to call self.api.list_spaces()")
+        self.logger.debug(f"🔍 ENDPOINT: list_spaces method called")
+        self.logger.debug(f"🔍 ENDPOINT: current_user: {current_user}")
+        self.logger.debug(f"🔍 ENDPOINT: self.api: {type(self.api)}")
+        self.logger.debug(f"🔍 ENDPOINT: self.api object id: {id(self.api)}")
+        self.logger.debug(f"🔍 ENDPOINT: self.api.space_manager: {getattr(self.api, 'space_manager', 'NOT_SET')}")
+        self.logger.debug(f"🔍 ENDPOINT: About to call self.api.list_spaces()")
         
         try:
             spaces = await self.api.list_spaces(current_user)
-            print(f"🔍 ENDPOINT: api.list_spaces returned: {spaces}")
+            self.logger.debug(f"🔍 ENDPOINT: api.list_spaces returned: {spaces}")
             
             response = SpacesListResponse(
                 spaces=spaces,
@@ -42,14 +42,13 @@ class SpacesEndpoint:
                 page_size=len(spaces),  # No pagination implemented yet
                 offset=0
             )
-            print(f"🔍 ENDPOINT: Created SpacesListResponse: {type(response)}")
+            self.logger.debug(f"🔍 ENDPOINT: Created SpacesListResponse: {type(response)}")
             return response
         except Exception as e:
-            print(f"❌ ENDPOINT ERROR: Exception in list_spaces: {e}")
-            print(f"🔍 ENDPOINT: Exception type: {type(e)}")
+            self.logger.error(f"❌ ENDPOINT ERROR: Exception in list_spaces: {e}")
+            self.logger.debug(f"🔍 ENDPOINT: Exception type: {type(e)}")
             import traceback
-            print(f"🔍 ENDPOINT: Full traceback:")
-            traceback.print_exc()
+            self.logger.debug(f"🔍 ENDPOINT: Full traceback:\n{traceback.format_exc()}")
             raise
     
     async def add_space(self, space: Space, current_user: Dict):
@@ -155,19 +154,18 @@ class SpacesEndpoint:
             description="Get a list of all accessible graph spaces for the authenticated user"
         )
         async def list_spaces_route(current_user: Dict = Depends(self.auth_dependency)):
-            print(f"🔍 ROUTING: GET /spaces endpoint called")
-            print(f"🔍 ROUTING: current_user: {current_user}")
-            print(f"🔍 ROUTING: About to call self.list_spaces()")
+            self.logger.debug(f"🔍 ROUTING: GET /spaces endpoint called")
+            self.logger.debug(f"🔍 ROUTING: current_user: {current_user}")
+            self.logger.debug(f"🔍 ROUTING: About to call self.list_spaces()")
             try:
                 result = await self.list_spaces(current_user)
-                print(f"🔍 ROUTING: list_spaces returned successfully: {type(result)}")
+                self.logger.debug(f"🔍 ROUTING: list_spaces returned successfully: {type(result)}")
                 return result
             except Exception as e:
-                print(f"❌ ROUTING ERROR: Exception in list_spaces_route: {e}")
-                print(f"🔍 ROUTING: Exception type: {type(e)}")
+                self.logger.error(f"❌ ROUTING ERROR: Exception in list_spaces_route: {e}")
+                self.logger.debug(f"🔍 ROUTING: Exception type: {type(e)}")
                 import traceback
-                print(f"🔍 ROUTING: Full traceback:")
-                traceback.print_exc()
+                self.logger.debug(f"🔍 ROUTING: Full traceback:\n{traceback.format_exc()}")
                 raise
         
         @self.router.post(
@@ -233,8 +231,9 @@ class SpacesEndpoint:
 
 def create_spaces_router(api, auth_dependency) -> APIRouter:
     """Create and return the spaces router."""
-    print(f"🔍 ENDPOINT CREATION DEBUG: Creating SpacesEndpoint with API: {api}")
-    print(f"🔍 ENDPOINT CREATION DEBUG: API space_manager: {getattr(api, 'space_manager', 'NOT_SET')}")
+    logger = logging.getLogger(__name__)
+    logger.debug(f"🔍 ENDPOINT CREATION DEBUG: Creating SpacesEndpoint with API: {api}")
+    logger.debug(f"🔍 ENDPOINT CREATION DEBUG: API space_manager: {getattr(api, 'space_manager', 'NOT_SET')}")
     endpoint = SpacesEndpoint(api, auth_dependency)
-    print(f"🔍 ENDPOINT CREATION DEBUG: SpacesEndpoint created with API space_manager: {getattr(endpoint.api, 'space_manager', 'NOT_SET')}")
+    logger.debug(f"🔍 ENDPOINT CREATION DEBUG: SpacesEndpoint created with API space_manager: {getattr(endpoint.api, 'space_manager', 'NOT_SET')}")
     return endpoint.router

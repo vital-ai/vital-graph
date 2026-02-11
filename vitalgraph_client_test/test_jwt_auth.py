@@ -17,7 +17,9 @@ Key Features Tested:
 import sys
 import os
 import logging
+import asyncio
 from pathlib import Path
+from typing import Dict, Any
 
 # Add the project root to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def test_jwt_authentication() -> bool:
+async def test_jwt_authentication() -> bool:
     """Test JWT-only authentication flow.
     
     Returns:
@@ -47,7 +49,7 @@ def test_jwt_authentication() -> bool:
         client = VitalGraphClient()
         
         logger.info("🔌 Opening connection and authenticating with JWT...")
-        client.open()
+        await client.open()
         
         # Get server info with authentication details
         server_info: Dict[str, Any] = client.get_server_info()
@@ -57,7 +59,7 @@ def test_jwt_authentication() -> bool:
         
         # Test authenticated API call
         logger.info("📋 Testing authenticated API call - listing spaces...")
-        spaces_response: SpacesListResponse = client.list_spaces()
+        spaces_response: SpacesListResponse = await client.list_spaces()
         
         # Access typed response properties
         spaces = spaces_response.spaces
@@ -86,7 +88,7 @@ def test_jwt_authentication() -> bool:
         
         # Test another authenticated call after potential refresh
         logger.info("📋 Testing API call after token refresh...")
-        spaces_after_response: SpacesListResponse = client.list_spaces()
+        spaces_after_response: SpacesListResponse = await client.list_spaces()
         
         # Access typed response properties
         spaces_after = spaces_after_response.spaces
@@ -100,7 +102,7 @@ def test_jwt_authentication() -> bool:
             logger.warning(f"   ⚠️ Space count changed: {total_count} -> {total_count_after}")
         
         logger.info("🚪 Closing connection...")
-        client.close()
+        await client.close()
         
         logger.info("✅ JWT-only authentication test completed successfully!")
         
@@ -114,12 +116,12 @@ def test_jwt_authentication() -> bool:
     return True
 
 
-def main() -> None:
+async def main() -> None:
     """Main test function."""
     logger.info("🚀 Starting VitalGraph Client JWT-Only Authentication Test")
     logger.info("📋 Note: Using typed client methods with SpacesListResponse models for full type safety")
     
-    success = test_jwt_authentication()
+    success = await test_jwt_authentication()
     
     if success:
         logger.info("🎉 All JWT tests passed with typed client methods!")
@@ -131,4 +133,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

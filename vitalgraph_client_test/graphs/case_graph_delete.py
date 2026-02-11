@@ -39,7 +39,7 @@ class GraphDeleteTester:
         """
         self.client = client
         
-    def test_graph_deletion(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
+    async def test_graph_deletion(self, space_id: str, created_graphs: List[str] = None) -> Dict[str, Any]:
         """
         Test graph deletion operations.
         
@@ -64,7 +64,7 @@ class GraphDeleteTester:
         if created_graphs:
             # Test deletion of each created graph
             for graph_uri in created_graphs[:]:  # Use slice copy to avoid modification during iteration
-                delete_result = self._test_delete_existing_graph(space_id, graph_uri)
+                delete_result = await self._test_delete_existing_graph(space_id, graph_uri)
                 results['test_details'].append(delete_result)
                 results['total_tests'] += 1
                 if delete_result['passed']:
@@ -77,7 +77,7 @@ class GraphDeleteTester:
                     results['failed_tests'].append(delete_result['name'])
         
         # Test 2: Delete non-existent graph
-        nonexistent_result = self._test_delete_nonexistent_graph(space_id)
+        nonexistent_result = await self._test_delete_nonexistent_graph(space_id)
         results['test_details'].append(nonexistent_result)
         results['total_tests'] += 1
         if nonexistent_result['passed']:
@@ -87,7 +87,7 @@ class GraphDeleteTester:
             results['failed_tests'].append(nonexistent_result['name'])
         
         # Test 3: Delete with silent flag
-        silent_result = self._test_delete_with_silent_flag(space_id)
+        silent_result = await self._test_delete_with_silent_flag(space_id)
         results['test_details'].append(silent_result)
         results['total_tests'] += 1
         if silent_result['passed']:
@@ -99,18 +99,18 @@ class GraphDeleteTester:
         logger.info(f"✅ Graph deletion tests completed: {results['passed_tests']}/{results['total_tests']} passed")
         return results
     
-    def _test_delete_existing_graph(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
+    async def _test_delete_existing_graph(self, space_id: str, graph_uri: str) -> Dict[str, Any]:
         """Test deleting an existing graph."""
         logger.info(f"  Testing delete existing graph: {graph_uri}")
         
         try:
             # Delete graph using client
-            delete_response = self.client.graphs.drop_graph(space_id, graph_uri)
+            delete_response = await self.client.graphs.drop_graph(space_id, graph_uri)
             
             if delete_response.is_success:
                 # Verify graph is deleted by trying to get its info
                 try:
-                    info_response = self.client.graphs.get_graph_info(space_id, graph_uri)
+                    info_response = await self.client.graphs.get_graph_info(space_id, graph_uri)
                     if not info_response.is_success or info_response.graph is None:
                         return {
                             'name': f'Delete Existing Graph ({graph_uri})',
@@ -151,7 +151,7 @@ class GraphDeleteTester:
                 'error': f"Exception during graph deletion: {e}"
             }
     
-    def _test_delete_nonexistent_graph(self, space_id: str) -> Dict[str, Any]:
+    async def _test_delete_nonexistent_graph(self, space_id: str) -> Dict[str, Any]:
         """Test deleting a non-existent graph."""
         logger.info("  Testing delete non-existent graph...")
         
@@ -159,7 +159,7 @@ class GraphDeleteTester:
         
         try:
             # Delete non-existent graph using client
-            delete_response = self.client.graphs.drop_graph(space_id, nonexistent_graph_uri)
+            delete_response = await self.client.graphs.drop_graph(space_id, nonexistent_graph_uri)
             
             # This should either succeed (idempotent) or fail gracefully
             if delete_response:
@@ -186,7 +186,7 @@ class GraphDeleteTester:
                 'graph_uri': nonexistent_graph_uri
             }
     
-    def _test_delete_with_silent_flag(self, space_id: str) -> Dict[str, Any]:
+    async def _test_delete_with_silent_flag(self, space_id: str) -> Dict[str, Any]:
         """Test deleting with silent flag."""
         logger.info("  Testing delete with silent flag...")
         
@@ -195,7 +195,7 @@ class GraphDeleteTester:
         
         try:
             # Create graph first
-            create_response = self.client.graphs.create_graph(space_id, test_graph_uri)
+            create_response = await self.client.graphs.create_graph(space_id, test_graph_uri)
             
             if not create_response.is_success:
                 return {
@@ -205,7 +205,7 @@ class GraphDeleteTester:
                 }
             
             # Delete with silent flag using client
-            delete_response = self.client.graphs.drop_graph(space_id, test_graph_uri, silent=True)
+            delete_response = await self.client.graphs.drop_graph(space_id, test_graph_uri, silent=True)
             
             if delete_response:
                 return {

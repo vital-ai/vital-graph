@@ -17,7 +17,7 @@ class KGEntityGetTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, created_entities: list = None) -> Dict[str, Any]:
         """
         Run KGEntity retrieval tests.
         
@@ -39,7 +39,7 @@ class KGEntityGetTester:
         # First get a URI to test with
         test_uri = None
         try:
-            list_response = self.client.kgentities.list_kgentities(
+            list_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=1
@@ -62,7 +62,7 @@ class KGEntityGetTester:
         # Test 1: Get specific entity by URI
         logger.info("🔍 Testing get specific KGEntity by URI...")
         try:
-            entity_response = self.client.kgentities.get_kgentity(
+            entity_response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=test_uri
@@ -91,7 +91,7 @@ class KGEntityGetTester:
         # Test 2: Get entity with complete graph
         logger.info("🔍 Testing get entity with complete graph...")
         try:
-            graph_response = self.client.kgentities.get_kgentity(
+            graph_response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=test_uri,
@@ -137,7 +137,7 @@ class KGEntityGetTester:
         logger.info("🔍 Testing get non-existent entity...")
         try:
             fake_uri = "http://vital.ai/test/nonexistent/entity/12345"
-            nonexistent_response = self.client.kgentities.get_kgentity(
+            nonexistent_response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=fake_uri

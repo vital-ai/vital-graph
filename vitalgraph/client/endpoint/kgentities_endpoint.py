@@ -50,7 +50,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    def _make_request(self, method: str, url: str, params=None, json=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -68,7 +68,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             if json:
                 kwargs['json'] = json
             
-            response = self._make_authenticated_request(method, url, **kwargs)
+            response = await self._make_authenticated_request(method, url, **kwargs)
             
             duration = time.time() - start_time
             logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
@@ -78,7 +78,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
-    def list_kgentities(
+    async def list_kgentities(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -122,7 +122,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 include_entity_graph=include_entity_graph
             )
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             # Use VitalSigns instance
@@ -201,7 +201,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def get_kgentity(
+    async def get_kgentity(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -251,7 +251,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             
             params = build_query_params(**params_dict)
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             vs = self.vs
@@ -312,7 +312,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_reference_id=reference_id
             )
     
-    def get_kgentities_by_reference_ids(
+    async def get_kgentities_by_reference_ids(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -347,7 +347,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 include_entity_graph=include_entity_graph
             )
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             vs = self.vs
@@ -404,7 +404,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_reference_ids=reference_ids
             )
     
-    def create_kgentities(
+    async def create_kgentities(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -459,7 +459,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             # Send exactly like old endpoint
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Server returns EntityCreateResponse with metadata (created_count, created_uris)
@@ -489,7 +489,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def update_kgentities(
+    async def update_kgentities(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -544,7 +544,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             # Send exactly like old endpoint
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Server returns EntityUpdateResponse with metadata (updated_uri)
@@ -571,7 +571,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def delete_kgentity(
+    async def delete_kgentity(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -605,7 +605,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 delete_entity_graph=delete_entity_graph
             )
             
-            response = self._make_request('DELETE', url, params=params)
+            response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             
             deleted_count = response_data.get('deleted_count', 1)
@@ -637,7 +637,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_uris=[uri]
             )
     
-    def delete_kgentities_batch(
+    async def delete_kgentities_batch(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -668,7 +668,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 uri_list=",".join(uri_list)
             )
             
-            response = self._make_request('DELETE', url, params=params)
+            response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             
             deleted_count = response_data.get('deleted_count', len(uri_list))
@@ -699,7 +699,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_uris=uri_list
             )
     
-    def get_kgentity_frames(
+    async def get_kgentity_frames(
         self,
         space_id: str,
         graph_id: str,
@@ -747,7 +747,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 search=search
             )
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             vs = self.vs
@@ -861,7 +861,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 entity_uri=entity_uri
             )
     
-    def create_entity_frames(
+    async def create_entity_frames(
         self,
         space_id: str,
         graph_id: str,
@@ -918,7 +918,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             # Send exactly like old endpoint
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Parse created frames from response
@@ -949,7 +949,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def update_entity_frames(
+    async def update_entity_frames(
         self,
         space_id: str,
         graph_id: str,
@@ -1014,7 +1014,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             )
             
             # Send exactly like old endpoint
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Log complete server response for debugging
@@ -1065,7 +1065,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def delete_entity_frames(
+    async def delete_entity_frames(
         self,
         space_id: str,
         graph_id: str,
@@ -1102,7 +1102,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 parent_frame_uri=parent_frame_uri
             )
             
-            response = self._make_request('DELETE', url, params=params)
+            response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
             
             # Check if response indicates failure (success=false)
@@ -1158,7 +1158,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_uris=frame_uris
             )
     
-    def query_entities(
+    async def query_entities(
         self,
         space_id: str,
         graph_id: str,
@@ -1188,7 +1188,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
             
-            response = self._make_request('POST', url, params=params, json=query_criteria)
+            response = await self._make_request('POST', url, params=params, json=query_criteria)
             response_data = response.json()
             
             vs = self.vs

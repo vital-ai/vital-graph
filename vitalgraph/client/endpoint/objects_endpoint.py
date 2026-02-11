@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ObjectsEndpoint(BaseEndpoint):
     """Client endpoint for Objects operations."""
     
-    def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> ObjectsListResponse:
+    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> ObjectsListResponse:
         """
         List Objects with pagination and optional search.
         
@@ -62,7 +62,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 search=search
             )
             
-            server_response = self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
+            server_response = await self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
             
             # Extract objects from server response - handle Union[JsonLdObject, JsonLdDocument]
             objects = []
@@ -99,7 +99,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def get_object(self, space_id: str, graph_id: str, uri: str) -> ObjectResponse:
+    async def get_object(self, space_id: str, graph_id: str, uri: str) -> ObjectResponse:
         """
         Get a specific Object by URI.
         
@@ -125,7 +125,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            server_response = self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
+            server_response = await self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
             
             # Extract single object from server response
             object_data = None
@@ -167,7 +167,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def create_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectCreateResponse:
+    async def create_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectCreateResponse:
         """
         Create Objects from JSON-LD request.
         
@@ -192,7 +192,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
             
-            server_response = self._make_typed_request('POST', url, ServerObjectCreateResponse, params=params, json=document.model_dump(by_alias=True))
+            server_response = await self._make_typed_request('POST', url, ServerObjectCreateResponse, params=params, json=document.model_dump(by_alias=True))
             
             # Extract created URIs from server response
             created_uris = []
@@ -226,7 +226,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def update_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectUpdateResponse:
+    async def update_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectUpdateResponse:
         """
         Update Objects from JSON-LD request.
         
@@ -251,7 +251,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
             
-            server_response = self._make_typed_request('PUT', url, ServerObjectUpdateResponse, params=params, json=document.model_dump(by_alias=True))
+            server_response = await self._make_typed_request('PUT', url, ServerObjectUpdateResponse, params=params, json=document.model_dump(by_alias=True))
             
             # Extract updated URIs from server response
             updated_uris = []
@@ -287,7 +287,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def delete_object(self, space_id: str, graph_id: str, uri: str) -> ObjectDeleteResponse:
+    async def delete_object(self, space_id: str, graph_id: str, uri: str) -> ObjectDeleteResponse:
         """
         Delete an Object by URI.
         
@@ -313,7 +313,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            server_response = self._make_typed_request('DELETE', url, ServerObjectDeleteResponse, params=params)
+            server_response = await self._make_typed_request('DELETE', url, ServerObjectDeleteResponse, params=params)
             
             return build_success_response(
                 ObjectDeleteResponse,
@@ -340,7 +340,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def delete_objects_batch(self, space_id: str, graph_id: str, uri_list: str) -> ObjectDeleteResponse:
+    async def delete_objects_batch(self, space_id: str, graph_id: str, uri_list: str) -> ObjectDeleteResponse:
         """
         Delete multiple Objects by URI list.
         
@@ -366,7 +366,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            server_response = self._make_typed_request('DELETE', url, ServerObjectDeleteResponse, params=params)
+            server_response = await self._make_typed_request('DELETE', url, ServerObjectDeleteResponse, params=params)
             
             # Extract deletion info from server response
             deleted_uris = uri_list.split(',') if uri_list else []

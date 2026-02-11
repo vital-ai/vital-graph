@@ -19,7 +19,7 @@ class KGQueryFrameQueriesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str], 
                   event_uris: List[str], file_uris: Dict[str, str] = None) -> Dict[str, Any]:
         """
         Run KGQuery frame query tests.
@@ -42,25 +42,25 @@ class KGQueryFrameQueriesTester:
         errors = []
         
         # Test 1: Find events for a specific organization
-        test1 = self._test_find_events_for_organization(space_id, graph_id, organization_uris)
+        test1 = await self._test_find_events_for_organization(space_id, graph_id, organization_uris)
         results.append(test1)
         if not test1['passed']:
             errors.append(test1.get('error', 'Find events for organization failed'))
         
         # Test 2: Find events with multiple frame slot criteria
-        test2 = self._test_multi_frame_query(space_id, graph_id, organization_uris)
+        test2 = await self._test_multi_frame_query(space_id, graph_id, organization_uris)
         results.append(test2)
         if not test2['passed']:
             errors.append(test2.get('error', 'Multi-frame query failed'))
         
         # Test 3: Filter by entity type
-        test3 = self._test_filter_by_entity_type(space_id, graph_id)
+        test3 = await self._test_filter_by_entity_type(space_id, graph_id)
         results.append(test3)
         if not test3['passed']:
             errors.append(test3.get('error', 'Entity type filter failed'))
         
         # Test 4: Filter by frame type
-        test4 = self._test_filter_by_frame_type(space_id, graph_id)
+        test4 = await self._test_filter_by_frame_type(space_id, graph_id)
         results.append(test4)
         if not test4['passed']:
             errors.append(test4.get('error', 'Frame type filter failed'))
@@ -68,13 +68,13 @@ class KGQueryFrameQueriesTester:
         # File reference tests (if file_uris provided)
         if file_uris:
             # Test 5: Find organizations with contract documents
-            test5 = self._test_find_orgs_with_contracts(space_id, graph_id)
+            test5 = await self._test_find_orgs_with_contracts(space_id, graph_id)
             results.append(test5)
             if not test5['passed']:
                 errors.append(test5.get('error', 'Find orgs with contracts failed'))
             
             # Test 6: Find organizations with specific file URI
-            test6 = self._test_find_orgs_with_file_uri(space_id, graph_id, file_uris)
+            test6 = await self._test_find_orgs_with_file_uri(space_id, graph_id, file_uris)
             results.append(test6)
             if not test6['passed']:
                 errors.append(test6.get('error', 'Find orgs with file URI failed'))
@@ -109,7 +109,7 @@ class KGQueryFrameQueriesTester:
             }
         }
     
-    def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
+    async def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
                                           organization_uris: List[str]) -> Dict[str, Any]:
         """Test finding events that reference a specific organization."""
         logger.info("\n  Test 1: Find events for specific organization...")
@@ -151,7 +151,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -190,7 +190,7 @@ class KGQueryFrameQueriesTester:
                 'elapsed_time': 0
             }
     
-    def _test_multi_frame_query(self, space_id: str, graph_id: str,
+    async def _test_multi_frame_query(self, space_id: str, graph_id: str,
                                 organization_uris: List[str]) -> Dict[str, Any]:
         """Test finding events with multiple slot criteria across different frames."""
         logger.info("\n  Test 2: Multi-frame query (org URI + event type)...")
@@ -245,7 +245,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -296,7 +296,7 @@ class KGQueryFrameQueriesTester:
                 'elapsed_time': 0
             }
     
-    def _test_filter_by_entity_type(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_filter_by_entity_type(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test filtering by entity type."""
         logger.info("\n  Test 3: Filter by entity type...")
         
@@ -318,7 +318,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -357,7 +357,7 @@ class KGQueryFrameQueriesTester:
                 'elapsed_time': 0
             }
     
-    def _test_filter_by_frame_type(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_filter_by_frame_type(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test filtering by frame type."""
         logger.info("\n  Test 4: Filter by frame type...")
         
@@ -382,7 +382,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -431,7 +431,7 @@ class KGQueryFrameQueriesTester:
                 'elapsed_time': 0
             }
     
-    def _test_find_orgs_with_contracts(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_find_orgs_with_contracts(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test finding organizations with contract documents."""
         logger.info("\n  Test 5: Find organizations with contract documents...")
         
@@ -461,7 +461,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,
@@ -500,7 +500,7 @@ class KGQueryFrameQueriesTester:
                 'elapsed_time': 0
             }
     
-    def _test_find_orgs_with_file_uri(self, space_id: str, graph_id: str, 
+    async def _test_find_orgs_with_file_uri(self, space_id: str, graph_id: str, 
                                       file_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test finding organizations with a specific file URI."""
         logger.info("\n  Test 6: Find organizations with specific file URI...")
@@ -548,7 +548,7 @@ class KGQueryFrameQueriesTester:
             )
             
             start_time = time.time()
-            response = self.client.kgqueries.query_connections(
+            response = await self.client.kgqueries.query_connections(
                 space_id=space_id,
                 graph_id=graph_id,
                 criteria=criteria,

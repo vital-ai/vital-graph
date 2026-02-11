@@ -34,7 +34,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
         file_node.name = "Test Document"
         
         # Pass GraphObject directly - no JSON-LD conversion needed
-        response = client.files.create_file(
+        response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,
             objects=[file_node]
@@ -45,7 +45,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
             created_uris.append(str(file_node.URI))
             
             # Validate FileNode is stored in database by retrieving it
-            get_response = client.files.get_file(
+            get_response = await client.files.get_file(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=str(file_node.URI)
@@ -73,7 +73,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
         file_node_2.name = "Test Data"
         
         # Pass GraphObjects directly - no JSON-LD conversion needed
-        response = client.files.create_file(
+        response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,
             objects=[file_node_1, file_node_2]
@@ -86,7 +86,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
             
             # Validate FileNodes are stored in database by retrieving them
             for file_uri in [str(file_node_1.URI), str(file_node_2.URI)]:
-                get_response = client.files.get_file(
+                get_response = await client.files.get_file(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=file_uri

@@ -12,6 +12,7 @@ instead of direct HTTP calls for full type safety.
 import sys
 import json
 import logging
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -34,7 +35,7 @@ def setup_logging():
     )
 
 
-def test_objects_endpoint(config_path: str):
+async def test_objects_endpoint(config_path: str):
     """Test the Objects endpoint with its own test space."""
     logger = logging.getLogger(__name__)
     
@@ -52,7 +53,7 @@ def test_objects_endpoint(config_path: str):
         # Configuration loaded from environment variables
         client = VitalGraphClient()
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -67,14 +68,14 @@ def test_objects_endpoint(config_path: str):
         space_id = "space_objects_test"
         
         # Check if space already exists
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         existing_spaces = spaces_response.spaces
         existing_space = next((s for s in existing_spaces if s.space == space_id), None)
         
         if existing_space:
             print(f"   ⚠️  Found existing test space '{space_id}', deleting it first...")
             try:
-                delete_response = client.spaces.delete_space(space_id)
+                delete_response = await client.spaces.delete_space(space_id)
                 if delete_response and (
                     (hasattr(delete_response, 'success') and delete_response.success) or
                     (hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message))
@@ -83,11 +84,11 @@ def test_objects_endpoint(config_path: str):
                 else:
                     error_msg = delete_response.message if delete_response and hasattr(delete_response, 'message') else 'Unknown error'
                     print(f"   ❌ Failed to delete existing space: {error_msg}")
-                    client.close()
+                    await client.close()
                     return False
             except Exception as e:
                 print(f"   ❌ Exception deleting existing space: {e}")
-                client.close()
+                await client.close()
                 return False
         
         # Create fresh test space
@@ -101,7 +102,7 @@ def test_objects_endpoint(config_path: str):
                 tenant="test_tenant"
             )
             
-            create_response = client.spaces.add_space(space_data)
+            create_response = await client.spaces.add_space(space_data)
             if create_response and (
                 (hasattr(create_response, 'success') and create_response.success) or
                 (hasattr(create_response, 'created_count') and create_response.created_count == 1) or
@@ -111,17 +112,17 @@ def test_objects_endpoint(config_path: str):
             else:
                 error_msg = create_response.message if create_response and hasattr(create_response, 'message') else 'Unknown error'
                 print(f"   ❌ Failed to create test space: {error_msg}")
-                client.close()
+                await client.close()
                 return False
         except Exception as e:
             print(f"   ❌ Exception creating test space: {e}")
-            client.close()
+            await client.close()
             return False
         
         # Create test graph
         print("\n3. Creating test graph...")
         graph_id = "http://vital.ai/graph/objects_test"
-        client.graphs.create_graph(space_id, graph_id)
+        await client.graphs.create_graph(space_id, graph_id)
         print(f"   ✓ Test graph created: {graph_id}")
         
         # Insert some test data using VitalSigns KGEntity objects
@@ -146,13 +147,13 @@ def test_objects_endpoint(config_path: str):
         from vitalgraph.model.jsonld_model import JsonLdDocument
         test_objects_doc = JsonLdDocument(**jsonld_data)
         
-        create_response = client.objects.create_objects(space_id, graph_id, test_objects_doc)
+        create_response = await client.objects.create_objects(space_id, graph_id, test_objects_doc)
         print(f"   ✓ Test objects created: {create_response.created_count} objects")
         
         # Test 1: List objects with pagination
         print("\n6. Testing List Objects (Paginated)...")
         try:
-            objects_response: ObjectsResponse = client.list_objects(
+            objects_response: ObjectsResponse = await client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -184,7 +185,7 @@ def test_objects_endpoint(config_path: str):
         # Test 2: Count objects
         print("\n7. Testing Object Count...")
         try:
-            count_response: ObjectsResponse = client.list_objects(
+            count_response: ObjectsResponse = await client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100,
@@ -202,7 +203,7 @@ def test_objects_endpoint(config_path: str):
         # Test 3: Search functionality
         print("\n8. Testing Search Objects...")
         try:
-            search_response: ObjectsResponse = client.list_objects(
+            search_response: ObjectsResponse = await client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=3,
@@ -225,7 +226,7 @@ def test_objects_endpoint(config_path: str):
         # Test 4: Verify objects exist
         print("\n9. Testing Object Verification...")
         try:
-            verify_response = client.list_objects(
+            verify_response = await client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100
@@ -248,7 +249,7 @@ def test_objects_endpoint(config_path: str):
         # Test 5: List with offset
         print("\n10. Testing List with Offset...")
         try:
-            offset_response = client.list_objects(
+            offset_response = await client.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=2,
@@ -272,7 +273,7 @@ def test_objects_endpoint(config_path: str):
         try:
             print(f"   Testing different page sizes:")
             for page_size in [1, 2, 5]:
-                page_response = client.list_objects(
+                page_response = await client.list_objects(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,
@@ -307,7 +308,7 @@ def test_objects_endpoint(config_path: str):
             single_object_data['@context'] = updated_jsonld['@context']
             updated_object = JsonLdObject(**single_object_data)
             
-            update_response = client.objects.update_objects(space_id, graph_id, updated_object)
+            update_response = await client.objects.update_objects(space_id, graph_id, updated_object)
             print(f"   ✓ Objects updated successfully")
             print(f"     - Updated count: {update_response.updated_count}")
             if update_response.updated_uris:
@@ -320,7 +321,7 @@ def test_objects_endpoint(config_path: str):
         # Test 8: Delete single object (DELETE /api/graphs/objects)
         print("\n13. Testing Delete Single Object...")
         try:
-            delete_response = client.objects.delete_object(
+            delete_response = await client.objects.delete_object(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri="http://example.org/entity1"
@@ -335,7 +336,7 @@ def test_objects_endpoint(config_path: str):
         # Test 9: Delete multiple objects (DELETE /api/graphs/objects with uri_list)
         print("\n14. Testing Delete Multiple Objects...")
         try:
-            delete_batch_response = client.objects.delete_objects_batch(
+            delete_batch_response = await client.objects.delete_objects_batch(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri_list="http://example.org/entity2,http://example.org/entity3"
@@ -351,13 +352,13 @@ def test_objects_endpoint(config_path: str):
         print("\n15. Cleaning up test space...")
         if space_id:
             try:
-                client.spaces.delete_space(space_id)
+                await client.spaces.delete_space(space_id)
                 print(f"   ✓ Test space deleted: {space_id}")
             except Exception as e:
                 print(f"   ⚠️  Failed to delete test space: {e}")
         
         # Close client
-        client.close()
+        await client.close()
         print(f"\n16. Client closed successfully")
         
         print("\n✅ Objects endpoint testing completed successfully!")
@@ -386,7 +387,7 @@ def test_objects_endpoint(config_path: str):
         return False
 
 
-def main():
+async def main():
     """Main function to test objects endpoint."""
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -408,7 +409,7 @@ def main():
         return 1
     
     # Test objects endpoint
-    success = test_objects_endpoint(config_path)
+    success = await test_objects_endpoint(config_path)
     
     if success:
         print("\n🎉 Objects endpoint testing completed successfully!")
@@ -422,5 +423,5 @@ def main():
 
 
 if __name__ == "__main__":
-    exit_code = main()
+    exit_code = asyncio.run(main())
     sys.exit(exit_code)

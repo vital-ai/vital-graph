@@ -50,7 +50,7 @@ class KGEntityFrameGetTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Frame Get Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -69,7 +69,7 @@ class KGEntityFrameGetTester:
             logger.info("✅ Using existing frames from entity creation for retrieval test")
             
             # Test 1: Get all frames for the entity using get_kgentity_frames
-            frames_response = self.client.kgentities.get_kgentity_frames(
+            frames_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -87,7 +87,7 @@ class KGEntityFrameGetTester:
             logger.info(f"✅ Retrieved {len(frames_response.objects)} frames for entity")
             
             # Test 2: Get frames using get_kgentity_frames (returns FrameResponse)
-            frames_response2 = self.client.kgentities.get_kgentity_frames(
+            frames_response2 = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -127,7 +127,7 @@ class KGEntityFrameGetTester:
             entity_objects = self.test_data_creator.create_organization_with_address("Pagination Test Corp")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -151,7 +151,7 @@ class KGEntityFrameGetTester:
             page_count = 0
             
             while True:
-                page_response = self.client.kgentities.get_kgentity_frames(
+                page_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -183,7 +183,7 @@ class KGEntityFrameGetTester:
             logger.info(f"✅ Pagination test completed: {page_count} pages, {total_retrieved} total frames retrieved")
             
             # Validate total count consistency
-            final_response = self.client.kgentities.get_kgentity_frames(
+            final_response = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -221,7 +221,7 @@ class KGEntityFrameGetTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Filter Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -244,7 +244,7 @@ class KGEntityFrameGetTester:
             search_terms = ["Engineer", "Manager", "Technology"]
             
             for search_term in search_terms:
-                search_response = self.client.kgentities.get_kgentity_frames(
+                search_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -256,7 +256,7 @@ class KGEntityFrameGetTester:
                     logger.info(f"✅ Search for '{search_term}': found {found_count} frames")
                     
                     # Compare with total frames
-                    all_frames_response = self.client.kgentities.get_kgentity_frames(
+                    all_frames_response = await self.client.kgentities.get_kgentity_frames(
                         space_id=space_id,
                         graph_id=graph_id,
                         entity_uri=entity_uri
@@ -297,7 +297,7 @@ class KGEntityFrameGetTester:
             entity_objects = self.test_data_creator.create_organization_with_address("Hierarchical Get Corp")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -311,7 +311,7 @@ class KGEntityFrameGetTester:
             self.created_entity_uris.append(entity_uri)
             
             # Get existing frames from entity for hierarchical retrieval test
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -347,7 +347,7 @@ class KGEntityFrameGetTester:
             
             # Test get_kgentity_frames with non-existent entity
             try:
-                frames_response = self.client.kgentities.get_kgentity_frames(
+                frames_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=nonexistent_entity_uri
@@ -372,7 +372,7 @@ class KGEntityFrameGetTester:
             
             # Test get_kgentity_frames with non-existent entity
             try:
-                frames_response = self.client.kgentities.get_kgentity_frames(
+                frames_response = await self.client.kgentities.get_kgentity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=nonexistent_entity_uri
@@ -416,7 +416,7 @@ class KGEntityFrameGetTester:
             # Delete created entities (which should cascade to frames)
             for entity_uri in self.created_entity_uris:
                 try:
-                    delete_response = self.client.kgentities.delete_kgentity(
+                    delete_response = await self.client.kgentities.delete_kgentity(
                         space_id=space_id,
                         graph_id=graph_id,
                         uri=entity_uri,

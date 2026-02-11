@@ -19,7 +19,7 @@ class KGEntityListTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run KGEntity listing tests.
         
@@ -41,7 +41,7 @@ class KGEntityListTester:
         # Test 1: Basic listing with pagination
         logger.info("🔍 Testing basic KGEntity listing...")
         try:
-            response = self.client.kgentities.list_kgentities(
+            response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -73,7 +73,7 @@ class KGEntityListTester:
         # Test 2: Search functionality
         logger.info("🔍 Testing KGEntity search...")
         try:
-            search_response = self.client.kgentities.list_kgentities(
+            search_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=3,
@@ -106,7 +106,7 @@ class KGEntityListTester:
         # Test 3: Entity type filtering
         logger.info("🔍 Testing entity type filtering...")
         try:
-            filter_response = self.client.kgentities.list_kgentities(
+            filter_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -136,7 +136,7 @@ class KGEntityListTester:
         # Test 4: Include entity graph parameter
         logger.info("🔍 Testing include_entity_graph parameter...")
         try:
-            graph_response = self.client.kgentities.list_kgentities(
+            graph_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=2,
@@ -192,7 +192,7 @@ class KGEntityListTester:
         
         for page_size in [1, 5, 10]:
             try:
-                page_response = self.client.kgentities.list_kgentities(
+                page_response = await self.client.kgentities.list_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,

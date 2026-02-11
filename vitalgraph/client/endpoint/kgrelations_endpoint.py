@@ -40,7 +40,7 @@ class KGRelationsEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    def _make_request(self, method: str, url: str, params=None, json=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -58,7 +58,7 @@ class KGRelationsEndpoint(BaseEndpoint):
             if json:
                 kwargs['json'] = json
             
-            response = self._make_authenticated_request(method, url, **kwargs)
+            response = await self._make_authenticated_request(method, url, **kwargs)
             
             duration = time.time() - start_time
             logger.info(f"⏱️  {method} {operation}: {duration:.3f}s")
@@ -68,7 +68,7 @@ class KGRelationsEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
-    def list_relations(
+    async def list_relations(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -117,7 +117,7 @@ class KGRelationsEndpoint(BaseEndpoint):
             logger.debug(f"DEBUG list_relations params: {params}")
             logger.debug(f"DEBUG relation_type_uri value: {relation_type_uri}, type: {type(relation_type_uri)}")
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             # Convert JSON-LD to VitalSigns objects
@@ -155,7 +155,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def get_relation(
+    async def get_relation(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -186,7 +186,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 relation_uri=relation_uri
             )
             
-            response = self._make_request('GET', url, params=params)
+            response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
             # Convert JSON-LD to VitalSigns object
@@ -216,7 +216,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 uri=relation_uri
             )
     
-    def create_relations(
+    async def create_relations(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -265,7 +265,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 )
                 data.jsonld_type = 'document'
             
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Extract created URIs from response
@@ -295,7 +295,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def update_relations(
+    async def update_relations(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -342,7 +342,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 )
                 data.jsonld_type = 'document'
             
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Extract updated URIs from response
@@ -371,7 +371,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def upsert_relations(
+    async def upsert_relations(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -418,7 +418,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 )
                 data.jsonld_type = 'document'
             
-            response = self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
             response_data = response.json()
             
             # Extract upserted URIs from response
@@ -447,7 +447,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def delete_relations(
+    async def delete_relations(
         self, 
         space_id: str, 
         graph_id: str, 
@@ -482,7 +482,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 'relation_uris': relation_uris
             }
             
-            response = self._make_request('DELETE', url, params=params, json=delete_request)
+            response = await self._make_request('DELETE', url, params=params, json=delete_request)
             response_data = response.json()
             
             # Extract deletion results

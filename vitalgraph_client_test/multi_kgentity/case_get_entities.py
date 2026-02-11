@@ -18,7 +18,7 @@ class GetEntitiesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
                   entity_names: List[str]) -> Dict[str, Any]:
         """
         Run individual entity retrieval tests.
@@ -53,7 +53,7 @@ class GetEntitiesTester:
             try:
                 logger.info(f"\nGetting entity {i+1}: {org_name}...")
                 
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri,

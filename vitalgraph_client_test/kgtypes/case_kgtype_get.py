@@ -17,7 +17,7 @@ class KGTypeGetTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, created_kgtypes: list = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, created_kgtypes: list = None) -> Dict[str, Any]:
         """
         Run KGType retrieval tests.
         
@@ -38,15 +38,15 @@ class KGTypeGetTester:
             # Create a copy of the first 2 KGTypes for get testing
             test_kgtypes = created_kgtypes[:2].copy()
             for i, kgtype_uri in enumerate(test_kgtypes):
-                get_result = self._test_get_existing_kgtype(space_id, graph_id, kgtype_uri, i+1)
+                get_result = await self._test_get_existing_kgtype(space_id, graph_id, kgtype_uri, i+1)
                 results.append(get_result)
         
         # Test get non-existent KGType
-        nonexistent_result = self._test_get_nonexistent_kgtype(space_id, graph_id)
+        nonexistent_result = await self._test_get_nonexistent_kgtype(space_id, graph_id)
         results.append(nonexistent_result)
         
         # Test get with invalid URI
-        invalid_result = self._test_get_invalid_kgtype(space_id, graph_id)
+        invalid_result = await self._test_get_invalid_kgtype(space_id, graph_id)
         results.append(invalid_result)
         
         passed_tests = sum(1 for r in results if r['passed'])
@@ -60,7 +60,7 @@ class KGTypeGetTester:
             'results': results
         }
     
-    def _test_get_existing_kgtype(self, space_id: str, graph_id: str, kgtype_uri: str, index: int) -> Dict[str, Any]:
+    async def _test_get_existing_kgtype(self, space_id: str, graph_id: str, kgtype_uri: str, index: int) -> Dict[str, Any]:
         """Test getting an existing KGType."""
         logger.info(f"  Testing get existing KGType: {kgtype_uri}")
         
@@ -72,7 +72,7 @@ class KGTypeGetTester:
             logger.info(f"      - KGType URI: {kgtype_uri}")
             
             # Use get_kgtype to get specific KGType by URI
-            response = self.client.get_kgtype(space_id, graph_id, kgtype_uri)
+            response = await self.client.get_kgtype(space_id, graph_id, kgtype_uri)
             
             # Log the response details
             logger.info(f"    📥 RESPONSE: GET KGType")
@@ -123,14 +123,14 @@ class KGTypeGetTester:
                 'error': f"Exception getting KGType {kgtype_uri}: {e}"
             }
     
-    def _test_get_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_get_nonexistent_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test getting a non-existent KGType."""
         logger.info("  Testing get non-existent KGType...")
         
         nonexistent_uri = "http://vital.ai/test/kgtype/nonexistent_12345"
         
         try:
-            response = self.client.get_kgtype(space_id, graph_id, nonexistent_uri)
+            response = await self.client.get_kgtype(space_id, graph_id, nonexistent_uri)
             
             # For non-existent KGTypes, we expect is_success to be False or type to be None
             if not response.is_success or response.type is None:
@@ -156,14 +156,14 @@ class KGTypeGetTester:
                 'nonexistent_uri': nonexistent_uri
             }
     
-    def _test_get_invalid_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_get_invalid_kgtype(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test getting a KGType with invalid URI."""
         logger.info("  Testing get KGType with invalid URI...")
         
         invalid_uri = "invalid-uri-format"
         
         try:
-            response = self.client.get_kgtype(space_id, graph_id, invalid_uri)
+            response = await self.client.get_kgtype(space_id, graph_id, invalid_uri)
             
             # For invalid URIs, we expect either no response or empty data
             if response and hasattr(response, 'data') and response.data:

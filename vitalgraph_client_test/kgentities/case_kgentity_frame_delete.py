@@ -50,7 +50,7 @@ class KGEntityFrameDeleteTester:
             entity_objects = self.test_data_creator.create_person_with_contact("Frame Delete Test Person")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -65,7 +65,7 @@ class KGEntityFrameDeleteTester:
             logger.info(f"✅ Created test entity: {entity_uri}")
             
             # Get existing frames from the entity to test deletion
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -85,7 +85,7 @@ class KGEntityFrameDeleteTester:
             # Test frame deletion by attempting to delete one frame
             if frame_uris_to_delete:
                 test_frame_uri = frame_uris_to_delete[0]
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -128,7 +128,7 @@ class KGEntityFrameDeleteTester:
             entity1_objects = self.test_data_creator.create_person_with_contact("Entity 1 Person")
             
             # Modern client API expects GraphObjects directly
-            entity1_response = self.client.kgentities.create_kgentities(
+            entity1_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity1_objects
@@ -137,7 +137,7 @@ class KGEntityFrameDeleteTester:
             entity2_objects = self.test_data_creator.create_person_with_contact("Entity 2 Person")
             
             # Modern client API expects GraphObjects directly
-            entity2_response = self.client.kgentities.create_kgentities(
+            entity2_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity2_objects
@@ -157,7 +157,7 @@ class KGEntityFrameDeleteTester:
             # Create frame for entity1
             frame_objects = self.test_data_creator.create_employment_frame("Engineer", "Tech Corp")
             
-            frame_response = self.client.kgentities.create_entity_frames(
+            frame_response = await self.client.kgentities.create_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity1_uri,
@@ -173,7 +173,7 @@ class KGEntityFrameDeleteTester:
             
             # Try to delete entity1's frame using entity2 (should fail or return structured error)
             try:
-                invalid_delete_response = self.client.kgentities.delete_entity_frames(
+                invalid_delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity2_uri,  # Wrong entity!
@@ -197,7 +197,7 @@ class KGEntityFrameDeleteTester:
                 logger.info(f"✅ Client-side validation caught ownership violation: {e}")
             
             # Now delete the frame correctly using entity1
-            correct_delete_response = self.client.kgentities.delete_entity_frames(
+            correct_delete_response = await self.client.kgentities.delete_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity1_uri,  # Correct entity
@@ -235,7 +235,7 @@ class KGEntityFrameDeleteTester:
             entity_objects = self.test_data_creator.create_organization_with_address("Hierarchical Delete Corp")
             
             # Modern client API expects GraphObjects directly
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -249,7 +249,7 @@ class KGEntityFrameDeleteTester:
             self.created_entity_uris.append(entity_uri)
             
             # Get existing frames from entity for hierarchical deletion test
-            existing_frames = self.client.kgentities.get_kgentity_frames(
+            existing_frames = await self.client.kgentities.get_kgentity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri
@@ -267,7 +267,7 @@ class KGEntityFrameDeleteTester:
                 
             deleted_count = 0
             for frame_uri in frames_to_delete[:2]:  # Delete first 2 frames
-                delete_response = self.client.kgentities.delete_entity_frames(
+                delete_response = await self.client.kgentities.delete_entity_frames(
                     space_id=space_id,
                     graph_id=graph_id,
                     entity_uri=entity_uri,
@@ -303,7 +303,7 @@ class KGEntityFrameDeleteTester:
             
             # Create test entity
             entity_objects = self.test_data_creator.create_person_with_contact("Nonexistent Frame Test Person")
-            entity_response = self.client.kgentities.create_kgentities(
+            entity_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=entity_objects
@@ -319,7 +319,7 @@ class KGEntityFrameDeleteTester:
             # Try to delete non-existent frame
             nonexistent_frame_uri = "http://vital.ai/test/nonexistent/frame/12345"
             
-            delete_response = self.client.kgentities.delete_entity_frames(
+            delete_response = await self.client.kgentities.delete_entity_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
@@ -366,7 +366,7 @@ class KGEntityFrameDeleteTester:
             # Delete created entities (which should cascade to frames)
             for entity_uri in self.created_entity_uris:
                 try:
-                    delete_response = self.client.kgentities.delete_kgentity(
+                    delete_response = await self.client.kgentities.delete_kgentity(
                         space_id=space_id,
                         graph_id=graph_id,
                         uri=entity_uri,

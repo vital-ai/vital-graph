@@ -25,7 +25,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         file_node.URI = "haley:file_test_delete_001"
         file_node.name = "File to Delete"
         
-        response = client.files.create_file(
+        response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,
             objects=[file_node]
@@ -40,7 +40,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         # Test 2: Delete the file
         logger.info("  Test 2: Delete file by URI")
         
-        response = client.files.delete_file(
+        response = await client.files.delete_file(
             space_id=space_id,
             graph_id=graph_id,
             uri="haley:file_test_delete_001"
@@ -55,7 +55,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         # Test 3: Verify file is deleted
         logger.info("  Test 3: Verify file no longer exists")
         
-        response = client.files.get_file(
+        response = await client.files.get_file(
             space_id=space_id,
             graph_id=graph_id,
             uri="haley:file_test_delete_001"
@@ -79,7 +79,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         file_node_2.URI = "haley:file_test_batch_delete_002"
         file_node_2.name = "Batch Delete File 2"
         
-        response = client.files.create_file(
+        response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,
             objects=[file_node_1, file_node_2]
@@ -96,7 +96,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         
         uri_list = "haley:file_test_batch_delete_001,haley:file_test_batch_delete_002"
         
-        response = client.files.delete_files_batch(
+        response = await client.files.delete_files_batch(
             space_id=space_id,
             graph_id=graph_id,
             uri_list=uri_list
@@ -111,7 +111,7 @@ async def run_file_delete_tests(client, space_id: str, graph_id: str, logger=Non
         # Test 6: Verify batch deleted files no longer exist
         logger.info("  Test 6: Verify batch deleted files no longer exist")
         
-        response = client.files.get_file(
+        response = await client.files.get_file(
             space_id=space_id,
             graph_id=graph_id,
             uri="haley:file_test_batch_delete_001"

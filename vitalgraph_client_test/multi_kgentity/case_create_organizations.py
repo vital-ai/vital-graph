@@ -262,7 +262,7 @@ class CreateOrganizationsTester:
         
         return file_objects
         
-    def run_tests(self, space_id: str, graph_id: str, file_uris: Dict[str, str] = None) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, file_uris: Dict[str, str] = None) -> Dict[str, Any]:
         """
         Run organization creation tests.
         
@@ -313,7 +313,7 @@ class CreateOrganizationsTester:
                 org_entity_uri = str(org_entity.URI)
                 
                 # Create entity - pass GraphObjects directly
-                response = self.client.kgentities.create_kgentities(
+                response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=org_objects

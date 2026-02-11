@@ -18,7 +18,7 @@ class UpdateEntitiesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
+    async def run_tests(self, space_id: str, graph_id: str, entity_uris: List[str], 
                   entity_names: List[str]) -> Dict[str, Any]:
         """
         Run entity update tests.
@@ -62,7 +62,7 @@ class UpdateEntitiesTester:
                 logger.info(f"   Employee count: {update_info['old']} → {update_info['new']}")
                 
                 # Get entity with full graph
-                response = self.client.kgentities.get_kgentity(
+                response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=entity_uri,
@@ -88,7 +88,7 @@ class UpdateEntitiesTester:
                 
                 if updated:
                     # Update entity - pass GraphObjects directly
-                    update_response = self.client.kgentities.update_kgentities(
+                    update_response = await self.client.kgentities.update_kgentities(
                         space_id=space_id,
                         graph_id=graph_id,
                         objects=entity_objects

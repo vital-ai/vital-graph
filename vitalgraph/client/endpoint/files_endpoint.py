@@ -48,7 +48,7 @@ class FilesEndpoint(BaseEndpoint):
         # Initialize VitalSigns for JSON-LD conversion
         self.vs = VitalSigns()
     
-    def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
+    async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
                   offset: int = 0, file_filter: Optional[str] = None) -> FilesListResponse:
         """
         List files with pagination and optional filtering.
@@ -79,7 +79,7 @@ class FilesEndpoint(BaseEndpoint):
                 file_filter=file_filter
             )
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Convert JSON-LD to GraphObjects internally
@@ -110,7 +110,7 @@ class FilesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileResponse:
+    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileResponse:
         """
         Get a single file by URI.
         
@@ -136,7 +136,7 @@ class FilesEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Convert JSON-LD to GraphObjects internally
@@ -171,7 +171,7 @@ class FilesEndpoint(BaseEndpoint):
                 requested_uri=uri
             )
     
-    def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> FilesListResponse:
+    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> FilesListResponse:
         """
         Get multiple files by URI list.
         
@@ -197,7 +197,7 @@ class FilesEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Convert JSON-LD to GraphObjects internally
@@ -226,7 +226,7 @@ class FilesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def create_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileCreateResponse:
+    async def create_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileCreateResponse:
         """
         Create new file node (metadata only).
         
@@ -270,7 +270,7 @@ class FilesEndpoint(BaseEndpoint):
             else:
                 payload['jsonld_type'] = 'document'
             
-            response = self._make_authenticated_request('POST', url, params=params, json=payload)
+            response = await self._make_authenticated_request('POST', url, params=params, json=payload)
             response_data = response.json()
             
             return build_success_response(
@@ -293,7 +293,7 @@ class FilesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def update_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileUpdateResponse:
+    async def update_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileUpdateResponse:
         """
         Update file metadata.
         
@@ -337,7 +337,7 @@ class FilesEndpoint(BaseEndpoint):
             else:
                 payload['jsonld_type'] = 'document'
             
-            response = self._make_authenticated_request('PUT', url, params=params, json=payload)
+            response = await self._make_authenticated_request('PUT', url, params=params, json=payload)
             response_data = response.json()
             
             return build_success_response(
@@ -360,7 +360,7 @@ class FilesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileDeleteResponse:
+    async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileDeleteResponse:
         """
         Delete file node by URI.
         
@@ -386,7 +386,7 @@ class FilesEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            response = self._make_authenticated_request('DELETE', url, params=params)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
             
             return build_success_response(
@@ -411,7 +411,7 @@ class FilesEndpoint(BaseEndpoint):
             )
     
     # Advanced streaming methods with full support for bytes, streams, paths, and generators
-    def delete_files_batch(self, space_id: str, graph_id: str, uri_list: str) -> Dict[str, Any]:
+    async def delete_files_batch(self, space_id: str, graph_id: str, uri_list: str) -> Dict[str, Any]:
         """
         Delete multiple File nodes by URI list.
         
@@ -437,12 +437,12 @@ class FilesEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            response = self._make_authenticated_request('DELETE', url, params=params)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
             return response.json()
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to delete File nodes: {e}")
     
-    def upload_file_content(self, space_id: str, graph_id: str, file_uri: str, 
+    async def upload_file_content(self, space_id: str, graph_id: str, file_uri: str, 
                            source: Union[bytes, BinaryIO, str, Path, BinaryGenerator], 
                            filename: Optional[str] = None, 
                            content_type: Optional[str] = None,
@@ -501,7 +501,7 @@ class FilesEndpoint(BaseEndpoint):
             }
             
             # httpx will automatically set multipart/form-data with boundary
-            response = self._make_authenticated_request('POST', url, params=params, files=files)
+            response = await self._make_authenticated_request('POST', url, params=params, files=files)
             
             return build_success_response(
                 FileUploadResponse,
@@ -526,7 +526,7 @@ class FilesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
-    def upload_from_generator(self, space_id: str, graph_id: str, file_uri: str, 
+    async def upload_from_generator(self, space_id: str, graph_id: str, file_uri: str, 
                              generator: BinaryGenerator) -> FileUploadResponse:
         """
         Upload file content from a BinaryGenerator.
@@ -540,9 +540,9 @@ class FilesEndpoint(BaseEndpoint):
         Returns:
             FileUploadResponse with upload information
         """
-        return self.upload_file_content(space_id, graph_id, file_uri, generator)
+        return await self.upload_file_content(space_id, graph_id, file_uri, generator)
     
-    def download_file_content(self, space_id: str, graph_id: str, file_uri: str, 
+    async def download_file_content(self, space_id: str, graph_id: str, file_uri: str, 
                              destination: Optional[Union[str, Path, BinaryIO, BinaryConsumer]] = None,
                              chunk_size: int = 8192) -> Union[bytes, FileUploadResponse]:
         """
@@ -572,7 +572,7 @@ class FilesEndpoint(BaseEndpoint):
                 uri=file_uri
             )
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             
             # Check HTTP status code - raise exception for errors
             if response.status_code >= 400:
@@ -620,7 +620,7 @@ class FilesEndpoint(BaseEndpoint):
         except Exception as e:
             raise VitalGraphClientError(f"Failed to download file content: {e}")
     
-    def download_to_consumer(self, space_id: str, graph_id: str, file_uri: str, 
+    async def download_to_consumer(self, space_id: str, graph_id: str, file_uri: str, 
                             consumer: BinaryConsumer, chunk_size: int = 8192) -> FileUploadResponse:
         """
         Download file content to a BinaryConsumer.
@@ -635,9 +635,9 @@ class FilesEndpoint(BaseEndpoint):
         Returns:
             FileUploadResponse with download information
         """
-        return self.download_file_content(space_id, graph_id, file_uri, consumer, chunk_size)
+        return await self.download_file_content(space_id, graph_id, file_uri, consumer, chunk_size)
     
-    def pump_file(self, source_space_id: str, source_graph_id: str, source_file_uri: str,
+    async def pump_file(self, source_space_id: str, source_graph_id: str, source_file_uri: str,
                   target_space_id: str, target_graph_id: str, target_file_uri: str,
                   chunk_size: int = 8192, use_streaming: bool = True) -> Dict[str, Any]:
         """
@@ -673,7 +673,7 @@ class FilesEndpoint(BaseEndpoint):
                 uri=source_file_uri
             )
             
-            download_response = self._make_authenticated_request('GET', download_url, params=download_params)
+            download_response = await self._make_authenticated_request('GET', download_url, params=download_params)
             
             # Check for download errors
             if download_response.status_code >= 400:
@@ -700,7 +700,7 @@ class FilesEndpoint(BaseEndpoint):
                     'file': ('pumped_file', file_generator(), content_type)
                 }
                 
-                response = self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
+                response = await self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
             else:
                 # Non-streaming: collect all content into memory first
                 # (More compatible but uses more memory)
@@ -710,7 +710,7 @@ class FilesEndpoint(BaseEndpoint):
                     'file': ('pumped_file', file_content, content_type)
                 }
                 
-                response = self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
+                response = await self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
             
             return {
                 "success": True,
@@ -777,7 +777,7 @@ class FilesEndpoint(BaseEndpoint):
             # aiohttp supports async generators in multipart uploads - only one chunk in memory!
             async with aiohttp.ClientSession() as session:
                 # Get auth headers
-                headers = self._get_auth_headers()
+                headers = await self._get_auth_headers()
                 
                 # Create multipart form data with async generator
                 data = aiohttp.FormData()
@@ -814,7 +814,7 @@ class FilesEndpoint(BaseEndpoint):
         except Exception as e:
             raise VitalGraphClientError(f"Failed to stream upload file: {e}")
     
-    def upload_file_stream(self, space_id: str, graph_id: str, file_uri: str,
+    async def upload_file_stream(self, space_id: str, graph_id: str, file_uri: str,
                           source: Union[str, Path, bytes, AsyncBinaryGenerator],
                           filename: Optional[str] = None,
                           content_type: Optional[str] = None,
@@ -901,7 +901,7 @@ class FilesEndpoint(BaseEndpoint):
                 'file': (final_filename, sync_generator(), final_content_type)
             }
             
-            response = self._make_authenticated_request('POST', url, params=params, files=files)
+            response = await self._make_authenticated_request('POST', url, params=params, files=files)
             response_data = response.json()
             
             return FileUploadResponse(
@@ -950,7 +950,7 @@ class FilesEndpoint(BaseEndpoint):
             # Use httpx for async HTTP requests
             async with httpx.AsyncClient() as client:
                 # Get auth headers
-                headers = self._get_auth_headers()
+                headers = await self._get_auth_headers()
                 
                 async with client.stream('GET', url, params=params, headers=headers, timeout=300.0) as response:
                     response.raise_for_status()
@@ -986,7 +986,7 @@ class FilesEndpoint(BaseEndpoint):
         except Exception as e:
             raise VitalGraphClientError(f"Failed to stream download file: {e}")
     
-    def download_file_stream(self, space_id: str, graph_id: str, file_uri: str,
+    async def download_file_stream(self, space_id: str, graph_id: str, file_uri: str,
                             destination: Union[str, Path, AsyncBinaryConsumer],
                             chunk_size: int = 8192) -> FileUploadResponse:
         """
@@ -1006,29 +1006,9 @@ class FilesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        # Try to get running event loop
-        try:
-            loop = asyncio.get_running_loop()
-            # If we're already in an async context, raise an error
-            raise VitalGraphClientError(
-                "Cannot use sync download_file_stream() in async context. "
-                "Use 'await download_file_stream_async()' instead."
-            )
-        except RuntimeError:
-            # No running loop - we can create one
-            pass
-        
-        # Run async version in new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(
-                self.download_file_stream_async(space_id, graph_id, file_uri, destination, chunk_size)
-            )
-        finally:
-            loop.close()
+        return await self.download_file_stream_async(space_id, graph_id, file_uri, destination, chunk_size)
     
-    def _download_file_stream_sync_fallback(self, space_id: str, graph_id: str, file_uri: str,
+    async def _download_file_stream_sync_fallback(self, space_id: str, graph_id: str, file_uri: str,
                             destination: Union[str, Path, AsyncBinaryConsumer],
                             chunk_size: int = 8192) -> FileUploadResponse:
         """
@@ -1059,7 +1039,7 @@ class FilesEndpoint(BaseEndpoint):
                 chunk_size=chunk_size
             )
             
-            response = self._make_authenticated_request('GET', url, params=params)
+            response = await self._make_authenticated_request('GET', url, params=params)
             
             # Check HTTP status code
             if response.status_code >= 400:
@@ -1123,7 +1103,7 @@ class FilesEndpoint(BaseEndpoint):
         except Exception as e:
             raise VitalGraphClientError(f"Failed to stream download file: {e}")
     
-    def _get_auth_headers(self) -> Dict[str, str]:
+    async def _get_auth_headers(self) -> Dict[str, str]:
         """
         Get authentication headers with automatic token refresh.
         Ensures token is valid before returning headers.
@@ -1134,7 +1114,7 @@ class FilesEndpoint(BaseEndpoint):
         # This uses the client's proactive token refresh logic
         if hasattr(self.client, '_ensure_valid_token'):
             try:
-                self.client._ensure_valid_token()
+                await self.client._ensure_valid_token()
             except Exception as e:
                 # If token refresh fails, log but continue with current token
                 # The request will fail with 401 if token is invalid

@@ -71,7 +71,7 @@ class DeleteFilesTester:
         try:
             # Delete files
             for file_key, file_uri in file_uris.items():
-                response = self.client.files.delete_file(
+                response = await self.client.files.delete_file(
                     space_id=space_id,
                     uri=file_uri,
                     graph_id=graph_id

@@ -18,7 +18,7 @@ from ...model.sparql_model import (
 class SparqlEndpoint(BaseEndpoint):
     """Client endpoint for SPARQL operations."""
     
-    def execute_sparql_query(self, space_id: str, request: SPARQLQueryRequest) -> SPARQLQueryResponse:
+    async def execute_sparql_query(self, space_id: str, request: SPARQLQueryRequest) -> SPARQLQueryResponse:
         """
         Execute a SPARQL query.
         
@@ -37,9 +37,9 @@ class SparqlEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/query"
         
-        return self._make_typed_request('POST', url, SPARQLQueryResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLQueryResponse, json=request.model_dump())
     
-    def execute_sparql_insert(self, space_id: str, request: SPARQLInsertRequest) -> SPARQLInsertResponse:
+    async def execute_sparql_insert(self, space_id: str, request: SPARQLInsertRequest) -> SPARQLInsertResponse:
         """
         Execute a SPARQL insert operation (W3C SPARQL 1.1 Protocol compliant).
         
@@ -58,9 +58,9 @@ class SparqlEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/insert"
         
-        return self._make_typed_request('POST', url, SPARQLInsertResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLInsertResponse, json=request.model_dump())
     
-    def execute_sparql_update(self, space_id: str, request: SPARQLUpdateRequest) -> SPARQLUpdateResponse:
+    async def execute_sparql_update(self, space_id: str, request: SPARQLUpdateRequest) -> SPARQLUpdateResponse:
         """
         Execute a SPARQL update operation (W3C SPARQL 1.1 Protocol compliant).
         
@@ -79,9 +79,9 @@ class SparqlEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/update"
         
-        return self._make_typed_request('POST', url, SPARQLUpdateResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLUpdateResponse, json=request.model_dump())
     
-    def execute_sparql_delete(self, space_id: str, request: SPARQLDeleteRequest) -> SPARQLDeleteResponse:
+    async def execute_sparql_delete(self, space_id: str, request: SPARQLDeleteRequest) -> SPARQLDeleteResponse:
         """
         Execute a SPARQL delete operation (W3C SPARQL 1.1 Protocol compliant).
         
@@ -100,5 +100,5 @@ class SparqlEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/delete"
         
-        return self._make_typed_request('POST', url, SPARQLDeleteResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLDeleteResponse, json=request.model_dump())
     

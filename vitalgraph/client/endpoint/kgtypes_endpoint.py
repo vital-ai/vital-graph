@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class KGTypesEndpoint(BaseEndpoint):
     """Client endpoint for KGTypes operations."""
     
-    def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
+    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
         """
         List KGTypes with pagination and optional search.
         
@@ -64,7 +64,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 search=search
             )
             
-            server_response = self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
+            server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
             
             # Extract types from server response - handle data field from server
             types = []
@@ -102,7 +102,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
+    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
         """
         Get a specific KGType by URI.
         
@@ -131,13 +131,13 @@ class KGTypesEndpoint(BaseEndpoint):
             # Try KGTypeGetResponse first, fall back to KGTypeListResponse (exactly like original)
             kgtype_data = None
             try:
-                server_response = self._make_typed_request('GET', url, ServerKGTypeGetResponse, params=params)
+                server_response = await self._make_typed_request('GET', url, ServerKGTypeGetResponse, params=params)
                 # Extract from data field
                 if hasattr(server_response, 'data'):
                     kgtype_data = server_response.data
             except Exception:
                 # Fallback to list response
-                server_response = self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
+                server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
                 if hasattr(server_response, 'data'):
                     from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
                     if isinstance(server_response.data, JsonLdObject):
@@ -177,7 +177,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def get_kgtypes_by_uris(self, space_id: str, graph_id: str, uri_list: str) -> KGTypesListResponse:
+    async def get_kgtypes_by_uris(self, space_id: str, graph_id: str, uri_list: str) -> KGTypesListResponse:
         """
         Get multiple KGTypes by URI list.
         
@@ -203,7 +203,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            server_response = self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
+            server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
             
             # Extract types from server response - handle data field from server
             types = []
@@ -239,7 +239,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
+    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
         """
         Create KGTypes from GraphObjects.
         
@@ -282,7 +282,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 'data': data.model_dump(by_alias=True)
             }
             
-            server_response = self._make_typed_request('POST', url, ServerKGTypeCreateResponse, json=request_body)
+            server_response = await self._make_typed_request('POST', url, ServerKGTypeCreateResponse, json=request_body)
             
             # Extract created URIs from server response
             created_uris = []
@@ -319,7 +319,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
+    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
         """
         Update KGTypes from GraphObjects.
         
@@ -362,7 +362,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 'data': data.model_dump(by_alias=True)
             }
             
-            server_response = self._make_typed_request('PUT', url, ServerKGTypeUpdateResponse, json=request_body)
+            server_response = await self._make_typed_request('PUT', url, ServerKGTypeUpdateResponse, json=request_body)
             
             # Extract updated URIs from server response
             updated_uris = []
@@ -398,7 +398,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
+    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
         """
         Delete a KGType by URI.
         
@@ -424,7 +424,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            server_response = self._make_typed_request('DELETE', url, ServerKGTypeDeleteResponse, params=params)
+            server_response = await self._make_typed_request('DELETE', url, ServerKGTypeDeleteResponse, params=params)
             
             # Extract deletion info from server response
             deleted = True
@@ -456,7 +456,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
+    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
         """
         Delete multiple KGTypes by URI list.
         
@@ -482,7 +482,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            server_response = self._make_typed_request('DELETE', url, ServerKGTypeDeleteResponse, params=params)
+            server_response = await self._make_typed_request('DELETE', url, ServerKGTypeDeleteResponse, params=params)
             
             # Extract deletion info from server response
             deleted_uris = uri_list.split(',') if uri_list else []

@@ -21,7 +21,7 @@ class KGEntityQueryTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run KGEntity query tests.
         
@@ -54,7 +54,7 @@ class KGEntityQueryTester:
                 "offset": 0
             }
             
-            query_response = self.client.kgentities.query_entities(
+            query_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria
@@ -97,7 +97,7 @@ class KGEntityQueryTester:
                 "offset": 0
             }
             
-            type_response = self.client.kgentities.query_entities(
+            type_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria
@@ -138,7 +138,7 @@ class KGEntityQueryTester:
                 "offset": 0
             }
             
-            filter_response = self.client.kgentities.query_entities(
+            filter_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria
@@ -193,7 +193,7 @@ class KGEntityQueryTester:
                 "offset": 0
             }
             
-            multi_filter_response = self.client.kgentities.query_entities(
+            multi_filter_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria
@@ -237,7 +237,7 @@ class KGEntityQueryTester:
                 "offset": 0
             }
             
-            page1_response = self.client.kgentities.query_entities(
+            page1_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria_page1
@@ -254,7 +254,7 @@ class KGEntityQueryTester:
                 "offset": 3
             }
             
-            page2_response = self.client.kgentities.query_entities(
+            page2_response = await self.client.kgentities.query_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_criteria=query_criteria_page2

@@ -44,7 +44,7 @@ logging.basicConfig(
 )
 
 
-async def test_files_endpoint(config_path: str) -> bool:
+async def test_files_endpoint() -> bool:
     """
     Test the Files endpoint operations using VitalGraph client.
     
@@ -67,7 +67,7 @@ async def test_files_endpoint(config_path: str) -> bool:
         # Configuration loaded from environment variables
         client = VitalGraphClient()
         
-        client.open()
+        await client.open()
         print(f"   ✓ JWT client connected: {client.is_connected()}")
         
         # Display JWT authentication status
@@ -83,14 +83,14 @@ async def test_files_endpoint(config_path: str) -> bool:
         test_graph_id = "urn:test_files"
         
         # Check if space already exists
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             existing_space = next((s for s in spaces_response.spaces if s.space == test_space_id), None)
             
             if existing_space:
                 print(f"   ⚠️  Found existing test space '{test_space_id}', deleting it first...")
                 try:
-                    delete_response = client.spaces.delete_space(test_space_id)
+                    delete_response = await client.spaces.delete_space(test_space_id)
                     if delete_response.is_success:
                         print(f"   ✓ Existing space deleted")
                     else:
@@ -110,7 +110,7 @@ async def test_files_endpoint(config_path: str) -> bool:
                 tenant="test_tenant"
             )
             
-            create_response = client.spaces.create_space(space_data)
+            create_response = await client.spaces.create_space(space_data)
             if create_response.is_success:
                 print(f"   ✓ Test space created successfully: {create_response.space.space if create_response.space else test_space_id}")
             else:
@@ -277,7 +277,7 @@ async def test_files_endpoint(config_path: str) -> bool:
         # Cleanup test space
         print("\n9. Cleaning up test space...")
         try:
-            delete_response = client.spaces.delete_space(test_space_id)
+            delete_response = await client.spaces.delete_space(test_space_id)
             if delete_response.is_success:
                 print(f"   ✓ Test space deleted successfully: {delete_response.space_id}")
             else:
@@ -286,7 +286,7 @@ async def test_files_endpoint(config_path: str) -> bool:
             print(f"   ⚠️  Could not delete test space: {e}")
         
         # Close client connection
-        client.close()
+        await client.close()
         print("\n   ✓ Client connection closed")
         
         # Return overall success

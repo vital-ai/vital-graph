@@ -17,7 +17,7 @@ class EntityGraphOperationsTester:
     def __init__(self, client):
         self.client = client
     
-    def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str, test_entity_uri: str) -> Dict[str, Any]:
         """
         Run entity graph operation tests.
         
@@ -52,7 +52,7 @@ class EntityGraphOperationsTester:
             logger.info(f"\n--- Get Entity Graph ---\n")
             
             # Get the complete entity graph
-            response = self.client.kgentities.get_kgentity(
+            response = await self.client.kgentities.get_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=test_entity_uri,
@@ -95,7 +95,7 @@ class EntityGraphOperationsTester:
             logger.info(f"\n--- Delete Entity Graph ---\n")
             
             # Delete the entity
-            delete_response = self.client.kgentities.delete_kgentity(
+            delete_response = await self.client.kgentities.delete_kgentity(
                 space_id=space_id,
                 graph_id=graph_id,
                 uri=test_entity_uri,
@@ -128,7 +128,7 @@ class EntityGraphOperationsTester:
             # Try to get the deleted entity
             logger.info(f"   Attempting to get deleted entity...")
             try:
-                get_deleted_response = self.client.kgentities.get_kgentity(
+                get_deleted_response = await self.client.kgentities.get_kgentity(
                     space_id=space_id,
                     graph_id=graph_id,
                     uri=test_entity_uri
@@ -152,7 +152,7 @@ class EntityGraphOperationsTester:
             
             # List all entities to verify deletion
             logger.info(f"   Verifying deletion by listing all entities...")
-            list_response = self.client.kgentities.list_kgentities(
+            list_response = await self.client.kgentities.list_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100

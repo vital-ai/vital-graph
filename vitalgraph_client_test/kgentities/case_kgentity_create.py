@@ -20,7 +20,7 @@ class KGEntityCreateTester:
         self.client = client
         self.data_creator = ClientTestDataCreator()
         
-    def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def run_tests(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """
         Run KGEntity creation tests.
         
@@ -47,7 +47,7 @@ class KGEntityCreateTester:
             person_objects = self.data_creator.create_person_with_contact("Test Person")
             
             # Modern client API expects GraphObjects directly
-            create_response = self.client.kgentities.create_kgentities(
+            create_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=person_objects
@@ -82,7 +82,7 @@ class KGEntityCreateTester:
             
             # Convert to JSON-LD for client
             # Modern client API expects GraphObjects directly
-            parent_create_response = self.client.kgentities.create_kgentities(
+            parent_create_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=org_objects,
@@ -121,7 +121,7 @@ class KGEntityCreateTester:
             
             # Convert to JSON-LD for client
             # Modern client API expects GraphObjects directly
-            multi_create_response = self.client.kgentities.create_kgentities(
+            multi_create_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
                 graph_id=graph_id,
                 objects=all_objects
@@ -154,7 +154,7 @@ class KGEntityCreateTester:
                 project_objects = self.data_creator.create_project_with_timeline("Test UPSERT Project")
                 
                 # Modern client API expects GraphObjects directly
-                upsert_response = self.client.kgentities.upsert_kgentities(
+                upsert_response = await self.client.kgentities.upsert_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=project_objects
@@ -201,7 +201,7 @@ class KGEntityCreateTester:
                     ]
                 }
                 # Modern client API expects GraphObjects directly
-                duplicate_response = self.client.kgentities.create_kgentities(
+                duplicate_response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,
                     graph_id=graph_id,
                     objects=duplicate_objects

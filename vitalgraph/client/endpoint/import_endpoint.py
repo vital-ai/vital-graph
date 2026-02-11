@@ -20,7 +20,7 @@ from ...model.import_model import (
 class ImportEndpoint(BaseEndpoint):
     """Client endpoint for Data Import operations."""
     
-    def create_import_job(self, import_job: ImportJob) -> ImportCreateResponse:
+    async def create_import_job(self, import_job: ImportJob) -> ImportCreateResponse:
         """
         Create new data import job.
         
@@ -38,9 +38,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import"
         
-        return self._make_typed_request('POST', url, ImportCreateResponse, json=import_job.model_dump())
+        return await self._make_typed_request('POST', url, ImportCreateResponse, json=import_job.model_dump())
     
-    def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
+    async def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
                         page_size: int = 100, offset: int = 0) -> ImportJobsResponse:
         """
         List all import jobs with optional filtering.
@@ -67,9 +67,9 @@ class ImportEndpoint(BaseEndpoint):
             offset=offset
         )
         
-        return self._make_typed_request('GET', url, ImportJobsResponse, params=params)
+        return await self._make_typed_request('GET', url, ImportJobsResponse, params=params)
     
-    def get_import_job(self, import_id: str) -> ImportJobResponse:
+    async def get_import_job(self, import_id: str) -> ImportJobResponse:
         """
         Get import job details by ID.
         
@@ -87,9 +87,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
         
-        return self._make_typed_request('GET', url, ImportJobResponse)
+        return await self._make_typed_request('GET', url, ImportJobResponse)
     
-    def update_import_job(self, import_id: str, import_job: ImportJob) -> ImportUpdateResponse:
+    async def update_import_job(self, import_id: str, import_job: ImportJob) -> ImportUpdateResponse:
         """
         Update import job.
         
@@ -108,9 +108,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
         
-        return self._make_typed_request('PUT', url, ImportUpdateResponse, json=import_job.model_dump())
+        return await self._make_typed_request('PUT', url, ImportUpdateResponse, json=import_job.model_dump())
     
-    def delete_import_job(self, import_id: str) -> ImportDeleteResponse:
+    async def delete_import_job(self, import_id: str) -> ImportDeleteResponse:
         """
         Delete import job.
         
@@ -128,9 +128,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
         
-        return self._make_typed_request('DELETE', url, ImportDeleteResponse)
+        return await self._make_typed_request('DELETE', url, ImportDeleteResponse)
     
-    def execute_import_job(self, import_id: str) -> ImportExecuteResponse:
+    async def execute_import_job(self, import_id: str) -> ImportExecuteResponse:
         """
         Execute import job.
         
@@ -148,9 +148,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/execute"
         
-        return self._make_typed_request('POST', url, ImportExecuteResponse)
+        return await self._make_typed_request('POST', url, ImportExecuteResponse)
     
-    def get_import_status(self, import_id: str) -> ImportStatusResponse:
+    async def get_import_status(self, import_id: str) -> ImportStatusResponse:
         """
         Get import execution status.
         
@@ -168,9 +168,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/status"
         
-        return self._make_typed_request('GET', url, ImportStatusResponse)
+        return await self._make_typed_request('GET', url, ImportStatusResponse)
     
-    def get_import_log(self, import_id: str) -> ImportLogResponse:
+    async def get_import_log(self, import_id: str) -> ImportLogResponse:
         """
         Get import execution log.
         
@@ -188,9 +188,9 @@ class ImportEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/log"
         
-        return self._make_typed_request('GET', url, ImportLogResponse)
+        return await self._make_typed_request('GET', url, ImportLogResponse)
     
-    def upload_import_file(self, import_id: str, file_path: str) -> ImportUploadResponse:
+    async def upload_import_file(self, import_id: str, file_path: str) -> ImportUploadResponse:
         """
         Upload file to import job.
         
@@ -218,14 +218,14 @@ class ImportEndpoint(BaseEndpoint):
             with open(file_path_obj, 'rb') as f:
                 files = {'file': (file_path_obj.name, f, 'application/octet-stream')}
                 # Use authenticated request with token refresh
-                response = self._make_authenticated_request('POST', url, files=files)
+                response = await self._make_authenticated_request('POST', url, files=files)
                 response.raise_for_status()
                 return ImportUploadResponse.model_validate(response.json())
                 
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to upload import file: {e}")
     
-    def upload_from_generator(self, import_id: str, generator: BinaryGenerator) -> Dict[str, Any]:
+    async def upload_from_generator(self, import_id: str, generator: BinaryGenerator) -> Dict[str, Any]:
         """
         Upload file to import job from a BinaryGenerator.
         
@@ -236,4 +236,4 @@ class ImportEndpoint(BaseEndpoint):
         Returns:
             Dictionary containing upload result
         """
-        return self.upload_import_file(import_id, generator)
+        return await self.upload_import_file(import_id, generator)

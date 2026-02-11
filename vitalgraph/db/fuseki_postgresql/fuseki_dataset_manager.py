@@ -51,6 +51,8 @@ class FusekiDatasetManager:
         self.server_url = fuseki_config.get('server_url', 'http://localhost:3030')
         self.username = fuseki_config.get('username', 'vitalgraph_user')
         self.password = fuseki_config.get('password', 'vitalgraph_pass')
+        self.connection_limit = fuseki_config.get('connection_limit', 20)
+        self.auto_register_datasets = fuseki_config.get('auto_register_datasets', False)
         self.session = None
         
         # Keycloak JWT authentication
@@ -71,14 +73,7 @@ class FusekiDatasetManager:
         if self.server_url.endswith('/'):
             self.server_url = self.server_url[:-1]
         
-        # Inter-request throttle: minimum milliseconds between Fuseki requests.
-        # Gives JVM GC breathing room during rapid sequential operations.
-        # 0 = no throttle (default for low-volume or local Fuseki).
-        self._min_request_interval_ms = int(fuseki_config.get('min_request_interval_ms', 100))
-        self._last_request_time = 0.0
-        
-        logger.info(f"FusekiDatasetManager initialized for server: {self.server_url} "
-                    f"(throttle={self._min_request_interval_ms}ms)")
+        logger.info(f"FusekiDatasetManager initialized for server: {self.server_url}")
     
     async def connect(self) -> bool:
         """Initialize HTTP session for Fuseki operations."""
@@ -91,9 +86,10 @@ class FusekiDatasetManager:
             # - enable_cleanup_closed: proactively clean up closed connections
             connector = aiohttp.TCPConnector(
                 keepalive_timeout=15,
-                limit=20,
+                limit=self.connection_limit,
                 enable_cleanup_closed=True,
             )
+            logger.info(f"Fuseki TCPConnector: limit={self.connection_limit}")
             
             # Create HTTP session with appropriate authentication
             if self.enable_authentication and self.auth_manager:
@@ -182,19 +178,11 @@ class FusekiDatasetManager:
         
         for attempt in range(max_retries + 1):
             try:
-                # Inter-request throttle: wait if we're sending requests too rapidly
-                if self._min_request_interval_ms > 0:
-                    elapsed_ms = (time.monotonic() - self._last_request_time) * 1000
-                    if elapsed_ms < self._min_request_interval_ms:
-                        wait_s = (self._min_request_interval_ms - elapsed_ms) / 1000
-                        await asyncio.sleep(wait_s)
-                
                 # Refresh auth headers on every attempt so the JWT token is always current
                 headers = await self._get_request_headers(additional_headers)
                 
                 request_func = getattr(self.session, method)
                 response = await request_func(url, headers=headers, **kwargs)
-                self._last_request_time = time.monotonic()
                 
                 # Handle 401 (expired/invalid JWT) — force token refresh and retry
                 if response.status == 401 and attempt < max_retries:
@@ -302,6 +290,89 @@ class FusekiDatasetManager:
         """Get Fuseki dataset name for a space."""
         return f"vitalgraph_space_{space_id}"
     
+    async def ensure_datasets_registered(self, space_ids: List[str]) -> dict:
+        """
+        Ensure all known spaces have registered Fuseki datasets.
+        
+        Checks Fuseki for each dataset one-at-a-time (safe for multiple
+        instances starting concurrently) and registers any that are missing.
+        Fuseki returns 409 if the dataset already exists, which is handled
+        gracefully.
+        
+        Args:
+            space_ids: List of space identifiers to ensure
+            
+        Returns:
+            Dict with 'registered', 'already_existed', 'failed' counts
+        """
+        if not self.session:
+            raise RuntimeError("Not connected to Fuseki server")
+        
+        if not self.auto_register_datasets:
+            logger.info("Fuseki auto-register disabled by config")
+            return {'registered': 0, 'already_existed': 0, 'failed': 0}
+        
+        logger.info(f"Ensuring {len(space_ids)} Fuseki datasets are registered...")
+        
+        # Fetch currently registered datasets once
+        registered_names = set()
+        try:
+            headers = await self._get_request_headers()
+            async with self.session.get(
+                f"{self.server_url}/$/datasets", headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for ds in data.get('datasets', []):
+                        # ds.name includes leading slash: "/vitalgraph_space_foo"
+                        name = ds.get('ds.name', '').lstrip('/')
+                        registered_names.add(name)
+                    logger.info(f"Fuseki has {len(registered_names)} datasets registered")
+                else:
+                    logger.warning(f"Could not list Fuseki datasets: {response.status}")
+        except Exception as e:
+            logger.warning(f"Could not list Fuseki datasets: {e}")
+        
+        stats = {'registered': 0, 'already_existed': 0, 'failed': 0}
+        
+        for space_id in space_ids:
+            dataset_name = self.get_dataset_name(space_id)
+            
+            if dataset_name in registered_names:
+                stats['already_existed'] += 1
+                continue
+            
+            # Dataset not registered — register it one-at-a-time
+            try:
+                logger.info(f"Registering missing Fuseki dataset: {dataset_name}")
+                headers = await self._get_request_headers()
+                async with self.session.post(
+                    f"{self.server_url}/$/datasets",
+                    params={'dbName': dataset_name, 'dbType': 'tdb2'},
+                    headers=headers
+                ) as response:
+                    if response.status in [200, 201]:
+                        stats['registered'] += 1
+                        logger.info(f"Registered Fuseki dataset: {dataset_name}")
+                    elif response.status == 409:
+                        stats['already_existed'] += 1
+                        logger.debug(f"Fuseki dataset already exists (race): {dataset_name}")
+                    else:
+                        error_text = await response.text()
+                        stats['failed'] += 1
+                        logger.error(f"Failed to register Fuseki dataset {dataset_name}: {response.status} - {error_text}")
+            except Exception as e:
+                stats['failed'] += 1
+                logger.error(f"Error registering Fuseki dataset {dataset_name}: {e}")
+        
+        logger.info(
+            f"Fuseki dataset registration complete: "
+            f"{stats['registered']} registered, "
+            f"{stats['already_existed']} already existed, "
+            f"{stats['failed']} failed"
+        )
+        return stats
+
     async def create_dataset(self, space_id: str) -> bool:
         """
         Create a new Fuseki dataset for a space.

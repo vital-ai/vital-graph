@@ -12,10 +12,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+import asyncio
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
 
 
-def list_all_spaces():
+async def list_all_spaces():
     """List all spaces and print details."""
     
     # Initialize client with config
@@ -24,13 +25,13 @@ def list_all_spaces():
     
     try:
         # Open connection
-        client.open()
+        await client.open()
         print("✅ Connected to VitalGraph")
         print("=" * 80)
         
         # List all spaces
         print("\n📋 Listing all spaces...\n")
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         
         if not spaces_response.is_success:
             print(f"❌ Failed to list spaces: {spaces_response.error_message}")
@@ -77,9 +78,9 @@ def list_all_spaces():
     
     finally:
         # Close client
-        client.close()
+        await client.close()
         print("\n✅ Client closed")
 
 
 if __name__ == "__main__":
-    list_all_spaces()
+    asyncio.run(list_all_spaces())

@@ -246,49 +246,41 @@ class SignalManager:
                 
                 # DEBUG: Show exactly what channels we have
                 all_channels = list(self.callbacks.keys())
-                print(f"🔔 SUBPROCESS: SignalManager has {len(all_channels)} channels: {all_channels}", flush=True)
-                self.logger.info(f"🔔 DEBUG: SignalManager channels: {all_channels}")
+                self.logger.debug(f"🔔 SignalManager has {len(all_channels)} channels: {all_channels}")
                 
                 # Listen on all channels using async cursor
                 for channel in self.callbacks.keys():
                     try:
                         async with self.listen_connection.cursor() as cursor:
                             await cursor.execute(f"LISTEN {channel}")
-                        print(f"🔔 SUBPROCESS: ✅ Executed LISTEN {channel} on async connection", flush=True)
-                        self.logger.info(f"🔔 DEBUG: ✅ Executed LISTEN {channel} on async connection")
+                        self.logger.debug(f"🔔 Executed LISTEN {channel} on async connection")
                     except Exception as e:
                         self.logger.error(f"Error executing LISTEN {channel}: {e}")
-                        print(f"🔔 SUBPROCESS: ❌ Error executing LISTEN {channel}: {e}", flush=True)
+                        self.logger.error(f"🔔 Error executing LISTEN {channel}: {e}")
                     
                 self.active_channels = set(self.callbacks.keys())
                 
                 self.logger.info(f"PostgreSQL notification listener connected, listening on {len(self.active_channels)} channels")
-                self.logger.info(f"🔔 DEBUG: Listening setup complete. Registered callbacks: {list(self.callbacks.keys())}")
-                self.logger.info(f"🔔 DEBUG: Connection supports notifies: {hasattr(self.listen_connection, 'notifies')}")
-                
-                # EXPLICIT CHANNEL VERIFICATION
-                print(f"🔔 SUBPROCESS: ✅ FINAL CHANNEL LIST: {list(self.active_channels)}", flush=True)
-                print(f"🔔 SUBPROCESS: 🎯 EXPECTING NOTIFICATIONS ON: vitalgraph_spaces, vitalgraph_space", flush=True)
-                print(f"🔔 SUBPROCESS: Ready to actively consume notifications on {len(self.callbacks.keys())} channels", flush=True)
+                self.logger.debug(f"🔔 Listening setup complete. Registered callbacks: {list(self.callbacks.keys())}")
+                self.logger.debug(f"🔔 Connection supports notifies: {hasattr(self.listen_connection, 'notifies')}")
+                self.logger.debug(f"🔔 Final channel list: {list(self.active_channels)}")
                 
                 # Keep connection alive until we're told to stop
-                # Since we can't reliably access notifications without polling,
-                # we'll use a simple approach: just keep the connection alive
                 self.logger.info("Notification listener running - keeping connection alive")
                 self.logger.info(f" Starting notification listener loop")
                 
+                # Create the async generator ONCE and reuse it across iterations
+                # to avoid creating/discarding generator objects every second
+                gen = self.listen_connection.notifies()
+                debug_counter = 0
+                
                 while self.running:
                     try:
-                        # Use async generator pattern for notifications (EXACTLY like working minimal test)
-                        gen = self.listen_connection.notifies()
                         try:
-                            # Wait for notification with timeout
+                            # Wait for notification with timeout using the persistent generator
                             notify = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
                             
-                            # DIRECT LOGGING - This should work if minimal test works
-                            print(f"🔔 SUBPROCESS: SIGNALMANAGER NOTIFICATION RECEIVED! Channel: {notify.channel}, Payload: {notify.payload}", flush=True)
-                            print(f"🔔 SUBPROCESS: PID: {notify.pid}", flush=True)
-                            self.logger.info(f"🔔 DEBUG: SignalManager received notification: {notify.channel}, {notify.payload}")
+                            self.logger.debug(f"🔔 Notification received: channel={notify.channel}, payload={notify.payload}, pid={notify.pid}")
                             
                             # Process the notification through our handler
                             await self._process_notification_async(self.listen_connection, notify.pid, notify.channel, notify.payload)
@@ -297,23 +289,17 @@ class SignalManager:
                             # Timeout is expected - no notifications in the last second
                             pass
                         except StopAsyncIteration:
-                            # No more notifications
-                            pass
+                            # Generator exhausted, recreate it
+                            gen = self.listen_connection.notifies()
                         
-                        # Add periodic debug logging
-                        if hasattr(self, '_debug_counter'):
-                            self._debug_counter += 1
-                        else:
-                            self._debug_counter = 1
-                        if self._debug_counter % 10 == 0:  # Log every 10 seconds
-                            self.logger.info(f"🔔 DEBUG: Listener still running, callbacks registered: {sum(len(cbs) for cbs in self.callbacks.values())}")
+                        debug_counter += 1
+                        if debug_counter % 10 == 0:  # Log every 10 seconds
+                            self.logger.debug(f"🔔 Listener still running, callbacks registered: {sum(len(cbs) for cbs in self.callbacks.values())}")
                             
                     except Exception as e:
                         self.logger.error(f"Error in notification listener loop: {str(e)}")
                         import traceback
                         self.logger.error(f"Traceback: {traceback.format_exc()}")
-                        print(f"🔔 SUBPROCESS: Error in notification listener loop: {str(e)}", flush=True)
-                        print(f"🔔 SUBPROCESS: Traceback: {traceback.format_exc()}", flush=True)
                         break
                     
             except Exception as e:
@@ -360,8 +346,7 @@ class SignalManager:
             channel: Notification channel
             payload: Notification payload
         """
-        print(f"🔔 SUBPROCESS: _process_notification called! Channel: {channel}, Payload: {payload}", flush=True)
-        self.logger.info(f"🔔 DEBUG: _process_notification called! Channel: {channel}, Payload: {payload}")
+        self.logger.debug(f"🔔 _process_notification called: channel={channel}, payload={payload}")
         try:
             # Parse JSON payload if it's a string
             if isinstance(payload, str):
@@ -387,25 +372,21 @@ class SignalManager:
             channel: Notification channel
             data: Notification data
         """
-        print(f"🔔 SUBPROCESS: _execute_callbacks called for channel '{channel}' with data: {data}", flush=True)
-        self.logger.info(f"🔔 DEBUG: _execute_callbacks called for channel '{channel}' with data: {data}")
+        self.logger.debug(f"🔔 _execute_callbacks called for channel '{channel}' with data: {data}")
         if channel in self.callbacks:
-            self.logger.info(f" Found {len(self.callbacks[channel])} callbacks for channel '{channel}'")
+            self.logger.debug(f"Found {len(self.callbacks[channel])} callbacks for channel '{channel}'")
             for i, callback in enumerate(self.callbacks[channel]):
                 try:
-                    print(f"🔔 SUBPROCESS: Executing callback {i+1} for channel '{channel}'", flush=True)
-                    self.logger.info(f"🔔 DEBUG: Executing callback {i+1} for channel '{channel}'")
+                    self.logger.debug(f"🔔 Executing callback {i+1} for channel '{channel}'")
                     if asyncio.iscoroutinefunction(callback):
                         await callback(data)
                     else:
                         callback(data)
-                    print(f"🔔 SUBPROCESS: Callback {i+1} executed successfully for channel '{channel}'", flush=True)
-                    self.logger.info(f"🔔 DEBUG: Callback {i+1} executed successfully for channel '{channel}'")
+                    self.logger.debug(f"🔔 Callback {i+1} executed successfully for channel '{channel}'")
                 except Exception as e:
                     self.logger.error(f"Error executing callback for channel '{channel}': {str(e)}")
         else:
-            print(f"🔔 SUBPROCESS: No callbacks registered for channel '{channel}'", flush=True)
-            self.logger.warning(f"🔔 DEBUG: No callbacks registered for channel '{channel}'")
+            self.logger.warning(f"🔔 No callbacks registered for channel '{channel}'")
     
     async def _process_notification_async(self, conn, pid, channel, payload):
         """
@@ -417,8 +398,7 @@ class SignalManager:
             channel: Notification channel
             payload: Notification payload
         """
-        print(f"🔔 SUBPROCESS: _process_notification_async called! Channel: {channel}, Payload: {payload}", flush=True)
-        self.logger.info(f"🔔 DEBUG: _process_notification_async called! Channel: {channel}, Payload: {payload}")
+        self.logger.debug(f"🔔 _process_notification_async called: channel={channel}, payload={payload}")
         try:
             # Parse JSON payload if it's a string
             if isinstance(payload, str):
@@ -447,8 +427,7 @@ class SignalManager:
             channel: The notification channel to register for
             callback: Async function to call when a notification is received
         """
-        print(f"🔔 SUBPROCESS: register_callback called for channel '{channel}' with callback: {callback}", flush=True)
-        self.logger.info(f"🔔 DEBUG: register_callback called for channel '{channel}' with callback: {callback}")
+        self.logger.debug(f"🔔 register_callback called for channel '{channel}' with callback: {callback}")
         
         if not callable(callback):
             self.logger.error(f"Callback for channel '{channel}' is not callable: {callback}")
@@ -457,13 +436,11 @@ class SignalManager:
             self.callbacks[channel] = []
             self.logger.debug(f"Created new callback list for channel: {channel}")
         self.callbacks[channel].append(callback)
-        print(f"🔔 SUBPROCESS: Registered callback for channel: {channel} (total callbacks: {len(self.callbacks[channel])})", flush=True)
-        self.logger.info(f"Registered callback for channel: {channel} (total callbacks: {len(self.callbacks[channel])})")
+        self.logger.debug(f"Registered callback for channel: {channel} (total callbacks: {len(self.callbacks[channel])})")
         
         # Log all registered callbacks for debugging
         total_callbacks = sum(len(cbs) for cbs in self.callbacks.values())
-        print(f"🔔 SUBPROCESS: Total callbacks across all channels: {total_callbacks}", flush=True)
-        self.logger.info(f"Total callbacks across all channels: {total_callbacks}")
+        self.logger.debug(f"Total callbacks across all channels: {total_callbacks}")
         
         # If we're already listening, make sure we're listening on this channel
         if self.running and self.listen_connection and not self._is_connection_closed(self.listen_connection):
@@ -472,8 +449,7 @@ class SignalManager:
                 async with self.listen_connection.cursor() as cursor:
                     await cursor.execute(f"LISTEN {channel}")
             asyncio.create_task(listen_on_channel())
-            print(f"🔔 SUBPROCESS: Executed LISTEN {channel} on async connection", flush=True)
-            self.logger.info(f"🔔 DEBUG: Executed LISTEN {channel} on async connection")
+            self.logger.debug(f"🔔 Executed LISTEN {channel} on async connection")
     
     async def notify_users_changed(self, signal_type: str = SIGNAL_TYPE_UPDATED):
         """

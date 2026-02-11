@@ -19,7 +19,7 @@ class KGQueryEntityQueriesTester:
     def __init__(self, client):
         self.client = client
         
-    def run_tests(self, space_id: str, graph_id: str, 
+    async def run_tests(self, space_id: str, graph_id: str, 
                   organization_uris: List[str], 
                   event_uris: List[str],
                   file_uris: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
@@ -44,44 +44,44 @@ class KGQueryEntityQueriesTester:
         errors = []
         
         # Test 1: Find events for a specific organization
-        test1 = self._test_find_events_for_organization(space_id, graph_id, organization_uris, event_uris)
+        test1 = await self._test_find_events_for_organization(space_id, graph_id, organization_uris, event_uris)
         results.append(test1)
         if not test1['passed']:
             errors.append(test1.get('error', 'Find events for organization failed'))
         
         # Test 2: Find events for multiple organizations
-        test2 = self._test_find_events_for_multiple_orgs(space_id, graph_id, organization_uris, event_uris)
+        test2 = await self._test_find_events_for_multiple_orgs(space_id, graph_id, organization_uris, event_uris)
         results.append(test2)
         if not test2['passed']:
             errors.append(test2.get('error', 'Find events for multiple orgs failed'))
         
         # Test 3: Filter by event entity type
-        test3 = self._test_filter_by_event_type(space_id, graph_id, organization_uris, event_uris)
+        test3 = await self._test_filter_by_event_type(space_id, graph_id, organization_uris, event_uris)
         results.append(test3)
         if not test3['passed']:
             errors.append(test3.get('error', 'Filter by event type failed'))
         
         # Test 4: Filter by frame type
-        test4 = self._test_filter_by_frame_type(space_id, graph_id, organization_uris, event_uris)
+        test4 = await self._test_filter_by_frame_type(space_id, graph_id, organization_uris, event_uris)
         results.append(test4)
         if not test4['passed']:
             errors.append(test4.get('error', 'Filter by frame type failed'))
         
         # Test 5: Pagination
-        test5 = self._test_pagination(space_id, graph_id, organization_uris, event_uris)
+        test5 = await self._test_pagination(space_id, graph_id, organization_uris, event_uris)
         results.append(test5)
         if not test5['passed']:
             errors.append(test5.get('error', 'Pagination failed'))
         
         # Test 6: Empty results
-        test6 = self._test_empty_results(space_id, graph_id)
+        test6 = await self._test_empty_results(space_id, graph_id)
         results.append(test6)
         if not test6['passed']:
             errors.append(test6.get('error', 'Empty results test failed'))
         
         # Test 7: Query with file URI slot (if files available)
         if file_uris:
-            test7 = self._test_query_with_file_uri(space_id, graph_id, organization_uris, file_uris)
+            test7 = await self._test_query_with_file_uri(space_id, graph_id, organization_uris, file_uris)
             results.append(test7)
             if not test7['passed']:
                 errors.append(test7.get('error', 'Query with file URI failed'))
@@ -98,7 +98,7 @@ class KGQueryEntityQueriesTester:
             'results': results
         }
     
-    def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
+    async def _test_find_events_for_organization(self, space_id: str, graph_id: str, 
                                           organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test finding events that reference a specific organization."""
         logger.info("\n  Test 1: Find events for specific organization...")
@@ -128,7 +128,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_frame_connections(
+            response = await self.client.kgqueries.query_frame_connections(
                 space_id, graph_id,
                 entity_type_uris=["http://vital.ai/ontology/haley-ai-kg#KGEntity"],
                 frame_criteria=[
@@ -162,7 +162,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_find_events_for_multiple_orgs(self, space_id: str, graph_id: str,
+    async def _test_find_events_for_multiple_orgs(self, space_id: str, graph_id: str,
                                            organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test finding events for multiple organizations."""
         logger.info("\n  Test 2: Find events for multiple organizations...")
@@ -192,7 +192,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_entities(space_id, graph_id, criteria)
+            response = await self.client.kgqueries.query_entities(space_id, graph_id, criteria)
             
             if response.is_success:
                 found_count = len(response.entity_uris) if response.entity_uris else 0
@@ -206,7 +206,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_filter_by_event_type(self, space_id: str, graph_id: str,
+    async def _test_filter_by_event_type(self, space_id: str, graph_id: str,
                                    organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test filtering by specific event entity type."""
         logger.info("\n  Test 3: Filter by event entity type...")
@@ -226,7 +226,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_entities(space_id, graph_id, criteria)
+            response = await self.client.kgqueries.query_entities(space_id, graph_id, criteria)
             
             if response.is_success:
                 found_count = len(response.entity_uris) if response.entity_uris else 0
@@ -240,7 +240,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_filter_by_frame_type(self, space_id: str, graph_id: str,
+    async def _test_filter_by_frame_type(self, space_id: str, graph_id: str,
                                    organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test filtering by specific frame type."""
         logger.info("\n  Test 4: Filter by frame type...")
@@ -259,7 +259,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_entities(space_id, graph_id, criteria)
+            response = await self.client.kgqueries.query_entities(space_id, graph_id, criteria)
             
             if response.is_success:
                 found_count = len(response.entity_uris) if response.entity_uris else 0
@@ -273,7 +273,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_pagination(self, space_id: str, graph_id: str,
+    async def _test_pagination(self, space_id: str, graph_id: str,
                         organization_uris: List[str], event_uris: List[str]) -> Dict[str, Any]:
         """Test pagination of query results."""
         logger.info("\n  Test 5: Pagination...")
@@ -293,7 +293,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response1 = self.client.kgqueries.query_entities(space_id, graph_id, criteria_page1)
+            response1 = await self.client.kgqueries.query_entities(space_id, graph_id, criteria_page1)
             
             if not response1.is_success:
                 logger.error(f"     ❌ First page query failed: {response1.message}")
@@ -313,7 +313,7 @@ class KGQueryEntityQueriesTester:
                 offset=5
             )
             
-            response2 = self.client.kgqueries.query_entities(space_id, graph_id, criteria_page2)
+            response2 = await self.client.kgqueries.query_entities(space_id, graph_id, criteria_page2)
             
             if not response2.is_success:
                 logger.error(f"     ❌ Second page query failed: {response2.message}")
@@ -328,7 +328,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+    async def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test query that should return empty results."""
         logger.info("\n  Test 6: Empty results query...")
         
@@ -354,7 +354,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_entities(space_id, graph_id, criteria)
+            response = await self.client.kgqueries.query_entities(space_id, graph_id, criteria)
             
             if response.is_success:
                 found_count = len(response.entity_uris) if response.entity_uris else 0
@@ -372,7 +372,7 @@ class KGQueryEntityQueriesTester:
             logger.error(f"     ❌ Exception: {e}")
             return {'passed': False, 'error': str(e)}
     
-    def _test_query_with_file_uri(self, space_id: str, graph_id: str,
+    async def _test_query_with_file_uri(self, space_id: str, graph_id: str,
                                   organization_uris: List[str], 
                                   file_uris: Dict[str, str]) -> Dict[str, Any]:
         """Test query with file URI slot criteria."""
@@ -403,7 +403,7 @@ class KGQueryEntityQueriesTester:
                 offset=0
             )
             
-            response = self.client.kgqueries.query_entities(space_id, graph_id, criteria)
+            response = await self.client.kgqueries.query_entities(space_id, graph_id, criteria)
             
             if response.is_success:
                 found_count = len(response.entity_uris) if response.entity_uris else 0

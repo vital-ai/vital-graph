@@ -129,7 +129,7 @@ async def main():
     
     # Connect
     logger.info("🔐 Connecting to VitalGraph server...")
-    client.open()
+    await client.open()
     if not client.is_connected():
         logger.error("❌ Connection failed!")
         return False
@@ -142,13 +142,13 @@ async def main():
     # Check if space already exists and delete it
     logger.info(f"📦 Checking for existing test space: {space_id}")
     try:
-        spaces_response = client.spaces.list_spaces()
+        spaces_response = await client.spaces.list_spaces()
         if spaces_response.is_success:
             existing_space = next((s for s in spaces_response.spaces if s.space == space_id), None)
             
             if existing_space:
                 logger.info(f"   Found existing space, deleting...")
-                delete_response = client.spaces.delete_space(space_id)
+                delete_response = await client.spaces.delete_space(space_id)
                 if delete_response.is_success:
                     logger.info(f"   ✅ Existing space deleted")
     except Exception as e:
@@ -161,7 +161,7 @@ async def main():
         space_description="Test space for multiple organization CRUD operations",
         tenant="test_tenant"
     )
-    create_response = client.spaces.create_space(space_data)
+    create_response = await client.spaces.create_space(space_data)
     if not create_response.is_success:
         logger.error(f"❌ Failed to create space: {create_response.error_message}")
         return False
@@ -175,7 +175,7 @@ async def main():
         # STEP 0: KGTypes Operations (Create and List Types)
         # ====================================================================
         kgtypes_tester = KGTypesOperationsTester(client)
-        kgtypes_results = kgtypes_tester.run_tests(space_id, graph_id)
+        kgtypes_results = await kgtypes_tester.run_tests(space_id, graph_id)
         all_results.append(kgtypes_results)
         
         if kgtypes_results["tests_failed"] > 0:
@@ -197,7 +197,7 @@ async def main():
         # STEP 2: Create Organizations (with file references)
         # ====================================================================
         create_tester = CreateOrganizationsTester(client)
-        create_results = create_tester.run_tests(space_id, graph_id, file_uris=file_uris)
+        create_results = await create_tester.run_tests(space_id, graph_id, file_uris=file_uris)
         all_results.append(create_results)
         
         if create_results["tests_failed"] > 0:
@@ -230,7 +230,7 @@ async def main():
         }
         
         try:
-            relation_type_uris, product_uris, relation_uris = create_all_relation_data(
+            relation_type_uris, product_uris, relation_uris = await create_all_relation_data(
                 client, space_id, graph_id, org_name_to_uri
             )
             total_relations = sum(len(uris) for uris in relation_uris.values())
@@ -246,7 +246,7 @@ async def main():
         # STEP 3: Create Business Events
         # ====================================================================
         event_tester = CreateBusinessEventsTester(client)
-        event_results = event_tester.run_tests(space_id, graph_id, created_entity_uris)
+        event_results = await event_tester.run_tests(space_id, graph_id, created_entity_uris)
         all_results.append(event_results)
         
         if event_results["tests_failed"] > 0:
@@ -268,7 +268,7 @@ async def main():
         # STEP 4: List and Verify Graphs
         # ====================================================================
         graphs_tester = ListGraphsTester(client)
-        graphs_results = graphs_tester.run_tests(space_id, graph_id)
+        graphs_results = await graphs_tester.run_tests(space_id, graph_id)
         all_results.append(graphs_results)
         
         # ====================================================================
@@ -276,42 +276,42 @@ async def main():
         # ====================================================================
         # Expected: 10 orgs + 10 events + 4 relation types + 2 products = 26 entities
         list_tester = ListEntitiesTester(client)
-        list_results = list_tester.run_tests(space_id, graph_id, expected_count=26)
+        list_results = await list_tester.run_tests(space_id, graph_id, expected_count=26)
         all_results.append(list_results)
         
         # ====================================================================
         # STEP 3: List Entity Graphs (MultiEntityGraphResponse)
         # ====================================================================
         list_graphs_tester = ListEntityGraphsTester(client)
-        list_graphs_results = list_graphs_tester.run_tests(space_id, graph_id, created_entity_uris)
+        list_graphs_results = await list_graphs_tester.run_tests(space_id, graph_id, created_entity_uris)
         all_results.append(list_graphs_results)
         
         # ====================================================================
         # STEP 4: Get Individual Entities
         # ====================================================================
         get_tester = GetEntitiesTester(client)
-        get_results = get_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
+        get_results = await get_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
         all_results.append(get_results)
         
         # ====================================================================
         # STEP 5: List Business Events
         # ====================================================================
         list_events_tester = ListBusinessEventsTester(client)
-        list_events_results = list_events_tester.run_tests(space_id, graph_id, expected_event_count=10)
+        list_events_results = await list_events_tester.run_tests(space_id, graph_id, expected_event_count=10)
         all_results.append(list_events_results)
         
         # ====================================================================
         # STEP 6: Get Business Event Graphs
         # ====================================================================
         get_events_tester = GetBusinessEventsTester(client)
-        get_events_results = get_events_tester.run_tests(space_id, graph_id, created_event_uris)
+        get_events_results = await get_events_tester.run_tests(space_id, graph_id, created_event_uris)
         all_results.append(get_events_results)
         
         # ====================================================================
         # STEP 7: Reference ID Operations
         # ====================================================================
         ref_id_tester = ReferenceIdOperationsTester(client)
-        ref_id_results = ref_id_tester.run_tests(space_id, graph_id, created_entity_uris, 
+        ref_id_results = await ref_id_tester.run_tests(space_id, graph_id, created_entity_uris, 
                                                   entity_names, reference_ids)
         all_results.append(ref_id_results)
         
@@ -319,7 +319,7 @@ async def main():
         # STEP 8: Update Entities
         # ====================================================================
         update_tester = UpdateEntitiesTester(client)
-        update_results = update_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
+        update_results = await update_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names)
         all_results.append(update_results)
         
         # ====================================================================
@@ -327,7 +327,7 @@ async def main():
         # ====================================================================
         if update_results.get("updates"):
             verify_tester = VerifyUpdatesTester(client)
-            verify_results = verify_tester.run_tests(space_id, graph_id, created_entity_uris, 
+            verify_results = await verify_tester.run_tests(space_id, graph_id, created_entity_uris, 
                                                      update_results["updates"])
             all_results.append(verify_results)
         
@@ -335,7 +335,7 @@ async def main():
         # STEP 10: Frame Operations
         # ====================================================================
         frame_tester = FrameOperationsTester(client)
-        frame_results = frame_tester.run_tests(space_id, graph_id, 
+        frame_results = await frame_tester.run_tests(space_id, graph_id, 
                                                created_entity_uris[0], entity_names[0])
         all_results.append(frame_results)
         
@@ -344,7 +344,7 @@ async def main():
         # ====================================================================
         # Run frame-based entity queries (single and multi-frame)
         kgquery_tester = KGQueryFrameQueriesTester(client)
-        kgquery_results = kgquery_tester.run_tests(space_id, graph_id, 
+        kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, 
                                                     created_entity_uris, created_event_uris, 
                                                     file_uris=file_uris)
         all_results.append(kgquery_results)
@@ -354,7 +354,7 @@ async def main():
         # ====================================================================
         if relation_type_uris and product_uris:
             kgquery_relation_tester = KGQueryRelationQueriesTester(client)
-            kgquery_relation_results = kgquery_relation_tester.run_tests(
+            kgquery_relation_results = await kgquery_relation_tester.run_tests(
                 space_id, graph_id,
                 org_name_to_uri, product_uris, relation_type_uris
             )
@@ -366,7 +366,7 @@ async def main():
         # STEP 13: Entity Graph Operations
         # ====================================================================
         entity_graph_tester = EntityGraphOperationsTester(client)
-        entity_graph_results = entity_graph_tester.run_tests(space_id, graph_id, 
+        entity_graph_results = await entity_graph_tester.run_tests(space_id, graph_id, 
                                                               created_entity_uris[1])
         all_results.append(entity_graph_results)
         
@@ -376,7 +376,7 @@ async def main():
         # Note: One entity (Global Finance Group) was already deleted in entity graph operations
         # Expected remaining: 6 orgs + 10 events + 4 relation types + 2 products = 22 entities
         delete_tester = DeleteEntitiesTester(client)
-        delete_results = delete_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names, 
+        delete_results = await delete_tester.run_tests(space_id, graph_id, created_entity_uris, entity_names, 
                                                   expected_remaining=22)
         all_results.append(delete_results)
         
@@ -462,7 +462,7 @@ async def main():
         #     logger.warning(f"⚠️  Could not delete space: {delete_response.error_message}")
         logger.info(f"⚠️  Skipping space deletion - space '{space_id}' preserved for inspection")
         
-        client.close()
+        await client.close()
         logger.info("✅ Client closed")
 
 

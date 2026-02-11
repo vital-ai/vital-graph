@@ -103,6 +103,8 @@ class VitalGraphConfig:
                 'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
                 'username': self._get_profile_env('FUSEKI_USERNAME', ''),
                 'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
+                'connection_limit': int(self._get_profile_env('FUSEKI_CONNECTION_LIMIT', '20')),
+                'auto_register_datasets': self._get_profile_env('FUSEKI_AUTO_REGISTER_DATASETS', 'false').lower() == 'true',
                 'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
                 'keycloak': {
                     'url': self._get_profile_env('KEYCLOAK_URL', ''),
@@ -130,6 +132,8 @@ class VitalGraphConfig:
                     'dataset_name': self._get_profile_env('FUSEKI_DATASET', 'vitalgraph'),
                     'username': self._get_profile_env('FUSEKI_USERNAME', ''),
                     'password': self._get_profile_env('FUSEKI_PASSWORD', ''),
+                    'connection_limit': int(self._get_profile_env('FUSEKI_CONNECTION_LIMIT', '20')),
+                    'auto_register_datasets': self._get_profile_env('FUSEKI_AUTO_REGISTER_DATASETS', 'false').lower() == 'true',
                     'enable_authentication': self._get_profile_env('FUSEKI_ENABLE_AUTH', 'false').lower() == 'true',
                     'keycloak': {
                         'url': self._get_profile_env('KEYCLOAK_URL', ''),

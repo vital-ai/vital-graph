@@ -15,6 +15,7 @@ Tests all space operations including:
 
 import sys
 import logging
+import asyncio
 from pathlib import Path
 
 # Add parent directory to path
@@ -53,7 +54,7 @@ class SpacesEndpointTester:
             "errors": []
         }
     
-    def setup(self) -> bool:
+    async def setup(self) -> bool:
         """Set up the test client."""
         logger.info("\n" + "=" * 80)
         logger.info("SETUP: Initializing VitalGraph Client")
@@ -61,14 +62,14 @@ class SpacesEndpointTester:
         
         try:
             self.client = VitalGraphClient()
-            self.client.open()
+            await self.client.open()
             logger.info("✅ Client initialized and opened successfully")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to initialize client: {e}")
             return False
     
-    def cleanup_existing_space(self) -> None:
+    async def cleanup_existing_space(self) -> None:
         """Clean up any existing test space."""
         logger.info("\n" + "=" * 80)
         logger.info("CLEANUP: Removing existing test space if present")
@@ -76,7 +77,7 @@ class SpacesEndpointTester:
         
         try:
             # Try to delete the test space
-            delete_response = self.client.spaces.delete_space(self.test_space_id)
+            delete_response = await self.client.spaces.delete_space(self.test_space_id)
             if delete_response.is_success:
                 logger.info(f"✅ Deleted existing test space: {self.test_space_id}")
             else:
@@ -84,7 +85,7 @@ class SpacesEndpointTester:
         except Exception as e:
             logger.info(f"ℹ️  No existing test space (error: {e})")
     
-    def test_create_space(self) -> bool:
+    async def test_create_space(self) -> bool:
         """Test creating a new space."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 1: Create Space")
@@ -103,7 +104,7 @@ class SpacesEndpointTester:
             
             # Create the space
             logger.info(f"Creating space: {self.test_space_id}")
-            response = self.client.spaces.create_space(space_data)
+            response = await self.client.spaces.create_space(space_data)
             
             # Check response type
             if not isinstance(response, SpaceCreateResponse):
@@ -156,7 +157,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"Create space exception: {str(e)}")
             return False
     
-    def test_get_space(self) -> bool:
+    async def test_get_space(self) -> bool:
         """Test getting a space by ID."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 2: Get Space")
@@ -166,7 +167,7 @@ class SpacesEndpointTester:
         
         try:
             logger.info(f"Getting space: {self.test_space_id}")
-            response = self.client.spaces.get_space(self.test_space_id)
+            response = await self.client.spaces.get_space(self.test_space_id)
             
             # Check response type
             if not isinstance(response, SpaceResponse):
@@ -209,7 +210,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"Get space exception: {str(e)}")
             return False
     
-    def test_get_space_not_found(self) -> bool:
+    async def test_get_space_not_found(self) -> bool:
         """Test getting a non-existent space (error response)."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 3: Get Non-Existent Space (Error Response)")
@@ -220,7 +221,7 @@ class SpacesEndpointTester:
         try:
             non_existent_id = "non_existent_space_12345"
             logger.info(f"Getting non-existent space: {non_existent_id}")
-            response = self.client.spaces.get_space(non_existent_id)
+            response = await self.client.spaces.get_space(non_existent_id)
             
             # Check response type
             if not isinstance(response, SpaceResponse):
@@ -271,7 +272,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"Get non-existent space exception: {str(e)}")
             return False
     
-    def test_list_spaces(self) -> bool:
+    async def test_list_spaces(self) -> bool:
         """Test listing all spaces."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 4: List Spaces")
@@ -281,7 +282,7 @@ class SpacesEndpointTester:
         
         try:
             logger.info("Listing all spaces")
-            response = self.client.spaces.list_spaces()
+            response = await self.client.spaces.list_spaces()
             
             # Check response type
             if not isinstance(response, SpacesListResponse):
@@ -334,7 +335,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"List spaces exception: {str(e)}")
             return False
     
-    def test_get_space_info(self) -> bool:
+    async def test_get_space_info(self) -> bool:
         """Test getting detailed space information."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 5: Get Space Info")
@@ -344,7 +345,7 @@ class SpacesEndpointTester:
         
         try:
             logger.info(f"Getting space info: {self.test_space_id}")
-            response = self.client.spaces.get_space_info(self.test_space_id)
+            response = await self.client.spaces.get_space_info(self.test_space_id)
             
             # Check response type
             if not isinstance(response, SpaceInfoResponse):
@@ -388,7 +389,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"Get space info exception: {str(e)}")
             return False
     
-    def test_update_space(self) -> bool:
+    async def test_update_space(self) -> bool:
         """Test updating a space."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 6: Update Space")
@@ -406,7 +407,7 @@ class SpacesEndpointTester:
             )
             
             logger.info(f"Updating space: {self.test_space_id}")
-            response = self.client.spaces.update_space(self.test_space_id, updated_space)
+            response = await self.client.spaces.update_space(self.test_space_id, updated_space)
             
             # Check response type
             if not isinstance(response, SpaceUpdateResponse):
@@ -442,7 +443,7 @@ class SpacesEndpointTester:
             self.results["errors"].append(f"Update space exception: {str(e)}")
             return False
     
-    def test_delete_space(self) -> bool:
+    async def test_delete_space(self) -> bool:
         """Test deleting a space."""
         logger.info("\n" + "=" * 80)
         logger.info("TEST 7: Delete Space")
@@ -452,7 +453,7 @@ class SpacesEndpointTester:
         
         try:
             logger.info(f"Deleting space: {self.test_space_id}")
-            response = self.client.spaces.delete_space(self.test_space_id)
+            response = await self.client.spaces.delete_space(self.test_space_id)
             
             # Check response type
             if not isinstance(response, SpaceDeleteResponse):
@@ -510,40 +511,40 @@ class SpacesEndpointTester:
         else:
             logger.info(f"❌ {self.results['tests_failed']} test(s) FAILED")
     
-    def run_all_tests(self) -> bool:
+    async def run_all_tests(self) -> bool:
         """Run all tests."""
-        if not self.setup():
+        if not await self.setup():
             return False
         
         # Clean up any existing test space
-        self.cleanup_existing_space()
+        await self.cleanup_existing_space()
         
         # Run tests in order
-        self.test_create_space()
-        self.test_get_space()
-        self.test_get_space_not_found()  # Error response test
-        self.test_list_spaces()
-        self.test_get_space_info()
-        self.test_update_space()
-        self.test_delete_space()
+        await self.test_create_space()
+        await self.test_get_space()
+        await self.test_get_space_not_found()  # Error response test
+        await self.test_list_spaces()
+        await self.test_get_space_info()
+        await self.test_update_space()
+        await self.test_delete_space()
         
         # Print summary
         self.print_summary()
         
         # Close client
         if self.client:
-            self.client.close()
+            await self.client.close()
             logger.info("\n✅ Client closed")
         
         return self.results["tests_failed"] == 0
 
 
-def main():
+async def main():
     """Main entry point."""
     tester = SpacesEndpointTester()
-    success = tester.run_all_tests()
+    success = await tester.run_all_tests()
     sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

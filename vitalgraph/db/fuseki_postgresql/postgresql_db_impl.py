@@ -7,7 +7,7 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
 import asyncpg
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..db_inf import DbImplInterface
 from .postgresql_schema import FusekiPostgreSQLSchema
@@ -847,7 +847,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             
             # Import the adapted terms class
             from .fuseki_postgresql_space_terms import FusekiPostgreSQLSpaceTerms
-            from datetime import datetime
+            from datetime import datetime, timezone
             
             # Create a terms manager instance (simplified for this context)
             terms_manager = FusekiPostgreSQLSpaceTerms(self)
@@ -934,7 +934,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 # Batch insert new terms using INSERT ... ON CONFLICT DO NOTHING for safety
                 if new_terms:
                     logger.debug(f"Batch inserting {len(new_terms)} new terms (out of {len(terms_to_insert)} total)")
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc).replace(tzinfo=None)
                     
                     # Use executemany for batch insert
                     insert_query = f"""
@@ -992,7 +992,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             # Batch insert all quads
             if quads_to_insert:
                 logger.debug(f"Batch inserting {len(quads_to_insert)} quads")
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 
                 quad_insert_query = f"""
                     INSERT INTO {quad_table} (subject_uuid, predicate_uuid, object_uuid, context_uuid, created_time)
@@ -1021,7 +1021,8 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             return False
     
     async def remove_quads_from_postgresql(self, space_id: str, quads: List[tuple],
-                                          transaction: 'FusekiPostgreSQLTransaction' = None) -> bool:
+                                          transaction: 'FusekiPostgreSQLTransaction' = None,
+                                          skip_orphan_cleanup: bool = False) -> bool:
         """
         Remove RDF quads from PostgreSQL primary data tables.
         This is part of the dual-write system.
@@ -1131,6 +1132,33 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 if still_missing:
                     logger.error(f"DELETE failed - missing UUIDs for {len(still_missing)} terms after prefix matching")
                     logger.error(f"Missing terms (first 5): {list(still_missing)[:5]}")
+                    
+                    # Diagnostic: log which quads reference the missing terms and check DB state
+                    for missing_term in list(still_missing)[:3]:
+                        # Find quads that reference this term
+                        for quad in quads:
+                            quad_strs = [term_unwrap_map.get(str(t), str(t)) for t in quad[:4]] if len(quad) >= 4 else [term_unwrap_map.get(str(t), str(t)) for t in quad[:3]] + ['default']
+                            if missing_term in quad_strs:
+                                pos = quad_strs.index(missing_term)
+                                pos_name = ['subject', 'predicate', 'object', 'graph'][pos]
+                                logger.error(f"  Missing term '{missing_term}' used as {pos_name} in quad: {[str(t)[:80] for t in quad[:4]]}")
+                                break
+                        
+                        # Check if term exists without dataset filter
+                        try:
+                            diag_query = f"SELECT term_text, term_type, dataset FROM {term_table} WHERE term_text = $1 LIMIT 5"
+                            if transaction:
+                                conn = transaction.get_connection()
+                                diag_rows = await conn.fetch(diag_query, missing_term)
+                            else:
+                                diag_rows = await self.execute_query(diag_query, [missing_term])
+                            if diag_rows:
+                                logger.error(f"  Term '{missing_term}' EXISTS in DB but with: {[(r['term_type'], r['dataset']) for r in diag_rows]}")
+                            else:
+                                logger.error(f"  Term '{missing_term}' does NOT exist in {term_table} at all")
+                        except Exception as diag_err:
+                            logger.error(f"  Diagnostic query failed: {diag_err}")
+                    
                     return False
             
             # Step 4: Build list of quad UUID tuples for batch delete
@@ -1187,7 +1215,12 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             logger.debug(f"Batch deleted {len(quad_uuids)} quads for space {space_id}")
             
             # Step 6: Clean up orphaned terms (terms not referenced by any quads)
-            # Use a single batch query instead of checking each term individually for performance
+            # Skipped during update_quads — the INSERT phase will re-reference shared terms
+            if skip_orphan_cleanup:
+                logger.debug(f"🧹 ORPHAN_CLEANUP: Skipped (skip_orphan_cleanup=True)")
+                logger.debug(f"Successfully removed {len(quads)} quads for space {space_id}")
+                return True
+            
             import time
             orphan_start = time.time()
             term_table = f"{space_id}_term"
@@ -1198,7 +1231,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 
                 # Find all orphaned terms in a single query
                 orphan_check_query = f"""
-                    SELECT t.term_uuid 
+                    SELECT t.term_uuid, t.term_text 
                     FROM {term_table} t
                     WHERE t.term_uuid = ANY($1)
                     AND NOT EXISTS (
@@ -1220,7 +1253,9 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 orphaned_uuids = [row['term_uuid'] for row in orphaned_rows]
                 
                 if orphaned_uuids:
-                    logger.info(f"🧹 ORPHAN_CLEANUP: Found {len(orphaned_uuids)} orphaned terms to delete")
+                    orphaned_texts = [row['term_text'] for row in orphaned_rows]
+                    logger.info(f"🧹 ORPHAN_CLEANUP: Found {len(orphaned_uuids)} orphaned terms to delete for space {space_id}")
+                    logger.info(f"🧹 ORPHAN_CLEANUP: Deleting terms: {orphaned_texts[:10]}{'...' if len(orphaned_texts) > 10 else ''}")
                     
                     # Delete all orphaned terms in a single batch operation
                     delete_orphans_query = f"DELETE FROM {term_table} WHERE term_uuid = ANY($1)"

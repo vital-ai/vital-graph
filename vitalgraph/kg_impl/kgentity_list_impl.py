@@ -5,6 +5,7 @@ This module provides the implementation for listing KG entities with filtering,
 pagination, and search capabilities, working exclusively with GraphObjects.
 """
 
+import asyncio
 import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
@@ -191,48 +192,57 @@ class KGEntityListProcessor:
             
             self.logger.debug(f"Found {len(entity_uris)} entity URIs: {entity_uris}")
             
-            # Now retrieve each entity as a GraphObject
-            entities = []
-            for entity_uri in entity_uris:
-                try:
-                    if include_entity_graph:
-                        # Use KGEntityGetProcessor to get complete entity graph with frames and slots
-                        from .kgentity_get_impl import KGEntityGetProcessor
-                        get_processor = KGEntityGetProcessor(logger=self.logger)
-                        entity_objects = await get_processor.get_entity(
+            # Retrieve all entities concurrently using asyncio.gather()
+            if include_entity_graph:
+                from .kgentity_get_impl import KGEntityGetProcessor
+                get_processor = KGEntityGetProcessor(logger=self.logger)
+                
+                async def _fetch_entity_graph(uri: str):
+                    try:
+                        return await get_processor.get_entity(
                             space_id=space_id,
                             graph_id=graph_id,
-                            entity_uri=entity_uri,
+                            entity_uri=uri,
                             include_entity_graph=True,
                             backend_adapter=backend_adapter
                         )
-                        if entity_objects:
-                            # Add all objects (entity + frames + slots + edges)
-                            entities.extend(entity_objects)
-                            self.logger.debug(f"Retrieved complete entity graph for: {entity_uri} ({len(entity_objects)} objects)")
-                        else:
-                            self.logger.warning(f"Failed to retrieve entity graph for: {entity_uri}")
+                    except Exception as e:
+                        self.logger.warning(f"Error retrieving entity graph {uri}: {e}")
+                        return None
+                
+                results = await asyncio.gather(*[_fetch_entity_graph(uri) for uri in entity_uris])
+                
+                entities = []
+                for uri, entity_objects in zip(entity_uris, results):
+                    if entity_objects:
+                        entities.extend(entity_objects)
+                        self.logger.debug(f"Retrieved complete entity graph for: {uri} ({len(entity_objects)} objects)")
                     else:
-                        # Use the backend's get_entity method to retrieve just the basic entity
-                        entity_result = await backend_adapter.get_entity(space_id, graph_id, entity_uri)
-                        if entity_result and hasattr(entity_result, 'objects') and entity_result.objects:
-                            # Log how many objects were retrieved
-                            self.logger.debug(f"🔍 entity_result.objects contains {len(entity_result.objects)} objects for {entity_uri}")
-                            if len(entity_result.objects) > 1:
-                                self.logger.warning(f"⚠️ Expected 1 object but got {len(entity_result.objects)} - only using first one")
-                            # Log the type of the object
-                            obj = entity_result.objects[0]
-                            self.logger.debug(f"🔍 Object type: {type(obj).__name__}, Object class: {obj.__class__.__name__}")
-                            if hasattr(obj, 'URI'):
-                                self.logger.debug(f"🔍 Object URI: {obj.URI}")
-                            # Add the first object (should be the entity itself)
-                            entities.append(obj)
-                            self.logger.debug(f"Retrieved basic entity: {entity_uri}")
-                        else:
-                            self.logger.warning(f"Failed to retrieve entity data for: {entity_uri}")
-                except Exception as e:
-                    self.logger.warning(f"Error retrieving entity {entity_uri}: {e}")
-                    continue
+                        self.logger.warning(f"Failed to retrieve entity graph for: {uri}")
+            else:
+                async def _fetch_entity(uri: str):
+                    try:
+                        return await backend_adapter.get_entity(space_id, graph_id, uri)
+                    except Exception as e:
+                        self.logger.warning(f"Error retrieving entity {uri}: {e}")
+                        return None
+                
+                results = await asyncio.gather(*[_fetch_entity(uri) for uri in entity_uris])
+                
+                entities = []
+                for uri, entity_result in zip(entity_uris, results):
+                    if entity_result and hasattr(entity_result, 'objects') and entity_result.objects:
+                        self.logger.debug(f"🔍 entity_result.objects contains {len(entity_result.objects)} objects for {uri}")
+                        if len(entity_result.objects) > 1:
+                            self.logger.warning(f"⚠️ Expected 1 object but got {len(entity_result.objects)} - only using first one")
+                        obj = entity_result.objects[0]
+                        self.logger.debug(f"🔍 Object type: {type(obj).__name__}, Object class: {obj.__class__.__name__}")
+                        if hasattr(obj, 'URI'):
+                            self.logger.debug(f"🔍 Object URI: {obj.URI}")
+                        entities.append(obj)
+                        self.logger.debug(f"Retrieved basic entity: {uri}")
+                    else:
+                        self.logger.warning(f"Failed to retrieve entity data for: {uri}")
             
             self.logger.debug(f"Successfully retrieved {len(entities)} entities")
             return entities

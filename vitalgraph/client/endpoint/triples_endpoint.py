@@ -18,7 +18,7 @@ from ...model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 class TriplesEndpoint(BaseEndpoint):
     """Client endpoint for Triples operations."""
     
-    def list_triples(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, 
+    async def list_triples(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, 
                     subject: Optional[str] = None, predicate: Optional[str] = None, 
                     object: Optional[str] = None, object_filter: Optional[str] = None) -> TripleListResponse:
         """
@@ -55,9 +55,9 @@ class TriplesEndpoint(BaseEndpoint):
             object_filter=object_filter
         )
         
-        return self._make_typed_request('GET', url, TripleListResponse, params=params)
+        return await self._make_typed_request('GET', url, TripleListResponse, params=params)
     
-    def add_triples(self, space_id: str, graph_id: str, document: JsonLdRequest) -> TripleOperationResponse:
+    async def add_triples(self, space_id: str, graph_id: str, document: JsonLdRequest) -> TripleOperationResponse:
         """
         Add triples to a graph.
         
@@ -83,9 +83,9 @@ class TriplesEndpoint(BaseEndpoint):
         
         # Send the JsonLdRequest directly (server handles discriminated union)
         # The server will automatically detect JsonLdObject vs JsonLdDocument
-        return self._make_typed_request('POST', url, TripleOperationResponse, params=params, json=document.model_dump(by_alias=True))
+        return await self._make_typed_request('POST', url, TripleOperationResponse, params=params, json=document.model_dump(by_alias=True))
     
-    def delete_triples(self, space_id: str, graph_id: str, 
+    async def delete_triples(self, space_id: str, graph_id: str, 
                       subject: Optional[str] = None, predicate: Optional[str] = None, 
                       object: Optional[str] = None) -> TripleOperationResponse:
         """
@@ -120,4 +120,4 @@ class TriplesEndpoint(BaseEndpoint):
             object=object
         )
         
-        return self._make_typed_request('DELETE', url, TripleOperationResponse, params=params)
+        return await self._make_typed_request('DELETE', url, TripleOperationResponse, params=params)
