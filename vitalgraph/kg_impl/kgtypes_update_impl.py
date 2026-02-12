@@ -18,6 +18,9 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 # KG domain model imports
 from ai_haley_kg_domain.model.KGType import KGType
 
+# RDFLib helper for datatype preservation in SPARQL result parsing
+from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+
 
 class KGTypesUpdateProcessor:
     """
@@ -272,9 +275,10 @@ class KGTypesUpdateProcessor:
                     # Use the actual variable names from the SPARQL query
                     subject = binding.get('subject', {}).get('value', '')
                     predicate = binding.get('predicate', {}).get('value', '')
-                    obj = binding.get('object', {}).get('value', '')
+                    # Reconstruct RDFLib object from full binding to preserve datatype/language
+                    obj = _sparql_binding_to_rdflib(binding.get('object', ''))
                     
-                    if subject and predicate and obj:
+                    if subject and predicate and obj is not None:
                         delete_quads.append((subject, predicate, obj, graph_id))
             
             self.logger.info(f"🔍 Built {len(delete_quads)} delete quads for KGType")
@@ -300,10 +304,12 @@ class KGTypesUpdateProcessor:
             triples = GraphObject.to_triples_list(objects)
             
             # Convert triples to quads by adding graph_id
+            # Keep RDFLib objects (especially Literal with datatype/language)
+            # so downstream formatters can preserve type information.
             insert_quads = []
             for triple in triples:
                 s, p, o = triple
-                insert_quads.append((str(s), str(p), str(o), graph_id))
+                insert_quads.append((str(s), str(p), o, graph_id))
             
             self.logger.info(f"🔍 Built {len(insert_quads)} insert quads for KGType")
             return insert_quads

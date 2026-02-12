@@ -579,59 +579,59 @@ class KGRelationsEndpoint:
         # TODO: Implement validation logic
         pass
     
+    def _get_backend_adapter(self, space_id: str):
+        """Get wrapped backend adapter for a space, consistent with other endpoints."""
+        space_record = self.space_manager.get_space(space_id)
+        if not space_record:
+            return None
+        
+        space_impl = space_record.space_impl
+        backend_impl = space_impl.get_db_space_impl()
+        if not backend_impl:
+            return None
+        
+        return FusekiPostgreSQLBackendAdapter(backend_impl)
+    
     async def _store_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
         """Store relations in space and return created URIs."""
         if not relations:
             return []
         
-        # Get space implementation
-        space_record = self.space_manager.get_space(space_id)
-        if not space_record:
-            return []
-        
-        space_impl = space_record.space_impl
-        backend = space_impl.get_db_space_impl()
+        backend = self._get_backend_adapter(space_id)
         if not backend:
             return []
         
-        # Convert relations to RDF quads
+        # Convert relations to RDF quads (preserves RDFLib objects from to_rdf())
         from rdflib import URIRef
         quads = []
         created_uris = []
         
         for relation in relations:
-            # Get relation triples using VitalSigns
             relation_triples = relation.to_rdf()
-            
-            # Convert to quads with graph URI
             graph_uri = URIRef(graph_id)
             for s, p, o in relation_triples:
                 quads.append((s, p, o, graph_uri))
             
-            # Track created URI
             if hasattr(relation, 'URI'):
                 created_uris.append(relation.URI)
         
-        # Store quads via backend
         if quads:
-            await backend.add_rdf_quads_batch(space_id, quads)
+            # Use the adapter's backend which delegates to dual-write coordinator
+            await backend.backend.add_rdf_quads_batch(space_id, quads)
         
         return created_uris
     
     async def _update_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
-        """Update relations in space and return updated URIs."""
+        """Update relations in space using atomic update_quads."""
         if not relations:
             return []
         
-        # Get space implementation
-        space_record = self.space_manager.get_space(space_id)
-        if not space_record:
-            return []
-        
-        space_impl = space_record.space_impl
-        backend = space_impl.get_db_space_impl()
+        backend = self._get_backend_adapter(space_id)
         if not backend:
             return []
+        
+        from rdflib import URIRef
+        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
         
         updated_uris = []
         
@@ -639,38 +639,52 @@ class KGRelationsEndpoint:
             if not hasattr(relation, 'URI'):
                 continue
             
-            relation_uri = relation.URI
+            relation_uri = str(relation.URI)
             
-            # Delete existing relation triples
-            delete_query = self._build_delete_relation_query(graph_id, relation_uri)
-            await backend.execute_sparql_update(space_id, delete_query)
+            # Step 1: Query existing triples to build delete quads with proper RDFLib objects
+            query = f"""SELECT ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    <{relation_uri}> ?p ?o .
+                }}
+            }}"""
+            results = await backend.execute_sparql_query(space_id, query)
             
-            # Add updated relation triples
-            from rdflib import URIRef
+            delete_quads = []
+            bindings = []
+            if isinstance(results, dict) and 'results' in results:
+                bindings = results['results'].get('bindings', [])
+            elif isinstance(results, list):
+                bindings = results
+            
+            for binding in bindings:
+                if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
+                    p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                    o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
+                    if p_value and o_rdflib is not None:
+                        delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
+            
+            # Step 2: Build insert quads from VitalSigns (preserves RDFLib objects)
             relation_triples = relation.to_rdf()
-            graph_uri = URIRef(graph_id)
-            quads = [(s, p, o, graph_uri) for s, p, o in relation_triples]
+            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
             
-            if quads:
-                await backend.add_rdf_quads_batch(space_id, quads)
+            # Step 3: Atomic update
+            if delete_quads or insert_quads:
+                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
                 updated_uris.append(relation_uri)
         
         return updated_uris
     
     async def _upsert_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
-        """Upsert relations in space and return upserted URIs."""
+        """Upsert relations in space using atomic update_quads."""
         if not relations:
             return []
         
-        # Get space implementation
-        space_record = self.space_manager.get_space(space_id)
-        if not space_record:
-            return []
-        
-        space_impl = space_record.space_impl
-        backend = space_impl.get_db_space_impl()
+        backend = self._get_backend_adapter(space_id)
         if not backend:
             return []
+        
+        from rdflib import URIRef
+        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
         
         upserted_uris = []
         
@@ -678,33 +692,37 @@ class KGRelationsEndpoint:
             if not hasattr(relation, 'URI'):
                 continue
             
-            relation_uri = relation.URI
+            relation_uri = str(relation.URI)
             
-            # Check if relation exists
-            check_query = f"""
-            ASK {{
+            # Step 1: Query existing triples (may be empty for create case)
+            query = f"""SELECT ?p ?o WHERE {{
                 GRAPH <{graph_id}> {{
                     <{relation_uri}> ?p ?o .
                 }}
-            }}
-            """
+            }}"""
+            results = await backend.execute_sparql_query(space_id, query)
             
-            result = await backend.execute_sparql_query(space_id, check_query)
-            exists = result.get('boolean', False) if isinstance(result, dict) else False
+            delete_quads = []
+            bindings = []
+            if isinstance(results, dict) and 'results' in results:
+                bindings = results['results'].get('bindings', [])
+            elif isinstance(results, list):
+                bindings = results
             
-            # Delete if exists
-            if exists:
-                delete_query = self._build_delete_relation_query(graph_id, relation_uri)
-                await backend.execute_sparql_update(space_id, delete_query)
+            for binding in bindings:
+                if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
+                    p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                    o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
+                    if p_value and o_rdflib is not None:
+                        delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
             
-            # Add relation triples
-            from rdflib import URIRef
+            # Step 2: Build insert quads from VitalSigns (preserves RDFLib objects)
             relation_triples = relation.to_rdf()
-            graph_uri = URIRef(graph_id)
-            quads = [(s, p, o, graph_uri) for s, p, o in relation_triples]
+            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
             
-            if quads:
-                await backend.add_rdf_quads_batch(space_id, quads)
+            # Step 3: Atomic update (works for both create and update cases)
+            if insert_quads:
+                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
                 upserted_uris.append(relation_uri)
         
         return upserted_uris

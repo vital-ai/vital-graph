@@ -2232,57 +2232,73 @@ class KGFramesEndpoint:
             return False
     
     async def _store_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Store VitalSigns objects in backend via triples."""
+        """
+        Store VitalSigns frame objects in backend using atomic update_quads.
+        
+        Queries existing triples for all subject URIs first, then uses a single
+        transaction for delete + insert to prevent triple accumulation.
+        """
         try:
-            # Convert objects to triples
-            all_triples = []
             frame_uris = []
-            
             for obj in objects:
                 if isinstance(obj, KGFrame):
-                    # Cast URI property to get actual string value
                     frame_uris.append(str(obj.URI))
-                
-                # Convert to triples using VitalSigns
-                triples = obj.to_triples()
-                all_triples.extend(triples)
             
-            # Build SPARQL INSERT query
-            if all_triples:
-                # Format triple components based on RDFLib object types
-                from rdflib import URIRef, Literal, BNode
-                triple_statements = []
-                for t in all_triples:
-                    subject = str(t.subject)
-                    predicate = str(t.predicate)
-                    
-                    # Format object based on its RDFLib type
-                    if isinstance(t.object, Literal):
-                        if t.object.datatype:
-                            obj_str = f'"{t.object}"^^<{t.object.datatype}>'
-                        elif t.object.language:
-                            obj_str = f'"{t.object}"@{t.object.language}'
-                        else:
-                            obj_str = f'"{t.object}"'
-                    elif isinstance(t.object, URIRef):
-                        obj_str = f"<{t.object}>"
-                    elif isinstance(t.object, BNode):
-                        obj_str = f"_:{t.object}"
-                    else:
-                        # Fallback for strings
-                        obj_str = f'"{t.object}"'
-                    
-                    triple_statements.append(f"<{subject}> <{predicate}> {obj_str}")
-                
-                triples_str = " .\n    ".join(triple_statements)
-                insert_query = f"""
-                INSERT DATA {{
+            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
+            triples = GraphObject.to_triples_list(objects)
+            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
+            
+            if not insert_quads:
+                return frame_uris
+            
+            # Step 2: Query existing triples for all subjects (pre-cleanup)
+            subject_uris = set()
+            for obj in objects:
+                if hasattr(obj, 'URI') and obj.URI:
+                    subject_uris.add(str(obj.URI))
+            
+            delete_quads = []
+            if subject_uris:
+                subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
+                query = f"""SELECT ?subject ?predicate ?object WHERE {{
                     GRAPH <{graph_id}> {{
-                        {triples_str} .
+                        VALUES ?subject {{ {subject_values} }}
+                        ?subject ?predicate ?object .
                     }}
-                }}
-                """
-                await backend.execute_sparql_update(insert_query)
+                }}"""
+                
+                results = await backend.execute_sparql_query(space_id, query)
+                
+                bindings = []
+                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                    bindings = results['results'].get('bindings', [])
+                elif isinstance(results, list):
+                    bindings = results
+                
+                from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                for row in bindings:
+                    if isinstance(row, dict):
+                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        o = _sparql_binding_to_rdflib(row.get('object', ''))
+                        if s and p and o is not None:
+                            delete_quads.append((s, p, o, graph_id))
+            
+            if delete_quads:
+                self.logger.info(f"🧹 Pre-cleanup: found {len(delete_quads)} existing triples for {len(subject_uris)} frame subjects")
+            
+            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
+            def _quad_str_key(q):
+                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
+            old_key_map = {_quad_str_key(q): q for q in delete_quads}
+            new_key_map = {_quad_str_key(q): q for q in insert_quads}
+            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+            
+            # Step 4: Atomic update — single PG transaction, single Fuseki request
+            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
             
             return frame_uris
             
@@ -2291,40 +2307,23 @@ class KGFramesEndpoint:
             raise
     
     async def _update_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Update VitalSigns objects in backend via triples."""
+        """
+        Update VitalSigns objects in backend via atomic update_quads.
+        
+        Delegates to _store_frames_in_backend which handles atomic
+        delete + insert in a single transaction.
+        """
         try:
-            frame_uris = []
-            
-            for obj in objects:
-                if isinstance(obj, KGFrame):
-                    # Cast URI property to get actual string value
-                    frame_uri = str(obj.URI)
-                    frame_uris.append(frame_uri)
-                    
-                    # Delete existing frame triples
-                    delete_query = f"""
-                    DELETE WHERE {{
-                        GRAPH <{graph_id}> {{
-                            <{frame_uri}> ?p ?o .
-                        }}
-                    }}
-                    """
-                    await backend.execute_sparql_update(delete_query)
-            
-            # Insert updated frames
-            await self._store_frames_in_backend(backend, space_id, graph_id, objects)
-            
-            return frame_uris
+            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
             
         except Exception as e:
             self.logger.error(f"Error updating frames in backend: {e}")
             raise
     
     async def _upsert_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Upsert VitalSigns objects in backend via triples."""
+        """Upsert VitalSigns objects in backend via atomic update_quads."""
         try:
-            # For upsert, we delete existing and insert new (same as update)
-            return await self._update_frames_in_backend(backend, space_id, graph_id, objects)
+            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
             
         except Exception as e:
             self.logger.error(f"Error upserting frames in backend: {e}")
@@ -2456,41 +2455,15 @@ class KGFramesEndpoint:
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
-    async def _update_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Update VitalSigns objects in backend via triples."""
-        try:
-            frame_uris = []
-            
-            for obj in objects:
-                if isinstance(obj, KGFrame):
-                    # Cast URI property to get actual string value
-                    frame_uri = str(obj.URI)
-                    frame_uris.append(frame_uri)
-                    
-                    # Delete existing frame triples
-                    delete_query = f"""
-                    DELETE WHERE {{
-                        GRAPH <{graph_id}> {{
-                            <{frame_uri}> ?p ?o .
-                        }}
-                    }}
-                    """
-                    await backend.execute_sparql_update(delete_query)
-            
-            # Insert updated frames
-            await self._store_frames_in_backend(backend, space_id, graph_id, objects)
-            
-            return frame_uris
-            
-        except Exception as e:
-            self.logger.error(f"Error updating frames in backend: {e}")
-            raise
+    # NOTE: _update_frames_in_backend and _upsert_frames_in_backend are defined
+    # earlier in the class and delegate to _store_frames_in_backend which uses
+    # atomic update_quads.  The second definitions below are kept as overrides
+    # for the slot-related sub-section of the endpoint.
 
     async def _upsert_frames_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Upsert VitalSigns objects in backend via triples."""
+        """Upsert VitalSigns objects in backend via atomic update_quads."""
         try:
-            # For upsert, we delete existing and insert new (same as update)
-            return await self._update_frames_in_backend(backend, space_id, graph_id, objects)
+            return await self._store_frames_in_backend(backend, space_id, graph_id, objects)
             
         except Exception as e:
             self.logger.error(f"Error upserting frames in backend: {e}")
@@ -2793,74 +2766,63 @@ class KGFramesEndpoint:
             return False
     
     async def _update_frame_slots_in_backend(self, backend, space_id: str, graph_id: str, slots: List[KGSlot]) -> List[str]:
-        """Update VitalSigns slot objects in backend via SPARQL (coordinates Fuseki + PostgreSQL)."""
+        """
+        Update VitalSigns slot objects in backend using atomic update_quads.
+        
+        Joins DELETE and INSERT into a single PostgreSQL transaction and a
+        single Fuseki request, preventing triple accumulation if the delete
+        phase succeeds but the insert fails (or vice versa).
+        """
         try:
-            slot_uris = []
+            from vital_ai_vitalsigns.model.GraphObject import GraphObject
             
-            # First, delete existing slot triples using SPARQL
-            # The dual-write coordinator will apply this to both Fuseki and PostgreSQL
-            for slot in slots:
-                slot_uri = str(slot.URI)
-                slot_uris.append(slot_uri)
-                
-                # Delete existing slot data via SPARQL
-                delete_query = f"""
-                DELETE {{
-                    GRAPH <{graph_id}> {{
-                        <{slot_uri}> ?p ?o .
-                    }}
-                }}
-                WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{slot_uri}> ?p ?o .
-                    }}
-                }}
-                """
-                await backend.execute_sparql_update(space_id, delete_query)
+            slot_uris = [str(slot.URI) for slot in slots]
             
-            # Then, insert updated slot data using SPARQL
-            all_triples = []
-            for slot in slots:
-                # Convert to triples using VitalSigns
-                triples = slot.to_triples()
-                all_triples.extend(triples)
-            
-            # Build SPARQL INSERT query
-            if all_triples:
-                # Format triple components based on RDFLib object types
-                from rdflib import URIRef, Literal, BNode
-                triple_statements = []
-                for t in all_triples:
-                    subject = str(t[0])
-                    predicate = str(t[1])
-                    
-                    # Format object based on its RDFLib type
-                    if isinstance(t[2], Literal):
-                        if t[2].datatype:
-                            obj_str = f'"{t[2]}"^^<{t[2].datatype}>'
-                        elif t[2].language:
-                            obj_str = f'"{t[2]}"@{t[2].language}'
-                        else:
-                            obj_str = f'"{t[2]}"'
-                    elif isinstance(t[2], URIRef):
-                        obj_str = f"<{t[2]}>"
-                    elif isinstance(t[2], BNode):
-                        obj_str = f"_:{t[2]}"
-                    else:
-                        # Fallback for strings
-                        obj_str = f'"{t[2]}"'
-                    
-                    triple_statements.append(f"<{subject}> <{predicate}> {obj_str}")
-                
-                triples_str = " .\n    ".join(triple_statements)
-                insert_query = f"""
-                INSERT DATA {{
-                    GRAPH <{graph_id}> {{
-                        {triples_str} .
-                    }}
+            # Step 1: Query existing triples for all slot subjects (delete side)
+            subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
+            query = f"""SELECT ?subject ?predicate ?object WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?subject {{ {subject_values} }}
+                    ?subject ?predicate ?object .
                 }}
-                """
-                await backend.execute_sparql_update(space_id, insert_query)
+            }}"""
+            
+            results = await backend.execute_sparql_query(space_id, query)
+            
+            delete_quads = []
+            bindings = []
+            if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                bindings = results['results'].get('bindings', [])
+            elif isinstance(results, list):
+                bindings = results
+            
+            for row in bindings:
+                if isinstance(row, dict):
+                    s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                    p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                    # Reconstruct RDFLib object from full binding to preserve datatype/language
+                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                    o = _sparql_binding_to_rdflib(row.get('object', ''))
+                    if s and p and o is not None:
+                        delete_quads.append((s, p, o, graph_id))
+            
+            # Step 2: Build insert quads from VitalSigns objects (preserve RDFLib objects)
+            triples = GraphObject.to_triples_list(slots)
+            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
+            
+            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
+            def _quad_str_key(q):
+                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
+            old_key_map = {_quad_str_key(q): q for q in delete_quads}
+            new_key_map = {_quad_str_key(q): q for q in insert_quads}
+            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+            
+            self.logger.info(f"🔄 Slot update: {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
+            
+            # Step 4: Atomic update — single PG transaction, single Fuseki request
+            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
             
             return slot_uris
             
@@ -2912,75 +2874,73 @@ class KGFramesEndpoint:
             raise
     
     async def _store_frame_slots_in_backend(self, backend, space_id: str, graph_id: str, objects: List[GraphObject]) -> List[str]:
-        """Store VitalSigns slot objects and edges in backend via triples."""
+        """
+        Store VitalSigns slot objects and edges in backend using atomic update_quads.
+        
+        Queries existing triples for all subject URIs first, then uses a single
+        transaction for delete + insert to prevent triple accumulation.
+        """
         try:
-            # Convert objects to triples
-            all_triples = []
             slot_uris = []
-            
             for obj in objects:
                 if isinstance(obj, KGSlot):
-                    # Cast URI property to get actual string value
                     slot_uris.append(str(obj.URI))
-                
-                # Convert to triples using VitalSigns
-                triples = obj.to_triples()
-                all_triples.extend(triples)
             
-            # Build SPARQL INSERT query
-            if all_triples:
-                # Convert VitalSigns tuples to RDFLib format
-                from rdflib import URIRef, Literal
-                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
-                rdflib_triples = []
-                for triple in all_triples:
-                    # VitalSigns returns tuples (s, p, o)
-                    s, p, o = triple
-                    # Convert to RDFLib objects
-                    s_ref = URIRef(str(s))
-                    p_ref = URIRef(str(p))
-                    # Object could be URI or Literal - use proper URI validation
-                    o_str = str(o)
-                    if validate_rfc3986(o_str, rule='URI'):
-                        o_ref = URIRef(o_str)
-                    else:
-                        o_ref = Literal(o_str)
-                    rdflib_triples.append((s_ref, p_ref, o_ref))
-                
-                # Build triple statements for SPARQL
-                from rdflib import BNode
-                triple_statements = []
-                for s, p, o in rdflib_triples:
-                    subject = str(s)
-                    predicate = str(p)
-                    
-                    # Format object based on its RDFLib type
-                    if isinstance(o, Literal):
-                        if o.datatype:
-                            obj_str = f'"{o}"^^<{o.datatype}>'
-                        elif o.language:
-                            obj_str = f'"{o}"@{o.language}'
-                        else:
-                            obj_str = f'"{o}"'
-                    elif isinstance(o, URIRef):
-                        obj_str = f"<{o}>"
-                    elif isinstance(o, BNode):
-                        obj_str = f"_:{o}"
-                    else:
-                        # Fallback for strings
-                        obj_str = f'"{o}"'
-                    
-                    triple_statements.append(f"<{subject}> <{predicate}> {obj_str}")
-                
-                triples_str = " .\n    ".join(triple_statements)
-                insert_query = f"""
-                INSERT DATA {{
+            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
+            triples = GraphObject.to_triples_list(objects)
+            insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
+            
+            if not insert_quads:
+                return slot_uris
+            
+            # Step 2: Query existing triples for all subjects (pre-cleanup)
+            subject_uris = set()
+            for obj in objects:
+                if hasattr(obj, 'URI') and obj.URI:
+                    subject_uris.add(str(obj.URI))
+            
+            delete_quads = []
+            if subject_uris:
+                subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
+                query = f"""SELECT ?subject ?predicate ?object WHERE {{
                     GRAPH <{graph_id}> {{
-                        {triples_str} .
+                        VALUES ?subject {{ {subject_values} }}
+                        ?subject ?predicate ?object .
                     }}
-                }}
-                """
-                await backend.execute_sparql_update(space_id, insert_query)
+                }}"""
+                
+                results = await backend.execute_sparql_query(space_id, query)
+                
+                bindings = []
+                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                    bindings = results['results'].get('bindings', [])
+                elif isinstance(results, list):
+                    bindings = results
+                
+                for row in bindings:
+                    if isinstance(row, dict):
+                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                        o = _sparql_binding_to_rdflib(row.get('object', ''))
+                        if s and p and o is not None:
+                            delete_quads.append((s, p, o, graph_id))
+            
+            if delete_quads:
+                self.logger.info(f"🧹 Pre-cleanup: found {len(delete_quads)} existing triples for {len(subject_uris)} subjects")
+            
+            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
+            def _quad_str_key(q):
+                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
+            old_key_map = {_quad_str_key(q): q for q in delete_quads}
+            new_key_map = {_quad_str_key(q): q for q in insert_quads}
+            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+            
+            # Step 4: Atomic update — single PG transaction, single Fuseki request
+            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
             
             return slot_uris
             

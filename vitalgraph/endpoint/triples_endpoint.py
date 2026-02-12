@@ -391,10 +391,11 @@ class TriplesEndpoint:
                 )
             
             # Convert quads to tuple format expected by the backend
+            # Preserve RDFLib objects (especially Literal with datatype/language)
+            # so downstream dual-write formatters can match typed literals correctly
             quad_tuples = []
             for s, p, o, g in quads:
-                # Use tuple format: (subject, predicate, object, graph)
-                quad_tuples.append((str(s), str(p), str(o), str(g)))
+                quad_tuples.append((str(s), str(p), o, str(g)))
             
             # Remove quads from the database using hybrid backend batch method
             success = await db_space_impl.remove_rdf_quads_batch(space_id, quad_tuples)

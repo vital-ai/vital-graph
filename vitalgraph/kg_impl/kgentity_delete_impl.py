@@ -15,6 +15,9 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 # KG domain model imports
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 
+# RDFLib helper for datatype preservation in SPARQL result parsing
+from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+
 
 class KGEntityDeleteProcessor:
     """
@@ -57,50 +60,28 @@ class KGEntityDeleteProcessor:
             
             triples_result = await backend.execute_sparql_query(space_id, triples_query)
             
-            # Extract triples
-            all_triples = []
+            # Extract quads with proper RDFLib objects to preserve datatype/language
+            delete_quads = []
             if isinstance(triples_result, dict) and 'results' in triples_result:
                 bindings = triples_result['results'].get('bindings', [])
                 for binding in bindings:
                     if 'p' in binding and 'o' in binding:
                         p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
-                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
                         
-                        if p_value and o_value:
-                            all_triples.append((entity_uri, p_value, o_value, o_type))
+                        if p_value and o_rdflib is not None:
+                            delete_quads.append((entity_uri, p_value, o_rdflib, full_graph_uri))
             
-            if not all_triples:
+            if not delete_quads:
                 self.logger.warning(f"No triples found for entity {entity_uri}")
                 return False
             
-            # Build DELETE DATA query with concrete triples
-            delete_statements = []
-            for s, p, o, o_type in all_triples:
-                # Format object based on type
-                if o_type == 'literal':
-                    # Escape quotes in literals
-                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
-                    o_formatted = f'"{o_escaped}"'
-                elif o_type == 'uri':
-                    o_formatted = f'<{o}>'
-                else:
-                    o_formatted = f'<{o}>'
-                
-                delete_statements.append(f'        <{s}> <{p}> {o_formatted} .')
+            self.logger.debug(f"Deleting entity {entity_uri} with {len(delete_quads)} quads")
             
-            delete_query = f"""
-            DELETE DATA {{
-                GRAPH <{full_graph_uri}> {{
-{chr(10).join(delete_statements)}
-                }}
-            }}
-            """
-            
-            self.logger.debug(f"Executing DELETE DATA with {len(all_triples)} triples")
-            
-            # Execute delete operation through backend
-            success = await backend.execute_sparql_update(space_id, delete_query)
+            # Use remove_rdf_quads_batch for proper dual-write with typed literals
+            deleted_count = await backend.remove_rdf_quads_batch(space_id, delete_quads)
+            success = deleted_count > 0 if isinstance(deleted_count, int) else bool(deleted_count)
             
             if success:
                 self.logger.debug(f"Successfully deleted entity: {entity_uri}")
@@ -194,39 +175,26 @@ class KGEntityDeleteProcessor:
             step2_time = time.time() - step2_start
             self.logger.info(f"🔥 STEP 2: Query completed in {step2_time:.3f}s")
             
-            # Extract triples
+            # Extract quads with proper RDFLib objects to preserve datatype/language
             self.logger.info(f"🔥 STEP 2: Extracting triples from results...")
-            all_triples = []
+            quads = []
             if isinstance(triples_result, dict) and 'results' in triples_result:
                 bindings = triples_result['results'].get('bindings', [])
                 for binding in bindings:
                     if 's' in binding and 'p' in binding and 'o' in binding:
                         s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
                         p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        o_value = binding['o'].get('value', '') if isinstance(binding['o'], dict) else str(binding['o'])
-                        o_type = binding['o'].get('type', 'uri') if isinstance(binding['o'], dict) else 'uri'
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
                         
-                        if s_value and p_value and o_value:
-                            all_triples.append((s_value, p_value, o_value, o_type))
+                        if s_value and p_value and o_rdflib is not None:
+                            quads.append((s_value, p_value, o_rdflib, full_graph_uri))
             
-            if not all_triples:
+            if not quads:
                 self.logger.warning(f"No triples found for entity graph objects")
                 return 0
             
-            self.logger.info(f"🔥 STEP 2: Found {len(all_triples)} triples to delete")
-            
-            # Convert triples to quad tuples for direct deletion (bypasses SPARQL parsing!)
-            step3_start = time.time()
-            self.logger.info(f"🔥 STEP 3: Converting {len(all_triples)} triples to quads...")
-            quads = []
-            for s, p, o, o_type in all_triples:
-                # Convert to quad tuple format: (subject, predicate, object, graph, object_type)
-                # Keep as 5-tuple with type info at the end for Fuseki formatting
-                quad = (s, p, o, full_graph_uri, o_type)
-                quads.append(quad)
-            
-            step3_time = time.time() - step3_start
-            self.logger.info(f"🔥 STEP 3: Converted to {len(quads)} quads in {step3_time:.3f}s")
+            self.logger.info(f"🔥 STEP 2: Found {len(quads)} quads to delete")
             
             # Execute direct quad deletion (bypasses SPARQL parsing!)
             step4_start = time.time()

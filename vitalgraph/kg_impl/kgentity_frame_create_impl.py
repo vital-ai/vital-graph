@@ -16,11 +16,52 @@ from dataclasses import dataclass
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
+# RDFLib imports for proper quad building with type preservation
+from rdflib import URIRef, Literal, BNode
+
 # Domain model imports for edge creation
 from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 
 # Backend adapter import
 from vitalgraph.kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+
+
+def _sparql_binding_to_rdflib(binding) -> Any:
+    """
+    Convert a SPARQL result binding (dict with value/type/datatype/language)
+    to the corresponding RDFLib object, preserving datatype and language info.
+
+    Handles:
+        - {"type": "uri", "value": "..."} → URIRef
+        - {"type": "literal", "value": "...", "datatype": "..."} → Literal with datatype
+        - {"type": "literal", "value": "...", "language": "..."} → Literal with lang
+        - {"type": "literal", "value": "..."} → plain Literal
+        - {"type": "bnode", "value": "..."} → BNode
+        - plain string → URIRef if valid URI, else Literal
+    """
+    if isinstance(binding, dict):
+        value = binding.get('value', '')
+        term_type = binding.get('type', 'literal')
+        if term_type == 'uri':
+            return URIRef(value)
+        elif term_type == 'literal':
+            datatype = binding.get('datatype')
+            language = binding.get('language')
+            if datatype:
+                return Literal(value, datatype=URIRef(datatype))
+            elif language:
+                return Literal(value, lang=language)
+            else:
+                return Literal(value)
+        elif term_type == 'bnode':
+            return BNode(value)
+    # Fallback for plain strings
+    if isinstance(binding, str):
+        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
+        if validate_rfc3986(binding, rule='URI'):
+            return URIRef(binding)
+        return Literal(binding)
+    return Literal(str(binding))
 
 
 @dataclass
@@ -405,12 +446,17 @@ class KGEntityFrameCreateProcessor:
             self.logger.info(f"⏱️ FRAME_UPDATE step2 build_insert_quads: {t2-t1:.3f}s ({len(insert_quads)} quads)")
             
             # Step 2.5: Diff — only delete removed quads, only insert added quads
-            old_set = set(tuple(q) for q in delete_quads)
-            new_set = set(tuple(q) for q in insert_quads)
-            unchanged = old_set & new_set
-            actual_deletes = list(old_set - new_set)
-            actual_inserts = list(new_set - old_set)
-            self.logger.info(f"⏱️ FRAME_UPDATE diff: {len(unchanged)} unchanged, {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
+            # Use string keys for comparison (RDFLib objects don't hash consistently
+            # across different construction paths), then map back to original quads.
+            def _quad_str_key(q):
+                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
+            
+            old_key_map = {_quad_str_key(q): q for q in delete_quads}
+            new_key_map = {_quad_str_key(q): q for q in insert_quads}
+            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+            self.logger.info(f"⏱️ FRAME_UPDATE diff: {len(unchanged_keys)} unchanged, {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
             
             # Step 3: Execute atomic update with only the changed quads
             success = await backend_adapter.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
@@ -484,16 +530,11 @@ class KGEntityFrameCreateProcessor:
                         subject = str(result['subject'].get('value', '')) if isinstance(result['subject'], dict) else str(result['subject'])
                         predicate = str(result['predicate'].get('value', '')) if isinstance(result['predicate'], dict) else str(result['predicate'])
                         
-                        # Log the raw object to see what Fuseki is returning
-                        if isinstance(result['object'], dict):
-                            obj_dict = result['object']
-                            if obj_dict.get('datatype') and 'float' in obj_dict.get('datatype', '').lower():
-                                self.logger.debug(f"🔍 FLOAT VALUE from Fuseki: {obj_dict}")
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        o = _sparql_binding_to_rdflib(result.get('object', ''))
                         
-                        obj = str(result['object'].get('value', '')) if isinstance(result['object'], dict) else str(result['object'])
-                        
-                        if subject and predicate and obj:
-                            delete_quads.append((subject, predicate, obj, graph_id))
+                        if subject and predicate and o is not None:
+                            delete_quads.append((subject, predicate, o, graph_id))
                 
                 # Also include the frame itself - find all its triples
                 frame_triples_query = f"""
@@ -516,10 +557,11 @@ class KGEntityFrameCreateProcessor:
                 for result in frame_bindings:
                     if isinstance(result, dict) and all(key in result for key in ['predicate', 'object']):
                         predicate = str(result['predicate'].get('value', '')) if isinstance(result['predicate'], dict) else str(result['predicate'])
-                        obj = str(result['object'].get('value', '')) if isinstance(result['object'], dict) else str(result['object'])
+                        # Reconstruct RDFLib object from full binding to preserve datatype/language
+                        o = _sparql_binding_to_rdflib(result.get('object', ''))
                         
-                        if predicate and obj:
-                            delete_quads.append((frame_uri, predicate, obj, graph_id))
+                        if predicate and o is not None:
+                            delete_quads.append((frame_uri, predicate, o, graph_id))
             
             self.logger.debug(f"🔍 Built {len(delete_quads)} delete quads")
             return delete_quads
@@ -573,10 +615,13 @@ class KGEntityFrameCreateProcessor:
                 self.logger.debug(f"🔍   ... and {len(triples) - 10} more triples")
             
             # Convert triples to quads by adding graph_id
+            # Keep RDFLib objects (especially Literal with datatype/language)
+            # so downstream formatters (_format_term, _format_sparql_term,
+            # _extract_term_info) can preserve type information.
             insert_quads = []
             for triple in triples:
                 s, p, o = triple
-                insert_quads.append((str(s), str(p), str(o), graph_id))
+                insert_quads.append((str(s), str(p), o, graph_id))
             
             self.logger.debug(f"🔍 Built {len(insert_quads)} insert quads")
             return insert_quads
@@ -681,11 +726,79 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error handling frame update deletion: {e}")
             return False
     
+    async def _build_delete_quads_for_subjects(self, backend_adapter: FusekiPostgreSQLBackendAdapter,
+                                               space_id: str, graph_id: str,
+                                               all_objects: List[GraphObject]) -> List[tuple]:
+        """
+        Query existing triples for all subject URIs that are about to be inserted.
+        Returns delete quads so that existing data is cleaned before insert,
+        preventing triple accumulation when a subject is written more than once.
+        
+        Args:
+            backend_adapter: Backend adapter for database operations
+            space_id: Space identifier
+            graph_id: Graph identifier
+            all_objects: Objects whose subject URIs will be checked
+            
+        Returns:
+            List of (subject, predicate, object, graph) tuples to delete
+        """
+        try:
+            subject_uris = set()
+            for obj in all_objects:
+                if hasattr(obj, 'URI') and obj.URI:
+                    subject_uris.add(str(obj.URI))
+            
+            if not subject_uris:
+                return []
+            
+            # Batch query: find all existing triples for these subjects
+            subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
+            query = f"""SELECT ?subject ?predicate ?object WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?subject {{ {subject_values} }}
+                    ?subject ?predicate ?object .
+                }}
+            }}"""
+            
+            results = await backend_adapter.execute_sparql_query(space_id, query)
+            
+            # Parse SPARQL results into quad tuples
+            delete_quads = []
+            bindings = []
+            if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                bindings = results['results'].get('bindings', [])
+            elif isinstance(results, list):
+                bindings = results
+            
+            for row in bindings:
+                if isinstance(row, dict):
+                    s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                    p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                    # Reconstruct RDFLib object from full binding dict to preserve datatype/language
+                    o_binding = row.get('object', '')
+                    o = _sparql_binding_to_rdflib(o_binding)
+                    if s and p and o is not None:
+                        delete_quads.append((s, p, o, graph_id))
+            
+            if delete_quads:
+                self.logger.info(f"🧹 Pre-cleanup: found {len(delete_quads)} existing triples for {len(subject_uris)} subjects")
+            
+            return delete_quads
+            
+        except Exception as e:
+            self.logger.error(f"Error building delete quads for subjects: {e}")
+            return []
+
     async def execute_frame_creation(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str, 
                                    graph_id: str, all_objects: List[GraphObject]) -> bool:
         """
-        Execute atomic frame creation via backend.
-        EXTRACTED FROM: lines 1125-1145 in _create_or_update_frames()
+        Execute atomic frame creation via backend using update_quads.
+        
+        Uses a single transaction that deletes any existing triples for all
+        subject URIs and inserts the new triples atomically.  This prevents
+        triple accumulation when CREATE is called for subjects that already
+        exist (e.g. a second write for the same slot URI).
         
         Args:
             backend_adapter: Backend adapter for database operations
@@ -694,144 +807,53 @@ class KGEntityFrameCreateProcessor:
             all_objects: All GraphObjects to create (frames, slots, edges)
             
         Returns:
-            bool: True if creation successful, False otherwise
+            Tuple of (success: bool, fuseki_success: bool)
         """
         try:
-            # Debug: Log what objects are being stored
+            import time as _time
+            _t0 = _time.time()
+            
             self.logger.debug(f"🔍 Storing {len(all_objects)} objects to backend:")
             for obj in all_objects:
                 self.logger.debug(f"  - {obj.__class__.__name__}: {getattr(obj, 'URI', 'NO_URI')}")
             
-            # Convert objects to triples and store (extracted from lines 1043-1145)
-            triples = GraphObject.to_triples_list(all_objects)
+            # Step 1: Build insert quads from VitalSigns objects
+            insert_quads = await self.build_insert_quads_for_objects(all_objects, graph_id)
+            _t1 = _time.time()
+            self.logger.info(f"⏱️ FRAME_CREATE step1 build_insert_quads: {_t1-_t0:.3f}s ({len(insert_quads)} quads)")
             
-            # Use graph_id directly as it's already a full URI
-            full_graph_uri = graph_id
+            # Step 2: Query existing triples for all subjects being created (pre-cleanup)
+            delete_quads = await self._build_delete_quads_for_subjects(
+                backend_adapter, space_id, graph_id, all_objects)
+            _t2 = _time.time()
+            self.logger.info(f"⏱️ FRAME_CREATE step2 build_delete_quads: {_t2-_t1:.3f}s ({len(delete_quads)} quads)")
             
-            # Build SPARQL INSERT query (back to original working approach)
-            triples_str = ""
-            edge_triples_count = 0
-            for triple in triples:
-                s, p, o = triple
-                
-                # Check RDFLib object types directly to preserve type information
-                from rdflib import URIRef, Literal, BNode
-                
-                # Log the actual type to diagnose formatting issues
-                self.logger.info(f"🔍 Object type check: o={repr(o)}, type={type(o).__name__}, isinstance(Literal)={isinstance(o, Literal)}, isinstance(URIRef)={isinstance(o, URIRef)}")
-                
-                # Format object based on its RDFLib type
-                if isinstance(o, Literal):
-                    # Literal - wrap in quotes with datatype if present
-                    if o.datatype:
-                        obj_str = f'"{o}"^^<{o.datatype}>'
-                    elif o.language:
-                        obj_str = f'"{o}"@{o.language}'
-                    else:
-                        obj_str = f'"{o}"'
-                elif isinstance(o, URIRef):
-                    # URI - wrap in angle brackets
-                    obj_str = f"<{o}>"
-                elif isinstance(o, BNode):
-                    # Blank node
-                    obj_str = f"_:{o}"
-                else:
-                    # Fallback for strings - check if it's a URI
-                    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
-                    if validate_rfc3986(str(o), rule='URI'):
-                        obj_str = f"<{o}>"
-                    else:
-                        obj_str = f'"{o}"'
-                
-                triples_str += f"    <{s}> <{p}> {obj_str} .\n"
-                
-                    # Count Edge_hasEntityKGFrame triples
-                if 'Edge_hasEntityKGFrame' in str(s) or 'hasEdgeSource' in str(p) or 'hasEdgeDestination' in str(p):
-                    edge_triples_count += 1
-                    self.logger.debug(f"🔍 Edge triple: s={repr(str(s))}, p={repr(str(p))}, o={repr(str(o))}")
+            # Step 3: Diff — only delete removed quads, only insert added quads
+            # Use string keys for comparison, map back to original quads with RDFLib objects.
+            def _quad_str_key(q):
+                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
             
-            self.logger.debug(f"🔍 Generated {len(triples)} total triples, {edge_triples_count} edge-related triples")
+            old_key_map = {_quad_str_key(q): q for q in delete_quads}
+            new_key_map = {_quad_str_key(q): q for q in insert_quads}
+            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+            self.logger.info(f"⏱️ FRAME_CREATE diff: {len(unchanged_keys)} unchanged, "
+                           f"{len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
             
-            insert_query = f"""
-            INSERT DATA {{
-                GRAPH <{full_graph_uri}> {{
-            {triples_str}
-                }}
-            }}
-            """
+            # Step 4: Atomic update — single PG transaction, single Fuseki request
+            success = await backend_adapter.update_quads(
+                space_id, graph_id, actual_deletes, actual_inserts)
+            _t3 = _time.time()
+            self.logger.info(f"⏱️ FRAME_CREATE step3 update_quads: {_t3-_t2:.3f}s")
+            self.logger.info(f"⏱️ FRAME_CREATE total: {_t3-_t0:.3f}s")
             
-            # Debug logging to identify double angle bracket issue
-            self.logger.debug(f"🔍 Full graph URI: {repr(full_graph_uri)}")
-            self.logger.debug(f"🔍 First 5 triples:")
-            for i, triple in enumerate(triples[:5]):
-                s, p, o = triple
-                self.logger.debug(f"  Triple {i+1}: s={repr(str(s))}, p={repr(str(p))}, o={repr(str(o))}")
-            # Extract just the edge-related triples for debugging
-            edge_triples_in_query = [line for line in insert_query.split('\n') if 'hasEdgeSource' in line or 'hasEdgeDestination' in line or 'Edge_hasEntityKGFrame' in line]
-            self.logger.debug(f"🔍 Edge triples in INSERT query ({len(edge_triples_in_query)} lines):")
-            for line in edge_triples_in_query[:10]:  # Show first 10 edge-related lines
-                self.logger.debug(f"  {line.strip()}")
-            
-            # Check for double angle brackets
-            if '<<' in insert_query or '>>' in insert_query:
-                self.logger.error(f"🚨 Double angle brackets detected in SPARQL query!")
-                raise ValueError("SPARQL query contains double angle brackets")
-            
-            # Execute the insert (extracted from line 1145)
-            self.logger.debug(f"🔍 Executing SPARQL INSERT with {len(triples)} triples...")
-            insert_result = await backend_adapter.execute_sparql_update(space_id, insert_query)
-            self.logger.debug(f"🔍 SPARQL INSERT execution completed")
-            
-            # Extract fuseki_success from DualWriteResult if available
-            _fuseki_success = True
-            if hasattr(insert_result, 'fuseki_success'):
-                _fuseki_success = insert_result.fuseki_success
-            
-            # Immediate verification: Check if edges were inserted
-            verification_query = f"""
-            SELECT DISTINCT ?edge ?source ?dest WHERE {{
-                GRAPH <{full_graph_uri}> {{
-                    ?edge a <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .
-                    ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> ?source .
-                    ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?dest .
-                }}
-            }}
-            LIMIT 5
-            """
-            
-            verification_results = await backend_adapter.execute_sparql_query(space_id, verification_query)
-            self.logger.debug(f"🔍 Immediate post-INSERT edge verification: {verification_results}")
-            
-            # Query all triples in the graph to see what was actually stored
-            all_triples_query = f"""
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{full_graph_uri}> {{
-                    ?s ?p ?o .
-                }}
-            }}
-            LIMIT 100
-            """
-            
-            all_results = await backend_adapter.execute_sparql_query(space_id, all_triples_query)
-            self.logger.debug(f"🔍 All triples in graph after INSERT ({len(all_results) if isinstance(all_results, list) else 'unknown'} results):")
-            
-            # Log first 20 triples to see what's actually stored
-            if isinstance(all_results, list):
-                for i, result in enumerate(all_results[:20]):
-                    if isinstance(result, dict):
-                        s = result.get('s', {}).get('value', 'NO_SUBJECT')
-                        p = result.get('p', {}).get('value', 'NO_PREDICATE') 
-                        o = result.get('o', {}).get('value', 'NO_OBJECT')
-                        self.logger.debug(f"  Triple {i+1}: s={s}, p={p}, o={o}")
-            elif isinstance(all_results, dict) and 'results' in all_results:
-                bindings = all_results['results'].get('bindings', [])
-                for i, binding in enumerate(bindings[:20]):
-                    s = binding.get('s', {}).get('value', 'NO_SUBJECT')
-                    p = binding.get('p', {}).get('value', 'NO_PREDICATE')
-                    o = binding.get('o', {}).get('value', 'NO_OBJECT')
-                    self.logger.debug(f"  Triple {i+1}: s={s}, p={p}, o={o}")
-            
-            return (True, _fuseki_success)
+            if success:
+                self.logger.debug(f"✅ Atomic frame creation completed successfully")
+                return (True, True)
+            else:
+                self.logger.error(f"❌ Atomic frame creation failed")
+                return (False, False)
             
         except Exception as e:
             self.logger.error(f"Error executing frame creation: {e}")

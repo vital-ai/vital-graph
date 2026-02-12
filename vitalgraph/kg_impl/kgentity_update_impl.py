@@ -15,6 +15,9 @@ from ..model.kgentities_model import EntityUpdateResponse
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
+# RDFLib helper for datatype preservation in SPARQL result parsing
+from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+
 # KG domain model imports
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 
@@ -226,16 +229,22 @@ class KGEntityUpdateProcessor:
             self.logger.debug(f"🔍 Delete query for entity: {entity_uri}")
             results = await backend.execute_sparql_query(space_id, find_entity_data_query)
             
-            # Convert SPARQL results to delete quads
-            if isinstance(results, list):
-                for result in results:
-                    if isinstance(result, dict) and all(key in result for key in ['subject', 'predicate', 'object']):
-                        subject = str(result['subject'].get('value', '')) if isinstance(result['subject'], dict) else str(result['subject'])
-                        predicate = str(result['predicate'].get('value', '')) if isinstance(result['predicate'], dict) else str(result['predicate'])
-                        obj = str(result['object'].get('value', '')) if isinstance(result['object'], dict) else str(result['object'])
-                        
-                        if subject and predicate and obj:
-                            delete_quads.append((subject, predicate, obj, graph_id))
+            # Convert SPARQL results to delete quads — handle both result formats
+            bindings = []
+            if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                bindings = results['results'].get('bindings', [])
+            elif isinstance(results, list):
+                bindings = results
+            
+            for result in bindings:
+                if isinstance(result, dict) and all(key in result for key in ['subject', 'predicate', 'object']):
+                    subject = str(result['subject'].get('value', '')) if isinstance(result['subject'], dict) else str(result['subject'])
+                    predicate = str(result['predicate'].get('value', '')) if isinstance(result['predicate'], dict) else str(result['predicate'])
+                    # Reconstruct RDFLib object from full binding to preserve datatype/language
+                    obj = _sparql_binding_to_rdflib(result.get('object', ''))
+                    
+                    if subject and predicate and obj is not None:
+                        delete_quads.append((subject, predicate, obj, graph_id))
             
             self.logger.debug(f"🔍 Built {len(delete_quads)} delete quads for entity")
             return delete_quads
@@ -260,10 +269,12 @@ class KGEntityUpdateProcessor:
             triples = GraphObject.to_triples_list(objects)
             
             # Convert triples to quads by adding graph_id
+            # Keep RDFLib objects (especially Literal with datatype/language)
+            # so downstream formatters can preserve type information.
             insert_quads = []
             for triple in triples:
                 s, p, o = triple
-                insert_quads.append((str(s), str(p), str(o), graph_id))
+                insert_quads.append((str(s), str(p), o, graph_id))
             
             self.logger.debug(f"🔍 Built {len(insert_quads)} insert quads for entity")
             return insert_quads
