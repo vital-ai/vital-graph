@@ -1414,7 +1414,7 @@ class SPARQLUpdateParser:
             else:
                 continue
             
-            if subject and predicate and obj:
+            if subject is not None and predicate is not None and obj is not None:
                 # Convert to tuple format: (subject, predicate, object, graph)
                 # For resolved DELETE patterns, use 'default' graph unless specified
                 triple_tuple = (subject, predicate, obj, 'default')

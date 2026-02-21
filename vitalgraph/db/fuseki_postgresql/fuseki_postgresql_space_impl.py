@@ -258,7 +258,7 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
             where_clauses.append(f"?s = <{subject}>")
         if predicate:
             where_clauses.append(f"?p = <{predicate}>")
-        if obj:
+        if obj is not None:
             where_clauses.append(f"?o = <{obj}>")
         
         where_filter = f"FILTER ({' && '.join(where_clauses)})" if where_clauses else ""
@@ -315,7 +315,7 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
     
     def _format_sparql_term(self, term: str) -> str:
         """Format an RDF term for SPARQL based on its type."""
-        if not term:
+        if term is None:
             return '""'
         
         # Check if it's a URI (starts with http:// or https:// or urn:)

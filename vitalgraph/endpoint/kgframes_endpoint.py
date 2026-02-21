@@ -2399,7 +2399,7 @@ class KGFramesEndpoint:
                         predicate = binding.get("p", {}).get("value") 
                         obj = binding.get("o", {}).get("value")
                         
-                        if subject and predicate and obj:
+                        if subject is not None and predicate is not None and obj is not None:
                             all_triples.append({
                                 "subject": subject,
                                 "predicate": predicate,

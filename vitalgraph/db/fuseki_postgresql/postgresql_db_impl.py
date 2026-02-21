@@ -881,7 +881,7 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                     # Store RDFLib objects, keyed by their string representation
                     for term in [subject, predicate, obj, graph]:
                         term_key = str(term)
-                        if term_key and term_key not in unique_terms:
+                        if term_key is not None and term_key not in unique_terms:
                             unique_terms[term_key] = term
                             
                 except Exception as quad_error:

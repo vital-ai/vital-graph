@@ -864,7 +864,7 @@ class FusekiDatasetManager:
             
             # logger.info(f"🔍 Processing quad: S={subject}, P={predicate}, O={obj}, G={graph_key}")
             
-            if subject and predicate and obj:
+            if subject is not None and predicate is not None and obj is not None:
                 if graph_key not in graphs_data:
                     graphs_data[graph_key] = []
                 graphs_data[graph_key].append(f"                    {subject} {predicate} {obj} .")
@@ -907,7 +907,7 @@ class FusekiDatasetManager:
         Returns:
             Formatted term string or None
         """
-        if not term:
+        if term is None:
             return None
         
         # Handle RDFLib objects

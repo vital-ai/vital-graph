@@ -282,7 +282,7 @@ class KGSparqlUtils:
                     subject = binding.get("subject", {}).get("value")
                     predicate = binding.get("predicate", {}).get("value")
                     obj = binding.get("object", {}).get("value")
-                    if subject and predicate and obj:
+                    if subject is not None and predicate is not None and obj is not None:
                         triples.append((subject, predicate, obj))
             # Handle flat structure: results.bindings
             elif isinstance(results, dict) and results.get("bindings"):
@@ -290,7 +290,7 @@ class KGSparqlUtils:
                     subject = binding.get("subject", {}).get("value")
                     predicate = binding.get("predicate", {}).get("value")
                     obj = binding.get("object", {}).get("value")
-                    if subject and predicate and obj:
+                    if subject is not None and predicate is not None and obj is not None:
                         triples.append((subject, predicate, obj))
             elif isinstance(results, list):
                 for item in results:
@@ -307,7 +307,7 @@ class KGSparqlUtils:
                         if isinstance(obj, dict):
                             obj = obj.get("value")
                         
-                        if subject and predicate and obj:
+                        if subject is not None and predicate is not None and obj is not None:
                             triples.append((subject, predicate, obj))
         except (KeyError, TypeError) as e:
             logger.warning(f"Error extracting triples from SPARQL results: {e}")

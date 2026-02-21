@@ -221,7 +221,7 @@ class FusekiPostgreSQLDbOps:
         Returns:
             Formatted term for SPARQL query
         """
-        if not term:
+        if term is None:
             return '""'
         
         # Check if it's a URI (starts with http:// or https:// or urn:)

@@ -939,7 +939,7 @@ class DualWriteCoordinator:
                         triple = f"{subject_formatted} {predicate_formatted} {obj_formatted}"
                         logger.info(f"🔥 FUSEKI_DELETE: Formatted triple {i}: {triple[:200]}")
                     
-                    if subject_formatted and predicate_formatted and obj_formatted:
+                    if subject_formatted is not None and predicate_formatted is not None and obj_formatted is not None:
                         graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
                 
                 else:
@@ -954,7 +954,7 @@ class DualWriteCoordinator:
                     predicate_formatted = self._format_sparql_term(str(predicate))
                     obj_formatted = self._format_sparql_term(obj)
                     
-                    if subject_formatted and predicate_formatted and obj_formatted:
+                    if subject_formatted is not None and predicate_formatted is not None and obj_formatted is not None:
                         graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
             
             if graph_quads:
@@ -1205,7 +1205,7 @@ class DualWriteCoordinator:
                 subject_formatted = self._format_sparql_term(subject)
                 predicate_formatted = self._format_sparql_term(predicate)
                 obj_formatted = self._format_sparql_term(obj)
-                if subject_formatted and predicate_formatted and obj_formatted:
+                if subject_formatted is not None and predicate_formatted is not None and obj_formatted is not None:
                     graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
             else:
                 subject, predicate, obj = quad[:3]
@@ -1215,7 +1215,7 @@ class DualWriteCoordinator:
                 subject_formatted = self._format_sparql_term(str(subject))
                 predicate_formatted = self._format_sparql_term(str(predicate))
                 obj_formatted = self._format_sparql_term(obj)
-                if subject_formatted and predicate_formatted and obj_formatted:
+                if subject_formatted is not None and predicate_formatted is not None and obj_formatted is not None:
                     graph_quads[graph].append(f"{subject_formatted} {predicate_formatted} {obj_formatted}")
 
         if not graph_quads:
@@ -1242,7 +1242,7 @@ class DualWriteCoordinator:
         Returns:
             Formatted SPARQL term string or None
         """
-        if not term:
+        if term is None:
             return None
         
         # Handle RDFLib objects

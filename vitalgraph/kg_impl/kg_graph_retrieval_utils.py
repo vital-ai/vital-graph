@@ -139,8 +139,15 @@ class GraphObjectRetriever:
                 if obj_data.get('type') == 'uri':
                     obj = URIRef(obj_value)
                 else:
-                    # Literal value - match original code behavior
-                    obj = Literal(obj_value)
+                    # Literal value - preserve datatype and language from SPARQL results
+                    datatype = obj_data.get('datatype')
+                    lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                    if lang:
+                        obj = Literal(obj_value, lang=lang)
+                    elif datatype:
+                        obj = Literal(obj_value, datatype=URIRef(datatype))
+                    else:
+                        obj = Literal(obj_value)
                 
                 triples.append((subject, predicate, obj))
             except Exception as e:
@@ -220,8 +227,15 @@ class GraphObjectRetriever:
             if obj_data.get('type') == 'uri':
                 obj = URIRef(obj_value)
             else:
-                # Literal value - match original code behavior
-                obj = Literal(obj_value)
+                # Literal value - preserve datatype and language from SPARQL results
+                datatype = obj_data.get('datatype')
+                lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                if lang:
+                    obj = Literal(obj_value, lang=lang)
+                elif datatype:
+                    obj = Literal(obj_value, datatype=URIRef(datatype))
+                else:
+                    obj = Literal(obj_value)
             
             triples.append((subject, predicate, obj))
         
@@ -298,8 +312,15 @@ class GraphObjectRetriever:
             if obj_data.get('type') == 'uri':
                 obj = URIRef(obj_value)
             else:
-                # Literal value - match original code behavior
-                obj = Literal(obj_value)
+                # Literal value - preserve datatype and language from SPARQL results
+                datatype = obj_data.get('datatype')
+                lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                if lang:
+                    obj = Literal(obj_value, lang=lang)
+                elif datatype:
+                    obj = Literal(obj_value, datatype=URIRef(datatype))
+                else:
+                    obj = Literal(obj_value)
             
             grouped[subject_uri].append((subject, predicate, obj))
         
@@ -370,8 +391,15 @@ class GraphObjectRetriever:
             if obj_data.get('type') == 'uri':
                 obj = URIRef(obj_value)
             else:
-                # Literal value - match original code behavior
-                obj = Literal(obj_value)
+                # Literal value - preserve datatype and language from SPARQL results
+                datatype = obj_data.get('datatype')
+                lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                if lang:
+                    obj = Literal(obj_value, lang=lang)
+                elif datatype:
+                    obj = Literal(obj_value, datatype=URIRef(datatype))
+                else:
+                    obj = Literal(obj_value)
             
             triples.append((subject, predicate, obj))
         
@@ -455,8 +483,15 @@ class GraphObjectRetriever:
             if obj_data.get('type') == 'uri':
                 obj = URIRef(obj_value)
             else:
-                # Literal value - match original code behavior
-                obj = Literal(obj_value)
+                # Literal value - preserve datatype and language from SPARQL results
+                datatype = obj_data.get('datatype')
+                lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                if lang:
+                    obj = Literal(obj_value, lang=lang)
+                elif datatype:
+                    obj = Literal(obj_value, datatype=URIRef(datatype))
+                else:
+                    obj = Literal(obj_value)
             
             triples.append((subject, predicate, obj))
         
@@ -591,8 +626,15 @@ class GraphObjectRetriever:
             if obj_data.get('type') == 'uri':
                 obj = URIRef(obj_value)
             else:
-                # Literal value - match original code behavior
-                obj = Literal(obj_value)
+                # Literal value - preserve datatype and language from SPARQL results
+                datatype = obj_data.get('datatype')
+                lang = obj_data.get('xml:lang') or obj_data.get('lang')
+                if lang:
+                    obj = Literal(obj_value, lang=lang)
+                elif datatype:
+                    obj = Literal(obj_value, datatype=URIRef(datatype))
+                else:
+                    obj = Literal(obj_value)
             
             triples.append((subject, predicate, obj))
         
