@@ -26,6 +26,7 @@ from .endpoint.graphs_endpoint import GraphsEndpoint
 from .endpoint.triples_endpoint import TriplesEndpoint
 from .endpoint.import_endpoint import ImportEndpoint
 from .endpoint.export_endpoint import ExportEndpoint
+from .endpoint.entity_registry_endpoint import EntityRegistryClientEndpoint
 from .utils.client_utils import VitalGraphClientError
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
@@ -116,6 +117,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.triples = TriplesEndpoint(self)
         self.imports = ImportEndpoint(self)
         self.exports = ExportEndpoint(self)
+        self.entity_registry = EntityRegistryClientEndpoint(self)
     
     async def open(self) -> None:
         """

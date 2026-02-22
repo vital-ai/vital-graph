@@ -221,6 +221,21 @@ class VitalGraphAppImpl:
                     else:
                         self.logger.warning("SpaceManager initialization skipped - conditions not met")
                     
+                    # Initialize Entity Registry (global, uses same asyncpg pool)
+                    try:
+                        pool = getattr(self.db_impl, 'connection_pool', None)
+                        if pool:
+                            from vitalgraph.entity_registry.entity_registry_impl import EntityRegistryImpl
+                            self.entity_registry = EntityRegistryImpl(pool)
+                            await self.entity_registry.ensure_tables()
+                            self.logger.info("✅ Entity Registry tables ensured")
+                        else:
+                            self.logger.warning("Entity Registry skipped - no connection pool available")
+                            self.entity_registry = None
+                    except Exception as e:
+                        self.logger.warning(f"Entity Registry initialization failed: {e}")
+                        self.entity_registry = None
+                    
                     # Endpoints are already initialized in __init__
                     # SpaceManager is now fully initialized and connected
                     self.logger.info("SpaceManager ready for endpoint operations")
@@ -338,6 +353,8 @@ class VitalGraphAppImpl:
         self._init_graph_data_routers()
         self.logger.info("Initializing data routers...")
         self._init_data_routers()
+        self.logger.info("Initializing entity registry routes...")
+        self._init_entity_registry_routes()
         self.logger.info("Initializing frontend routes...")
         self._init_frontend_routes()
         self.logger.info("All endpoints initialized successfully!")
@@ -477,6 +494,13 @@ class VitalGraphAppImpl:
             await websocket_endpoint(websocket, self.websocket_manager)
 
         self.app.websocket("/api/ws")(websocket_wrapper)
+    
+    def _init_entity_registry_routes(self):
+        """Initialize Entity Registry endpoint routes."""
+        from vitalgraph.endpoint.entity_registry_endpoint import create_entity_registry_router
+        
+        entity_registry_router = create_entity_registry_router(self, self.get_current_user)
+        self.app.include_router(entity_registry_router, prefix="/api/entity-registry", tags=["Entity Registry"])
     
     def _init_frontend_routes(self):
         """Initialize frontend serving routes."""
