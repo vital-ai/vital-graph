@@ -1,0 +1,5 @@
+{"source": "e_31obybtzs3", "destination": "e_bc39rrmjbr", "type_key": "employer_of", "description": "Regional sales director at Acme Corporation", "created_by": "test_runner"}
+{"source": "e_1mnsrvc35l", "destination": "e_31obybtzs3", "type_key": "advisor_to", "description": "Technical architecture advisor", "created_by": "test_runner"}
+{"source": "e_cft3s7lbf9", "destination": "e_hwa93tvzmu", "type_key": "employer_of", "description": "Trade compliance officer at Pinnacle Consulting Group", "created_by": "test_runner"}
+{"source": "e_31obybtzs3", "destination": "e_9qxdkjjemq", "type_key": "customer_of", "description": "Acme uses GeoTest geospatial analytics platform", "created_by": "test_runner"}
+{"source": "e_9qxdkjjemq", "destination": "e_y2xe22sd1z", "type_key": "employer_of", "description": "Supply chain operations manager at GeoTest Corp", "created_by": "test_runner"}

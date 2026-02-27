@@ -1,0 +1,4 @@
+{"type_key": "person", "type_label": "Person", "type_description": "An individual person"}
+{"type_key": "business", "type_label": "Business", "type_description": "A business or company"}
+{"type_key": "organization", "type_label": "Organization", "type_description": "A non-commercial organization"}
+{"type_key": "government", "type_label": "Government", "type_description": "A government body or agency"}

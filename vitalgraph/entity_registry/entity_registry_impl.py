@@ -3,6 +3,17 @@ Core Entity Registry implementation.
 
 Async operations using asyncpg, sharing the connection pool
 from the Fuseki-PostgreSQL hybrid backend.
+
+This class composes domain-specific mixins:
+  - ChangeLogMixin:    change log + helpers
+  - IdentifierMixin:   external identifier CRUD
+  - AliasMixin:        alias CRUD
+  - CategoryMixin:     entity category operations
+  - LocationMixin:     location types, location CRUD, location categories
+  - RelationshipMixin: relationship types, relationship CRUD
+  - SameAsMixin:       same-as mappings + entity resolution
+  - DedupMixin:        near-duplicate detection + cross-worker sync
+  - WeaviateMixin:     Weaviate upsert/delete helpers
 """
 
 import json
@@ -12,47 +23,96 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from .entity_alias_ops import AliasMixin
+from .entity_category_ops import CategoryMixin
+from .entity_changelog_ops import ChangeLogMixin
+from .entity_dedup import EntityDedupIndex
+from .entity_dedup_ops import DedupMixin
+from .entity_identifier_ops import IdentifierMixin
+from .entity_location_ops import LocationMixin
 from .entity_registry_id import generate_entity_id, entity_id_to_uri, uri_to_entity_id
 from .entity_registry_schema import EntityRegistrySchema
+from .entity_relationship_ops import RelationshipMixin
+from .entity_same_as_ops import SameAsMixin
+from .entity_weaviate import EntityWeaviateIndex
+from .entity_weaviate_ops import WeaviateMixin
 
 
 logger = logging.getLogger(__name__)
 
-MAX_RESOLVE_DEPTH = 10
 
-
-class EntityRegistryImpl:
+class EntityRegistryImpl(
+    ChangeLogMixin,
+    IdentifierMixin,
+    AliasMixin,
+    CategoryMixin,
+    LocationMixin,
+    RelationshipMixin,
+    SameAsMixin,
+    DedupMixin,
+    WeaviateMixin,
+):
     """
     Core entity registry operations.
 
     All methods are async and use the shared asyncpg connection pool.
+    Domain-specific operations are provided by the mixin base classes.
     """
 
-    def __init__(self, connection_pool: asyncpg.Pool):
+    def __init__(self, connection_pool: asyncpg.Pool, dedup_index: Optional[EntityDedupIndex] = None,
+                 signal_manager=None, weaviate_index: Optional[EntityWeaviateIndex] = None):
         """
         Initialize with an asyncpg connection pool.
 
         Args:
             connection_pool: Shared asyncpg pool from FusekiPostgreSQLDbImpl.
+            dedup_index: Optional EntityDedupIndex for near-duplicate detection.
+            signal_manager: Optional SignalManager for cross-worker dedup sync.
+            weaviate_index: Optional EntityWeaviateIndex for vector search.
         """
         self.pool = connection_pool
         self.schema = EntityRegistrySchema()
+        self.dedup_index = dedup_index
+        self.signal_manager = signal_manager
+        self.weaviate_index = weaviate_index
 
     # ------------------------------------------------------------------
     # Schema initialization
     # ------------------------------------------------------------------
 
     async def ensure_tables(self) -> bool:
-        """Create registry tables, indexes, and seed data if they don't exist."""
+        """Verify that entity registry tables exist. Does NOT create or modify schema.
+
+        Run entity_registry/migrate.py to create tables and apply migrations.
+        """
         try:
             async with self.pool.acquire() as conn:
-                async with conn.transaction():
-                    for sql in self.schema.create_tables_sql():
-                        await conn.execute(sql)
-                    for sql in self.schema.create_indexes_sql():
-                        await conn.execute(sql)
-                    await conn.execute(self.schema.seed_entity_types_sql())
-            logger.info("Entity registry tables ensured")
+                exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = 'entity')"
+                )
+                if not exists:
+                    raise RuntimeError(
+                        "Entity registry tables not found. "
+                        "Run 'python entity_registry/migrate.py' to create them."
+                    )
+            logger.info("Entity registry tables verified")
+
+            # Initialize dedup index if configured
+            if self.dedup_index:
+                try:
+                    count = await self.dedup_index.initialize(self.pool)
+                    logger.info(f"Entity dedup index loaded {count} entities")
+                except Exception as e:
+                    logger.error(f"Failed to initialize entity dedup index: {e}")
+
+            # Ensure Weaviate collection if configured
+            if self.weaviate_index:
+                try:
+                    await self.weaviate_index.ensure_collection()
+                except Exception as e:
+                    logger.error(f"Failed to ensure Weaviate collection: {e}")
+
             return True
         except Exception as e:
             logger.error(f"Failed to ensure entity registry tables: {e}")
@@ -104,15 +164,20 @@ class EntityRegistryImpl:
         region: Optional[str] = None,
         locality: Optional[str] = None,
         website: Optional[str] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
         created_by: Optional[str] = None,
         notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         aliases: Optional[List[Dict[str, Any]]] = None,
         identifiers: Optional[List[Dict[str, Any]]] = None,
+        locations: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Create a new entity with a generated unique ID.
 
-        Optionally creates initial aliases and identifiers in the same transaction.
+        Optionally creates initial aliases, identifiers, and locations
+        in the same transaction.
 
         Returns:
             Entity dict including entity_id and entity_uri.
@@ -120,6 +185,8 @@ class EntityRegistryImpl:
         Raises:
             ValueError: If type_key is invalid.
         """
+        metadata_json = json.dumps(metadata) if metadata else '{}'
+
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 type_id = await self._get_entity_type_id(conn, type_key)
@@ -141,10 +208,13 @@ class EntityRegistryImpl:
 
                 row = await conn.fetchrow(
                     "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
-                    "country, region, locality, website, created_by, notes) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *",
+                    "country, region, locality, website, latitude, longitude, "
+                    "metadata, created_by, notes) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13) "
+                    "RETURNING *",
                     entity_id, type_id, primary_name, description,
-                    country, region, locality, website, created_by, notes
+                    country, region, locality, website, latitude, longitude,
+                    metadata_json, created_by, notes
                 )
                 entity = dict(row)
                 entity['entity_uri'] = entity_id_to_uri(entity_id)
@@ -163,11 +233,34 @@ class EntityRegistryImpl:
                     for ident_data in identifiers:
                         await self._insert_identifier(conn, entity_id, **ident_data)
 
+                # Create initial locations
+                if locations:
+                    for loc_data in locations:
+                        loc_type_key = loc_data.pop('location_type_key', None)
+                        if loc_type_key:
+                            await self._insert_location(
+                                conn, entity_id, loc_type_key,
+                                created_by=created_by, **loc_data,
+                            )
+
+                # Update dedup index and notify other workers
+                if self.dedup_index:
+                    entity_for_index = dict(entity)
+                    entity_for_index['aliases'] = [
+                        {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
+                    ]
+                    self.dedup_index.add_entity(entity_id, entity_for_index)
+                    await self._notify_dedup_change('add', entity_id)
+
+                # Sync to Weaviate
+                await self._weaviate_upsert_entity(entity_id)
+
                 return entity
 
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get entity by ID, including type info, identifiers, and aliases.
+        Get entity by ID, including type info, identifiers, aliases,
+        locations, and relationships.
         """
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -181,6 +274,13 @@ class EntityRegistryImpl:
 
             entity = dict(row)
             entity['entity_uri'] = entity_id_to_uri(entity_id)
+
+            # Ensure metadata is a dict
+            md = entity.get('metadata')
+            if isinstance(md, str):
+                entity['metadata'] = json.loads(md)
+            elif md is None:
+                entity['metadata'] = {}
 
             # Fetch identifiers
             ident_rows = await conn.fetch(
@@ -198,6 +298,44 @@ class EntityRegistryImpl:
             )
             entity['aliases'] = [dict(r) for r in alias_rows]
 
+            # Fetch active locations (with is_active from view)
+            loc_rows = await conn.fetch(
+                "SELECT lv.*, lt.type_key AS location_type_key, "
+                "lt.type_label AS location_type_label "
+                "FROM entity_location_view lv "
+                "JOIN entity_location_type lt ON lv.location_type_id = lt.location_type_id "
+                "WHERE lv.entity_id = $1 AND lv.status = 'active' "
+                "ORDER BY lv.is_primary DESC, lv.location_id",
+                entity_id
+            )
+            locations = []
+            for lr in loc_rows:
+                loc = dict(lr)
+                cat_rows = await conn.fetch(
+                    "SELECT c.category_key, c.category_label "
+                    "FROM entity_location_category_map lcm "
+                    "JOIN category c ON lcm.category_id = c.category_id "
+                    "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+                    "ORDER BY c.category_key",
+                    loc['location_id']
+                )
+                loc['categories'] = [dict(r) for r in cat_rows]
+                locations.append(loc)
+            entity['locations'] = locations
+
+            # Fetch current relationships (from view)
+            rel_rows = await conn.fetch(
+                "SELECT rv.*, rt.type_key AS relationship_type_key, "
+                "rt.type_label AS relationship_type_label, rt.inverse_key "
+                "FROM entity_relationship_view rv "
+                "JOIN relationship_type rt ON rv.relationship_type_id = rt.relationship_type_id "
+                "WHERE (rv.entity_source = $1 OR rv.entity_destination = $1) "
+                "AND rv.is_current = TRUE "
+                "ORDER BY rv.relationship_id",
+                entity_id
+            )
+            entity['relationships'] = [dict(r) for r in rel_rows]
+
             return entity
 
     async def get_entity_by_uri(self, uri: str) -> Optional[Dict[str, Any]]:
@@ -214,9 +352,14 @@ class EntityRegistryImpl:
         region: Optional[str] = None,
         locality: Optional[str] = None,
         website: Optional[str] = None,
+        latitude: Optional[float] = None,
+        longitude: Optional[float] = None,
         status: Optional[str] = None,
         updated_by: Optional[str] = None,
         notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        verified: Optional[bool] = None,
+        verified_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Update entity fields. Only provided (non-None) fields are updated.
@@ -238,6 +381,10 @@ class EntityRegistryImpl:
             fields['locality'] = locality
         if website is not None:
             fields['website'] = website
+        if latitude is not None:
+            fields['latitude'] = latitude
+        if longitude is not None:
+            fields['longitude'] = longitude
         if status is not None:
             valid_statuses = ('active', 'inactive', 'merged', 'deleted')
             if status not in valid_statuses:
@@ -245,6 +392,13 @@ class EntityRegistryImpl:
             fields['status'] = status
         if notes is not None:
             fields['notes'] = notes
+        if metadata is not None:
+            fields['metadata'] = json.dumps(metadata)
+        if verified is not None:
+            fields['verified'] = verified
+            if verified:
+                fields['verified_by'] = verified_by or updated_by
+                fields['verified_time'] = datetime.now(timezone.utc)
 
         if not fields:
             return await self.get_entity(entity_id)
@@ -254,7 +408,8 @@ class EntityRegistryImpl:
         set_parts = []
         values = []
         for i, (col, val) in enumerate(fields.items(), 1):
-            set_parts.append(f"{col} = ${i}")
+            cast = '::jsonb' if col == 'metadata' else ''
+            set_parts.append(f"{col} = ${i}{cast}")
             values.append(val)
 
         values.append(entity_id)
@@ -274,7 +429,19 @@ class EntityRegistryImpl:
                     'fields': list(fields.keys())
                 }, changed_by=updated_by)
 
-        return await self.get_entity(entity_id)
+        updated = await self.get_entity(entity_id)
+
+        # Refresh dedup index if name or location fields changed
+        if self.dedup_index and updated:
+            dedup_fields = {'primary_name', 'country', 'region', 'locality'}
+            if dedup_fields & set(fields.keys()):
+                self.dedup_index.add_entity(entity_id, updated)
+                await self._notify_dedup_change('add', entity_id)
+
+        # Sync to Weaviate
+        await self._weaviate_upsert_entity(entity_id)
+
+        return updated
 
     async def delete_entity(self, entity_id: str, deleted_by: Optional[str] = None,
                             comment: Optional[str] = None) -> bool:
@@ -295,7 +462,20 @@ class EntityRegistryImpl:
 
                 await self._log_change(conn, entity_id, 'entity_deleted', None,
                                        changed_by=deleted_by, comment=comment)
+
+                # Remove from dedup index and notify other workers
+                if self.dedup_index:
+                    self.dedup_index.remove_entity(entity_id)
+                    await self._notify_dedup_change('remove', entity_id)
+
+                # Remove from Weaviate
+                await self._weaviate_delete_entity(entity_id)
+
                 return True
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
 
     async def search_entities(
         self,
@@ -395,435 +575,3 @@ class EntityRegistryImpl:
         return await self.search_entities(
             type_key=type_key, status=status, page=page, page_size=page_size
         )
-
-    # ------------------------------------------------------------------
-    # Identifier operations
-    # ------------------------------------------------------------------
-
-    async def _insert_identifier(
-        self, conn, entity_id: str,
-        identifier_namespace: str, identifier_value: str,
-        is_primary: bool = False, created_by: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Insert an identifier within an existing connection/transaction."""
-        row = await conn.fetchrow(
-            "INSERT INTO entity_identifier (entity_id, identifier_namespace, identifier_value, "
-            "is_primary, created_by, notes) "
-            "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            entity_id, identifier_namespace, identifier_value, is_primary, created_by, notes
-        )
-        await self._log_change(conn, entity_id, 'identifier_added', {
-            'namespace': identifier_namespace, 'value': identifier_value
-        }, changed_by=created_by)
-        return dict(row)
-
-    async def add_identifier(
-        self, entity_id: str,
-        identifier_namespace: str, identifier_value: str,
-        is_primary: bool = False, created_by: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Add an external identifier to an entity."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                # Verify entity exists
-                exists = await conn.fetchval(
-                    "SELECT 1 FROM entity WHERE entity_id = $1", entity_id
-                )
-                if not exists:
-                    raise ValueError(f"Entity not found: {entity_id}")
-
-                return await self._insert_identifier(
-                    conn, entity_id, identifier_namespace, identifier_value,
-                    is_primary, created_by, notes
-                )
-
-    async def remove_identifier(self, identifier_id: int,
-                                retracted_by: Optional[str] = None) -> bool:
-        """Retract an identifier (soft-remove)."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "UPDATE entity_identifier SET status = 'retracted' "
-                    "WHERE identifier_id = $1 AND status != 'retracted' RETURNING entity_id, identifier_namespace, identifier_value",
-                    identifier_id
-                )
-                if row is None:
-                    return False
-
-                await self._log_change(conn, row['entity_id'], 'identifier_retracted', {
-                    'identifier_id': identifier_id,
-                    'namespace': row['identifier_namespace'],
-                    'value': row['identifier_value'],
-                }, changed_by=retracted_by)
-                return True
-
-    async def list_identifiers(self, entity_id: str) -> List[Dict[str, Any]]:
-        """List all active identifiers for an entity."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM entity_identifier WHERE entity_id = $1 AND status != 'retracted' "
-                "ORDER BY identifier_namespace, identifier_id",
-                entity_id
-            )
-            return [dict(r) for r in rows]
-
-    async def lookup_by_identifier(
-        self, namespace: str, value: str
-    ) -> List[Dict[str, Any]]:
-        """Find entities by external identifier (namespace + value).
-
-        Returns a list since identifiers are not necessarily unique across entities.
-        """
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT ei.entity_id FROM entity_identifier ei "
-                "JOIN entity e ON ei.entity_id = e.entity_id "
-                "WHERE ei.identifier_namespace = $1 AND ei.identifier_value = $2 "
-                "AND ei.status = 'active' AND e.status != 'deleted'",
-                namespace, value
-            )
-            entities = []
-            for row in rows:
-                entity = await self.get_entity(row['entity_id'])
-                if entity:
-                    entities.append(entity)
-            return entities
-
-    async def lookup_by_identifier_value(self, value: str) -> List[Dict[str, Any]]:
-        """Find entities by identifier value across all namespaces."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT ei.entity_id FROM entity_identifier ei "
-                "JOIN entity e ON ei.entity_id = e.entity_id "
-                "WHERE ei.identifier_value = $1 "
-                "AND ei.status = 'active' AND e.status != 'deleted'",
-                value
-            )
-            entities = []
-            for row in rows:
-                entity = await self.get_entity(row['entity_id'])
-                if entity:
-                    entities.append(entity)
-            return entities
-
-    # ------------------------------------------------------------------
-    # Alias operations
-    # ------------------------------------------------------------------
-
-    async def _insert_alias(
-        self, conn, entity_id: str,
-        alias_name: str, alias_type: str = 'aka',
-        is_primary: bool = False, created_by: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Insert an alias within an existing connection/transaction."""
-        row = await conn.fetchrow(
-            "INSERT INTO entity_alias (entity_id, alias_name, alias_type, is_primary, created_by, notes) "
-            "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            entity_id, alias_name, alias_type, is_primary, created_by, notes
-        )
-        await self._log_change(conn, entity_id, 'alias_added', {
-            'alias_name': alias_name, 'alias_type': alias_type
-        }, changed_by=created_by)
-        return dict(row)
-
-    async def add_alias(
-        self, entity_id: str,
-        alias_name: str, alias_type: str = 'aka',
-        is_primary: bool = False, created_by: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Add an alias to an entity."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                exists = await conn.fetchval(
-                    "SELECT 1 FROM entity WHERE entity_id = $1", entity_id
-                )
-                if not exists:
-                    raise ValueError(f"Entity not found: {entity_id}")
-
-                return await self._insert_alias(
-                    conn, entity_id, alias_name, alias_type,
-                    is_primary, created_by, notes
-                )
-
-    async def remove_alias(self, alias_id: int,
-                           retracted_by: Optional[str] = None) -> bool:
-        """Retract an alias (soft-remove)."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "UPDATE entity_alias SET status = 'retracted' "
-                    "WHERE alias_id = $1 AND status != 'retracted' RETURNING entity_id, alias_name",
-                    alias_id
-                )
-                if row is None:
-                    return False
-
-                await self._log_change(conn, row['entity_id'], 'alias_retracted', {
-                    'alias_id': alias_id, 'alias_name': row['alias_name']
-                }, changed_by=retracted_by)
-                return True
-
-    async def list_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
-        """List all active aliases for an entity."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM entity_alias WHERE entity_id = $1 AND status != 'retracted' "
-                "ORDER BY alias_type, alias_id",
-                entity_id
-            )
-            return [dict(r) for r in rows]
-
-    async def search_by_alias(self, query: str) -> List[Dict[str, Any]]:
-        """Search entities via alias names (ILIKE)."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT ea.entity_id FROM entity_alias ea "
-                "JOIN entity e ON ea.entity_id = e.entity_id "
-                "WHERE ea.alias_name ILIKE $1 AND ea.status != 'retracted' AND e.status != 'deleted'",
-                f"%{query}%"
-            )
-            entities = []
-            for row in rows:
-                entity = await self.get_entity(row['entity_id'])
-                if entity:
-                    entities.append(entity)
-            return entities
-
-    # ------------------------------------------------------------------
-    # Same-As operations
-    # ------------------------------------------------------------------
-
-    async def create_same_as(
-        self,
-        source_entity_id: str,
-        target_entity_id: str,
-        relationship_type: str = 'same_as',
-        confidence: Optional[float] = None,
-        reason: Optional[str] = None,
-        created_by: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Create a same-as mapping between two entities.
-
-        Validates that both entities exist and checks for cycles.
-
-        Raises:
-            ValueError: If entities don't exist, are the same, or would create a cycle.
-        """
-        if source_entity_id == target_entity_id:
-            raise ValueError("Cannot create same-as mapping to self")
-
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                # Verify both entities exist
-                for eid in (source_entity_id, target_entity_id):
-                    exists = await conn.fetchval(
-                        "SELECT 1 FROM entity WHERE entity_id = $1", eid
-                    )
-                    if not exists:
-                        raise ValueError(f"Entity not found: {eid}")
-
-                # Check for cycles: would target eventually resolve back to source?
-                if await self._would_create_cycle(conn, source_entity_id, target_entity_id):
-                    raise ValueError(
-                        f"Creating same-as {source_entity_id} -> {target_entity_id} would create a cycle"
-                    )
-
-                row = await conn.fetchrow(
-                    "INSERT INTO entity_same_as (source_entity_id, target_entity_id, "
-                    "relationship_type, confidence, reason, created_by, notes) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
-                    source_entity_id, target_entity_id, relationship_type,
-                    confidence, reason, created_by, notes
-                )
-
-                await self._log_change(conn, source_entity_id, 'same_as_created', {
-                    'target_entity_id': target_entity_id,
-                    'relationship_type': relationship_type,
-                }, changed_by=created_by)
-
-                return dict(row)
-
-    async def _would_create_cycle(self, conn, source_id: str, target_id: str) -> bool:
-        """Check if adding source -> target would create a cycle."""
-        visited = {source_id}
-        current = target_id
-        for _ in range(MAX_RESOLVE_DEPTH):
-            if current in visited:
-                return True
-            visited.add(current)
-            next_id = await conn.fetchval(
-                "SELECT target_entity_id FROM entity_same_as "
-                "WHERE source_entity_id = $1 AND status = 'active' LIMIT 1",
-                current
-            )
-            if next_id is None:
-                return False
-            current = next_id
-        # Exceeded depth — treat as potential cycle
-        return True
-
-    async def retract_same_as(
-        self, same_as_id: int,
-        retracted_by: Optional[str] = None,
-        reason: Optional[str] = None,
-    ) -> bool:
-        """Retract a same-as mapping."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "UPDATE entity_same_as SET status = 'retracted', "
-                    "retracted_time = $1, retracted_by = $2 "
-                    "WHERE same_as_id = $3 AND status = 'active' "
-                    "RETURNING source_entity_id, target_entity_id",
-                    datetime.now(timezone.utc), retracted_by, same_as_id
-                )
-                if row is None:
-                    return False
-
-                await self._log_change(conn, row['source_entity_id'], 'same_as_retracted', {
-                    'same_as_id': same_as_id,
-                    'target_entity_id': row['target_entity_id'],
-                }, changed_by=retracted_by, comment=reason)
-                return True
-
-    async def get_same_as(self, entity_id: str) -> List[Dict[str, Any]]:
-        """Get all active same-as mappings for an entity (as source or target)."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM entity_same_as "
-                "WHERE (source_entity_id = $1 OR target_entity_id = $1) AND status = 'active' "
-                "ORDER BY created_time",
-                entity_id
-            )
-            return [dict(r) for r in rows]
-
-    async def resolve_entity(self, entity_id: str) -> Dict[str, Any]:
-        """
-        Follow transitive same-as chain to the canonical entity.
-
-        A -> B -> C returns C.
-        If no same-as mapping exists, returns the entity itself.
-
-        Raises:
-            ValueError: If entity not found.
-        """
-        async with self.pool.acquire() as conn:
-            current_id = entity_id
-            visited = set()
-
-            for _ in range(MAX_RESOLVE_DEPTH):
-                if current_id in visited:
-                    break  # cycle detected, stop
-                visited.add(current_id)
-
-                next_id = await conn.fetchval(
-                    "SELECT target_entity_id FROM entity_same_as "
-                    "WHERE source_entity_id = $1 AND status = 'active' LIMIT 1",
-                    current_id
-                )
-                if next_id is None:
-                    break
-                current_id = next_id
-
-        entity = await self.get_entity(current_id)
-        if entity is None:
-            raise ValueError(f"Entity not found: {entity_id}")
-        return entity
-
-    # ------------------------------------------------------------------
-    # Change Log
-    # ------------------------------------------------------------------
-
-    async def _log_change(
-        self, conn, entity_id: Optional[str], change_type: str,
-        change_detail: Optional[Dict] = None,
-        changed_by: Optional[str] = None,
-        comment: Optional[str] = None,
-    ):
-        """Insert a change log entry within an existing connection/transaction."""
-        detail_json = json.dumps(change_detail) if change_detail else None
-        await conn.execute(
-            "INSERT INTO entity_change_log (entity_id, change_type, change_detail, changed_by, comment) "
-            "VALUES ($1, $2, $3::jsonb, $4, $5)",
-            entity_id, change_type, detail_json, changed_by, comment
-        )
-
-    async def get_change_log(
-        self, entity_id: str,
-        change_type: Optional[str] = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
-        """Get change log for a specific entity."""
-        conditions = ["entity_id = $1"]
-        params: list = [entity_id]
-        param_idx = 1
-
-        if change_type:
-            param_idx += 1
-            conditions.append(f"change_type = ${param_idx}")
-            params.append(change_type)
-
-        where = "WHERE " + " AND ".join(conditions)
-
-        async with self.pool.acquire() as conn:
-            total = await conn.fetchval(
-                f"SELECT COUNT(*) FROM entity_change_log {where}", *params
-            )
-
-            param_idx += 1
-            params.append(limit)
-            limit_p = param_idx
-            param_idx += 1
-            params.append(offset)
-            offset_p = param_idx
-
-            rows = await conn.fetch(
-                f"SELECT * FROM entity_change_log {where} "
-                f"ORDER BY created_time DESC LIMIT ${limit_p} OFFSET ${offset_p}",
-                *params
-            )
-            return [self._parse_row(dict(r)) for r in rows], total
-
-    async def get_recent_changes(
-        self,
-        limit: int = 50,
-        change_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get recent changes across all entities."""
-        if change_type:
-            rows_raw = await self._fetch(
-                "SELECT * FROM entity_change_log WHERE change_type = $1 "
-                "ORDER BY created_time DESC LIMIT $2",
-                change_type, limit
-            )
-        else:
-            rows_raw = await self._fetch(
-                "SELECT * FROM entity_change_log ORDER BY created_time DESC LIMIT $1",
-                limit
-            )
-        return [self._parse_row(r) for r in rows_raw]
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _parse_row(row_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensure JSONB fields are dicts, not strings."""
-        cd = row_dict.get('change_detail')
-        if isinstance(cd, str):
-            row_dict['change_detail'] = json.loads(cd)
-        return row_dict
-
-    async def _fetch(self, sql: str, *args) -> List[Dict[str, Any]]:
-        """Simple fetch helper."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, *args)
-            return [dict(r) for r in rows]

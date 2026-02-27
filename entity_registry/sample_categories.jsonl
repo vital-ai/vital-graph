@@ -1,0 +1,7 @@
+{"category_key": "customer", "category_label": "Customer", "category_description": "A customer or client"}
+{"category_key": "partner", "category_label": "Partner", "category_description": "A business partner or affiliate"}
+{"category_key": "vendor", "category_label": "Vendor", "category_description": "A vendor or supplier"}
+{"category_key": "competitor", "category_label": "Competitor", "category_description": "A competitor"}
+{"category_key": "prospect", "category_label": "Prospect", "category_description": "A prospective customer or lead"}
+{"category_key": "investor", "category_label": "Investor", "category_description": "An investor or shareholder"}
+{"category_key": "regulator", "category_label": "Regulator", "category_description": "A regulatory or oversight body"}

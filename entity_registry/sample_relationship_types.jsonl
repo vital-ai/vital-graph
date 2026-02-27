@@ -1,0 +1,13 @@
+{"type_key": "parent_of", "type_label": "Parent Of", "type_description": "Parent company or organization", "inverse_key": "subsidiary_of"}
+{"type_key": "subsidiary_of", "type_label": "Subsidiary Of", "type_description": "Subsidiary or child organization", "inverse_key": "parent_of"}
+{"type_key": "employer_of", "type_label": "Employer Of", "type_description": "Employs a person", "inverse_key": "employee_of"}
+{"type_key": "employee_of", "type_label": "Employee Of", "type_description": "Employed by an organization", "inverse_key": "employer_of"}
+{"type_key": "investor_in", "type_label": "Investor In", "type_description": "Invests in an entity", "inverse_key": "funded_by"}
+{"type_key": "funded_by", "type_label": "Funded By", "type_description": "Receives funding from an entity", "inverse_key": "investor_in"}
+{"type_key": "partner_of", "type_label": "Partner Of", "type_description": "Business partner (symmetric)", "inverse_key": "partner_of"}
+{"type_key": "advisor_to", "type_label": "Advisor To", "type_description": "Advises an entity", "inverse_key": "advised_by"}
+{"type_key": "advised_by", "type_label": "Advised By", "type_description": "Receives advice from an entity", "inverse_key": "advisor_to"}
+{"type_key": "supplier_to", "type_label": "Supplier To", "type_description": "Supplies goods/services to an entity", "inverse_key": "customer_of"}
+{"type_key": "customer_of", "type_label": "Customer Of", "type_description": "Purchases goods/services from an entity", "inverse_key": "supplier_to"}
+{"type_key": "board_member_of", "type_label": "Board Member Of", "type_description": "Serves on the board of an entity", "inverse_key": "has_board_member"}
+{"type_key": "has_board_member", "type_label": "Has Board Member", "type_description": "Has a person on its board", "inverse_key": "board_member_of"}

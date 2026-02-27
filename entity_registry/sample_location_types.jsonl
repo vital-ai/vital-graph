@@ -1,0 +1,6 @@
+{"type_key": "headquarters", "type_label": "Headquarters", "type_description": "Primary headquarters"}
+{"type_key": "branch", "type_label": "Branch Office", "type_description": "A branch or satellite office"}
+{"type_key": "warehouse", "type_label": "Warehouse", "type_description": "A warehouse or distribution center"}
+{"type_key": "mailing", "type_label": "Mailing Address", "type_description": "A mailing or correspondence address"}
+{"type_key": "residence", "type_label": "Residence", "type_description": "A residential address"}
+{"type_key": "registered", "type_label": "Registered Office", "type_description": "Officially registered office address"}

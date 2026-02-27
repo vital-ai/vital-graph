@@ -65,6 +65,9 @@ server = [
     "pytidb[models]",
     "pytidb",
     "weaviate-client>=4.19.2",
+    "datasketch>=1.6.0",
+    "rapidfuzz>=3.0.0",
+    "jellyfish>=1.0.0",
 ]
 
 # Development dependencies
@@ -75,6 +78,12 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.5.0",
     "pre-commit>=3.0.0",
+    # Local vectorizer (generate_vectors.py) — replicates Weaviate text2vec-transformers
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "nltk>=3.8.0",
+    "numpy>=1.24.0",
+    "sentencepiece>=0.1.99",
 ]
 
 # Testing utilities

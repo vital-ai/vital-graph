@@ -226,9 +226,26 @@ class VitalGraphAppImpl:
                         pool = getattr(self.db_impl, 'connection_pool', None)
                         if pool:
                             from vitalgraph.entity_registry.entity_registry_impl import EntityRegistryImpl
-                            self.entity_registry = EntityRegistryImpl(pool)
+                            from vitalgraph.entity_registry.entity_dedup import EntityDedupIndex
+                            from vitalgraph.entity_registry.entity_weaviate import EntityWeaviateIndex
+                            dedup_index = EntityDedupIndex.from_env()
+                            weaviate_index = await EntityWeaviateIndex.from_env()
+                            signal_mgr = self.vital_graph_impl.signal_manager if self.vital_graph_impl else None
+                            self.entity_registry = EntityRegistryImpl(
+                                pool, dedup_index=dedup_index, signal_manager=signal_mgr,
+                                weaviate_index=weaviate_index,
+                            )
                             await self.entity_registry.ensure_tables()
                             self.logger.info("✅ Entity Registry tables ensured")
+
+                            # Register callback for cross-worker dedup sync
+                            if signal_mgr and dedup_index:
+                                from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_DEDUP
+                                signal_mgr.register_callback(
+                                    CHANNEL_ENTITY_DEDUP,
+                                    self.entity_registry._handle_dedup_notification,
+                                )
+                                self.logger.info("✅ Entity dedup cross-worker sync registered")
                         else:
                             self.logger.warning("Entity Registry skipped - no connection pool available")
                             self.entity_registry = None
@@ -500,7 +517,7 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.entity_registry_endpoint import create_entity_registry_router
         
         entity_registry_router = create_entity_registry_router(self, self.get_current_user)
-        self.app.include_router(entity_registry_router, prefix="/api/entity-registry", tags=["Entity Registry"])
+        self.app.include_router(entity_registry_router, prefix="/api/registry")
     
     def _init_frontend_routes(self):
         """Initialize frontend serving routes."""
