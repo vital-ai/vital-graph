@@ -15,7 +15,8 @@ class WeaviateMixin:
         """Upsert an entity to Weaviate (non-blocking, logs errors).
 
         Fetches the full entity with aliases and categories, then upserts.
-        Also refreshes the Entity→Location cross-references.
+        Also ensures all locations exist in LocationIndex before setting
+        Entity→Location cross-references.
         """
         if not self.weaviate_index:
             return
@@ -28,9 +29,12 @@ class WeaviateMixin:
             entity['identifiers'] = await self.list_identifiers(entity_id)
             await self.weaviate_index.upsert_entity(entity)
 
-            # Refresh Entity→Location cross-refs
+            # Ensure all locations exist in LocationIndex, then set cross-refs
             locations = entity.get('locations', [])
             if locations:
+                for loc in locations:
+                    if loc.get('location_id'):
+                        await self.weaviate_index.upsert_location(loc)
                 loc_ids = [loc['location_id'] for loc in locations if loc.get('location_id')]
                 if loc_ids:
                     await self.weaviate_index.set_entity_location_refs(entity_id, loc_ids)
