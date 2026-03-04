@@ -75,9 +75,11 @@ def main():
 def validate_generated_instances(instances_path: str):
     """Validate that the generated JSONL file has proper structure."""
     
+    vs = VitalSigns()
+    
     try:
         line_count = 0
-        valid_json_count = 0
+        valid_count = 0
         instance_types = set()
         
         with open(instances_path, 'r') as f:
@@ -86,29 +88,30 @@ def validate_generated_instances(instances_path: str):
                 line = line.strip()
                 if line:
                     try:
-                        instance = json.loads(line)
-                        valid_json_count += 1
+                        # Parse JSON line into GraphObject via VitalSigns
+                        json_data = json.loads(line)
+                        objects = vs.from_json_list([json_data])
                         
-                        # Check required fields
-                        if '@type' in instance and '@id' in instance:
-                            instance_type = instance.get('@type', 'Unknown')
-                            instance_types.add(instance_type)
+                        if objects and len(objects) > 0:
+                            obj = objects[0]
+                            valid_count += 1
+                            obj_type = type(obj).__name__
+                            instance_types.add(obj_type)
                             if line_count <= 3:  # Show first few instances
-                                print(f"    ✓ Valid instance: {instance_type}")
-                                print(f"      ID: {instance.get('@id', 'Unknown')}")
-                                prop_count = len([k for k in instance.keys() if not k.startswith('@')])
-                                print(f"      Properties: {prop_count}")
+                                print(f"    ✓ Valid instance: {obj_type}")
+                                print(f"      URI: {obj.URI}")
                         else:
-                            print(f"    ⚠ Missing @type or @id in line {line_count}")
+                            print(f"    ⚠ Could not parse GraphObject from line {line_count}")
                             
                     except json.JSONDecodeError as e:
                         print(f"    ✗ Invalid JSON on line {line_count}: {e}")
+                    except Exception as e:
+                        print(f"    ⚠ Failed to parse line {line_count}: {e}")
         
-        print(f"    ✓ Processed {line_count} lines, {valid_json_count} valid JSON instances")
+        print(f"    ✓ Processed {line_count} lines, {valid_count} valid GraphObject instances")
         print(f"    ✓ Found {len(instance_types)} different instance types:")
-        for instance_type in sorted(list(instance_types)[:5]):  # Show first 5 types
-            type_name = instance_type.split('#')[-1] if '#' in instance_type else instance_type
-            print(f"      - {type_name}")
+        for obj_type in sorted(list(instance_types)[:5]):  # Show first 5 types
+            print(f"      - {obj_type}")
         if len(instance_types) > 5:
             print(f"      ... and {len(instance_types) - 5} more types")
         
@@ -156,17 +159,14 @@ def test_specific_ontology():
             
             # Show first instance details
             if lines:
-                first_instance = json.loads(lines[0].strip())
-                print(f"First instance:")
-                print(f"  Type: {first_instance.get('@type', 'Unknown')}")
-                print(f"  ID: {first_instance.get('@id', 'Unknown')}")
-                properties = {k: v for k, v in first_instance.items() if not k.startswith('@')}
-                print(f"  Properties: {len(properties)}")
-                for prop_uri, value in list(properties.items())[:3]:  # Show first 3 properties
-                    prop_name = prop_uri.split('#')[-1] if '#' in prop_uri else prop_uri
-                    print(f"    {prop_name}: {value}")
-                if len(properties) > 3:
-                    print(f"    ... and {len(properties) - 3} more properties")
+                vs = VitalSigns()
+                first_json = json.loads(lines[0].strip())
+                first_objects = vs.from_json_list([first_json])
+                if first_objects:
+                    first_obj = first_objects[0]
+                    print(f"First instance:")
+                    print(f"  Type: {type(first_obj).__name__}")
+                    print(f"  URI: {first_obj.URI}")
             
         except Exception as e:
             print(f"Test failed for {ontology_uri}: {e}")

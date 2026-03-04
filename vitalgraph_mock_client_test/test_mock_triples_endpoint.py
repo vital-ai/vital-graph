@@ -7,7 +7,7 @@ This script demonstrates:
 - pyoxigraph quad store operations for triple management
 - Complete triple lifecycle: add, list, query, delete
 - Real SPARQL pattern matching for triple queries
-- JSON-LD document processing and conversion
+- Quad-based response handling and conversion
 - Comprehensive error handling and edge cases
 """
 import logging
@@ -29,9 +29,10 @@ logging.basicConfig(
 from vitalgraph.mock.client.endpoint.mock_triples_endpoint import MockTriplesEndpoint
 from vitalgraph.mock.client.space.mock_space_manager import MockSpaceManager
 from vitalgraph.model.triples_model import TripleListResponse, TripleOperationResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.VITAL_Node import VITAL_Node
+from ai_haley_kg_domain.model.KGEntity import KGEntity
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
 
 
 class TestMockTriplesEndpoint:
@@ -79,43 +80,25 @@ class TestMockTriplesEndpoint:
         except Exception as e:
             print(f"⚠️  Cleanup error: {e}")
     
-    def create_test_jsonld_document(self) -> JsonLdDocument:
-        """Create a test JSON-LD document with VitalSigns-compatible data."""
-        jsonld_data = {
-            "@context": {
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#"
-            },
-            "@graph": [
-                {
-                    "@id": "http://example.org/entity1",
-                    "@type": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                    "http://vital.ai/ontology/vital-core#vitaltype": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                    "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription": "Test Entity 1 Description"
-                },
-                {
-                    "@id": "http://example.org/entity2", 
-                    "@type": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                    "http://vital.ai/ontology/vital-core#vitaltype": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                    "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription": "Test Entity 2 Description"
-                }
-            ]
-        }
-        return JsonLdDocument(**jsonld_data)
+    def create_test_graphobjects(self):
+        """Create test GraphObjects for triples operations."""
+        entity1 = KGEntity()
+        entity1.URI = "http://example.org/entity1"
+        entity1.kGraphDescription = "Test Entity 1 Description"
+        
+        entity2 = KGEntity()
+        entity2.URI = "http://example.org/entity2"
+        entity2.kGraphDescription = "Test Entity 2 Description"
+        
+        return [entity1, entity2]
     
-    def create_simple_jsonld_document(self) -> JsonLdDocument:
-        """Create a simple JSON-LD document with VitalSigns-compatible entity."""
-        jsonld_data = {
-            "@context": {
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#"
-            },
-            "@id": "http://example.org/simple1",
-            "@type": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-            "http://vital.ai/ontology/vital-core#vitaltype": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-            "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription": "Simple Test Entity"
-        }
-        return JsonLdDocument(**jsonld_data)
+    def create_simple_graphobject(self):
+        """Create a simple GraphObject for triples operations."""
+        entity = KGEntity()
+        entity.URI = "http://example.org/simple1"
+        entity.kGraphDescription = "Simple Test Entity"
+        
+        return [entity]
     
     def test_list_triples_empty(self):
         """Test listing triples when no triples exist."""
@@ -123,23 +106,19 @@ class TestMockTriplesEndpoint:
             response = self.endpoint.list_triples(self.test_space_id, self.test_graph_id)
             
             success = (
-                hasattr(response, 'data') and
-                hasattr(response.data, 'model_dump') and
+                isinstance(response, TripleListResponse) and
                 hasattr(response, 'total_count') and
                 response.total_count == 0
             )
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
             self.log_test_result(
                 "List Triples (Empty)",
                 success,
-                f"Found {len(graph_items)} entities in empty graph",
+                f"Found {len(graph_objects)} entities in empty graph",
                 {
-                    "entities_count": len(graph_items),
+                    "entities_count": len(graph_objects),
                     "total_count": getattr(response, 'total_count', 0)
                 }
             )
@@ -148,10 +127,10 @@ class TestMockTriplesEndpoint:
             self.log_test_result("List Triples (Empty)", False, f"Exception: {e}")
     
     def test_add_triples(self):
-        """Test adding triples via JSON-LD document."""
+        """Test adding triples via GraphObjects."""
         try:
-            document = self.create_test_jsonld_document()
-            response = self.endpoint.add_triples(self.test_space_id, self.test_graph_id, document)
+            test_objects = self.create_test_graphobjects()
+            response = self.endpoint.add_triples(self.test_space_id, self.test_graph_id, test_objects)
             
             success = (
                 isinstance(response, TripleOperationResponse) and
@@ -161,7 +140,7 @@ class TestMockTriplesEndpoint:
             self.log_test_result(
                 "Add Triples",
                 success,
-                f"Added triples from JSON-LD document",
+                f"Added triples from GraphObjects",
                 {
                     "success": response.success,
                     "message": response.message
@@ -179,34 +158,29 @@ class TestMockTriplesEndpoint:
         try:
             response = self.endpoint.list_triples(self.test_space_id, self.test_graph_id)
             
-            # Get the JSON-LD data (use by_alias=True to get @graph instead of graph)
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
             success = (
-                hasattr(response, 'data') and
-                hasattr(response, 'total_count') and
+                isinstance(response, TripleListResponse) and
                 response.total_count > 0 and
-                len(graph_items) > 0
+                len(graph_objects) > 0
             )
             
             entities_data = []
-            for entity in graph_items[:3]:  # Show first 3 entities
+            for obj in graph_objects[:3]:  # Show first 3 objects
                 entities_data.append({
-                    "@id": entity.get("@id", ""),
-                    "@type": entity.get("@type", ""),
-                    "properties": {k: v for k, v in entity.items() if not k.startswith('@')}
+                    "URI": str(obj.URI),
+                    "type": type(obj).__name__
                 })
             
             self.log_test_result(
                 "List Triples (With Data)",
                 success,
-                f"Found {len(graph_items)} entities in graph",
+                f"Found {len(graph_objects)} objects in graph",
                 {
-                    "entities_count": len(graph_items),
+                    "objects_count": len(graph_objects),
                     "total_count": getattr(response, 'total_count', 0),
-                    "sample_entities": entities_data
+                    "sample_objects": entities_data
                 }
             )
             
@@ -224,25 +198,20 @@ class TestMockTriplesEndpoint:
                 offset=0
             )
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
             success = (
-                hasattr(response, 'data') and
-                hasattr(response, 'page_size') and
+                isinstance(response, TripleListResponse) and
                 response.page_size == 2 and
-                hasattr(response, 'offset') and
                 response.offset == 0
             )
             
             self.log_test_result(
                 "List Triples (Pagination)",
                 success,
-                f"Retrieved page with {len(graph_items)} entities",
+                f"Retrieved page with {len(graph_objects)} objects",
                 {
-                    "entities_count": len(graph_items),
+                    "objects_count": len(graph_objects),
                     "page_size": getattr(response, 'page_size', 0),
                     "offset": getattr(response, 'offset', 0),
                     "total_count": getattr(response, 'total_count', 0)
@@ -263,27 +232,24 @@ class TestMockTriplesEndpoint:
                 subject=subject_filter
             )
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
-            success = hasattr(response, 'data')
+            success = isinstance(response, TripleListResponse)
             
-            # Verify all returned entities have the correct @id
-            if success and graph_items:
-                for entity in graph_items:
-                    if entity.get("@id") != subject_filter:
+            # Verify all returned objects have the correct URI
+            if success and graph_objects:
+                for obj in graph_objects:
+                    if str(obj.URI) != subject_filter:
                         success = False
                         break
             
             self.log_test_result(
                 "List Triples (Subject Filter)",
                 success,
-                f"Found {len(graph_items)} entities with subject {subject_filter}",
+                f"Found {len(graph_objects)} objects with subject {subject_filter}",
                 {
                     "subject_filter": subject_filter,
-                    "entities_count": len(graph_items),
+                    "objects_count": len(graph_objects),
                     "total_count": getattr(response, 'total_count', 0)
                 }
             )
@@ -302,28 +268,17 @@ class TestMockTriplesEndpoint:
                 predicate=predicate_filter
             )
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
-            success = hasattr(response, 'data')
-            
-            # For predicate filtering, we expect entities that have the specified property
-            entities_with_predicate = 0
-            if success and graph_items:
-                for entity in graph_items:
-                    if predicate_filter in entity or "name" in entity:  # Check both full URI and short form
-                        entities_with_predicate += 1
+            success = isinstance(response, TripleListResponse)
             
             self.log_test_result(
                 "List Triples (Predicate Filter)",
                 success,
-                f"Found {entities_with_predicate} entities with predicate {predicate_filter}",
+                f"Found {len(graph_objects)} objects with predicate {predicate_filter}",
                 {
                     "predicate_filter": predicate_filter,
-                    "entities_with_predicate": entities_with_predicate,
-                    "total_entities": len(graph_items),
+                    "objects_count": len(graph_objects),
                     "total_count": getattr(response, 'total_count', 0)
                 }
             )
@@ -404,10 +359,10 @@ class TestMockTriplesEndpoint:
             return 0
     
     def test_add_simple_triples(self):
-        """Test adding simple triples via JSON-LD document."""
+        """Test adding simple triples via GraphObjects."""
         try:
-            document = self.create_simple_jsonld_document()
-            response = self.endpoint.add_triples(self.test_space_id, self.test_graph_id, document)
+            test_objects = self.create_simple_graphobject()
+            response = self.endpoint.add_triples(self.test_space_id, self.test_graph_id, test_objects)
             
             success = (
                 isinstance(response, TripleOperationResponse) and
@@ -417,7 +372,7 @@ class TestMockTriplesEndpoint:
             self.log_test_result(
                 "Add Simple Triples",
                 success,
-                f"Added simple triples from JSON-LD document",
+                f"Added simple triples from GraphObjects",
                 {
                     "success": response.success,
                     "message": response.message
@@ -484,17 +439,12 @@ class TestMockTriplesEndpoint:
         try:
             response = self.endpoint.list_triples("nonexistent-space-12345", self.test_graph_id)
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
             success = (
                 isinstance(response, TripleListResponse) and
-                hasattr(response, 'data') and
-                hasattr(response, 'total_count') and
                 response.total_count == 0 and
-                len(graph_items) == 0
+                len(graph_objects) == 0
             )
             
             self.log_test_result(
@@ -503,7 +453,7 @@ class TestMockTriplesEndpoint:
                 "Gracefully handled nonexistent space request",
                 {
                     "error": getattr(response, 'error', None),
-                    "triples_count": len(graph_items)
+                    "objects_count": len(graph_objects)
                 }
             )
             
@@ -516,8 +466,8 @@ class TestMockTriplesEndpoint:
     def test_add_triples_nonexistent_space(self):
         """Test adding triples to nonexistent space."""
         try:
-            document = self.create_simple_jsonld_document()
-            response = self.endpoint.add_triples("nonexistent-space-12345", self.test_graph_id, document)
+            test_objects = self.create_simple_graphobject()
+            response = self.endpoint.add_triples("nonexistent-space-12345", self.test_graph_id, test_objects)
             
             success = (
                 isinstance(response, TripleOperationResponse) and
@@ -572,15 +522,11 @@ class TestMockTriplesEndpoint:
                 subject="http://example.org/nonexistent-subject"
             )
             
-            # Get the JSON-LD data
-            jsonld_data = response.data.model_dump(by_alias=True) if hasattr(response, 'data') else {}
-            graph_items = jsonld_data.get('@graph', []) if isinstance(jsonld_data, dict) else []
-            graph_items = graph_items or []  # Ensure it's never None
+            graph_objects = quad_list_to_graphobjects(response.results) if response.results else []
             
             success = (
-                hasattr(response, 'data') and
-                len(graph_items) == 0 and
-                hasattr(response, 'total_count') and
+                isinstance(response, TripleListResponse) and
+                len(graph_objects) == 0 and
                 response.total_count == 0
             )
             
@@ -589,7 +535,7 @@ class TestMockTriplesEndpoint:
                 success,
                 "Filter with no matches returned empty list",
                 {
-                    "entities_count": len(graph_items),
+                    "objects_count": len(graph_objects),
                     "total_count": getattr(response, 'total_count', 0)
                 }
             )

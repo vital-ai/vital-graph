@@ -130,7 +130,7 @@ class DualWriteCoordinator:
             logger.error(f"❌ This indicates malformed SPARQL - check that literals are properly quoted")
             return False
         
-        # Fail if DELETE WHERE syntax is used (not supported)
+        # Reject DELETE WHERE shorthand — use DELETE { ... } WHERE { ... } instead
         if operation_type == 'delete_where':
             logger.error(f"❌ Cannot execute SPARQL DELETE: DELETE WHERE syntax is not supported")
             logger.error(f"❌ Use DELETE {{ ... }} WHERE {{ ... }} instead")
@@ -142,7 +142,7 @@ class DualWriteCoordinator:
             pg_transaction = await self.postgresql_impl.begin_transaction()
             
             # Apply PostgreSQL storage changes within transaction (primary store)
-            if operation_type in ['delete', 'delete_insert', 'delete_data']:
+            if operation_type in ['delete', 'delete_insert', 'delete_data', 'insert_delete_pattern']:
                 # Remove deleted triples from PostgreSQL
                 # Filter out materialized triples before PostgreSQL deletion
                 delete_triples = parsed_operation['delete_triples']
@@ -190,7 +190,7 @@ class DualWriteCoordinator:
             # Step 3: Update Fuseki dataset AFTER PostgreSQL success
             # For INSERT operations, use original RDFLib quads if available, otherwise use parsed quads
             fuseki_success = True
-            if operation_type in ['insert', 'delete_insert', 'insert_data', 'insert_delete_pattern']:
+            if operation_type in ['insert', 'delete_insert', 'insert_data']:
                 quads_for_fuseki = original_quads if original_quads else parsed_operation['insert_triples']
                 if quads_for_fuseki:
                     logger.debug(f"📝 Adding {len(quads_for_fuseki)} triples to Fuseki dataset (using {'original RDFLib' if original_quads else 'parsed'} quads)")
@@ -199,10 +199,9 @@ class DualWriteCoordinator:
                     )
             
             # For DELETE operations, execute the SPARQL UPDATE on Fuseki
-            if operation_type in ['delete', 'delete_insert', 'delete_data']:
-                if parsed_operation['delete_triples']:
-                    logger.debug(f"📝 Executing DELETE on Fuseki dataset")
-                    fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
+            if operation_type in ['delete', 'delete_insert', 'delete_data', 'insert_delete_pattern']:
+                logger.debug(f"📝 Executing {operation_type} on Fuseki dataset via raw SPARQL UPDATE")
+                fuseki_success = await self._execute_fuseki_update(space_id, parsed_operation['raw_update'])
             
             # For DROP GRAPH operations, execute directly on Fuseki (PostgreSQL graph table handled separately)
             if operation_type in ['drop_graph', 'clear_graph']:

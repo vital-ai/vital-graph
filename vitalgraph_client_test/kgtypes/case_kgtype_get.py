@@ -94,7 +94,7 @@ class KGTypeGetTester:
                 # Extract KGType data from response
                 kgtype = response.type
                 if kgtype:
-                    retrieved_uri = kgtype.get('@id') or kgtype.get('URI') if isinstance(kgtype, dict) else str(kgtype)
+                    retrieved_uri = str(kgtype.URI)
                     return {
                         'name': f'Get Existing KGType #{index}',
                         'passed': True,
@@ -178,7 +178,7 @@ class KGTypeGetTester:
                     }
                 else:
                     # Check if the returned data is actually for our invalid URI
-                    found_uris = [item.get('@id') or item.get('URI') for item in kgtypes_data]
+                    found_uris = [str(item.URI) for item in kgtypes_data]
                     if invalid_uri in found_uris:
                         return {
                             'name': 'Get Invalid KGType URI',

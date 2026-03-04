@@ -263,6 +263,42 @@ class KGSparqlUtils:
         """
     
     @staticmethod
+    def extract_typed_triples_from_sparql_results(results: Any) -> List[tuple]:
+        """
+        Extract triples from SPARQL SELECT results, preserving object type info.
+        
+        Returns:
+            List of (subject_str, predicate_str, object_str, object_type, datatype) tuples
+            where object_type is 'uri' or 'literal', and datatype is the XSD datatype URI or None.
+        """
+        triples = []
+        try:
+            if isinstance(results, dict) and "results" in results and isinstance(results["results"], dict):
+                bindings = results["results"].get("bindings", [])
+                for binding in bindings:
+                    subject = binding.get("subject", {}).get("value")
+                    predicate = binding.get("predicate", {}).get("value")
+                    obj_binding = binding.get("object", {})
+                    obj = obj_binding.get("value")
+                    obj_type = obj_binding.get("type", "literal")
+                    obj_datatype = obj_binding.get("datatype")
+                    if subject is not None and predicate is not None and obj is not None:
+                        triples.append((subject, predicate, obj, obj_type, obj_datatype))
+            elif isinstance(results, dict) and results.get("bindings"):
+                for binding in results["bindings"]:
+                    subject = binding.get("subject", {}).get("value")
+                    predicate = binding.get("predicate", {}).get("value")
+                    obj_binding = binding.get("object", {})
+                    obj = obj_binding.get("value")
+                    obj_type = obj_binding.get("type", "literal")
+                    obj_datatype = obj_binding.get("datatype")
+                    if subject is not None and predicate is not None and obj is not None:
+                        triples.append((subject, predicate, obj, obj_type, obj_datatype))
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Error extracting typed triples from SPARQL results: {e}")
+        return triples
+
+    @staticmethod
     def extract_triples_from_sparql_results(results: Any) -> List[tuple]:
         """
         Extract triples from SPARQL SELECT results.

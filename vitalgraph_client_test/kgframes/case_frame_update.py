@@ -17,11 +17,8 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_frame_update_basic(client: VitalGraphClient, space_id: str, graph_id: str, frame_uri: str, logger: logging.Logger) -> bool:
@@ -38,18 +35,15 @@ async def test_frame_update_basic(client: VitalGraphClient, space_id: str, graph
         frame.name = "Updated Test Frame"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#UpdatedFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test frame update
-        response = client.kgframes.update_kgframes(
+        # Test frame update - pass GraphObject directly
+        response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document
+            objects=[frame]
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Basic frame update successful: {response.frames_updated} frames updated")
+        if response.is_success:
+            logger.info(f"✅ Basic frame update successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Basic frame update failed: {response.message}")
@@ -74,19 +68,16 @@ async def test_frame_update_with_entity_uri(client: VitalGraphClient, space_id: 
         frame.name = "Updated Frame with Entity"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#EntityUpdatedFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test frame update with entity URI
-        response = client.kgframes.update_kgframes(
+        # Test frame update with entity URI - pass GraphObject directly
+        response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             entity_uri=entity_uri
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Frame update with entity URI successful: {response.frames_updated} frames updated")
+        if response.is_success:
+            logger.info(f"✅ Frame update with entity URI successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Frame update with entity URI failed: {response.message}")
@@ -111,19 +102,16 @@ async def test_frame_update_with_parent_uri(client: VitalGraphClient, space_id: 
         frame.name = "Updated Child Frame"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ChildUpdatedFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test frame update with parent URI
-        response = client.kgframes.update_kgframes(
+        # Test frame update with parent URI - pass GraphObject directly
+        response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             parent_uri=parent_uri
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Frame update with parent URI successful: {response.frames_updated} frames updated")
+        if response.is_success:
+            logger.info(f"✅ Frame update with parent URI successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Frame update with parent URI failed: {response.message}")
@@ -151,18 +139,15 @@ async def test_frame_update_multiple(client: VitalGraphClient, space_id: str, gr
             frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#BatchUpdatedFrame"
             frames.append(frame)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frames)
-        
-        # Test multiple frame update
-        response = client.kgframes.update_kgframes(
+        # Test multiple frame update - pass GraphObjects directly
+        response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document
+            objects=frames
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Multiple frame update successful: {response.frames_updated} frames updated")
+        if response.is_success:
+            logger.info(f"✅ Multiple frame update successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Multiple frame update failed: {response.message}")

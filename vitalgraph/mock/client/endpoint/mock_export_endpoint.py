@@ -70,7 +70,7 @@ class MockExportEndpoint(MockBaseEndpoint):
             export_id=export_id,
             name="Mock Export Job",
             description="Mock export job for testing",
-            export_format=ExportFormat.JSON_LD,
+            export_format=ExportFormat.JSON,
             space_id="mock_space_001",
             graph_id="mock_graph_001",
             status=ExportStatus.PENDING,

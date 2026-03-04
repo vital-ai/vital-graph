@@ -1,5 +1,5 @@
 """
-Mock implementation of KGEntitiesEndpoint for testing with VitalSigns native JSON-LD functionality.
+Mock implementation of KGEntitiesEndpoint for testing with VitalSigns native functionality.
 
 This implementation uses:
 - VitalSigns native object creation and conversion
@@ -11,12 +11,13 @@ This implementation uses:
 from typing import Dict, Any, Optional, List
 from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.kgentities_model import (
-    EntitiesResponse, EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse,
+    EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse,
     EntityQueryRequest, EntityQueryResponse, EntityGraphResponse, EntityGraphDeleteResponse,
     EntitiesGraphResponse
 )
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
 from vitalgraph.model.kgframes_model import FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from vitalgraph.sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from vitalgraph.sparql.graph_validation import EntityGraphValidator
 from ai_haley_kg_domain.model.KGEntity import KGEntity
@@ -40,7 +41,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         from .mock_kgrelations_endpoint import MockKGRelationsEndpoint
         self.relations = MockKGRelationsEndpoint(client, space_manager, config=config)
     
-    def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False) -> EntitiesResponse:
+    def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False) -> QuadResponse:
         """
         List KGEntities with pagination and optional search using pyoxigraph SPARQL queries.
         
@@ -53,7 +54,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
             include_entity_graph: If True, include complete entity graphs with frames and slots
             
         Returns:
-            EntitiesResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         from vitalgraph.kg.kgentity_list_endpoint_impl import list_kgentities_impl
         return list_kgentities_impl(self, space_id, graph_id, page_size, offset, search, include_entity_graph)
@@ -74,12 +75,12 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         from vitalgraph.kg.kgentity_get_endpoint_impl import get_kgentity_impl
         return get_kgentity_impl(self, space_id, graph_id, uri, include_entity_graph)
     
-    def create_kgentities(self, space_id: str, graph_id: str, document: JsonLdDocument) -> EntityCreateResponse:
-        """Create KGEntities from JSON-LD document with grouping URI enforcement."""
+    def create_kgentities(self, space_id: str, graph_id: str, objects: List) -> EntityCreateResponse:
+        """Create KGEntities from GraphObjects with grouping URI enforcement."""
         from vitalgraph.kg.kgentity_create_endpoint_impl import create_kgentities_impl
-        return create_kgentities_impl(self, space_id, graph_id, document)
+        return create_kgentities_impl(self, space_id, graph_id, objects)
     
-    def update_kgentities(self, space_id: str, graph_id: str, document: JsonLdDocument, 
+    def update_kgentities(self, space_id: str, graph_id: str, objects: List, 
                          operation_mode: str = "update", parent_uri: str = None) -> EntityUpdateResponse:
         """
         Update KGEntities with proper entity lifecycle management.
@@ -94,7 +95,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         Args:
             space_id: Space identifier
             graph_id: Graph identifier  
-            document: JsonLdDocument containing complete entity graph structure
+            objects: List of GraphObjects containing complete entity graph structure
             operation_mode: "create", "update", or "upsert"
             parent_uri: Optional parent object URI (entity or parent frame)
             
@@ -102,7 +103,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
             EntityUpdateResponse with updated URI and operation details
         """
         from vitalgraph.kg.kgentity_update_endpoint_impl import update_kgentities_impl
-        return update_kgentities_impl(self, space_id, graph_id, document, operation_mode, parent_uri)
+        return update_kgentities_impl(self, space_id, graph_id, objects, operation_mode, parent_uri)
     
     def delete_kgentity(self, space_id: str, graph_id: str, uri: str, delete_entity_graph: bool = False) -> EntityDeleteResponse:
         """Delete a KGEntity by URI using pyoxigraph SPARQL DELETE."""
@@ -179,12 +180,12 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
     
     # New Entity-Frame Relationship Methods (Phase 1A)
     
-    def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument, operation_mode: str = "create") -> FrameCreateResponse:
+    def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, objects: List, operation_mode: str = "create") -> FrameCreateResponse:
         """Create frames within entity context using Edge_hasKGFrame relationships."""
         from vitalgraph.kg.kgentity_create_endpoint_impl import create_entity_frames_complex_impl
-        return create_entity_frames_complex_impl(self, space_id, graph_id, entity_uri, document, operation_mode)
+        return create_entity_frames_complex_impl(self, space_id, graph_id, entity_uri, objects, operation_mode)
     
-    def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument) -> FrameUpdateResponse:
+    def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, objects: List) -> FrameUpdateResponse:
         """
         Update frames within entity context using Edge_hasKGFrame relationships.
         
@@ -192,13 +193,13 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             entity_uri: Entity URI to update frames for
-            document: JSON-LD document containing updated frames
+            objects: List of GraphObjects containing updated frames
             
         Returns:
             FrameUpdateResponse with update details
         """
         from vitalgraph.kg.kgentity_update_endpoint_impl import update_entity_frames_impl
-        return update_entity_frames_impl(self, space_id, graph_id, entity_uri, document)
+        return update_entity_frames_impl(self, space_id, graph_id, entity_uri, objects)
     
     def delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str]) -> FrameDeleteResponse:
         """Delete frames within entity context using Edge_hasKGFrame relationships."""
@@ -358,22 +359,12 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         from vitalgraph.kg.kgentity_get_endpoint_impl import get_entity_with_complete_graph_impl
         return get_entity_with_complete_graph_impl(self, space, graph_id, entity_uri)
     
-    def _convert_triples_to_jsonld(self, triples: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Convert list of triples to JSON-LD document."""
-        from vitalgraph.utils.vitalsigns_helpers import convert_triples_to_jsonld
-        return convert_triples_to_jsonld(triples, self.logger)
-    
     def _convert_triples_to_vitalsigns_objects(self, triples: List[Dict[str, str]]) -> List[Any]:
         """Convert triples to VitalSigns objects using list-specific RDF functions."""
         from vitalgraph.utils.vitalsigns_helpers import convert_triples_to_vitalsigns_objects
         return convert_triples_to_vitalsigns_objects(triples, self.logger)
     
-    def _simple_triples_to_jsonld(self, triples: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Fallback simple conversion of triples to JSON-LD."""
-        from vitalgraph.utils.vitalsigns_helpers import simple_triples_to_jsonld
-        return simple_triples_to_jsonld(triples)
-    
-    def _strip_grouping_uris(self, document: JsonLdDocument) -> JsonLdDocument:
+    def _strip_grouping_uris(self, document: List) -> List:
         """Strip any existing hasKGGraphURI values from client document."""
         from vitalgraph.utils.vitalsigns_helpers import strip_grouping_uris_from_document
         return strip_grouping_uris_from_document(document)
@@ -388,28 +379,10 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         from vitalgraph.utils.graph_operations import set_dual_grouping_uris
         set_dual_grouping_uris(objects, entity_uri, self.logger)
     
-    def _process_complete_entity_document(self, document: JsonLdDocument, entity_uri: str) -> List[Any]:
+    def _process_complete_entity_document(self, document: List, entity_uri: str) -> List[Any]:
         """Process complete entity document to extract and validate all KG objects using VitalSigns."""
         from vitalgraph.kg.kgentity_create_endpoint_impl import process_complete_entity_document_impl
         return process_complete_entity_document_impl(self, document, entity_uri)
-    
-    def _create_vitalsigns_objects_from_jsonld(self, jsonld_document: Dict[str, Any]) -> List[Any]:
-        """Create VitalSigns objects from JSON-LD document using VitalSigns native methods."""
-        from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
-        return create_vitalsigns_objects_from_jsonld(jsonld_document, self.logger)
-    
-    def _jsonld_to_triples(self, jsonld_document: Dict[str, Any]) -> List[Dict[str, str]]:
-        """
-        Convert JSON-LD document to triples using pyoxigraph.
-        
-        Args:
-            jsonld_document: JSON-LD document dict
-            
-        Returns:
-            List of triple dicts with 'subject', 'predicate', 'object' keys
-        """
-        from vitalgraph.utils.vitalsigns_conversion_utils import jsonld_to_triples_impl
-        return jsonld_to_triples_impl(self, jsonld_document)
     
     def _delete_entity_graph_from_store(self, space, entity_uri: str, graph_id: str) -> bool:
         """
@@ -516,10 +489,15 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
     # ========================================
     
     
-    def get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str) -> JsonLdDocument:
+    def get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str) -> QuadResponse:
         """Get frames for an entity using Edge_hasKGFrame relationships."""
         from vitalgraph.kg.kgentity_get_endpoint_impl import get_entity_frames_complex_impl
-        return get_entity_frames_complex_impl(self, space_id, graph_id, entity_uri)
+        objects = get_entity_frames_complex_impl(self, space_id, graph_id, entity_uri)
+        quads = graphobjects_to_quad_list(objects, graph_id) if objects else []
+        return QuadResponse(
+            results=quads, total_count=len(objects) if objects else 0,
+            page_size=max(len(objects), 1) if objects else 1, offset=0
+        )
     
     
     # ========================================

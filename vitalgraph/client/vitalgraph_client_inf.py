@@ -7,14 +7,13 @@ This interface can be implemented by different client implementations
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Union
-from ..model.kgframes_model import (
-    FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-)
+from ..model.quad_model import QuadResponse, QuadResultsResponse
+from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
 from ..model.kgtypes_model import (
-    KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
+    KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
 )
 from ..model.objects_model import (
-    ObjectsResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+    ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
 )
 from ..model.sparql_model import (
     SPARQLQueryRequest, SPARQLQueryResponse, SPARQLUpdateRequest, SPARQLUpdateResponse,
@@ -31,7 +30,7 @@ from ..model.spaces_model import (
     Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse
 )
 from ..model.files_model import (
-    FilesResponse, FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
+    FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
 )
 from ..model.import_model import (
     ImportJob, ImportJobsResponse, ImportJobResponse, ImportCreateResponse, ImportUpdateResponse, 
@@ -41,7 +40,8 @@ from ..model.export_model import (
     ExportJob, ExportJobsResponse, ExportJobResponse, ExportCreateResponse, ExportUpdateResponse, 
     ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse
 )
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject
+from vital_ai_vitalsigns.model.GraphObject import GraphObject
+from ..model.quad_model import QuadRequest
 
 
 class VitalGraphClientInterface(ABC):
@@ -175,23 +175,23 @@ class VitalGraphClientInterface(ABC):
     # KGType CRUD Methods
     
     @abstractmethod
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypeListResponse:
+    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """List KGTypes with pagination and optional search."""
         pass
     
     @abstractmethod
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeListResponse:
+    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> QuadResultsResponse:
         """Get a specific KGType by URI."""
         pass
     
     @abstractmethod
-    async def create_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeCreateResponse:
-        """Create KGTypes from JSON-LD data."""
+    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
+        """Create KGTypes from GraphObjects."""
         pass
     
     @abstractmethod
-    async def update_kgtypes(self, space_id: str, graph_id: str, data: Union[JsonLdObject, JsonLdDocument]) -> KGTypeUpdateResponse:
-        """Update KGTypes from JSON-LD data."""
+    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
+        """Update KGTypes from GraphObjects."""
         pass
     
     @abstractmethod
@@ -207,23 +207,23 @@ class VitalGraphClientInterface(ABC):
     # KGFrame CRUD Methods
     
     @abstractmethod
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> FramesResponse:
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """List KGFrames with pagination and optional search."""
         pass
     
     @abstractmethod
-    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> FramesResponse:
+    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> QuadResultsResponse:
         """Get a specific KGFrame by URI."""
         pass
     
     @abstractmethod
-    async def create_kgframes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameCreateResponse:
-        """Create KGFrames from JSON-LD document."""
+    async def create_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> FrameCreateResponse:
+        """Create KGFrames from GraphObjects."""
         pass
     
     @abstractmethod
-    async def update_kgframes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameUpdateResponse:
-        """Update KGFrames from JSON-LD document."""
+    async def update_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> FrameUpdateResponse:
+        """Update KGFrames from GraphObjects."""
         pass
     
     @abstractmethod
@@ -239,23 +239,23 @@ class VitalGraphClientInterface(ABC):
     # Objects CRUD Methods
     
     @abstractmethod
-    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> ObjectsResponse:
+    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """List Objects with pagination and optional search."""
         pass
     
     @abstractmethod
-    async def get_object(self, space_id: str, graph_id: str, uri: str) -> ObjectsResponse:
+    async def get_object(self, space_id: str, graph_id: str, uri: str) -> QuadResultsResponse:
         """Get a specific Object by URI."""
         pass
     
     @abstractmethod
-    async def create_objects(self, space_id: str, graph_id: str, document: JsonLdDocument) -> ObjectCreateResponse:
-        """Create Objects from JSON-LD document."""
+    async def create_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> ObjectCreateResponse:
+        """Create Objects from GraphObjects."""
         pass
     
     @abstractmethod
-    async def update_objects(self, space_id: str, graph_id: str, document: JsonLdDocument) -> ObjectUpdateResponse:
-        """Update Objects from JSON-LD document."""
+    async def update_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> ObjectUpdateResponse:
+        """Update Objects from GraphObjects."""
         pass
     
     @abstractmethod
@@ -278,8 +278,8 @@ class VitalGraphClientInterface(ABC):
         pass
     
     @abstractmethod
-    async def add_triples(self, space_id: str, graph_id: str, document: JsonLdDocument) -> TripleOperationResponse:
-        """Add new triples to the specified graph."""
+    async def add_triples(self, space_id: str, graph_id: str, quad_request: QuadRequest) -> TripleOperationResponse:
+        """Add new triples/quads to the specified graph."""
         pass
     
     @abstractmethod
@@ -320,27 +320,27 @@ class VitalGraphClientInterface(ABC):
     
     @abstractmethod
     async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
-                  offset: int = 0, file_filter: Optional[str] = None) -> FilesResponse:
+                  offset: int = 0, file_filter: Optional[str] = None) -> QuadResponse:
         """List files with pagination and optional filtering."""
         pass
     
     @abstractmethod
-    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> JsonLdDocument:
+    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> QuadResultsResponse:
         """Get a specific file by URI."""
         pass
     
     @abstractmethod
-    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> JsonLdDocument:
+    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> QuadResultsResponse:
         """Get multiple files by URI list."""
         pass
     
     @abstractmethod
-    async def create_file(self, space_id: str, document: JsonLdDocument, graph_id: Optional[str] = None) -> FileCreateResponse:
+    async def create_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileCreateResponse:
         """Create new file node (metadata only)."""
         pass
     
     @abstractmethod
-    async def update_file(self, space_id: str, document: JsonLdDocument, graph_id: Optional[str] = None) -> FileUpdateResponse:
+    async def update_file(self, space_id: str, objects: List[GraphObject], graph_id: Optional[str] = None) -> FileUpdateResponse:
         """Update file metadata."""
         pass
     

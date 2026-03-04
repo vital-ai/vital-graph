@@ -3,7 +3,7 @@ Mock implementation of TriplesEndpoint for testing with VitalSigns native functi
 
 This implementation uses:
 - Real pyoxigraph quad operations for all triple operations
-- VitalSigns native functionality for JSON-LD to triple conversion
+- VitalSigns native functionality for triple conversion
 - SPARQL pattern matching for efficient triple queries
 - No mock data generation - all operations use real pyoxigraph storage
 """
@@ -13,7 +13,8 @@ from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.triples_model import (
     TripleListResponse, TripleOperationResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
+from vitalgraph.model.quad_model import QuadRequest
 
 
 class MockTriplesEndpoint(MockBaseEndpoint):
@@ -47,13 +48,8 @@ class MockTriplesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id) if self.space_manager else None
             if not space:
-                # Return empty JSON-LD document for nonexistent space
-                empty_jsonld = {
-                    "@context": {},
-                    "@graph": []
-                }
                 return TripleListResponse(
-                    data=JsonLdDocument(**empty_jsonld),
+                    results=[],
                     total_count=0,
                     page_size=page_size,
                     offset=offset
@@ -77,7 +73,7 @@ class MockTriplesEndpoint(MockBaseEndpoint):
             
             self.logger.info(f"After pagination: {len(quads)} quads")
             
-            # Convert quads back to VitalSigns objects, then to JSON-LD using VitalSigns
+            # Convert quads to VitalSigns objects, then to quad list
             if quads:
                 # Convert quads to triples (remove graph_id and clean URIs from pyoxigraph)
                 triples = []
@@ -89,25 +85,20 @@ class MockTriplesEndpoint(MockBaseEndpoint):
                     
                     triples.append((clean_subject, clean_predicate, clean_object))
                 
-                # Create JSON-LD structure directly from cleaned triples
-                self.logger.info(f"Converting {len(triples)} triples to JSON-LD")
-                if triples:
-                    self.logger.info(f"First triple: {triples[0]}")
+                self.logger.info(f"Converting {len(triples)} triples to quad response")
                 try:
-                    jsonld_data = self._triples_to_jsonld_document(triples)
-                    self.logger.info(f"JSON-LD result has {len(jsonld_data.get('@graph', []))} entities")
+                    # Convert triples to VitalSigns objects first
+                    triple_dicts = [{"subject": t[0], "predicate": t[1], "object": t[2]} for t in triples]
+                    objects = self._convert_triples_to_vitalsigns_objects(triple_dicts)
+                    result_quads = graphobjects_to_quad_list(objects, graph_id) if objects else []
                 except Exception as e:
-                    self.logger.error(f"Exception in _triples_to_jsonld_document: {e}")
-                    # Fallback to empty result
-                    from ai_haley_kg_domain.model.KGEntity import KGEntity
-                    jsonld_data = KGEntity.to_jsonld_list([])
+                    self.logger.error(f"Exception converting triples: {e}")
+                    result_quads = []
             else:
-                # Empty result - use a default VitalSigns class
-                from ai_haley_kg_domain.model.KGEntity import KGEntity
-                jsonld_data = KGEntity.to_jsonld_list([])
+                result_quads = []
             
             return TripleListResponse(
-                data=JsonLdDocument(**jsonld_data),
+                results=result_quads,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset
@@ -115,32 +106,27 @@ class MockTriplesEndpoint(MockBaseEndpoint):
                 
         except Exception as e:
             self.logger.error(f"Error listing triples: {e}")
-            # Return empty JSON-LD document
-            empty_jsonld = {
-                "@context": {},
-                "@graph": []
-            }
             return TripleListResponse(
-                data=JsonLdDocument(**empty_jsonld),
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
             )
     
     
-    def add_triples(self, space_id: str, graph_id: str, document: JsonLdDocument) -> TripleOperationResponse:
+    def add_triples(self, space_id: str, graph_id: str, quad_request: QuadRequest) -> TripleOperationResponse:
         """
         Add triples to a graph using VitalSigns native functionality and pyoxigraph.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing objects to convert to triples
+            quad_request: QuadRequest containing List[Quad] to add
             
         Returns:
             TripleOperationResponse with real operation results
         """
-        self._log_method_call("add_triples", space_id=space_id, graph_id=graph_id, document=document)
+        self._log_method_call("add_triples", space_id=space_id, graph_id=graph_id, quad_request=quad_request)
         
         try:
             # Get space from space manager
@@ -151,9 +137,8 @@ class MockTriplesEndpoint(MockBaseEndpoint):
                     message=f"Space {space_id} not found"
                 )
             
-            # Convert JSON-LD document to VitalSigns objects using the helper method
-            document_dict = document.model_dump(by_alias=True)
-            objects = self._jsonld_to_vitalsigns_objects(document_dict)
+            # Convert quads to GraphObjects
+            objects = quad_list_to_graphobjects(quad_request.quads)
             
             if not objects:
                 return TripleOperationResponse(

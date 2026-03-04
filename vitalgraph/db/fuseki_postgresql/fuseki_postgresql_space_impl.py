@@ -302,6 +302,11 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
         # Return True if any quads were added successfully
         return added_count > 0
     
+    async def update_quads(self, space_id: str, graph_id: str,
+                          delete_quads: List[tuple], insert_quads: List[tuple]) -> bool:
+        """Atomically delete and insert quads using dual-write coordinator."""
+        return await self.dual_write_coordinator.update_quads(space_id, delete_quads, insert_quads)
+    
     async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> bool:
         """Remove RDF quads in batch using dual-write coordinator."""
         if not quads:

@@ -23,7 +23,6 @@ from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.sparql_model import SPARQLQueryRequest, SPARQLQueryResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -198,9 +197,6 @@ class TestVitalSignsPyoxigraphIntegration:
             # Create mixed objects using VitalSigns
             test_objects = create_mixed_test_objects()
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            
             # Store objects in pyoxigraph via different endpoints
             entity = [obj for obj in test_objects if isinstance(obj, KGEntity)][0]
             frame = [obj for obj in test_objects if isinstance(obj, KGFrame)][0]
@@ -208,23 +204,14 @@ class TestVitalSignsPyoxigraphIntegration:
             integer_slot = [obj for obj in test_objects if isinstance(obj, KGIntegerSlot)][0]
             boolean_slot = [obj for obj in test_objects if isinstance(obj, KGBooleanSlot)][0]
             
-            # Create entity - handle potential response validation issues
+            # Create entity - pass GraphObjects directly
             self.logger.info(f"Creating entity: {entity.URI}")
-            entity_jsonld = GraphObject.to_jsonld_list([entity])
-            
-            # Ensure the JSON-LD has a graph array format
-            if 'graph' not in entity_jsonld or entity_jsonld['graph'] is None:
-                # Convert single object to graph array format
-                single_obj = {k: v for k, v in entity_jsonld.items() if k not in ['context']}
-                entity_jsonld['graph'] = [single_obj]
-            
-            entity_doc = JsonLdDocument(**entity_jsonld)
             
             try:
                 entity_response = self.mock_client.kgentities.create_kgentities(
                     space_id=self.test_space_id,
                     graph_id=self.test_graph_id,
-                    document=entity_doc
+                    objects=[entity]
                 )
                 entity_created_count = entity_response.created_count if hasattr(entity_response, 'created_count') else 1
                 self.logger.info(f"Entity creation response: created_count={entity_created_count}")
@@ -241,15 +228,12 @@ class TestVitalSignsPyoxigraphIntegration:
             edges = [obj for obj in test_objects if hasattr(obj, 'edgeSource')]
             frame_objects.extend(edges)
             
-            frame_jsonld = GraphObject.to_jsonld_list(frame_objects)
-            frame_doc = JsonLdDocument(**frame_jsonld)
-            
-            # Try to create frames with slots, handle response validation issues
+            # Try to create frames with slots - pass GraphObjects directly
             try:
                 frame_response = self.mock_client.kgframes.create_kgframes_with_slots(
                     space_id=self.test_space_id,
                     graph_id=self.test_graph_id,
-                    document=frame_doc
+                    objects=frame_objects
                 )
                 frame_created_count = frame_response.created_count if hasattr(frame_response, 'created_count') else len(frame_objects)
             except Exception as e:

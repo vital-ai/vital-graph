@@ -25,7 +25,6 @@ sys.path.insert(0, str(project_root))
 
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
-from vitalgraph.model.kgframes_model import JsonLdDocument
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
@@ -141,13 +140,11 @@ class TestDataLifecycleManagement:
             
             # Step 1: Create initial frame
             initial_objects = self.create_test_frame_with_slots("_initial")
-            initial_document = GraphObject.to_jsonld_list(initial_objects)
-            document = JsonLdDocument(**initial_document)
             
             create_response = self.mock_client.kgframes.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=initial_objects
             )
             
             assert create_response.created_count > 0, "Initial frame creation failed"
@@ -158,13 +155,10 @@ class TestDataLifecycleManagement:
             updated_objects[1].textSlotValue = "Updated Test Value"  # Update text slot value
             updated_objects[2].integerSlotValue = 200  # Update integer slot value
             
-            updated_document = GraphObject.to_jsonld_list(updated_objects)
-            document = JsonLdDocument(**updated_document)
-            
             update_response = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=updated_objects,
                 operation_mode="update"
             )
             
@@ -194,14 +188,12 @@ class TestDataLifecycleManagement:
             
             # Test CREATE mode
             create_objects = self.create_test_frame_with_slots("_create_mode")
-            create_document = GraphObject.to_jsonld_list(create_objects)
-            document = JsonLdDocument(**create_document)
             
             # First create should succeed
             create_response = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=create_objects,
                 operation_mode="create"
             )
             
@@ -212,7 +204,7 @@ class TestDataLifecycleManagement:
             create_response2 = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=create_objects,
                 operation_mode="create"
             )
             
@@ -223,13 +215,11 @@ class TestDataLifecycleManagement:
             
             # Test UPDATE mode on existing frame
             create_objects[1].textSlotValue = "Updated in UPDATE mode"
-            update_document = GraphObject.to_jsonld_list(create_objects)
-            document = JsonLdDocument(**update_document)
             
             update_response = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=create_objects,
                 operation_mode="update"
             )
             
@@ -238,13 +228,11 @@ class TestDataLifecycleManagement:
             
             # Test UPDATE mode on non-existent frame (should fail)
             nonexistent_objects = self.create_test_frame_with_slots("_nonexistent")
-            nonexistent_document = GraphObject.to_jsonld_list(nonexistent_objects)
-            document = JsonLdDocument(**nonexistent_document)
             
             update_nonexistent_response = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=nonexistent_objects,
                 operation_mode="update"
             )
             
@@ -255,13 +243,11 @@ class TestDataLifecycleManagement:
             
             # Test UPSERT mode
             upsert_objects = self.create_test_frame_with_slots("_upsert_mode")
-            upsert_document = GraphObject.to_jsonld_list(upsert_objects)
-            document = JsonLdDocument(**upsert_document)
             
             upsert_response = self.mock_client.kgframes.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=upsert_objects,
                 operation_mode="upsert"
             )
             
@@ -281,13 +267,11 @@ class TestDataLifecycleManagement:
             
             # Create frame with slots
             test_objects = self.create_test_frame_with_slots("_stale_test")
-            test_document = GraphObject.to_jsonld_list(test_objects)
-            document = JsonLdDocument(**test_document)
             
             create_response = self.mock_client.kgframes.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=test_objects
             )
             
             assert create_response.created_count > 0, "Test frame creation failed"
@@ -328,13 +312,10 @@ class TestDataLifecycleManagement:
                 if hasattr(obj, 'frameGraphURI'):
                     obj.frameGraphURI = "http://client.provided/wrong/grouping/uri"
             
-            test_document = GraphObject.to_jsonld_list(test_objects)
-            document = JsonLdDocument(**test_document)
-            
             create_response = self.mock_client.kgframes.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=test_objects
             )
             
             assert create_response.created_count > 0, "Frame creation failed"

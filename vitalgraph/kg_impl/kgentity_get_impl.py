@@ -21,7 +21,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 
 # Import response models
-from ..model.kgentities_model import EntitiesResponse
+from ..model.quad_model import QuadResponse
 
 # Import backend utilities
 from .kg_backend_utils import FusekiPostgreSQLBackendAdapter, BackendOperationResult
@@ -173,7 +173,7 @@ async def get_entity(
     include_entity_graph: bool = False,
     backend_adapter: Optional[FusekiPostgreSQLBackendAdapter] = None,
     logger: Optional[logging.Logger] = None
-) -> EntitiesResponse:
+) -> QuadResponse:
     """
     Convenience function for entity retrieval.
     
@@ -186,7 +186,7 @@ async def get_entity(
         logger: Optional logger instance
         
     Returns:
-        EntitiesResponse: Response containing the retrieved entity data
+        QuadResponse: Response containing the retrieved entity data
     """
     processor = KGEntityGetProcessor(logger=logger)
     return await processor.get_entity(

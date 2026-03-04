@@ -9,10 +9,10 @@ from typing import Dict, Any, Optional, List
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ...model.quad_model import QuadRequest
 from ...model.triples_model import (
     TripleListResponse, TripleOperationResponse, TripleListRequest
 )
-from ...model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 
 
 class TriplesEndpoint(BaseEndpoint):
@@ -57,14 +57,14 @@ class TriplesEndpoint(BaseEndpoint):
         
         return await self._make_typed_request('GET', url, TripleListResponse, params=params)
     
-    async def add_triples(self, space_id: str, graph_id: str, document: JsonLdRequest) -> TripleOperationResponse:
+    async def add_triples(self, space_id: str, graph_id: str, quad_request: QuadRequest) -> TripleOperationResponse:
         """
-        Add triples to a graph.
+        Add triples/quads to a graph. Operates at the raw triples level — no GraphObject validation.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD request (JsonLdObject for single triple or JsonLdDocument for multiple triples)
+            quad_request: QuadRequest containing raw quads to add
             
         Returns:
             TripleOperationResponse containing operation result
@@ -73,7 +73,7 @@ class TriplesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, document=document)
+        validate_required_params(space_id=space_id, graph_id=graph_id, quad_request=quad_request)
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/triples"
         params = build_query_params(
@@ -81,9 +81,10 @@ class TriplesEndpoint(BaseEndpoint):
             graph_id=graph_id
         )
         
-        # Send the JsonLdRequest directly (server handles discriminated union)
-        # The server will automatically detect JsonLdObject vs JsonLdDocument
-        return await self._make_typed_request('POST', url, TripleOperationResponse, params=params, json=document.model_dump(by_alias=True))
+        response = await self._make_authenticated_request(
+            'POST', url, params=params, json=quad_request.model_dump()
+        )
+        return TripleOperationResponse.model_validate(response.json())
     
     async def delete_triples(self, space_id: str, graph_id: str, 
                       subject: Optional[str] = None, predicate: Optional[str] = None, 

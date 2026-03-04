@@ -24,7 +24,7 @@ from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import GraphInfo, SPARQLGraphResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vital_ai_vitalsigns.model.VITAL_Node import VITAL_Node
 
 
 class TestMockClientGraphs:
@@ -299,25 +299,16 @@ class TestMockClientGraphs:
             return
         
         try:
-            # Create test data as JSON-LD using VitalSigns compatible types
-            test_data = JsonLdDocument(
-                context={
-                    "@vocab": "http://vital.ai/ontology/vital-core#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#"
-                },
-                graph=[
-                    {
-                        "@id": "http://example.org/node1",
-                        "@type": "http://vital.ai/ontology/vital-core#VITAL_Node",
-                        "vital-core:hasName": "Test Node 1"
-                    },
-                    {
-                        "@id": "http://example.org/node2",
-                        "@type": "http://vital.ai/ontology/vital-core#VITAL_Node",
-                        "vital-core:hasName": "Test Node 2"
-                    }
-                ]
-            )
+            # Create test data as GraphObjects
+            node1 = VITAL_Node()
+            node1.URI = "http://example.org/node1"
+            node1.name = "Test Node 1"
+            
+            node2 = VITAL_Node()
+            node2.URI = "http://example.org/node2"
+            node2.name = "Test Node 2"
+            
+            test_data = [node1, node2]
             
             # Add triples to the graph
             response = self.client.add_triples(self.test_space_id, graph_uri, test_data)

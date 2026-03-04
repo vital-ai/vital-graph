@@ -2,7 +2,7 @@
 VitalGraph Client KGEntities Endpoint - Refactored with Standardized Responses
 
 Client-side implementation for KGEntities operations.
-All responses contain VitalSigns GraphObjects, hiding JSON-LD complexity.
+All responses contain VitalSigns GraphObjects, hiding wire format complexity.
 """
 
 import httpx
@@ -14,6 +14,14 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+    extract_pagination_from_json_quads,
+    is_json_quads_response,
+    FORMAT_TO_CONTENT_TYPE,
+)
 from ..response.client_response import (
     EntityResponse,
     CreateEntityResponse,
@@ -30,7 +38,6 @@ from ..response.client_response import (
     FrameGraph
 )
 from ..response.response_builder import (
-    jsonld_to_graph_objects,
     build_success_response,
     build_error_response,
     extract_pagination_metadata,
@@ -50,7 +57,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    async def _make_request(self, method: str, url: str, params=None, json=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -65,8 +72,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
             kwargs = {}
             if params:
                 kwargs['params'] = params
-            if json:
+            if json is not None:
                 kwargs['json'] = json
+            if headers:
+                kwargs['headers'] = headers
+            if content is not None:
+                kwargs['content'] = content
             
             response = await self._make_authenticated_request(method, url, **kwargs)
             
@@ -128,61 +139,32 @@ class KGEntitiesEndpoint(BaseEndpoint):
             # Use VitalSigns instance
             vs = self.vs
             
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, vs)
+            pagination = extract_pagination_from_json_quads(response_data)
+            
             if include_entity_graph:
-                # Log complete server response for debugging
-                import json
-                logger.info(f"=== SERVER RESPONSE FOR list_kgentities with include_entity_graph=True ===")
-                logger.info(json.dumps(response_data, indent=2, default=str))
-                logger.info(f"=== END SERVER RESPONSE ===")
-                
-                # Server returns all entities with their complete graphs in the entities field
-                # Parse all objects first
-                entities_jsonld = response_data.get('entities', {})
-                all_objects = jsonld_to_graph_objects(entities_jsonld, vs)
-                
-                # Group objects by their kGGraphURI to create separate entity graphs
                 entity_graphs_dict = {}
-                for obj in all_objects:
-                    # Get the graph URI for this object
-                    graph_uri = None
-                    if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
-                        graph_uri = str(obj.kGGraphURI)
-                    
+                for obj in objects:
+                    graph_uri = str(obj.kGGraphURI) if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI else None
                     if graph_uri:
-                        if graph_uri not in entity_graphs_dict:
-                            entity_graphs_dict[graph_uri] = []
-                        entity_graphs_dict[graph_uri].append(obj)
-                
-                # Build EntityGraph containers
-                entity_graphs = []
-                for entity_uri, objects in entity_graphs_dict.items():
-                    entity_graphs.append(build_entity_graph(entity_uri, objects))
-                
+                        entity_graphs_dict.setdefault(graph_uri, []).append(obj)
+                entity_graphs = [build_entity_graph(eu, objs) for eu, objs in entity_graphs_dict.items()]
                 return build_success_response(
                     MultiEntityGraphResponse,
                     graph_list=entity_graphs,
                     status_code=response.status_code,
                     message=f"Retrieved {len(entity_graphs)} entity graphs",
-                    space_id=space_id,
-                    graph_id=graph_id,
+                    space_id=space_id, graph_id=graph_id,
                     metadata={'total_graphs': len(entity_graphs)}
                 )
             else:
-                # Response contains flat list of entities with pagination
-                entities_jsonld = response_data.get('entities', {})
-                objects = jsonld_to_graph_objects(entities_jsonld, vs)
-                
-                pagination = extract_pagination_metadata(response_data)
-                
                 return build_success_response(
                     PaginatedGraphObjectResponse,
                     objects=objects,
                     status_code=response.status_code,
                     message=f"Retrieved {len(objects)} entities",
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    entity_type_uri=entity_type_uri,
-                    search=search,
+                    space_id=space_id, graph_id=graph_id,
+                    entity_type_uri=entity_type_uri, search=search,
                     **pagination,
                     metadata={'object_types': count_object_types(objects)}
                 )
@@ -256,11 +238,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
             
             vs = self.vs
             
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, vs)
             if include_entity_graph:
-                # Server returns raw JSON-LD directly (JsonLdDocument with @graph)
-                objects = jsonld_to_graph_objects(response_data, vs)
-                
-                # Extract entity URI from the objects
                 entity_uri = uri or reference_id
                 for obj in objects:
                     if hasattr(obj, 'URI'):
@@ -268,24 +247,17 @@ class KGEntitiesEndpoint(BaseEndpoint):
                         if isinstance(obj, KGEntity):
                             entity_uri = str(obj.URI)
                             break
-                
                 entity_graph = build_entity_graph(entity_uri, objects)
-                
                 return build_success_response(
                     EntityGraphResponse,
                     objects=entity_graph,
                     status_code=response.status_code,
                     message=f"Retrieved entity graph with {len(objects)} objects",
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    requested_uri=uri,
-                    requested_reference_id=reference_id,
+                    space_id=space_id, graph_id=graph_id,
+                    requested_uri=uri, requested_reference_id=reference_id,
                     metadata={'object_types': count_object_types(objects)}
                 )
             else:
-                # Response contains just the entity
-                objects = jsonld_to_graph_objects(response_data, vs)
-                
                 return build_success_response(
                     EntityResponse,
                     objects=objects,
@@ -354,11 +326,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
             
             if include_entity_graph:
                 # Server returns EntitiesGraphResponse with complete_graphs dict
+                # Each value is now QuadResultsResponse-shaped
                 complete_graphs_dict = response_data.get('complete_graphs', {})
                 entity_graphs = []
                 
-                for entity_uri, graph_jsonld in complete_graphs_dict.items():
-                    objects = jsonld_to_graph_objects(graph_jsonld, vs)
+                for entity_uri, graph_data in complete_graphs_dict.items():
+                    objects = deserialize_response_to_graphobjects(graph_data, ClientWireFormat.JSON_QUADS, vs)
                     entity_graphs.append(build_entity_graph(entity_uri, objects))
                 
                 return build_success_response(
@@ -372,11 +345,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     metadata={'total_graphs': len(entity_graphs)}
                 )
             else:
-                # Response contains flat list of entities
-                entities_jsonld = response_data.get('entities', response_data)
-                objects = jsonld_to_graph_objects(entities_jsonld, vs)
-                
-                pagination = extract_pagination_metadata(response_data)
+                objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, vs)
+                pagination = extract_pagination_from_json_quads(response_data)
                 
                 return build_success_response(
                     PaginatedGraphObjectResponse,
@@ -432,25 +402,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgentities"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching old endpoint)
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            vs = self.vs
-            
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -458,13 +409,11 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 parent_uri=parent_uri
             )
             
-            # Send exactly like old endpoint
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type})
             response_data = response.json()
             
-            # Server returns EntityCreateResponse with metadata (created_count, created_uris)
-            # It doesn't return the actual entity data, so we return an empty objects list
-            # Client can do a GET request if they need the actual objects
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
             
@@ -517,25 +466,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgentities"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching old endpoint)
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            vs = self.vs
-            
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -543,8 +473,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 parent_uri=parent_uri
             )
             
-            # Send exactly like old endpoint
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type})
             response_data = response.json()
             
             # Server returns EntityUpdateResponse with metadata (updated_uri)
@@ -759,15 +690,15 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 if len(frame_uris) == 1:
                     # Single frame graph
                     frame_uri = frame_uris[0]
-                    frame_jsonld = frame_graphs_dict.get(frame_uri, {})
+                    frame_data = frame_graphs_dict.get(frame_uri, {})
                     
                     # Check if it's an error response
-                    if isinstance(frame_jsonld, dict) and 'error' in frame_jsonld:
+                    if isinstance(frame_data, dict) and 'error' in frame_data:
                         # Frame returned an error
                         return build_error_response(
                             FrameGraphResponse,
                             error_code=3,
-                            error_message=frame_jsonld.get('message', 'Frame not found'),
+                            error_message=frame_data.get('message', 'Frame not found'),
                             status_code=404,
                             space_id=space_id,
                             graph_id=graph_id,
@@ -776,12 +707,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
                         )
                     
                     # Convert Pydantic model to dict if needed
-                    if hasattr(frame_jsonld, 'model_dump'):
-                        frame_jsonld = frame_jsonld.model_dump(by_alias=True)
+                    if hasattr(frame_data, 'model_dump'):
+                        frame_data = frame_data.model_dump(by_alias=True)
                     
-                    # The frame_jsonld is a dict with structure: {"jsonld_type": "document", "@context": {}, "@graph": [...]}
-                    # We need to pass this whole structure to jsonld_to_graph_objects
-                    objects = jsonld_to_graph_objects(frame_jsonld, vs)
+                    objects = deserialize_response_to_graphobjects(frame_data, ClientWireFormat.JSON_QUADS, vs)
                     
                     frame_graph = build_frame_graph(frame_uri, objects)
                     
@@ -802,18 +731,18 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     frame_graphs = []
                     
                     for frame_uri in frame_uris:
-                        frame_jsonld = frame_graphs_dict.get(frame_uri, {})
-                        if frame_jsonld:
+                        frame_data = frame_graphs_dict.get(frame_uri, {})
+                        if frame_data:
                             # Skip error responses
-                            if isinstance(frame_jsonld, dict) and 'error' in frame_jsonld:
-                                logger.debug(f"Skipping frame {frame_uri} - error: {frame_jsonld.get('error')}")
+                            if isinstance(frame_data, dict) and 'error' in frame_data:
+                                logger.debug(f"Skipping frame {frame_uri} - error: {frame_data.get('error')}")
                                 continue
                             
                             # Convert Pydantic model to dict if needed
-                            if hasattr(frame_jsonld, 'model_dump'):
-                                frame_jsonld = frame_jsonld.model_dump(by_alias=True)
+                            if hasattr(frame_data, 'model_dump'):
+                                frame_data = frame_data.model_dump(by_alias=True)
                             
-                            objects = jsonld_to_graph_objects(frame_jsonld, vs)
+                            objects = deserialize_response_to_graphobjects(frame_data, ClientWireFormat.JSON_QUADS, vs)
                             if objects:  # Only add if we got objects
                                 frame_graphs.append(build_frame_graph(frame_uri, objects))
                     
@@ -830,8 +759,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     )
             else:
                 # Response contains flat list of frames
-                frames_jsonld = response_data.get('frames', response_data)
-                objects = jsonld_to_graph_objects(frames_jsonld, vs)
+                objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, vs)
                 
                 return build_success_response(
                     FrameResponse,
@@ -891,25 +819,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgentities/kgframes"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching old endpoint)
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            vs = self.vs
-            
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -917,13 +826,13 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 parent_frame_uri=parent_frame_uri
             )
             
-            # Send exactly like old endpoint
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type})
             response_data = response.json()
             
             # Parse created frames from response
-            created_jsonld = response_data.get('frames', response_data)
-            created_objects = jsonld_to_graph_objects(created_jsonld, vs)
+            created_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
             
             return build_success_response(
                 FrameResponse,
@@ -979,32 +888,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgentities/kgframes"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching old endpoint)
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            vs = self.vs
-            
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            # Log what we're sending for debugging
-            import json
-            logger.info(f"=== UPDATE FRAMES REQUEST ===")
-            logger.info(f"Sending {len(objects)} objects")
-            logger.info(f"Data: {json.dumps(jsonld_dict, indent=2, default=str)}")
-            logger.info(f"=== END REQUEST ===")
-            
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
@@ -1013,16 +896,10 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 operation_mode="update"
             )
             
-            # Send exactly like old endpoint
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type})
             response_data = response.json()
-            
-            # Log complete server response for debugging
-            import json
-            logger.info(f"=== UPDATE RESPONSE FROM SERVER ===")
-            logger.info(f"Status: {response.status_code}")
-            logger.info(f"Response: {json.dumps(response_data, indent=2, default=str)}")
-            logger.info(f"=== END RESPONSE ===")
             
             # Check if update actually succeeded (frames_updated > 0)
             frames_updated = response_data.get('frames_updated', 0)
@@ -1038,8 +915,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 )
             
             # Parse updated frames from response
-            updated_jsonld = response_data.get('frames', response_data)
-            updated_objects = jsonld_to_graph_objects(updated_jsonld, vs)
+            updated_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
             
             return build_success_response(
                 FrameResponse,
@@ -1191,35 +1067,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
             response = await self._make_request('POST', url, params=params, json=query_criteria)
             response_data = response.json()
             
-            vs = self.vs
-            
-            # Server returns EntitiesResponse with 'entities' field containing JsonLdDocument or JsonLdObject
-            # Extract the entities and convert to GraphObjects
-            entities_data = response_data.get('entities', {})
-            
-            # Handle both JsonLdObject (single entity) and JsonLdDocument (multiple entities)
-            if isinstance(entities_data, dict):
-                # Check if it's a JsonLdObject (single entity) - has @id, @type, etc but no @graph
-                if '@id' in entities_data and '@graph' not in entities_data:
-                    # Single entity - wrap in @graph array
-                    results_jsonld = {'@graph': [entities_data]}
-                # JsonLdDocument format with @graph
-                elif '@graph' in entities_data:
-                    results_jsonld = entities_data
-                elif 'graph' in entities_data:
-                    # Pydantic model serialized format - could be array or empty
-                    graph_data = entities_data['graph']
-                    if isinstance(graph_data, list):
-                        results_jsonld = {'@graph': graph_data}
-                    else:
-                        # Single object not in array
-                        results_jsonld = {'@graph': [graph_data] if graph_data else []}
-                else:
-                    results_jsonld = {'@graph': []}
-            else:
-                results_jsonld = {'@graph': []}
-            
-            objects = jsonld_to_graph_objects(results_jsonld, vs)
+            # Server returns QuadResponse-shaped JSON with results field
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
             
             query_info = {
                 'execution_time': response_data.get('execution_time'),

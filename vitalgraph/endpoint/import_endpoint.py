@@ -185,9 +185,9 @@ class ImportEndpoint:
             ),
             ImportJob(
                 import_id="import_003",
-                name="JSON-LD Import",
-                description="Import structured data in JSON-LD format",
-                import_type=ImportType.JSON_LD,
+                name="JSON Import",
+                description="Import structured data in JSON format",
+                import_type=ImportType.JSON,
                 space_id="space_002",
                 status=ImportStatus.CREATED,
                 created_date=datetime(2024, 1, 17, 14, 0, 0),

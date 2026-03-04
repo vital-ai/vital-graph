@@ -24,7 +24,6 @@ class RDFFormat(Enum):
     TURTLE = "turtle"
     RDF_XML = "xml"
     N_TRIPLES = "nt"
-    JSON_LD = "json-ld"
     N3 = "n3"
     TRIG = "trig"
     NQUADS = "nquads"
@@ -125,8 +124,6 @@ class RDFFormatDetector:
         'text/rdf+xml': RDFFormat.RDF_XML,
         'application/n-triples': RDFFormat.N_TRIPLES,
         'text/plain': RDFFormat.N_TRIPLES,  # Often used for N-Triples
-        'application/ld+json': RDFFormat.JSON_LD,
-        'application/json': RDFFormat.JSON_LD,
         'text/n3': RDFFormat.N3,
         'application/trig': RDFFormat.TRIG,
         'application/n-quads': RDFFormat.NQUADS
@@ -137,8 +134,6 @@ class RDFFormatDetector:
         '.rdf': RDFFormat.RDF_XML,
         '.xml': RDFFormat.RDF_XML,
         '.nt': RDFFormat.N_TRIPLES,
-        '.jsonld': RDFFormat.JSON_LD,
-        '.json': RDFFormat.JSON_LD,
         '.n3': RDFFormat.N3,
         '.trig': RDFFormat.TRIG,
         '.nq': RDFFormat.NQUADS

@@ -2,7 +2,7 @@
 VitalGraph Client Response Models
 
 Standardized response objects for all VitalGraph client operations.
-All responses contain VitalSigns GraphObjects, hiding JSON-LD complexity.
+All responses contain VitalSigns GraphObjects, hiding wire format complexity.
 """
 
 from typing import List, Dict, Any, Optional

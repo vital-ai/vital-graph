@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for MockKGFramesEndpoint with VitalSigns native JSON-LD functionality.
+Test suite for MockKGFramesEndpoint with VitalSigns native functionality.
 
 ✅ UPDATED: This test file now uses concrete slot classes with actual value properties!
     - Uses KGTextSlot, KGIntegerSlot, KGBooleanSlot, KGChoiceSlot, KGDoubleSlot
@@ -31,7 +31,7 @@ from vitalgraph.mock.client.mock_vitalgraph_client import MockVitalGraphClient
 from vitalgraph.mock.client.space.mock_space_manager import MockSpaceManager
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgframes_model import FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -137,16 +137,6 @@ def create_test_kgframes_with_slots() -> List[object]:
     return objects
 
 
-def create_test_jsonld_document(objects: List[object]) -> Dict[str, Any]:
-    """Convert VitalSigns objects to JSON-LD document using VitalSigns native functionality."""
-    from vital_ai_vitalsigns.model.GraphObject import GraphObject
-    
-    # Use VitalSigns native conversion
-    jsonld_document = GraphObject.to_jsonld_list(objects)
-    
-    return jsonld_document
-
-
 class TestMockKGFramesEndpoint:
     """Test suite for MockKGFramesEndpoint with Edge-based relationships."""
     
@@ -191,14 +181,12 @@ class TestMockKGFramesEndpoint:
             self.endpoint.client.space_manager.create_space(self.test_space_id)
             
             test_objects = create_test_kgframes_with_slots()
-            jsonld_document = create_test_jsonld_document(test_objects)
-            jsonld_doc = JsonLdDocument(**jsonld_document)
             
-            # Test: Create frames with slots using Edge relationships
+            # Test: Create frames with slots using Edge relationships - pass GraphObjects directly
             response = self.endpoint.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=jsonld_doc
+                objects=test_objects
             )
             
             success = (

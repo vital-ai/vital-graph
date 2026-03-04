@@ -11,14 +11,18 @@ import logging
 from .base_endpoint import BaseEndpoint
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+    extract_pagination_from_json_quads,
+    is_json_quads_response,
+)
 from ...model.kgtypes_model import (
-    KGTypeListResponse as ServerKGTypeListResponse,
     KGTypeCreateResponse as ServerKGTypeCreateResponse,
     KGTypeUpdateResponse as ServerKGTypeUpdateResponse,
     KGTypeDeleteResponse as ServerKGTypeDeleteResponse,
-    KGTypeGetResponse as ServerKGTypeGetResponse
 )
-from ...model.jsonld_model import JsonLdDocument, JsonLdObject
 from ..response.client_response import (
     KGTypeResponse,
     KGTypesListResponse,
@@ -64,26 +68,18 @@ class KGTypesEndpoint(BaseEndpoint):
                 search=search
             )
             
-            server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
-            
-            # Extract types from server response - handle data field from server
-            types = []
-            if hasattr(server_response, 'data'):
-                from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-                if isinstance(server_response.data, JsonLdObject):
-                    types = [server_response.data]
-                elif isinstance(server_response.data, JsonLdDocument):
-                    types = server_response.data.graph if server_response.data.graph else []
-            count = len(types)
-            
+            response = await self._make_authenticated_request('GET', url, params=params)
+            response_data = response.json()
+            graph_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
+            pagination = extract_pagination_from_json_quads(response_data)
             return build_success_response(
                 KGTypesListResponse,
                 status_code=200,
-                message=f"Retrieved {count} KGTypes",
-                types=types,
-                count=count,
-                page_size=page_size,
-                offset=offset
+                message=f"Retrieved {len(graph_objects)} KGTypes",
+                types=graph_objects,
+                count=pagination.get('total_count', len(graph_objects)),
+                page_size=pagination.get('page_size', page_size),
+                offset=pagination.get('offset', offset)
             )
             
         except VitalGraphClientError as e:
@@ -128,30 +124,15 @@ class KGTypesEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            # Try KGTypeGetResponse first, fall back to KGTypeListResponse (exactly like original)
-            kgtype_data = None
-            try:
-                server_response = await self._make_typed_request('GET', url, ServerKGTypeGetResponse, params=params)
-                # Extract from data field
-                if hasattr(server_response, 'data'):
-                    kgtype_data = server_response.data
-            except Exception:
-                # Fallback to list response
-                server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
-                if hasattr(server_response, 'data'):
-                    from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-                    if isinstance(server_response.data, JsonLdObject):
-                        kgtype_data = server_response.data
-                    elif isinstance(server_response.data, JsonLdDocument):
-                        types = server_response.data.graph if server_response.data.graph else []
-                        kgtype_data = types[0] if types else None
-            
-            if kgtype_data:
+            response = await self._make_authenticated_request('GET', url, params=params)
+            response_data = response.json()
+            graph_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
+            if graph_objects:
                 return build_success_response(
                     KGTypeResponse,
                     status_code=200,
                     message=f"Retrieved KGType: {uri}",
-                    type=kgtype_data
+                    type=graph_objects[0]
                 )
             else:
                 return build_error_response(
@@ -203,24 +184,15 @@ class KGTypesEndpoint(BaseEndpoint):
                 uri_list=uri_list
             )
             
-            server_response = await self._make_typed_request('GET', url, ServerKGTypeListResponse, params=params)
-            
-            # Extract types from server response - handle data field from server
-            types = []
-            if hasattr(server_response, 'data'):
-                from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-                if isinstance(server_response.data, JsonLdObject):
-                    types = [server_response.data]
-                elif isinstance(server_response.data, JsonLdDocument):
-                    types = server_response.data.graph if server_response.data.graph else []
-            count = len(types)
-            
+            response = await self._make_authenticated_request('GET', url, params=params)
+            response_data = response.json()
+            graph_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
             return build_success_response(
                 KGTypesListResponse,
                 status_code=200,
-                message=f"Retrieved {count} KGTypes",
-                types=types,
-                count=count
+                message=f"Retrieved {len(graph_objects)} KGTypes",
+                types=graph_objects,
+                count=len(graph_objects)
             )
             
         except VitalGraphClientError as e:
@@ -260,29 +232,10 @@ class KGTypesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching KGEntities pattern)
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            # Build request body with space_id, graph_id, and data
-            request_body = {
-                'space_id': space_id,
-                'graph_id': graph_id,
-                'data': data.model_dump(by_alias=True)
-            }
-            
-            server_response = await self._make_typed_request('POST', url, ServerKGTypeCreateResponse, json=request_body)
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            response = await self._make_authenticated_request('POST', url, params=params, json=body, headers={'Content-Type': content_type})
+            server_response = ServerKGTypeCreateResponse.model_validate(response.json())
             
             # Extract created URIs from server response
             created_uris = []
@@ -340,29 +293,10 @@ class KGTypesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
-            # Convert GraphObjects to JsonLdObject or JsonLdDocument (matching KGEntities pattern)
-            if len(objects) == 1:
-                # Single object - create JsonLdObject
-                jsonld_dict = GraphObject.to_jsonld_list([objects[0]])
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple objects - create JsonLdDocument
-                jsonld_dict = GraphObject.to_jsonld_list(objects)
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            # Build request body with space_id, graph_id, and data
-            request_body = {
-                'space_id': space_id,
-                'graph_id': graph_id,
-                'data': data.model_dump(by_alias=True)
-            }
-            
-            server_response = await self._make_typed_request('PUT', url, ServerKGTypeUpdateResponse, json=request_body)
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            response = await self._make_authenticated_request('PUT', url, params=params, json=body, headers={'Content-Type': content_type})
+            server_response = ServerKGTypeUpdateResponse.model_validate(response.json())
             
             # Extract updated URIs from server response
             updated_uris = []

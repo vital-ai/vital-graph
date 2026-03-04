@@ -1,7 +1,7 @@
 """
 KG Frames REST API endpoint for VitalGraph.
 
-This module provides REST API endpoints for managing KG frames and their slots using JSON-LD 1.1 format.
+This module provides REST API endpoints for managing KG frames and their slots.
 KG frames represent structured knowledge frames with connected slot nodes and values.
 
 Follows MockKGFramesEndpoint patterns with proper VitalSigns integration:
@@ -15,13 +15,13 @@ Follows MockKGFramesEndpoint patterns with proper VitalSigns integration:
 import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Query, Depends, Request, Response, Body
+from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
 
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from ..model.kgframes_model import (
-    FramesResponse,
     FrameGraphResponse,
     FrameCreateResponse,
     FrameUpdateResponse,
@@ -62,8 +62,6 @@ from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 # Import backend utilities
 from ..kg_impl.kg_backend_utils import create_backend_adapter, FusekiPostgreSQLBackendAdapter
 
-# Import JSON-LD utilities
-from ..kg_impl.kg_jsonld_utils import KGJsonLdUtils
 
 
 class OperationMode(str, Enum):
@@ -122,59 +120,83 @@ class KGFramesEndpoint:
         
         return FusekiPostgreSQLBackendAdapter(backend)
     
-    def _jsonld_request_to_vitalsigns(self, document: JsonLdRequest) -> List:
-        """Convert JsonLdRequest (JsonLdObject or JsonLdDocument) to VitalSigns objects."""
-        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-        vs = VitalSigns()
-        
-        if isinstance(document, JsonLdObject):
-            # Single object - wrap in document structure for from_jsonld_list
-            jsonld_data = document.model_dump(by_alias=True)
-            context = jsonld_data.pop('@context', {})
-            wrapped_doc = {
-                '@context': context,
-                '@graph': [jsonld_data]
-            }
-            return vs.from_jsonld_list(wrapped_doc)
-        else:
-            # Already a JsonLdDocument
-            return vs.from_jsonld_list(document.model_dump(by_alias=True))
     
-    async def _create_frames(self, space_id: str, graph_id: str, document: JsonLdRequest, operation_mode: str):
-        """Delegate frame creation to existing KGEntityFrameCreateProcessor."""
+    
+    async def _create_frames(
+        self, space_id: str, graph_id: str, quads: List[Quad],
+        operation_mode: str, entity_uri: Optional[str] = None,
+        parent_uri: Optional[str] = None, current_user: Dict = None,
+    ):
+        """Create or update frames from quads.
+
+        Applies the validation pipeline:
+        1. Convert quads to GraphObjects
+        2. Extract KGFrame instances from the object list
+        3. Set grouping URIs (kGGraphURI / parent references)
+        4. Validate frame structure (at least one frame, valid types)
+        5. Handle parent / entity relationships and create edges
+        6. Dispatch to mode-specific handler (create / update / upsert)
+        """
+        vitalsigns_objects = quad_list_to_graphobjects(quads)
         try:
-            # Get backend adapter
-            backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # KGFrames endpoint uses direct backend storage - no entity processors needed
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_request_to_vitalsigns(document)
-            
-            # KGFrames endpoint handles only frames and slots - no entity dependencies
-            frame_objects = vitalsigns_objects
-            result = await self._create_standalone_frames(
-                backend_adapter, space_id, graph_id, frame_objects, operation_mode.upper()
+            op_mode = OperationMode(operation_mode.lower())
+        except ValueError:
+            op_mode = OperationMode.CREATE
+
+        def _fail_create(msg):
+            return FrameCreateResponse(success=False, message=msg, created_count=0, created_uris=[], slots_created=0)
+
+        def _fail_update(msg):
+            return FrameUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
+        def _fail(msg):
+            return _fail_update(msg) if op_mode == OperationMode.UPDATE else _fail_create(msg)
+
+        try:
+            # --- backend ---
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                return _fail(f"Space {space_id} not found")
+            space_impl = space_record.space_impl
+            backend_impl = space_impl.get_db_space_impl()
+            if not backend_impl:
+                return _fail("Backend implementation not available")
+            from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+
+            # --- type filtering ---
+            frames = [obj for obj in vitalsigns_objects if isinstance(obj, KGFrame)]
+            if not frames:
+                return _fail("No valid KGFrame objects found in request")
+
+            # --- grouping URIs ---
+            effective_parent_uri = entity_uri if entity_uri else parent_uri
+            self._set_frame_grouping_uris(frames, graph_id, effective_parent_uri)
+
+            # --- structure validation ---
+            validation_result = self._validate_frame_structure(vitalsigns_objects)
+            if not validation_result.get("valid", False):
+                return _fail(f"Frame validation failed: {validation_result.get('error')}")
+
+            # --- parent / entity relationships ---
+            enhanced_objects = await self._handle_parent_relationships(
+                backend, space_id, graph_id, frames, vitalsigns_objects, effective_parent_uri
             )
-            
-            return FrameCreateResponse(
-                success=True,
-                message=result.message,
-                created_count=getattr(result, 'created_count', 0),
-                created_uris=[str(uri) for uri in getattr(result, 'created_uris', [])],
-                slots_created=0
-            )
-            
+
+            # --- dispatch by mode ---
+            if op_mode == OperationMode.CREATE:
+                return await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
+            elif op_mode == OperationMode.UPDATE:
+                return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
+            elif op_mode == OperationMode.UPSERT:
+                return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
+            else:
+                return _fail(f"Invalid operation_mode: {op_mode}")
+
         except Exception as e:
-            self.logger.error(f"Frame creation failed: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Frame creation failed: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                slots_created=0
-            )
-    
+            self.logger.error(f"Frame operation from objects failed: {e}")
+            return _fail(f"Frame operation failed: {str(e)}")
+
     async def _create_standalone_frames(self, backend_adapter, space_id: str, graph_id: str, frame_objects: List, operation_mode: str):
         """Create standalone frames without entity dependencies."""
         try:
@@ -214,14 +236,10 @@ class KGFramesEndpoint:
                 slots_created=0
             )
     
-    async def _update_frames(self, space_id: str, graph_id: str, document: JsonLdRequest, operation_mode: str):
+    async def _update_frames(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str):
         """Update frames using direct backend storage - no entity dependencies."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_request_to_vitalsigns(document)
             
             # Update frames using backend storage
             frames = [obj for obj in vitalsigns_objects if hasattr(obj, 'URI') and 'KGFrame' in str(type(obj))]
@@ -287,27 +305,15 @@ class KGFramesEndpoint:
     async def _get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, current_user: Dict, page_size: int = 10, offset: int = 0):
         """Get frames associated with a specific entity."""
         try:
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
-            # Build SPARQL query for entity-associated frames
             sparql_query = f"""
             PREFIX haley: <{self.haley_prefix}>
             PREFIX vital: <{self.vital_prefix}>
@@ -322,30 +328,15 @@ class KGFramesEndpoint:
             OFFSET {offset}
             """
             
-            # Execute query
             results = await backend.execute_sparql_query(space_id, sparql_query)
-            
-            # Convert results to frames
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
             
-            # Convert to JSON-LD document
-            frames_doc = self._frames_to_jsonld_document(frames)
-            
-            return FramesResponse(
-                frames=frames_doc,
-                total_count=len(frames),
-                page_size=page_size,
-                offset=offset
-            )
+            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            return QuadResponse(results=quads, total_count=len(frames), page_size=page_size, offset=offset)
             
         except Exception as e:
             self.logger.error(f"Entity frame retrieval failed: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
     async def _delete_entities(self, space_id: str, graph_id: str, entity_uris: List[str]):
         """Delegate entity deletion (for test compatibility)."""
@@ -353,18 +344,13 @@ class KGFramesEndpoint:
     
     # Slot endpoint methods for /api/graphs/kgframes/kgslots
     
-    async def _create_slots(self, space_id: str, graph_id: str, document: JsonLdRequest, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
+    async def _create_slots(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
         """Delegate slot creation to KGSlotCreateProcessor."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
             
-            # Initialize slot create processor with backend
             if not self.slot_create_processor:
                 self.slot_create_processor = KGSlotCreateProcessor(backend_adapter)
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_request_to_vitalsigns(document)
             
             # Set entity graph URI and parent URI on objects if provided
             if entity_uri or parent_uri:
@@ -416,14 +402,10 @@ class KGFramesEndpoint:
                 slots_created=0
             )
     
-    async def _update_slots(self, space_id: str, graph_id: str, document: JsonLdRequest, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
+    async def _update_slots(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
         """Delegate slot updates to KGSlotUpdateProcessor."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_request_to_vitalsigns(document)
             
             # Set entity graph URI and parent URI on objects if provided
             if entity_uri or parent_uri:
@@ -488,7 +470,6 @@ class KGFramesEndpoint:
         try:
             backend = self.backend_adapter
             
-            # Build and execute SPARQL query to find slot URIs
             query = self._build_list_slots_query(backend, space_id, graph_id, frame_uri, page_size, offset)
             self.logger.debug(f"Executing slot list query: {query}")
             
@@ -503,7 +484,6 @@ class KGFramesEndpoint:
             
             self.logger.debug(f"Found {len(slot_uris)} slots")
             
-            # Retrieve slot objects from backend
             slot_objects = []
             for slot_uri in slot_uris:
                 try:
@@ -513,10 +493,6 @@ class KGFramesEndpoint:
                 except Exception as e:
                     self.logger.warning(f"Failed to retrieve slot {slot_uri}: {e}")
             
-            # Convert to JSON-LD document
-            slots_doc = self._convert_objects_to_jsonld_document(slot_objects)
-            
-            # Get total count for pagination
             count_query = self._build_count_slots_query(backend, space_id, graph_id, frame_uri)
             count_result = backend.execute_sparql_query(count_query)
             total_count = 0
@@ -528,60 +504,31 @@ class KGFramesEndpoint:
             
             self.logger.info(f"Listed {len(slot_objects)} slots (total: {total_count}) in graph '{graph_id}' in space '{space_id}'")
             
-            return FramesResponse(
-                frames=slots_doc,
-                total_count=total_count,
-                page_size=page_size,
-                offset=offset
-            )
+            quads = graphobjects_to_quad_list(slot_objects, graph_id)
+            return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
             
         except Exception as e:
             self.logger.error(f"Slot listing failed: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
     async def _get_slot_by_uri(self, space_id: str, graph_id: str, slot_uri: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
         """Get single slot by URI."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
             
-            # Check if slot exists and retrieve
-            # Additional filtering by parent_uri and entity_uri can be added here
             if await backend_adapter.object_exists(space_id, graph_id, slot_uri):
-                # This would need actual slot retrieval logic with parent_uri/entity_uri filtering
-                # For now, return basic response structure
-                return FramesResponse(
-                    frames=JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[]),
-                    total_count=1,
-                    page_size=1,
-                    offset=0
-                )
+                return QuadResultsResponse(results=[], total_count=1)
             else:
-                return FramesResponse(
-                    frames=JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[]),
-                    total_count=0,
-                    page_size=1,
-                    offset=0
-                )
+                return QuadResultsResponse(results=[], total_count=0)
             
         except Exception as e:
             self.logger.error(f"Slot retrieval failed: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[]),
-                total_count=0,
-                page_size=1,
-                offset=0
-            )
+            return QuadResultsResponse(results=[], total_count=0)
     
     def _setup_routes(self):
         """Setup FastAPI routes for KG frames management."""
         
-        @self.router.get("/kgframes", response_model=Union[FramesResponse, FrameGraphResponse], tags=["KG Frames"])
+        @self.router.get("/kgframes", tags=["KG Frames"])
         async def list_or_get_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -591,7 +538,7 @@ class KGFramesEndpoint:
             uri: Optional[str] = Query(None, description="Single frame URI to retrieve"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs"),
             include_frame_graph: bool = Query(False, description="If True, include complete frame graph with slots"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
             List KG frames with pagination, or get specific frames by URI(s).
@@ -616,36 +563,25 @@ class KGFramesEndpoint:
 
         @self.router.post("/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Frames"])
         async def create_or_update_frames(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             operation_mode: str = Query("create", description="Operation mode: create, update, or upsert"),
             parent_uri: Optional[str] = Query(None, description="Parent URI for hierarchical relationships"),
             entity_uri: Optional[str] = Query(None, description="Entity URI for frame association"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
-            Create or update KG frames with JSON-LD 1.1 format.
-            
-            Supports multiple operation modes:
-            - create: Create new frames (default)
-            - update: Update existing frames
-            - upsert: Create or update frames
+            Create or update KG frames from JSON Quads.
             """
             self.logger.info(f"🔍 ROUTE: POST /kgframes called with space_id={space_id}, graph_id={graph_id}, operation_mode={operation_mode}")
-            self.logger.info(f"🔍 ROUTE: Request type: {type(request)}, entity_uri={entity_uri}, parent_uri={parent_uri}")
-            
-            # Log request structure for debugging
-            if hasattr(request, 'model_dump'):
-                request_dict = request.model_dump()
-                self.logger.info(f"🔍 ROUTE: Request model_dump keys: {list(request_dict.keys()) if isinstance(request_dict, dict) else 'Not a dict'}")
-            elif hasattr(request, '__dict__'):
-                self.logger.info(f"🔍 ROUTE: Request __dict__ keys: {list(request.__dict__.keys())}")
-            else:
-                self.logger.info(f"🔍 ROUTE: Request str representation: {str(request)[:100]}...")
             
             try:
-                return await self._create_or_update_frames(space_id, graph_id, request, operation_mode, parent_uri, entity_uri, current_user)
+                quads = body.quads
+                return await self._create_frames(
+                    space_id, graph_id, quads, operation_mode,
+                    entity_uri=entity_uri, parent_uri=parent_uri, current_user=current_user,
+                )
             except Exception as e:
                 self.logger.error(f"❌ ROUTE: Exception in create_or_update_frames: {type(e).__name__}: {str(e)}")
                 import traceback
@@ -691,7 +627,7 @@ class KGFramesEndpoint:
         
         # Frame-Slot Sub-Endpoint Operations (matching MockKGFramesEndpoint)
         
-        @self.router.get("/kgframes/kgslots", response_model=FramesResponse, tags=["KG Frame Slots"])
+        @self.router.get("/kgframes/kgslots", response_model=QuadResponse, tags=["KG Frame Slots"])
         async def get_frame_slots(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -711,23 +647,24 @@ class KGFramesEndpoint:
         
         @self.router.post("/kgframes/kgslots", response_model=Union[SlotCreateResponse, SlotUpdateResponse], tags=["KG Frame Slots"])
         async def create_or_update_frame_slots(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             frame_uri: str = Query(..., description="Frame URI to create/update slots for"),
             entity_uri: Optional[str] = Query(None, description="Entity URI for slot context"),
             parent_uri: Optional[str] = Query(None, description="Parent URI for slot hierarchy"),
             operation_mode: str = Query("create", description="Operation mode: create, update, or upsert"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
-            Create or update slots for a specific frame using Edge_hasKGSlot relationships.
+            Create or update slots for a specific frame from JSON Quads.
             Operation mode determines behavior: 'create' (fail if exists), 'update' (fail if not exists), 'upsert' (create or update).
             """
+            quads = body.quads
             if operation_mode == "update":
-                return await self._update_frame_slots(space_id, graph_id, frame_uri, request, current_user)
+                return await self._update_frame_slots(space_id, graph_id, frame_uri, quads, current_user)
             else:
-                return await self._create_frame_slots(space_id, graph_id, frame_uri, request, operation_mode, current_user, entity_uri, parent_uri)
+                return await self._create_frame_slots(space_id, graph_id, frame_uri, quads, operation_mode, current_user, entity_uri, parent_uri)
         
         @self.router.delete("/kgframes/kgslots", response_model=SlotDeleteResponse, tags=["KG Frame Slots"])
         async def delete_frame_slots(
@@ -745,33 +682,19 @@ class KGFramesEndpoint:
     
     # Implementation methods following MockKGFramesEndpoint patterns with VitalSigns integration
     
-    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int, search: Optional[str], current_user: Dict) -> FramesResponse:
+    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int, search: Optional[str], current_user: Dict) -> QuadResponse:
         """List KG frames with pagination using backend interface."""
-        from ..model.kgframes_model import FramesResponse
-        from ..model.jsonld_model import JsonLdDocument
-        
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             # Build SPARQL query for listing frames
             sparql_query = self._build_list_frames_query(backend, space_id, graph_id, search, page_size, offset)
@@ -782,35 +705,23 @@ class KGFramesEndpoint:
             # Convert results to VitalSigns frame objects
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
             
-            # Convert to JSON-LD document
-            frames_doc = self._frames_to_jsonld_document(frames)
-            
-            # Get total count
             count_query = self._build_count_frames_query(backend, space_id, graph_id, search)
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
-            
-            return FramesResponse(
-                frames=frames_doc,
+            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=total_count,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
             )
             
         except Exception as e:
             self.logger.error(f"Error listing KGFrames: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
-    async def _get_frame_by_uri(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool, current_user: Dict):
+    async def _get_frame_by_uri(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool, current_user: Dict) -> QuadResultsResponse:
         """Get single frame by URI with optional complete graph."""
-        from ..model.jsonld_model import JsonLdDocument
-        from ..model.kgframes_model import FrameGraphResponse
-        
         try:
             self.logger.info(f"🔍 Getting KGFrame {uri} from space {space_id}, graph {graph_id}, include_frame_graph={include_frame_graph}")
             
@@ -818,23 +729,13 @@ class KGFramesEndpoint:
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 self.logger.warning(f"❌ Space not found: {space_id}")
-                return FrameGraphResponse(
-                    success=False,
-                    message=f"Space '{space_id}' not found",
-                    frame=JsonLdDocument(graph=[]),
-                    complete_graph=None
-                )
+                return QuadResultsResponse(results=[], total_count=0)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
                 self.logger.warning(f"❌ Backend not found for space: {space_id}")
-                return FrameGraphResponse(
-                    success=False,
-                    message=f"Backend not found for space '{space_id}'",
-                    frame=JsonLdDocument(graph=[]),
-                    complete_graph=None
-                )
+                return QuadResultsResponse(results=[], total_count=0)
             
             # Build SPARQL query for getting specific frame using grouping URI pattern
             self.logger.debug(f"🔧 Building SPARQL query for frame {uri}")
@@ -853,128 +754,55 @@ class KGFramesEndpoint:
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
             self.logger.debug(f"🎯 Converted frames: {len(frames) if frames else 0} frames")
             
-            if not frames:
-                # Return empty FrameGraphResponse for not found frames
-                self.logger.info(f"📭 No frames found for URI: {uri}")
-                return FrameGraphResponse(
-                    success=False,
-                    message=f"No frames found for URI: {uri}",
-                    frame=JsonLdDocument(graph=[]),
-                    complete_graph=None
-                )
+            all_objects = list(frames) if frames else []
+            if include_frame_graph and frames:
+                frame_graph = await self._get_frame_graph(space_id=space_id, graph_id=graph_id, frame_uri=uri, current_user=current_user)
+                if frame_graph and hasattr(frame_graph, 'graph_objects') and frame_graph.graph_objects:
+                    all_objects.extend(frame_graph.graph_objects)
+                elif frame_graph and hasattr(frame_graph, 'graph') and frame_graph.graph:
+                    # Legacy path: frame_graph.graph contains GraphObjects directly
+                    all_objects.extend(frame_graph.graph)
             
-            # Convert to JSON-LD - use JsonLdObject for single frame, JsonLdDocument for multiple frames
-            self.logger.debug(f"📄 Converting {len(frames)} frames to JSON-LD")
-            
-            # Get complete graph if requested
-            complete_graph = None
-            if include_frame_graph:
-                self.logger.debug(f"🔍 Getting complete frame graph for URI: {uri}")
-                complete_graph = await self._get_frame_graph(
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    frame_uri=uri,
-                    current_user=current_user
-                )
-                self.logger.debug(f"✅ Complete graph retrieved with {len(complete_graph.graph) if complete_graph and complete_graph.graph else 0} objects")
-            
-            if len(frames) == 1:
-                # Single frame - use JsonLdObject (JsonLdDocument requires 0 or 2+ objects)
-                from ..model.jsonld_model import JsonLdObject
-                frame_dict = frames[0].to_jsonld()
-                frame_obj = JsonLdObject(**frame_dict)
-                self.logger.debug(f"✅ Created JsonLdObject for single frame")
-                
-                return FrameGraphResponse(
-                    success=True,
-                    message=f"Successfully retrieved frame for URI: {uri}",
-                    frame=frame_obj,
-                    complete_graph=complete_graph
-                )
-            else:
-                # Multiple frames (0 or 2+) - use JsonLdDocument
-                frame_doc = self._frames_to_jsonld_document(frames)
-                self.logger.debug(f"✅ JSON-LD document created with {len(frame_doc.graph) if frame_doc.graph else 0} graph items")
-                
-                return FrameGraphResponse(
-                    success=True,
-                    message=f"Successfully retrieved frame for URI: {uri}",
-                    frame=frame_doc,
-                    complete_graph=complete_graph if complete_graph else frame_doc
-                )
+            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            return QuadResultsResponse(
+                results=quads,
+                total_count=len(all_objects),
+            )
             
         except Exception as e:
             self.logger.error(f"❌ Error getting KGFrame {uri}: {e}")
-            self.logger.error(f"❌ Exception type: {type(e).__name__}")
             import traceback
             self.logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            return FrameGraphResponse(
-                success=False,
-                message=f"Error retrieving frame for URI {uri}: {str(e)}",
-                frame=JsonLdDocument(graph=[]),
-                complete_graph=None
-            )
+            return QuadResultsResponse(results=[], total_count=0)
     
-    async def _get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int, entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], current_user: Dict) -> FramesResponse:
+    async def _get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int, entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], current_user: Dict):
         """Get frames with their associated slots using pagination."""
-        from ..model.kgframes_model import FramesResponse
-        from ..model.jsonld_model import JsonLdDocument
-        
         try:
             self.logger.info(f"Getting KGFrames with slots in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
-            # Build SPARQL query for listing frames with slots
             sparql_query = self._build_frames_with_slots_query(backend, space_id, graph_id, frame_uri, entity_uri, parent_uri, search, kGSlotType, page_size, offset)
-            
-            # Execute query via backend interface
             results = await backend.execute_sparql_query(space_id, sparql_query)
-            
-            # Convert results to VitalSigns frame objects with slots
             frames = await self._sparql_results_to_frames_with_slots(backend, graph_id, results, space_id)
             
-            # Convert to JSON-LD document
-            frames_doc = self._frames_to_jsonld_document(frames)
-            
-            # Get total count
             count_query = self._build_count_frames_with_slots_query(backend, space_id, graph_id, frame_uri, entity_uri, parent_uri, search, kGSlotType)
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
             
-            return FramesResponse(
-                frames=frames_doc,
-                total_count=total_count,
-                page_size=page_size,
-                offset=offset
-            )
+            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
             
         except Exception as e:
             self.logger.error(f"Error getting KGFrames with slots: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
     def _build_frames_with_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], page_size: int, offset: int) -> str:
         """Build SPARQL query for frames with slots."""
@@ -991,10 +819,8 @@ class KGFramesEndpoint:
         # For now, use the same conversion as regular frames
         return await self._sparql_results_to_frames(backend, graph_id, results, space_id)
         
-    async def _get_frames_by_uris(self, space_id: str, graph_id: str, frame_uris: List[str], include_frame_graph: bool = False, current_user: Dict = None) -> FramesResponse:
+    async def _get_frames_by_uris(self, space_id: str, graph_id: str, frame_uris: List[str], include_frame_graph: bool = False, current_user: Dict = None) -> QuadResponse:
         """Get multiple frames by URI list."""
-        from ..model.jsonld_model import JsonLdDocument
-        
         try:
             # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
@@ -1014,201 +840,49 @@ class KGFramesEndpoint:
                 if result and hasattr(result, 'objects') and result.objects:
                     all_objects.extend(result.objects)
             
-            # Convert VitalSigns objects to JSON-LD document
-            if all_objects:
-                from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                vs = VitalSigns()
-                jsonld_dict = vs.to_jsonld_list(all_objects)
-                jsonld_doc = JsonLdDocument(context=jsonld_dict.get('@context', {"@vocab": self.haley_prefix}), graph=jsonld_dict.get('@graph', []))
-            else:
-                jsonld_doc = JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[])
-            
-            return FramesResponse(
-                frames=jsonld_doc,
+            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=len(all_objects),
                 page_size=len(frame_uris),
-                offset=0
+                offset=0,
             )
             
         except Exception as e:
             self.logger.error(f"Frame retrieval by URIs failed: {e}")
-            return FramesResponse(
-                frames=JsonLdDocument(context={"@vocab": self.haley_prefix}, graph=[]),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=len(frame_uris) if frame_uris else 0,
-                offset=0
-            )
-    
-    async def _create_or_update_frames(self, space_id: str, graph_id: str, request: Union[JsonLdObject, JsonLdDocument], operation_mode: str, parent_uri: Optional[str], entity_uri: Optional[str], current_user: Dict):
-        """Create, update, or upsert frames with VitalSigns integration."""
-        from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse
-        
-        # Convert string operation_mode to enum
-        try:
-            op_mode = OperationMode(operation_mode.lower())
-        except ValueError:
-            op_mode = OperationMode.CREATE
-        
-        try:
-            import time as _time
-            _t0 = _time.time()
-            self.logger.info(f"🔍 Processing frames with operation_mode {op_mode} in space {space_id}, graph {graph_id}")
-            self.logger.info(f"🔍 Request type: {type(request)}")
-            self.logger.info(f"🔍 Request content preview: {str(request)[:200]}...")
-            if entity_uri:
-                self.logger.info(f"🔍 Entity URI: {entity_uri}")
-            if parent_uri:
-                self.logger.info(f"🔍 Parent URI: {parent_uri}")
-            
-            # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
-            if not space_record:
-                if op_mode == OperationMode.CREATE:
-                    return FrameCreateResponse(
-                        success=False,
-                        message=f"Space {space_id} not found",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    return FrameUpdateResponse(
-                        success=False,
-                        message=f"Space {space_id} not found",
-                        updated_uri=""
-                    )
-            
-            space_impl = space_record.space_impl
-            backend_impl = space_impl.get_db_space_impl()
-            if not backend_impl:
-                if op_mode == OperationMode.CREATE:
-                    return FrameCreateResponse(
-                        success=False,
-                        message="Backend implementation not available",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    return FrameUpdateResponse(
-                        success=False,
-                        message="Backend implementation not available",
-                        updated_uri=""
-                    )
-            
-            _t1 = _time.time()
-            self.logger.info(f"⏱️ ENDPOINT get_backend: {_t1-_t0:.3f}s")
-            
-            # Wrap backend with adapter to provide update_quads method for UPDATE operations
-            from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
-            
-            # Handle JsonLdObject and JsonLdDocument separately - do not mix them
-            if isinstance(request, JsonLdObject):
-                # Convert single JsonLdObject to VitalSigns objects using VitalSigns utilities
-                from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                vs = VitalSigns()
-                jsonld_dict = request.model_dump(by_alias=True)
-                vitalsigns_obj = vs.from_jsonld(jsonld_dict)
-                vitalsigns_objects = [vitalsigns_obj] if not isinstance(vitalsigns_obj, list) else vitalsigns_obj
-            else:
-                # Handle JsonLdDocument
-                vitalsigns_objects = self._jsonld_document_to_vitalsigns_objects(request)
-            
-            _t2 = _time.time()
-            self.logger.info(f"⏱️ ENDPOINT jsonld_to_vitalsigns: {_t2-_t1:.3f}s ({len(vitalsigns_objects)} objects)")
-            
-            # Extract frames and validate
-            frames = [obj for obj in vitalsigns_objects if isinstance(obj, KGFrame)]
-            if not frames:
-                if op_mode == OperationMode.CREATE:
-                    return FrameCreateResponse(
-                        success=False,
-                        message="No valid KGFrame objects found in request",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    return FrameUpdateResponse(
-                        success=False,
-                        message="No valid KGFrame objects found in request",
-                        updated_uri=""
-                    )
-            
-            # Set grouping URIs on frames
-            effective_parent_uri = entity_uri if entity_uri else parent_uri
-            self._set_frame_grouping_uris(frames, graph_id, effective_parent_uri)
-            
-            # Validate frame structure
-            validation_result = self._validate_frame_structure(vitalsigns_objects)
-            if not validation_result.get("valid", False):
-                if op_mode == OperationMode.CREATE:
-                    return FrameCreateResponse(
-                        success=False,
-                        message=f"Frame validation failed: {validation_result.get('error')}",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    return FrameUpdateResponse(
-                        success=False,
-                        message=f"Frame validation failed: {validation_result.get('error')}",
-                        updated_uri=""
-                    )
-            
-            _t3 = _time.time()
-            self.logger.info(f"⏱️ ENDPOINT validate_structure: {_t3-_t2:.3f}s")
-            
-            # Handle parent relationships and create edges
-            enhanced_objects = await self._handle_parent_relationships(backend, space_id, graph_id, frames, vitalsigns_objects, effective_parent_uri)
-            
-            _t4 = _time.time()
-            self.logger.info(f"⏱️ ENDPOINT parent_relationships: {_t4-_t3:.3f}s")
-            
-            # Execute operation based on mode
-            if op_mode == OperationMode.CREATE:
-                return await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
-            elif op_mode == OperationMode.UPDATE:
-                return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
-            elif op_mode == OperationMode.UPSERT:
-                return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
-            else:
-                return FrameCreateResponse(
-                    success=False,
-                    message=f"Invalid operation_mode: {op_mode}",
-                    created_count=0,
-                    created_uris=[]
-                )
-                
-        except Exception as e:
-            self.logger.error(f"Error processing frames: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Failed to process frames: {str(e)}",
-                created_count=0,
-                created_uris=[]
+                offset=0,
             )
     
     async def _query_frames(self, space_id: str, graph_id: str, query_request: FrameQueryRequest, current_user: Dict) -> FrameQueryResponse:
         """Query frames using enhanced criteria-based search with sorting support."""
         from ..model.kgframes_model import FrameQueryResponse
-        from ..model.jsonld_model import JsonLdDocument
         
         try:
             self.logger.info(f"Querying frames in space {space_id}, graph {graph_id} with criteria: {query_request}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 return FrameQueryResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0
+                    frame_uris=[],
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
+                    has_more=False
                 )
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
                 return FrameQueryResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0
+                    frame_uris=[],
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
+                    has_more=False
                 )
             
             # Build SPARQL query based on criteria
@@ -1380,49 +1054,38 @@ class KGFramesEndpoint:
     
     # Frame-slot sub-endpoint implementations
     
-    async def _get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, kGSlotType: Optional[str], current_user: Dict) -> JsonLdDocument:
-        """Get slots for a specific frame using Edge_hasKGSlot relationships."""
-        from ..model.jsonld_model import JsonLdDocument
-        
+    async def _get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, kGSlotType: Optional[str], current_user: Dict) -> List:
+        """Get slots for a specific frame using Edge_hasKGSlot relationships. Returns List[GraphObject]."""
         try:
             self.logger.info(f"Getting slots for frame {frame_uri} in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return JsonLdDocument(graph=[])
+                return []
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return JsonLdDocument(graph=[])
+                return []
             
-            # Build SPARQL query to get slots connected to this frame
             sparql_query = self._build_get_frame_slots_query(graph_id, frame_uri, kGSlotType)
-            
-            # Execute query via backend interface
             results = await backend.execute_sparql_query(space_id, sparql_query)
-            
-            # Convert results to VitalSigns slot objects
             slots = await self._sparql_results_to_slots(backend, graph_id, results)
             
-            # Convert to JSON-LD document
-            slots_doc = self._slots_to_jsonld_document(slots)
-            
-            return slots_doc
+            return slots or []
             
         except Exception as e:
             self.logger.error(f"Error getting frame slots: {e}")
-            return JsonLdDocument(graph=[])
+            return []
     
-    async def _create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, request: JsonLdDocument, operation_mode: OperationMode, current_user: Dict, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> SlotCreateResponse:
-        """Create slots for a specific frame using Edge_hasKGSlot relationships."""
+    async def _create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], operation_mode: OperationMode, current_user: Dict, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> SlotCreateResponse:
+        """Create slots for a specific frame from quads."""
         from ..model.kgframes_model import SlotCreateResponse
+        vitalsigns_objects = quad_list_to_graphobjects(quads)
         
         try:
             self.logger.info(f"Creating slots for frame {frame_uri} with operation_mode {operation_mode}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 return SlotCreateResponse(
@@ -1442,7 +1105,6 @@ class KGFramesEndpoint:
                     created_uris=[]
                 )
             
-            # Validate that frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotCreateResponse(
                     success=False,
@@ -1450,9 +1112,6 @@ class KGFramesEndpoint:
                     created_count=0,
                     created_uris=[]
                 )
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_document_to_vitalsigns_objects(request)
             
             # Extract slots and validate
             slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
@@ -1502,14 +1161,14 @@ class KGFramesEndpoint:
                 created_uris=[]
             )
     
-    async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, request: JsonLdDocument, current_user: Dict) -> SlotUpdateResponse:
-        """Update slots for a specific frame using Edge_hasKGSlot relationships."""
+    async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], current_user: Dict) -> SlotUpdateResponse:
+        """Update slots for a specific frame from quads."""
         from ..model.kgframes_model import SlotUpdateResponse
+        vitalsigns_objects = quad_list_to_graphobjects(quads)
         
         try:
             self.logger.info(f"Updating slots for frame {frame_uri} in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 return SlotUpdateResponse(
@@ -1529,7 +1188,6 @@ class KGFramesEndpoint:
                     updated_uris=[]
                 )
             
-            # Validate that frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotUpdateResponse(
                     success=False,
@@ -1537,9 +1195,6 @@ class KGFramesEndpoint:
                     updated_count=0,
                     updated_uris=[]
                 )
-            
-            # Convert JSON-LD to VitalSigns objects
-            vitalsigns_objects = self._jsonld_document_to_vitalsigns_objects(request)
             
             # Extract slots and validate
             slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
@@ -1885,44 +1540,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Error converting SPARQL results to frames: {e}", exc_info=True)
             return []
     
-    def _frames_to_jsonld_document(self, frames: List[KGFrame]) -> JsonLdDocument:
-        """Convert frame objects to JSON-LD document."""
-        try:
-            self.logger.debug(f"📄 Converting {len(frames) if frames else 0} frames to JSON-LD document")
-            if not frames:
-                self.logger.debug(f"📄 No frames to convert, returning empty document")
-                return JsonLdDocument(
-                    context={"@vocab": self.haley_prefix},
-                    graph=[]
-                )
-            
-            # Convert VitalSigns objects to JSON-LD using native functionality
-            jsonld_objects = []
-            for i, frame in enumerate(frames):
-                try:
-                    self.logger.debug(f"📄 Converting frame {i+1}/{len(frames)}: {frame.URI}")
-                    # Use VitalSigns native JSON-LD conversion
-                    frame_dict = frame.to_jsonld()
-                    self.logger.debug(f"📄 Frame dict keys: {list(frame_dict.keys()) if frame_dict else 'None'}")
-                    jsonld_objects.append(frame_dict)
-                except Exception as e:
-                    self.logger.warning(f"Error converting frame {frame.URI} to JSON-LD: {e}")
-                    import traceback
-                    self.logger.warning(f"Traceback: {traceback.format_exc()}")
-                    continue
-            
-            self.logger.debug(f"📄 Successfully converted {len(jsonld_objects)} frames to JSON-LD")
-            return JsonLdDocument(
-                context={"@vocab": self.haley_prefix},
-                graph=jsonld_objects
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Error converting frames to JSON-LD document: {e}")
-            return JsonLdDocument(
-                context={"@vocab": self.haley_prefix},
-                graph=[]
-            )
+    
     
     def _extract_count_from_results(self, count_results) -> int:
         """Extract count from SPARQL count query results."""
@@ -1946,29 +1564,7 @@ class KGFramesEndpoint:
     # Helper methods for VitalSigns integration and frame operations
     
 
-    def _jsonld_document_to_vitalsigns_objects(self, jsonld_doc: JsonLdDocument) -> List[GraphObject]:
-        """Convert JSON-LD document to VitalSigns objects."""
-        try:
-            # Convert to dict format for VitalSigns processing
-            jsonld_dict = jsonld_doc.model_dump(by_alias=True)
-            
-            # Create VitalSigns instance
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vs = VitalSigns()
-            
-            # Use VitalSigns native JSON-LD conversion
-            if '@graph' in jsonld_dict:
-                vitalsigns_objects = vs.from_jsonld_list(jsonld_dict)
-            else:
-                vitalsigns_obj = vs.from_jsonld(jsonld_dict)
-                # Ensure we always return a list
-                vitalsigns_objects = [vitalsigns_obj] if not isinstance(vitalsigns_obj, list) else vitalsigns_obj
-            
-            return vitalsigns_objects
-            
-        except Exception as e:
-            self.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
-            return []  # Return empty list for invalid JSON-LD format
+    
     
     def _set_frame_grouping_uris(self, frames: List[KGFrame], graph_id: str, parent_uri: Optional[str]):
         """Set grouping URIs on frame objects following MockKGFramesEndpoint patterns."""
@@ -2334,7 +1930,12 @@ class KGFramesEndpoint:
         try:
             # Delete frame and all its properties
             delete_query = f"""
-            DELETE WHERE {{
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    <{frame_uri}> ?p ?o .
+                }}
+            }}
+            WHERE {{
                 GRAPH <{graph_id}> {{
                     <{frame_uri}> ?p ?o .
                 }}
@@ -2344,7 +1945,13 @@ class KGFramesEndpoint:
             
             # Also delete any slots connected to this frame
             delete_slots_query = f"""
-            DELETE WHERE {{
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    ?slot ?p ?o .
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            WHERE {{
                 GRAPH <{graph_id}> {{
                     ?edge a <{self.haley_prefix}Edge_hasKGSlot> ;
                           <{self.vital_prefix}hasEdgeSource> <{frame_uri}> ;
@@ -2658,37 +2265,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
     
-    def _slots_to_jsonld_document(self, slots: List[KGSlot]) -> JsonLdDocument:
-        """Convert slot objects to JSON-LD document."""
-        try:
-            if not slots:
-                return JsonLdDocument(
-                    context={"@vocab": self.haley_prefix},
-                    graph=[]
-                )
-            
-            # Convert VitalSigns objects to JSON-LD using native functionality
-            jsonld_objects = []
-            for slot in slots:
-                try:
-                    # Use VitalSigns native JSON-LD conversion
-                    slot_dict = slot.to_jsonld()
-                    jsonld_objects.append(slot_dict)
-                except Exception as e:
-                    self.logger.warning(f"Error converting slot {str(slot.URI)} to JSON-LD: {e}")
-                    continue
-            
-            return JsonLdDocument(
-                context={"@vocab": self.haley_prefix},
-                graph=jsonld_objects
-            )
-            
-        except Exception as e:
-            self.logger.error(f"Error converting slots to JSON-LD document: {e}")
-            return JsonLdDocument(
-                context={"@vocab": self.haley_prefix},
-                graph=[]
-            )
+    
     
     def _set_slot_frame_relationships(self, slots: List[KGSlot], frame_uri: str):
         """Set frameGraphURI on slots to connect them to the frame."""
@@ -2839,7 +2416,12 @@ class KGFramesEndpoint:
                 try:
                     # Delete the slot itself
                     delete_slot_query = f"""
-                    DELETE WHERE {{
+                    DELETE {{
+                        GRAPH <{graph_id}> {{
+                            <{slot_uri}> ?p ?o .
+                        }}
+                    }}
+                    WHERE {{
                         GRAPH <{graph_id}> {{
                             <{slot_uri}> ?p ?o .
                         }}
@@ -2849,7 +2431,12 @@ class KGFramesEndpoint:
                     
                     # Delete the Edge_hasKGSlot connecting frame to slot
                     delete_edge_query = f"""
-                    DELETE WHERE {{
+                    DELETE {{
+                        GRAPH <{graph_id}> {{
+                            ?edge ?ep ?eo .
+                        }}
+                    }}
+                    WHERE {{
                         GRAPH <{graph_id}> {{
                             ?edge a <{self.haley_prefix}Edge_hasKGSlot> ;
                                   <{self.vital_prefix}hasEdgeSource> <{frame_uri}> ;
@@ -2995,17 +2582,13 @@ class KGFramesEndpoint:
         space_id: str,
         graph_id: str,
         parent_frame_uri: str,
-        request: JsonLdRequest,
+        frame_objects: List,
         operation_mode: str,
         current_user: Dict
     ) -> FrameCreateResponse:
         """Create child frames linked to parent frame using processor."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
-            
-            # Convert JSON-LD to VitalSigns objects at boundary
-            frame_objects = self._jsonld_document_to_vitalsigns_objects(request)
             
             # Delegate to hierarchical processor
             result = await self.frame_hierarchical_processor.create_child_frames(
@@ -3050,13 +2633,11 @@ class KGFramesEndpoint:
         graph_id: str,
         frame_uri: str,
         current_user: Dict
-    ) -> JsonLdDocument:
-        """Get complete frame graph using processor."""
+    ):
+        """Get complete frame graph using processor. Returns object with graph_objects list."""
         try:
-            # Get backend adapter
             backend_adapter = await self._get_backend_adapter(space_id)
             
-            # Delegate to graph processor
             result = await self.frame_graph_processor.get_frame_graph(
                 backend_adapter=backend_adapter,
                 space_id=space_id,
@@ -3065,29 +2646,16 @@ class KGFramesEndpoint:
             )
             
             if result.success and result.graph_objects:
-                # Convert VitalSigns objects to JSON-LD at boundary
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                
-                # Handle single object case - JsonLdDocument requires 0 or 2+ objects
                 if len(result.graph_objects) == 1:
-                    # Single object (just the frame, no slots) - return None for complete_graph
                     self.logger.debug("Frame graph has only 1 object (frame only), returning None for complete_graph")
                     return None
-                
-                jsonld_data = GraphObject.to_jsonld_list(result.graph_objects)
-                return JsonLdDocument(**jsonld_data)
+                return result
             else:
-                # Return empty document
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return None
                 
         except Exception as e:
             self.logger.error(f"Frame graph retrieval failed: {e}", exc_info=True)
-            return JsonLdDocument(
-                context={"@vocab": self.haley_prefix},
-                graph=[]
-            )
+            return None
     
     async def _delete_frame_graph(
         self,

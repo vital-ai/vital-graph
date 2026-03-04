@@ -12,9 +12,10 @@ This implementation uses:
 from typing import Dict, Any, Optional, List
 from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.objects_model import (
-    ObjectsResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+    ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -22,7 +23,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 class MockObjectsEndpoint(MockBaseEndpoint):
     """Mock implementation of ObjectsEndpoint."""
     
-    def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> ObjectsResponse:
+    def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """
         List Objects with pagination and optional search using pyoxigraph SPARQL queries.
         
@@ -34,7 +35,7 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             search: Optional search term
             
         Returns:
-            ObjectsResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         self._log_method_call("list_objects", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset, search=search)
         
@@ -42,11 +43,8 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id)
             if not space:
-                # Return empty response for non-existent space
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return ObjectsResponse(
-                    objects=JsonLdDocument(**empty_jsonld),
+                return QuadResponse(
+                    results=[],
                     total_count=0,
                     page_size=page_size,
                     offset=offset
@@ -101,10 +99,8 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             self.logger.info(f"List objects query results: {len(results.get('bindings', []))} bindings")
             
             if not results.get("bindings"):
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return ObjectsResponse(
-                    objects=JsonLdDocument(**empty_jsonld),
+                return QuadResponse(
+                    results=[],
                     total_count=0,
                     page_size=page_size,
                     offset=offset
@@ -202,15 +198,11 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                     count_value = count_value.split("^^")[0].strip('"')
                 total_count = int(count_value)
             
-            # Convert to JSON-LD document using VitalSigns
-            self.logger.info(f"Converting {len(objects)} objects to JSON-LD document")
-            objects_jsonld = self._objects_to_jsonld_document(objects)
-            self.logger.info(f"JSON-LD document created with keys: {list(objects_jsonld.keys())}")
-            if '@graph' in objects_jsonld:
-                self.logger.info(f"@graph contains {len(objects_jsonld['@graph'])} items")
+            self.logger.info(f"Converting {len(objects)} objects to quad response")
+            quads = graphobjects_to_quad_list(objects, graph_id)
             
-            return ObjectsResponse(
-                objects=JsonLdDocument(**objects_jsonld),
+            return QuadResponse(
+                results=quads,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset
@@ -218,16 +210,14 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             
         except Exception as e:
             self.logger.error(f"Error listing objects: {e}")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return ObjectsResponse(
-                objects=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
             )
     
-    def get_object(self, space_id: str, graph_id: str, uri: str) -> JsonLdDocument:
+    def get_object(self, space_id: str, graph_id: str, uri: str) -> QuadResponse:
         """
         Get a specific Object by URI using pyoxigraph SPARQL query.
         
@@ -237,7 +227,7 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             uri: Object URI
             
         Returns:
-            JsonLdDocument with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results
         """
         self._log_method_call("get_object", space_id=space_id, graph_id=graph_id, uri=uri)
         
@@ -245,10 +235,9 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id)
             if not space:
-                # Return empty document for non-existent space
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Clean URI
             clean_uri = uri.strip('<>')
@@ -265,10 +254,9 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             results = self._execute_sparql_query(space, query)
             
             if not results.get("bindings"):
-                # Object not found
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Reconstruct object properties
             properties = {}
@@ -324,23 +312,22 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                 obj = None
             
             if obj:
-                # Convert to JSON-LD using VitalSigns native functionality
-                # Use to_jsonld_list for consistent format
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                obj_jsonld = GraphObject.to_jsonld_list([obj])
-                return JsonLdDocument(**obj_jsonld)
+                quads = graphobjects_to_quad_list([obj], graph_id)
+                return QuadResponse(
+                    results=quads, total_count=1, page_size=1, offset=0
+                )
             else:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
                 
         except Exception as e:
             self.logger.error(f"Error getting object {uri}: {e}")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return QuadResponse(
+                results=[], total_count=0, page_size=1, offset=0
+            )
     
-    def get_objects_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> ObjectsResponse:
+    def get_objects_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> QuadResponse:
         """
         Get multiple objects by URI list using pyoxigraph SPARQL queries.
         
@@ -350,7 +337,7 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             graph_id: Graph identifier
             
         Returns:
-            ObjectsResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         self._log_method_call("get_objects_by_uris", space_id=space_id, uri_list=uri_list, graph_id=graph_id)
         
@@ -358,83 +345,39 @@ class MockObjectsEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id)
             if not space:
-                # Return empty response for non-existent space
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return ObjectsResponse(
-                    objects=JsonLdDocument(**empty_jsonld),
-                    total_count=0,
-                    page_size=100,
-                    offset=0
-                )
+                return QuadResponse(results=[], total_count=0, page_size=100, offset=0)
             
-            # Parse URI list
             uris = [uri.strip() for uri in uri_list.split(',') if uri.strip()]
             
             if not uris:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return ObjectsResponse(
-                    objects=JsonLdDocument(**empty_jsonld),
-                    total_count=0,
-                    page_size=100,
-                    offset=0
-                )
+                return QuadResponse(results=[], total_count=0, page_size=100, offset=0)
             
-            # Get each object individually
-            objects = []
+            all_objects = []
             for uri in uris:
-                obj_doc = self.get_object(space_id, graph_id, uri)
-                if obj_doc and hasattr(obj_doc, 'graph') and obj_doc.graph:
-                    # Extract objects from the JsonLdDocument
-                    for obj_data in obj_doc.graph:
-                        objects.append(obj_data)
+                obj_list = self.get_object(space_id, graph_id, uri)
+                if obj_list:
+                    all_objects.extend(obj_list)
             
-            # Create response
-            if objects:
-                objects_jsonld = {
-                    "@context": {
-                        "vital": "http://vital.ai/ontology/vital#",
-                        "vital-core": "http://vital.ai/ontology/vital-core#",
-                        "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                    },
-                    "@graph": objects
-                }
-            else:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                objects_jsonld = GraphObject.to_jsonld_list([])
-            
-            return ObjectsResponse(
-                objects=JsonLdDocument(**objects_jsonld),
-                total_count=len(objects),
-                page_size=100,
-                offset=0
-            )
+            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            return QuadResponse(results=quads, total_count=len(all_objects), page_size=100, offset=0)
             
         except Exception as e:
             self.logger.error(f"Error getting objects by URIs: {e}")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return ObjectsResponse(
-                objects=JsonLdDocument(**empty_jsonld),
-                total_count=0,
-                page_size=100,
-                offset=0
-            )
+            return QuadResponse(results=[], total_count=0, page_size=100, offset=0)
     
-    def create_objects(self, space_id: str, graph_id: str, document: JsonLdDocument) -> ObjectCreateResponse:
+    def create_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> ObjectCreateResponse:
         """
-        Create Objects from JSON-LD document using VitalSigns native functionality.
+        Create Objects from GraphObjects using VitalSigns native functionality.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing object data
+            objects: List of GraphObject instances to create
             
         Returns:
             ObjectCreateResponse with created URIs and count
         """
-        self._log_method_call("create_objects", space_id=space_id, graph_id=graph_id, document=document)
+        self._log_method_call("create_objects", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -445,10 +388,6 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                     created_count=0, 
                     created_uris=[]
                 )
-            
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            objects = self._jsonld_to_vitalsigns_objects(document_dict)
             
             if not objects:
                 return ObjectCreateResponse(
@@ -487,19 +426,19 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                 created_uris=[]
             )
     
-    def update_objects(self, space_id: str, graph_id: str, document: JsonLdDocument) -> ObjectUpdateResponse:
+    def update_objects(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> ObjectUpdateResponse:
         """
-        Update Objects from JSON-LD document using VitalSigns native functionality.
+        Update Objects from GraphObjects using VitalSigns native functionality.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing updated object data
+            objects: List of GraphObject instances to update
             
         Returns:
             ObjectUpdateResponse with updated URI
         """
-        self._log_method_call("update_objects", space_id=space_id, graph_id=graph_id, document=document)
+        self._log_method_call("update_objects", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -509,10 +448,6 @@ class MockObjectsEndpoint(MockBaseEndpoint):
                     message="Space not found",
                     updated_uri=""
                 )
-            
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            objects = self._jsonld_to_vitalsigns_objects(document_dict)
             
             if not objects:
                 return ObjectUpdateResponse(

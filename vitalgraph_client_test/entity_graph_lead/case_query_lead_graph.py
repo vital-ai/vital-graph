@@ -115,9 +115,12 @@ class QueryLeadGraphTester:
                             results["tests_failed"] += 1
                             results["errors"].append(f"Frame returned error: {frame_data.error}")
                         else:
-                            # Convert to dict and inspect
-                            frame_dict = frame_data.model_dump(by_alias=True) if hasattr(frame_data, 'model_dump') else frame_data
-                            frame_objects = vs.from_jsonld_list(frame_dict)
+                            # Convert response to graph objects
+                            from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                            if hasattr(frame_data, 'results') and frame_data.results:
+                                frame_objects = quad_list_to_graphobjects(frame_data.results)
+                            else:
+                                frame_objects = []
                             
                             logger.info(f"   ✅ Retrieved frame with {len(frame_objects)} objects")
                             

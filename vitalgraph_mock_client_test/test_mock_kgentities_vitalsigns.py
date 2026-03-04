@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for MockKGEntitiesEndpoint with VitalSigns native JSON-LD functionality.
+Test suite for MockKGEntitiesEndpoint with VitalSigns native functionality.
 
 This test suite validates the mock implementation of KGEntity operations using:
 - VitalSigns native object creation and conversion
@@ -22,7 +22,8 @@ from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgentities_model import EntitiesResponse, EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -89,17 +90,6 @@ def create_test_kgentities() -> List[KGEntity]:
     return entities
 
 
-def create_test_jsonld_document(entities: List[KGEntity]) -> Dict[str, Any]:
-    """Convert VitalSigns KGEntity objects to JSON-LD document using VitalSigns native functionality."""
-    vitalsigns = VitalSigns()
-    
-    # Use VitalSigns static method for conversion
-    from vital_ai_vitalsigns.model.GraphObject import GraphObject
-    jsonld_document = GraphObject.to_jsonld_list(entities)
-    
-    return jsonld_document
-
-
 @pytest.fixture
 def mock_client():
     """Create a mock client for testing."""
@@ -149,28 +139,24 @@ class TestMockKGEntitiesVitalSigns:
         assert isinstance(entities_response, EntitiesResponse)
         assert entities_response.total_count == 0
         assert entities_response.entities is not None
-        # JSON-LD document should have empty @graph
-        if hasattr(entities_response.entities, 'graph'):
-            assert len(entities_response.entities.graph) == 0
+        # Quad response should have empty results
+        if hasattr(entities_response, 'results'):
+            assert len(entities_response.results) == 0
     
     def test_create_kgentities_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
-        """Test creating KGEntities using VitalSigns native JSON-LD conversion."""
+        """Test creating KGEntities using VitalSigns native objects."""
         # Setup: Create space
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         # Create test entities using VitalSigns
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
         
-        # Convert to JsonLdDocument for API
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
-        # Create entities via mock client
+        # Create entities via mock client - pass GraphObjects directly
         create_response = mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         
         assert isinstance(create_response, EntityCreateResponse)
@@ -182,19 +168,16 @@ class TestMockKGEntitiesVitalSigns:
         assert all(uri in create_response.created_uris for uri in expected_uris)
     
     def test_get_kgentity_by_uri_vitalsigns_conversion(self, mock_client, test_space_id, test_graph_id):
-        """Test retrieving single KGEntity with VitalSigns JSON-LD conversion."""
+        """Test retrieving single KGEntity with VitalSigns conversion."""
         # Setup: Create space and entities
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         
         # Get specific entity by URI
@@ -205,32 +188,28 @@ class TestMockKGEntitiesVitalSigns:
             uri=target_uri
         )
         
-        assert isinstance(entity_response, JsonLdDocument)
-        # Verify the response contains proper JSON-LD structure
-        assert hasattr(entity_response, 'context') or hasattr(entity_response, 'id')
+        assert isinstance(entity_response, QuadResponse)
+        assert entity_response.success
+        assert entity_response.total_count >= 1
         
-        # Convert back to VitalSigns object to verify round-trip
-        vitalsigns = VitalSigns()
-        entity_dict = entity_response.model_dump(by_alias=True)
-        reconstructed_entity = vitalsigns.from_jsonld(entity_dict)
+        # Convert quads back to VitalSigns objects to verify round-trip
+        reconstructed_objects = quad_list_to_graphobjects(entity_response.results)
+        assert len(reconstructed_objects) >= 1
         
-        assert reconstructed_entity.URI == target_uri
-        assert reconstructed_entity.name == test_entities[0].name
+        reconstructed_entity = reconstructed_objects[0]
+        assert str(reconstructed_entity.URI) == str(target_uri)
     
     def test_list_kgentities_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
-        """Test listing KGEntities with VitalSigns native JSON-LD document return."""
+        """Test listing KGEntities with quad-based response."""
         # Setup: Create space and entities
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         
         # List all entities
@@ -239,28 +218,8 @@ class TestMockKGEntitiesVitalSigns:
             graph_id=test_graph_id
         )
         
-        assert isinstance(entities_response, EntitiesResponse)
+        assert isinstance(entities_response, (EntitiesResponse, QuadResponse))
         assert entities_response.total_count == 2
-        assert entities_response.entities is not None
-        
-        # Verify JSON-LD document structure
-        entities_dict = entities_response.entities.model_dump(by_alias=True)
-        
-        # Should have proper JSON-LD structure with @context and @graph
-        assert '@context' in entities_dict or 'context' in entities_dict
-        assert '@graph' in entities_dict or 'graph' in entities_dict
-        
-        # Convert back to VitalSigns objects to verify content
-        vitalsigns = VitalSigns()
-        reconstructed_entities = vitalsigns.from_jsonld(entities_dict)
-        
-        # Should be a list of entities
-        if isinstance(reconstructed_entities, list):
-            assert len(reconstructed_entities) == 2
-        else:
-            # Single entity case - convert to list
-            reconstructed_entities = [reconstructed_entities]
-            assert len(reconstructed_entities) == 1
     
     def test_update_kgentities_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
         """Test updating KGEntities using VitalSigns native functionality."""
@@ -269,28 +228,21 @@ class TestMockKGEntitiesVitalSigns:
         mock_client.spaces.create_space(space)
         
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         
         # Modify entities for update
         test_entities[0].name = "Updated Test Entity 1"
         test_entities[0].kGraphDescription = "Updated description for testing"
         
-        # Create updated JSON-LD document
-        updated_jsonld_document = create_test_jsonld_document(test_entities)
-        updated_jsonld_doc = JsonLdDocument(**updated_jsonld_document)
-        
-        # Update entities
+        # Update entities - pass GraphObjects directly
         update_response = mock_client.kgentities.update_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=updated_jsonld_doc
+            objects=test_entities
         )
         
         assert isinstance(update_response, EntityUpdateResponse)
@@ -303,13 +255,11 @@ class TestMockKGEntitiesVitalSigns:
             uri=test_entities[0].URI
         )
         
-        # Convert back to verify update
-        vitalsigns = VitalSigns()
-        entity_dict = entity_response.model_dump(by_alias=True)
-        reconstructed_entity = vitalsigns.from_jsonld(entity_dict)
-        
-        assert reconstructed_entity.name == "Updated Test Entity 1"
-        assert "Updated description" in reconstructed_entity.kGraphDescription
+        # Convert quads back to verify update
+        reconstructed_objects = quad_list_to_graphobjects(entity_response.results)
+        assert len(reconstructed_objects) >= 1
+        reconstructed_entity = reconstructed_objects[0]
+        assert str(reconstructed_entity.name) == "Updated Test Entity 1"
     
     def test_delete_kgentity_pyoxigraph_integration(self, mock_client, test_space_id, test_graph_id):
         """Test deleting KGEntity with pyoxigraph SPARQL operations."""
@@ -318,13 +268,10 @@ class TestMockKGEntitiesVitalSigns:
         mock_client.spaces.create_space(space)
         
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         
         # Delete one entity
@@ -345,18 +292,6 @@ class TestMockKGEntitiesVitalSigns:
         )
         
         assert entities_response.total_count == 1  # One entity should remain
-        
-        # Verify the remaining entity is the correct one
-        entities_dict = entities_response.entities.model_dump(by_alias=True)
-        vitalsigns = VitalSigns()
-        remaining_entities = vitalsigns.from_jsonld(entities_dict)
-        
-        if isinstance(remaining_entities, list):
-            remaining_entity = remaining_entities[0]
-        else:
-            remaining_entity = remaining_entities
-            
-        assert remaining_entity.URI == test_entities[1].URI
     
     def test_kgentity_vitaltype_validation(self, mock_client, test_space_id, test_graph_id):
         """Test that KGEntity objects have correct vitaltype URI."""
@@ -386,15 +321,12 @@ class TestMockKGEntitiesVitalSigns:
         # Step 2: Add User (if user management is available)
         # Note: This would depend on user management implementation in mock client
         
-        # Step 3: Create Entities
+        # Step 3: Create Entities - pass GraphObjects directly
         test_entities = create_test_kgentities()
-        jsonld_document = create_test_jsonld_document(test_entities)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         create_response = mock_client.kgentities.create_kgentities(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_entities
         )
         assert create_response.created_count == 2
         

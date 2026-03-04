@@ -161,7 +161,7 @@ async def test_kgframes_endpoint() -> bool:
         org_entity = [obj for obj in org_objects if obj.__class__.__name__ == 'KGEntity'][0]
         project_entity = [obj for obj in project_objects if obj.__class__.__name__ == 'KGEntity'][0]
         
-        # Convert to JSON-LD and create via KGEntities endpoint
+        # Convert to quads and create via KGEntities endpoint
         from vital_ai_vitalsigns.model.GraphObject import GraphObject
         
         # Create entities with their complete graphs
@@ -172,30 +172,26 @@ async def test_kgframes_endpoint() -> bool:
             ("Project", project_objects)
         ]:
             try:
-                entity_document_dict = GraphObject.to_jsonld_list(entity_objects)
-                from vitalgraph.model.jsonld_model import JsonLdDocument
-                entity_document = JsonLdDocument(**entity_document_dict)
                 entity_response = await client.kgentities.create_kgentities(
                     space_id=test_space_id,
                     graph_id=test_graph_id,
-                    data=entity_document
+                    objects=entity_objects
                 )
                 
                 # Check for successful entity creation
                 success = False
                 entities_count = 0
                 
-                if hasattr(entity_response, 'success') and entity_response.success:
+                if hasattr(entity_response, 'is_success') and entity_response.is_success:
                     success = True
-                    entities_count = getattr(entity_response, 'entities_created', 0)
-                elif hasattr(entity_response, 'entities_created') and entity_response.entities_created > 0:
+                    entities_count = getattr(entity_response, 'created_count', 0)
+                elif hasattr(entity_response, 'created_count') and entity_response.created_count > 0:
                     success = True
-                    entities_count = entity_response.entities_created
+                    entities_count = entity_response.created_count
                 elif hasattr(entity_response, 'message') and "created" in str(entity_response.message).lower():
                     success = True
-                    # Try to extract count from message like "Successfully created 1 entities"
                     import re
-                    match = re.search(r'created (\d+) entities', str(entity_response.message))
+                    match = re.search(r'created (\d+)', str(entity_response.message))
                     entities_count = int(match.group(1)) if match else 1
                 
                 if success:
@@ -278,26 +274,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n6. Running Frame Delete Tests...")
-        try:
-            success = await run_frame_delete_tests(
-                client, test_space_id, test_graph_id,
-                frame_uri=test_frame_uri, frame_uris=test_frame_uris,
-                parent_frame_uri=test_parent_uri, logger=logger
-            )
-            all_results.append(("Frame Delete Tests", success))
-            total_tests += 1
-            if success:
-                total_passed += 1
-            else:
-                total_failed += 1
-        except Exception as e:
-            print(f"   ❌ Frame Delete Tests failed: {e}")
-            all_results.append(("Frame Delete Tests", False))
-            total_tests += 1
-            total_failed += 1
-        
-        print("\n7. Running Slot Creation Tests...")
+        print("\n6. Running Slot Creation Tests...")
         try:
             success = await run_slot_create_tests(
                 client, test_space_id, test_graph_id, test_frame_uri,
@@ -315,7 +292,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n8. Running Slot Update Tests...")
+        print("\n7. Running Slot Update Tests...")
         try:
             success = await run_slot_update_tests(
                 client, test_space_id, test_graph_id, test_frame_uri,
@@ -333,24 +310,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n9. Running Slot Delete Tests...")
-        try:
-            success = await run_slot_delete_tests(
-                client, test_space_id, test_graph_id, test_frame_uri, logger=logger
-            )
-            all_results.append(("Slot Delete Tests", success))
-            total_tests += 1
-            if success:
-                total_passed += 1
-            else:
-                total_failed += 1
-        except Exception as e:
-            print(f"   ❌ Slot Delete Tests failed: {e}")
-            all_results.append(("Slot Delete Tests", False))
-            total_tests += 1
-            total_failed += 1
-        
-        print("\n10. Running Frames with Slots Integration Tests...")
+        print("\n8. Running Frames with Slots Integration Tests...")
         try:
             success = await run_frames_with_slots_tests(
                 client, test_space_id, test_graph_id,
@@ -369,7 +329,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n11. Running Child Frames Tests...")
+        print("\n9. Running Child Frames Tests...")
         try:
             success = await run_child_frames_tests(
                 client, test_space_id, test_graph_id,
@@ -387,7 +347,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n12. Running Query Frames Tests...")
+        print("\n10. Running Query Frames Tests...")
         try:
             success = await run_query_frames_tests(
                 client, test_space_id, test_graph_id, logger=logger
@@ -404,11 +364,12 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n13. Running Frame Graphs Tests...")
+        print("\n11. Running Frame Graphs Tests...")
         try:
             success = await run_frame_graphs_tests(
                 client, test_space_id, test_graph_id,
-                frame_uri=test_frame_uri, frame_uris=test_frame_uris, logger=logger
+                frame_uri=test_frame_uri, frame_uris=test_frame_uris,
+                entity_uri=test_entity_uri, logger=logger
             )
             all_results.append(("Frame Graphs Tests", success))
             total_tests += 1
@@ -422,7 +383,7 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
-        print("\n14. Running Integration Tests...")
+        print("\n12. Running Integration Tests...")
         try:
             success = await run_integration_tests(
                 client, test_space_id, test_graph_id,
@@ -440,11 +401,49 @@ async def test_kgframes_endpoint() -> bool:
             total_tests += 1
             total_failed += 1
         
+        # Run destructive tests LAST so they don't break other suites
+        print("\n13. Running Slot Delete Tests...")
+        try:
+            success = await run_slot_delete_tests(
+                client, test_space_id, test_graph_id, test_frame_uri, logger=logger
+            )
+            all_results.append(("Slot Delete Tests", success))
+            total_tests += 1
+            if success:
+                total_passed += 1
+            else:
+                total_failed += 1
+        except Exception as e:
+            print(f"   ❌ Slot Delete Tests failed: {e}")
+            all_results.append(("Slot Delete Tests", False))
+            total_tests += 1
+            total_failed += 1
+        
+        print("\n14. Running Frame Delete Tests...")
+        try:
+            success = await run_frame_delete_tests(
+                client, test_space_id, test_graph_id,
+                frame_uri=test_frame_uri, frame_uris=test_frame_uris,
+                parent_frame_uri=test_parent_uri,
+                entity_uri=test_entity_uri, logger=logger
+            )
+            all_results.append(("Frame Delete Tests", success))
+            total_tests += 1
+            if success:
+                total_passed += 1
+            else:
+                total_failed += 1
+        except Exception as e:
+            print(f"   ❌ Frame Delete Tests failed: {e}")
+            all_results.append(("Frame Delete Tests", False))
+            total_tests += 1
+            total_failed += 1
+        
         # Cleanup test space
         print(f"\n15. Cleaning up test space...")
         try:
             delete_response = await client.spaces.delete_space(test_space_id)
-            if delete_response and hasattr(delete_response, 'success') and delete_response.success:
+            if delete_response and hasattr(delete_response, 'is_success') and delete_response.is_success:
                 print(f"   ✓ Test space deleted successfully: {test_space_id}")
             elif delete_response and hasattr(delete_response, 'message') and "deleted successfully" in str(delete_response.message):
                 print(f"   ✓ Test space deleted successfully: {test_space_id}")

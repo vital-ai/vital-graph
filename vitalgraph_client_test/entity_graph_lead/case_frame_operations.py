@@ -322,6 +322,27 @@ class LeadFrameOperationsTester:
                             new_value = old_value + 1
                             obj.integerSlotValue = new_value
                             break
+                        elif obj_type == 'KGCurrencySlot' and hasattr(obj, 'currencySlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'currency'
+                            old_value = float(obj.currencySlotValue) if obj.currencySlotValue else 0.0
+                            new_value = old_value + 5000.0
+                            obj.currencySlotValue = new_value
+                            break
+                        elif obj_type == 'KGDoubleSlot' and hasattr(obj, 'doubleSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'double'
+                            old_value = float(obj.doubleSlotValue) if obj.doubleSlotValue else 0.0
+                            new_value = old_value + 10.5
+                            obj.doubleSlotValue = new_value
+                            break
+                        elif obj_type == 'KGDateTimeSlot' and hasattr(obj, 'dateTimeSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'datetime'
+                            old_value = int(obj.dateTimeSlotValue) if obj.dateTimeSlotValue else 0
+                            new_value = old_value + 86400000  # Add 1 day in ms
+                            obj.dateTimeSlotValue = new_value
+                            break
                     
                     if updateable_slot:
                         logger.info(f"   Updating {slot_type} slot: {old_value} → {new_value}")

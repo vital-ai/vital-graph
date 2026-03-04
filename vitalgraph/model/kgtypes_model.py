@@ -1,13 +1,13 @@
 """KG Types Model Classes
 
 Pydantic models for KG type management operations with Union support for 
-both single JSON-LD objects and JSON-LD documents.
+both single objects and documents.
 """
 
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field, validator
 
-from .jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from .quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from .api_model import BasePaginatedResponse, BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse
 
 
@@ -20,31 +20,11 @@ class KGTypeFilter(BaseModel):
 
 class KGTypeRequest(BaseModel):
     """
-    Universal request model supporting both single and multiple KGType operations.
-    Uses JsonLdRequest discriminated union to automatically handle JsonLdObject or JsonLdDocument.
+    Request model for KGType operations.
     """
     space_id: str = Field(..., description="Space identifier")
     graph_id: str = Field(..., description="Graph identifier")
-    data: JsonLdRequest = Field(
-        ..., 
-        description="KGType data - discriminated union automatically handles single object (JsonLdObject) or multiple objects (JsonLdDocument)"
-    )
-    
-    @validator('data')
-    def validate_jsonld_format(cls, v):
-        """Custom validation to ensure proper JSON-LD format usage."""
-        if isinstance(v, JsonLdObject):
-            # Single object validation
-            if not v.id or not v.type:
-                raise ValueError("JsonLdObject must have @id and @type fields")
-        elif isinstance(v, JsonLdDocument):
-            # Multiple object validation
-            if not v.graph or len(v.graph) == 0:
-                raise ValueError("JsonLdDocument must have non-empty @graph array")
-            for obj in v.graph:
-                if not obj.get('@id') or not obj.get('@type'):
-                    raise ValueError("Each object in @graph must have @id and @type")
-        return v
+    data: Optional[QuadRequest] = Field(None, description="KGType data as quads")
 
 
 class KGTypeCreateRequest(KGTypeRequest):
@@ -61,9 +41,9 @@ class KGTypeBatchDeleteRequest(BaseModel):
     """Request model for batch deleting KGTypes (DELETE /kgtypes with body)."""
     space_id: str = Field(..., description="Space identifier")
     graph_id: str = Field(..., description="Graph identifier")
-    data: Union[JsonLdDocument, List[str]] = Field(
+    data: Union[QuadRequest, List[str]] = Field(
         ..., 
-        description="KGType URIs to delete - either JsonLdDocument or list of URIs"
+        description="KGType URIs to delete - as quads or list of URI strings"
     )
 
 
@@ -80,10 +60,7 @@ class KGTypeResponse(BaseModel):
     """Base response model for KGType operations."""
     success: bool = Field(..., description="Operation success status")
     message: str = Field(..., description="Human-readable status message")
-    data: Optional[Union[JsonLdObject, JsonLdDocument]] = Field(
-        None, 
-        description="Response data - format matches request format"
-    )
+    data: Optional[QuadResultsResponse] = Field(None, description="Response data as quad results")
     errors: Optional[List[str]] = Field(None, description="Error messages if any")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
 
@@ -105,15 +82,3 @@ class KGTypeDeleteResponse(KGTypeResponse):
     deleted_count: Optional[int] = Field(None, description="Number of KGTypes deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of deleted KGTypes")
 
-
-class KGTypeGetResponse(BaseModel):
-    """Response model for individual KGType retrieval operations."""
-    success: bool = Field(..., description="Operation success status")
-    message: str = Field(..., description="Human-readable status message")
-    data: Optional[JsonLdObject] = Field(None, description="Individual KGType as JSON-LD object")
-
-class KGTypeListResponse(BasePaginatedResponse):
-    """Response model for KGType listing operations."""
-    success: bool = Field(..., description="Operation success status")
-    data: Optional[Union[JsonLdObject, JsonLdDocument]] = Field(None, description="KGTypes as JSON-LD - single object or document with multiple")
-    pagination: Optional[Dict[str, Any]] = Field(None, description="Pagination metadata")

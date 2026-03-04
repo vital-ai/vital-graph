@@ -22,7 +22,7 @@ from vitalgraph.mock.client.mock_vitalgraph_client import MockVitalGraphClient
 from vitalgraph.mock.client.space.mock_space_manager import MockSpaceManager
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgframes_model import FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -99,38 +99,25 @@ class TestMockKGFramesEndpoint:
     def test_create_kgframes(self):
         """Test creating KGFrames."""
         try:
-            # Create test KGFrames JSON-LD document using correct schema properties
-            kgframes_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGFrame/test-frame-001",
-                        "@type": "haley:KGFrame",
-                        "vital-core:hasName": "TestFrame1",
-                        "haley:hasKGraphDescription": "A test frame for mock client testing",
-                        "haley:hasKGFrameTypeDescription": "Test frame type description",
-                        "haley:hasFrameSequence": 1
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGFrame/test-frame-002",
-                        "@type": "haley:KGFrame",
-                        "vital-core:hasName": "TestFrame2",
-                        "haley:hasKGraphDescription": "Another test frame for mock client testing",
-                        "haley:hasKGFrameTypeDescription": "Another test frame type description",
-                        "haley:hasFrameSequence": 2
-                    }
-                ]
-            }
+            # Create test KGFrame GraphObjects
+            frame1 = KGFrame()
+            frame1.URI = "http://vital.ai/haley.ai/app/KGFrame/test-frame-001"
+            frame1.name = "TestFrame1"
+            frame1.kGraphDescription = "A test frame for mock client testing"
+            frame1.kGFrameTypeDescription = "Test frame type description"
+            frame1.frameSequence = 1
             
-            document = JsonLdDocument(**kgframes_jsonld)
+            frame2 = KGFrame()
+            frame2.URI = "http://vital.ai/haley.ai/app/KGFrame/test-frame-002"
+            frame2.name = "TestFrame2"
+            frame2.kGraphDescription = "Another test frame for mock client testing"
+            frame2.kGFrameTypeDescription = "Another test frame type description"
+            frame2.frameSequence = 2
+            
             response = self.endpoint.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[frame1, frame2]
             )
             
             success = (
@@ -163,8 +150,8 @@ class TestMockKGFramesEndpoint:
             )
             
             success = (
-                isinstance(response, JsonLdDocument) and
-                (hasattr(response, 'id') or hasattr(response, 'context'))
+                isinstance(response, (QuadResponse, QuadResultsResponse)) and
+                response.success
             )
             
             self.log_test_result(
@@ -211,28 +198,18 @@ class TestMockKGFramesEndpoint:
     def test_update_kgframes(self):
         """Test updating KGFrames."""
         try:
-            # Create updated KGFrame JSON-LD document
-            updated_kgframe_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": "http://vital.ai/haley.ai/app/KGFrame/test-frame-001",
-                    "@type": "haley:KGFrame",
-                    "vital-core:hasName": "UpdatedTestFrame1",
-                    "haley:hasKGraphDescription": "Updated description for testing",
-                    "haley:hasKGFrameTypeDescription": "Updated test frame type description",
-                    "haley:hasFrameSequence": 10
-                }]
-            }
+            # Create updated KGFrame GraphObject
+            updated_frame = KGFrame()
+            updated_frame.URI = "http://vital.ai/haley.ai/app/KGFrame/test-frame-001"
+            updated_frame.name = "UpdatedTestFrame1"
+            updated_frame.kGraphDescription = "Updated description for testing"
+            updated_frame.kGFrameTypeDescription = "Updated test frame type description"
+            updated_frame.frameSequence = 10
             
-            document = JsonLdDocument(**updated_kgframe_jsonld)
             response = self.endpoint.update_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[updated_frame]
             )
             
             success = (

@@ -69,7 +69,7 @@ class MockImportEndpoint(MockBaseEndpoint):
             import_id=import_id,
             name="Mock Import Job",
             description="Mock import job for testing",
-            import_type=ImportType.JSON_LD,
+            import_type=ImportType.JSON,
             space_id="mock_space_001",
             graph_id="mock_graph_001",
             status=ImportStatus.PENDING,

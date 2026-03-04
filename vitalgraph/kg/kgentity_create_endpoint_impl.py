@@ -6,7 +6,6 @@ extracted from MockKGEntitiesEndpoint to improve code organization and maintaina
 """
 
 from typing import List, Optional, Any
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 from vitalgraph.model.kgframes_model import FrameCreateResponse
 from ai_haley_kg_domain.model.KGEntity import KGEntity
@@ -14,15 +13,15 @@ from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
 
 
-def create_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, document: JsonLdDocument) -> EntityCreateResponse:
+def create_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, document) -> EntityCreateResponse:
     """
-    Create KGEntities from JSON-LD document with grouping URI enforcement.
+    Create KGEntities from graph objects with grouping URI enforcement.
     
     Args:
         endpoint_instance: The MockKGEntitiesEndpoint instance (for access to methods and logger)
         space_id: Space identifier
         graph_id: Graph identifier
-        document: JsonLdDocument containing KGEntity data
+        document: List of GraphObjects containing KGEntity data
         
     Returns:
         EntityCreateResponse with created URIs and count
@@ -42,9 +41,8 @@ def create_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
         # Step 1: Strip any existing grouping URIs from client document
         cleaned_document = endpoint_instance._strip_grouping_uris(document)
         
-        # Step 2: Convert JSON-LD document to VitalSigns objects using direct object creation
-        document_dict = cleaned_document.model_dump(by_alias=True)
-        all_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Step 2: Accept graph objects directly
+        all_objects = cleaned_document if isinstance(cleaned_document, list) else [cleaned_document]
         
         if not all_objects:
             return EntityCreateResponse(
@@ -97,7 +95,7 @@ def create_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
         )
 
 
-def create_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument) -> FrameCreateResponse:
+def create_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, entity_uri: str, document) -> FrameCreateResponse:
     """
     Create frames within entity context using Edge_hasKGFrame relationships.
     
@@ -106,7 +104,7 @@ def create_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, e
         space_id: Space identifier
         graph_id: Graph identifier  
         entity_uri: Entity URI to create frames for
-        document: JSON-LD document containing frames
+        document: List of GraphObjects containing frames
         
     Returns:
         FrameCreateResponse with creation details
@@ -123,32 +121,12 @@ def create_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, e
                 created_uris=[]
             )
         
-        # Convert JSON-LD document to VitalSigns objects
-        try:
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = document.model_dump(by_alias=True)
-            objects = endpoint_instance.vitalsigns.from_jsonld_list(jsonld_data)
-            
-            # Handle None return from VitalSigns
-            if objects is None:
-                endpoint_instance.logger.warning("VitalSigns from_jsonld_list returned None, trying alternative approach")
-                objects = []
-            
-            # Ensure objects is a list
-            if not isinstance(objects, list):
-                objects = [objects] if objects is not None else []
-            
-            if not objects:
-                return FrameCreateResponse(
-                    message="No valid frames found in document",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-        except Exception as e:
-            endpoint_instance.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
+        # Accept graph objects directly
+        objects = document if isinstance(document, list) else [document]
+        
+        if not objects:
             return FrameCreateResponse(
-                message=f"Error processing document: {e}",
+                message="No valid frames found in document",
                 created_count=0,
                 created_uris=[]
             )
@@ -213,7 +191,7 @@ def create_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, e
 
 
 def create_entity_frames_complex_impl(endpoint_instance, space_id: str, graph_id: str, entity_uri: str, 
-                           document: JsonLdDocument, operation_mode: str = "create") -> FrameCreateResponse:
+                           document, operation_mode: str = "create") -> FrameCreateResponse:
     """
     Create frames within entity context using /kgentities/kgframes sub-endpoint.
     
@@ -222,7 +200,7 @@ def create_entity_frames_complex_impl(endpoint_instance, space_id: str, graph_id
         space_id: Space identifier
         graph_id: Graph identifier
         entity_uri: Parent entity URI
-        document: JsonLdDocument containing frames and related objects
+        document: List of GraphObjects containing frames and related objects
         operation_mode: "create", "update", or "upsert"
         
     Returns:
@@ -255,14 +233,8 @@ def create_entity_frames_complex_impl(endpoint_instance, space_id: str, graph_id
         #         created_uris=[]
         #     )
         
-        # Step 2: Create VitalSigns objects from JSON-LD
-        document_dict = document.model_dump(by_alias=True) if hasattr(document, 'model_dump') else document
-        
-        # Debug: Log the actual JSON-LD structure
-        import json
-        endpoint_instance.logger.info(f"JSON-LD structure: {json.dumps(document_dict, indent=2)[:500]}...")
-        
-        incoming_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Step 2: Accept graph objects directly
+        incoming_objects = document if isinstance(document, list) else [document]
         if not incoming_objects:
             return FrameCreateResponse(
                 message="No valid objects found in document",
@@ -421,22 +393,21 @@ def handle_entity_create_mode_impl(endpoint_instance, space, graph_id: str, enti
         )
 
 
-def process_complete_entity_document_impl(endpoint_instance, document: JsonLdDocument, entity_uri: str) -> List[Any]:
+def process_complete_entity_document_impl(endpoint_instance, document, entity_uri: str) -> List[Any]:
     """
     Process complete entity document to extract and validate all KG objects using VitalSigns.
     
     Args:
         endpoint_instance: The MockKGEntitiesEndpoint instance (for access to methods and logger)
-        document: JSON-LD document containing entity graph
+        document: List of GraphObjects containing entity graph
         entity_uri: URI of the main entity
         
     Returns:
         List of all VitalSigns objects (KGEntity, KGFrame, KGSlot, edges)
     """
     try:
-        # Convert entire document to VitalSigns objects using direct object creation
-        document_dict = document.model_dump(by_alias=True)
-        all_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Accept graph objects directly
+        all_objects = document if isinstance(document, list) else [document]
         
         if not all_objects:
             endpoint_instance.logger.warning("No valid VitalSigns objects found in document")

@@ -1,16 +1,14 @@
 """
 Files REST API endpoint for VitalGraph.
 
-This module provides REST API endpoints for managing files and file content using JSON-LD 1.1 format
-for metadata and binary handling for file content upload/download.
+This module provides REST API endpoints for managing files and file content,
+with binary handling for file content upload/download.
 """
 
 from typing import Dict, List, Optional, Union, Any
-from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException, Request, Response, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
-import pyld
-from pyld import jsonld
 import io
 import mimetypes
 import logging
@@ -18,9 +16,9 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from ..model.files_model import (
-    FilesResponse,
     FileCreateResponse,
     FileUpdateResponse,
     FileDeleteResponse,
@@ -66,48 +64,24 @@ class FilesEndpoint:
         
         self._setup_routes()
     
-    def _validate_file_node_types(self, request: JsonLdRequest) -> Optional[str]:
+    def _validate_file_node_types(self, graph_objects: List) -> Optional[str]:
         """
-        Validate that all objects in the request are FileNode or subclasses using isinstance.
+        Validate that all GraphObjects are FileNode or subclasses.
         
-        Args:
-            request: JsonLdRequest containing file node(s)
-            
         Returns:
             Error message if validation fails, None if valid
         """
-        objects_to_check = []
-        
-        if isinstance(request, JsonLdObject):
-            # Single object - convert to dict with by_alias to preserve @type
-            objects_to_check.append(request.model_dump(by_alias=True))
-        elif isinstance(request, JsonLdDocument):
-            # Multiple objects in @graph
-            if request.graph:
-                objects_to_check.extend(request.graph)
-        
-        for obj in objects_to_check:
-            try:
-                # Convert JSON-LD to VitalSigns object
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                vital_obj = GraphObject.from_jsonld(obj)
-                
-                # Check if it's an instance of FileNode or subclass
-                if not isinstance(vital_obj, FileNode):
-                    obj_type = obj.get('@type') or obj.get('type', 'unknown')
-                    actual_type = type(vital_obj).__name__
-                    return f"Invalid type '{obj_type}' (instantiated as {actual_type}). Only FileNode or its subclasses are allowed for file operations."
-                    
-            except Exception as e:
-                obj_type = obj.get('@type') or obj.get('type', 'unknown')
-                return f"Failed to validate object as FileNode: {obj_type}. Error: {str(e)}"
+        for obj in graph_objects:
+            if not isinstance(obj, FileNode):
+                actual_type = type(obj).__name__
+                return f"Invalid type '{actual_type}'. Only FileNode or its subclasses are allowed for file operations."
         
         return None
     
     def _setup_routes(self):
         """Setup FastAPI routes for files management."""
         
-        @self.router.get("/files", response_model=Union[FilesResponse, JsonLdObject, JsonLdDocument], tags=["Files"])
+        @self.router.get("/files", tags=["Files"])
         async def list_or_get_files(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -116,47 +90,41 @@ class FilesEndpoint:
             file_filter: Optional[str] = Query(None, description="Keyword to filter files by"),
             uri: Optional[str] = Query(None, description="Single file URI to retrieve"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of file URIs"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
             List files with pagination, or get specific files by URI(s).
-            
-            - If uri is provided: returns single file metadata (JsonLdObject)
-            - If uri_list is provided: returns multiple file metadata (JsonLdDocument)
-            - Otherwise: returns paginated list of all files (FilesResponse)
             """
-            
-            # Handle single URI retrieval
             if uri:
                 return await self._get_file_by_uri(space_id, graph_id, uri, current_user)
             
-            # Handle multiple URI retrieval
             if uri_list:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
                 return await self._get_files_by_uris(space_id, graph_id, uris, current_user)
             
-            # Handle paginated listing
             return await self._list_files(space_id, graph_id, page_size, offset, file_filter, current_user)
         
         @self.router.post("/files", response_model=FileCreateResponse, tags=["Files"])
         async def create_file_node(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="FileNode objects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            """Create file node(s). Uses discriminated union to automatically handle single files (JsonLdObject) or multiple files (JsonLdDocument)."""
-            return await self._create_file_node(space_id, graph_id, request, current_user)
+            """Create file node(s) from JSON Quads."""
+            quads = body.quads
+            return await self._create_file_node(space_id, graph_id, quads, current_user)
         
         @self.router.put("/files", response_model=FileUpdateResponse, tags=["Files"])
         async def update_file_metadata(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="FileNode objects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            """Update file metadata. Uses discriminated union to automatically handle single files (JsonLdObject) or multiple files (JsonLdDocument)."""
-            return await self._update_file_metadata(space_id, graph_id, request, current_user)
+            """Update file metadata from JSON Quads."""
+            quads = body.quads
+            return await self._update_file_metadata(space_id, graph_id, quads, current_user)
         
         @self.router.delete("/files", response_model=FileDeleteResponse, tags=["Files"])
         async def delete_file_node(
@@ -243,11 +211,10 @@ class FilesEndpoint:
             """
             return await self._download_file_stream(space_id, graph_id, uri, chunk_size, current_user)
     
-    async def _list_files(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, file_filter: Optional[str], current_user: Dict) -> FilesResponse:
-        """List files with pagination using FilesImpl."""
+    async def _list_files(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, file_filter: Optional[str], current_user: Dict) -> QuadResponse:
+        """List files with pagination."""
         try:
-            # Use FilesImpl to query actual FileNode objects from database
-            jsonld_document, total_count = await self.files_impl.list_files(
+            graph_objects, total_count = await self.files_impl.list_files(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=page_size,
@@ -255,73 +222,61 @@ class FilesEndpoint:
                 file_filter=file_filter
             )
             
-            # Convert dict to JsonLdDocument
-            files_data = JsonLdDocument(**jsonld_document)
-            
-            return FilesResponse(
-                files=files_data,
+            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            return QuadResponse(
                 total_count=total_count,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
+                results=quads,
             )
             
         except Exception as e:
-            # Return empty response on error
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_doc = GraphObject.to_jsonld_list([])
-            return FilesResponse(
-                files=JsonLdDocument(**empty_doc),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            self.logger.error(f"Error listing files: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
     
-    async def _get_file_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> JsonLdObject:
-        """Get single file by URI using FilesImpl."""
+    async def _get_file_by_uri(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> QuadResultsResponse:
+        """Get single file by URI."""
         try:
-            # Use FilesImpl to query actual FileNode object from database
             graph_object = await self.files_impl.get_file_by_uri(
                 space_id=space_id,
                 uri=uri,
                 graph_id=graph_id
             )
             
-            # Convert GraphObject to JSON-LD using VitalSigns
-            jsonld_dict = graph_object.to_jsonld()
-            
-            # Convert dict to JsonLdObject
-            return JsonLdObject(**jsonld_dict)
+            quads = graphobjects_to_quad_list([graph_object], graph_id) if graph_object else []
+            return QuadResultsResponse(
+                total_count=1 if graph_object else 0,
+                results=quads,
+            )
             
         except ValueError as e:
-            # File not found - return 404
             raise HTTPException(status_code=404, detail=f"File not found: {uri}")
         except Exception as e:
-            # Other errors - return 500
             raise HTTPException(status_code=500, detail=f"Error retrieving file: {str(e)}")
     
-    async def _get_files_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> JsonLdDocument:
-        """Get multiple files by URI list using FilesImpl."""
+    async def _get_files_by_uris(self, space_id: str, graph_id: Optional[str], uris: List[str], current_user: Dict) -> QuadResultsResponse:
+        """Get multiple files by URI list."""
         try:
-            # Use FilesImpl to query actual FileNode objects from database
-            jsonld_document, count = await self.files_impl.get_files_by_uris(
+            graph_objects, count = await self.files_impl.get_files_by_uris(
                 space_id=space_id,
                 uri_list=uris,
                 graph_id=graph_id
             )
             
-            # Convert dict to JsonLdDocument
-            return JsonLdDocument(**jsonld_document)
+            quads = graphobjects_to_quad_list(graph_objects, graph_id) if graph_objects else []
+            return QuadResultsResponse(
+                total_count=len(graph_objects) if graph_objects else 0,
+                results=quads,
+            )
             
         except Exception as e:
-            # Return empty document on error
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_doc = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_doc)
+            self.logger.error(f"Error getting files by URIs: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to get files: {str(e)}")
     
-    async def _create_file_node(self, space_id: str, graph_id: Optional[str], request: JsonLdRequest, current_user: Dict) -> FileCreateResponse:
-        """Create new file node (metadata only). Only FileNode or subclasses are allowed."""
-        # Validate that all objects are FileNode or subclasses
-        validation_error = self._validate_file_node_types(request)
+    async def _create_file_node(self, space_id: str, graph_id: Optional[str], quads: List[Quad], current_user: Dict) -> FileCreateResponse:
+        """Create new file node (metadata only) from quads. Only FileNode or subclasses are allowed."""
+        graph_objects = quad_list_to_graphobjects(quads)
+        validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileCreateResponse(
                 message=f"Validation error: {validation_error}",
@@ -330,27 +285,9 @@ class FilesEndpoint:
             )
         
         try:
-            # Convert request to JSON-LD document format
-            if isinstance(request, JsonLdObject):
-                # Single object - wrap in document
-                jsonld_document = {
-                    "@context": request.context if hasattr(request, 'context') else {},
-                    "@graph": [request.model_dump(by_alias=True)]
-                }
-            elif isinstance(request, JsonLdDocument):
-                # Already a document
-                jsonld_document = request.model_dump(by_alias=True)
-            else:
-                return FileCreateResponse(
-                    message="Invalid request format",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-            # Use FilesImpl to create file nodes in database
             created_uris = await self.files_impl.create_files(
                 space_id=space_id,
-                jsonld_document=jsonld_document,
+                graph_objects=graph_objects,
                 graph_id=graph_id
             )
             
@@ -367,34 +304,35 @@ class FilesEndpoint:
                 created_uris=[]
             )
     
-    async def _update_file_metadata(self, space_id: str, graph_id: Optional[str], request: JsonLdRequest, current_user: Dict) -> FileUpdateResponse:
-        """Update existing file metadata. Only FileNode or subclasses are allowed."""
-        # Validate that all objects are FileNode or subclasses
-        validation_error = self._validate_file_node_types(request)
+    async def _update_file_metadata(self, space_id: str, graph_id: Optional[str], quads: List[Quad], current_user: Dict) -> FileUpdateResponse:
+        """Update existing file metadata from quads. Only FileNode or subclasses are allowed."""
+        graph_objects = quad_list_to_graphobjects(quads)
+        validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileUpdateResponse(
                 message=f"Validation error: {validation_error}",
                 updated_uri=None
             )
         
-        # NO-OP implementation - simulate file metadata update
-        updated_uri = "haley:file_updated_001"
-        
-        # Handle both JsonLdObject and JsonLdDocument
-        if isinstance(request, JsonLdObject):
-            # Single object
-            if request.id:
-                updated_uri = request.id
-        elif isinstance(request, JsonLdDocument):
-            # Multiple objects in @graph - use first one
-            if request.graph and len(request.graph) > 0:
-                if '@id' in request.graph[0]:
-                    updated_uri = request.graph[0]['@id']
-        
-        return FileUpdateResponse(
-            message=f"Successfully updated file metadata",
-            updated_uri=updated_uri
-        )
+        try:
+            updated_uris = await self.files_impl.update_files(
+                space_id=space_id,
+                file_nodes=graph_objects,
+                graph_id=graph_id
+            )
+            
+            updated_uri = str(graph_objects[0].URI) if graph_objects else "unknown"
+            
+            return FileUpdateResponse(
+                message=f"Successfully updated {len(updated_uris)} file nodes",
+                updated_uri=updated_uri
+            )
+            
+        except Exception as e:
+            return FileUpdateResponse(
+                message=f"Error updating file metadata: {str(e)}",
+                updated_uri=None
+            )
     
     async def _delete_file_node(self, space_id: str, graph_id: Optional[str], uri: str, current_user: Dict) -> FileDeleteResponse:
         """Delete file node by URI and remove file from MinIO/S3 storage."""

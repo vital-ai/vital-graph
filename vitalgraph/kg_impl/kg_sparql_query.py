@@ -574,13 +574,13 @@ class KGSparqlQueryProcessor:
                             self.logger.info(f"🔍 Frame {frame_uri}: graph_results type={type(graph_results)}, has 'results' key={isinstance(graph_results, dict) and 'results' in graph_results}")
                             if isinstance(graph_results, dict) and 'results' in graph_results:
                                 self.logger.info(f"🔍 Frame {frame_uri}: results has 'bindings' key={'bindings' in graph_results.get('results', {})}")
-                            triples = self.utils.extract_triples_from_sparql_results(graph_results)
-                            self.logger.info(f"🔍 Frame {frame_uri}: Retrieved {len(triples)} triples")
-                            for i, (s, p, o) in enumerate(triples[:15]):
-                                self.logger.info(f"🔍   Triple {i+1}: {s} | {p} | {o}")
+                            triples = self.utils.extract_typed_triples_from_sparql_results(graph_results)
+                            self.logger.info(f"🔍 Frame {frame_uri}: Retrieved {len(triples)} typed triples")
+                            for i, (s, p, o, ot, dt) in enumerate(triples[:15]):
+                                self.logger.info(f"🔍   Triple {i+1}: {s} | {p} | {o} ({ot}{', ' + dt if dt else ''})")
                             if len(triples) > 15:
                                 self.logger.info(f"🔍   ... and {len(triples) - 15} more triples")
-                            return frame_uri, {'triples': triples, 'object_count': len(subject_uris)}
+                            return frame_uri, {'typed_triples': triples, 'object_count': len(subject_uris)}
                         else:
                             self.logger.info(f"🔍 Frame {frame_uri}: No graph data found")
                             return frame_uri, {'triples': [], 'object_count': 0}

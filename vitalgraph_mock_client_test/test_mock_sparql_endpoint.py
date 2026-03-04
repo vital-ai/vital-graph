@@ -34,7 +34,6 @@ from vitalgraph.model.sparql_model import (
     SPARQLInsertRequest, SPARQLInsertResponse,
     SPARQLDeleteRequest, SPARQLDeleteResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.VITAL_Node import VITAL_Node
 

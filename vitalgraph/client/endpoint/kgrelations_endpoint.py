@@ -2,7 +2,7 @@
 VitalGraph Client KGRelations Endpoint - Standardized Responses
 
 Client-side implementation for KGRelations operations using standardized response objects.
-All responses contain VitalSigns GraphObjects (Edge_hasKGRelation), hiding JSON-LD complexity.
+All responses contain VitalSigns GraphObjects (Edge_hasKGRelation), hiding wire format complexity.
 """
 
 import httpx
@@ -21,11 +21,15 @@ from ..response.client_response import (
     PaginatedGraphObjectResponse,
     DeleteResponse
 )
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+    extract_pagination_from_json_quads,
+)
 from ..response.response_builder import (
-    jsonld_to_graph_objects,
     build_success_response,
     build_error_response,
-    extract_pagination_metadata,
     count_object_types
 )
 
@@ -40,7 +44,7 @@ class KGRelationsEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    async def _make_request(self, method: str, url: str, params=None, json=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -55,8 +59,12 @@ class KGRelationsEndpoint(BaseEndpoint):
             kwargs = {}
             if params:
                 kwargs['params'] = params
-            if json:
+            if json is not None:
                 kwargs['json'] = json
+            if headers:
+                kwargs['headers'] = headers
+            if content is not None:
+                kwargs['content'] = content
             
             response = await self._make_authenticated_request(method, url, **kwargs)
             
@@ -120,12 +128,8 @@ class KGRelationsEndpoint(BaseEndpoint):
             response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
-            # Convert JSON-LD to VitalSigns objects
-            relations_jsonld = response_data.get('relations', {})
-            relations = jsonld_to_graph_objects(relations_jsonld, self.vs)
-            
-            # Extract pagination metadata
-            pagination = extract_pagination_metadata(response_data)
+            relations = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
+            pagination = extract_pagination_from_json_quads(response_data)
             
             return build_success_response(
                 PaginatedGraphObjectResponse,
@@ -189,9 +193,7 @@ class KGRelationsEndpoint(BaseEndpoint):
             response = await self._make_request('GET', url, params=params)
             response_data = response.json()
             
-            # Convert JSON-LD to VitalSigns object
-            relation_jsonld = response_data.get('relation', {})
-            relations = jsonld_to_graph_objects(relation_jsonld, self.vs)
+            relations = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
             
             return build_success_response(
                 EntityResponse,
@@ -247,25 +249,9 @@ class KGRelationsEndpoint(BaseEndpoint):
                 operation_mode='create'
             )
             
-            # Convert VitalSigns objects to JSON-LD and wrap in JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            
-            jsonld_dict = GraphObject.to_jsonld_list(relations)
-            
-            if len(relations) == 1:
-                # Single relation - create JsonLdObject
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                # Multiple relations - create JsonLdDocument
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(relations, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                  headers={'Content-Type': content_type})
             response_data = response.json()
             
             # Extract created URIs from response
@@ -326,23 +312,9 @@ class KGRelationsEndpoint(BaseEndpoint):
                 operation_mode='update'
             )
             
-            # Convert VitalSigns objects to JSON-LD and wrap in JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            
-            jsonld_dict = GraphObject.to_jsonld_list(relations)
-            
-            if len(relations) == 1:
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(relations, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                  headers={'Content-Type': content_type})
             response_data = response.json()
             
             # Extract updated URIs from response
@@ -402,23 +374,9 @@ class KGRelationsEndpoint(BaseEndpoint):
                 operation_mode='upsert'
             )
             
-            # Convert VitalSigns objects to JSON-LD and wrap in JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-            
-            jsonld_dict = GraphObject.to_jsonld_list(relations)
-            
-            if len(relations) == 1:
-                data = JsonLdObject(**jsonld_dict['@graph'][0])
-                data.jsonld_type = 'object'
-            else:
-                data = JsonLdDocument(
-                    context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-                    graph=jsonld_dict['@graph']
-                )
-                data.jsonld_type = 'document'
-            
-            response = await self._make_request('POST', url, params=params, json=data.model_dump(by_alias=True))
+            body, content_type = serialize_graphobjects_for_request(relations, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                  headers={'Content-Type': content_type})
             response_data = response.json()
             
             # Extract upserted URIs from response

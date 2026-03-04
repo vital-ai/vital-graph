@@ -80,7 +80,7 @@ class KGEntityCreateTester:
             org_objects = self.data_creator.create_organization_with_address("Test Organization")
             parent_uri = "http://vital.ai/test/client/parent_entity"
             
-            # Convert to JSON-LD for client
+            # Convert to quads for client
             # Modern client API expects GraphObjects directly
             parent_create_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
@@ -119,7 +119,7 @@ class KGEntityCreateTester:
             for entity_group in basic_entities[:2]:  # Take first 2 entity groups
                 all_objects.extend(entity_group)
             
-            # Convert to JSON-LD for client
+            # Convert to quads for client
             # Modern client API expects GraphObjects directly
             multi_create_response = await self.client.kgentities.create_kgentities(
                 space_id=space_id,
@@ -190,16 +190,6 @@ class KGEntityCreateTester:
             if results["created_entities"]:
                 duplicate_uri = results["created_entities"][0]
                 
-                duplicate_document_dict = {
-                    "@context": "urn:vital-ai:contexts:vital-core",
-                    "@graph": [
-                        {
-                            "@id": duplicate_uri,
-                            "@type": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                            "http://vital.ai/ontology/vital-core#name": "Duplicate Test Entity"
-                        }
-                    ]
-                }
                 # Modern client API expects GraphObjects directly
                 duplicate_response = await self.client.kgentities.create_kgentities(
                     space_id=space_id,

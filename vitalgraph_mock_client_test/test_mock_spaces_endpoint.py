@@ -6,7 +6,7 @@ This script demonstrates:
 - VitalSigns native object creation and conversion
 - pyoxigraph in-memory SPARQL quad store operations
 - Complete CRUD operations for Space objects
-- Real JSON-LD handling without mock data generation
+- Real quad handling without mock data generation
 - Comprehensive error handling and edge cases
 """
 

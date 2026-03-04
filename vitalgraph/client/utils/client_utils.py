@@ -9,7 +9,10 @@ from typing import Dict, Any, Optional
 
 class VitalGraphClientError(Exception):
     """Base exception for VitalGraph client errors."""
-    pass
+    
+    def __init__(self, message: str, status_code: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def validate_required_params(**params):

@@ -6,13 +6,8 @@ Pydantic models for KG entity operations including entities, frames, and slots.
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument, JsonLdObject
+from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
-
-
-class EntitiesResponse(BasePaginatedResponse):
-    """Response model for entities listing."""
-    entities: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing entities")
 
 
 class EntityCreateResponse(BaseCreateResponse):
@@ -30,9 +25,8 @@ class EntityDeleteResponse(BaseDeleteResponse):
     pass
 
 
-class EntityFramesResponse(BasePaginatedResponse):
-    """Response model for entity frames with pagination support."""
-    frames: Optional[Union[JsonLdObject, JsonLdDocument]] = Field(None, description="Frame data as JSON-LD object or document")
+class EntityFramesResponse(QuadResponse):
+    """Response model for entity frames with pagination support (paginated quad results)."""
     frame_uris: Optional[List[str]] = Field(None, description="List of frame URIs for simple responses")
 
 
@@ -106,10 +100,9 @@ class EntityQueryResponse(BasePaginatedResponse):
     entity_uris: List[str] = Field(..., description="List of matching entity subject URIs")
 
 
-class EntityGraphResponse(BaseModel):
-    """Response model for entity with optional complete graph."""
-    entity: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing the entity")
-    complete_graph: Optional[Union[JsonLdObject, JsonLdDocument]] = Field(None, description="Complete entity graph when include_entity_graph=True")
+class EntityGraphResponse(QuadResultsResponse):
+    """Response model for entity with optional complete graph (non-paginated quad results)."""
+    complete_graph: Optional[QuadResultsResponse] = Field(None, description="Complete entity graph when include_entity_graph=True")
 
 
 class EntityGraphDeleteResponse(BaseDeleteResponse):
@@ -119,10 +112,9 @@ class EntityGraphDeleteResponse(BaseDeleteResponse):
 
 # Enhanced Response Models
 
-class EntitiesGraphResponse(BasePaginatedResponse):
-    """Enhanced response model for entities with optional graph data."""
-    entities: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing entities")
-    complete_graphs: Optional[Dict[str, Union[JsonLdObject, JsonLdDocument]]] = Field(None, description="Complete graphs by entity URI when include_entity_graph=True")
+class EntitiesGraphResponse(QuadResponse):
+    """Enhanced response model for entities with optional graph data (paginated quad results)."""
+    complete_graphs: Optional[Dict[str, QuadResultsResponse]] = Field(None, description="Complete graphs by entity URI when include_entity_graph=True")
 
 
 # Update forward references for recursive models

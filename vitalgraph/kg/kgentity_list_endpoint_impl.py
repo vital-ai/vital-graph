@@ -6,12 +6,13 @@ that have been extracted from MockKGEntitiesEndpoint for better code organizatio
 """
 
 from typing import Optional, Dict, Any
-from vitalgraph.model.kgentities_model import EntitiesResponse, EntitiesGraphResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.kgentities_model import EntitiesGraphResponse
+from vitalgraph.model.quad_model import QuadResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 
 
 def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_size: int = 10, 
-                        offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False) -> EntitiesResponse:
+                        offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False) -> QuadResponse:
     """
     List KGEntities with pagination and optional search using pyoxigraph SPARQL queries.
     
@@ -25,7 +26,7 @@ def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_s
         include_entity_graph: If True, include complete entity graphs with frames and slots
         
     Returns:
-        EntitiesResponse with VitalSigns native JSON-LD document
+        QuadResponse with VitalSigns native objects
     """
     endpoint_instance._log_method_call("list_kgentities", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset, search=search)
     
@@ -33,11 +34,8 @@ def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_s
         # Get space from space manager
         space = endpoint_instance.space_manager.get_space(space_id)
         if not space:
-            # Return empty response for non-existent space
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return EntitiesResponse(
-                entities=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
@@ -108,11 +106,8 @@ def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_s
         results = endpoint_instance._execute_sparql_query(space, query)
         
         if not results.get("bindings"):
-            # No results found
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return EntitiesResponse(
-                entities=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
@@ -166,11 +161,10 @@ def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_s
                 count_value = count_value.split("^^")[0].strip('"')
             total_count = int(count_value)
         
-        # Convert to JSON-LD document using VitalSigns
-        entities_jsonld = endpoint_instance._objects_to_jsonld_document(entities)
+        quads = graphobjects_to_quad_list(entities, graph_id)
         
-        return EntitiesResponse(
-            entities=JsonLdDocument(**entities_jsonld),
+        return QuadResponse(
+            results=quads,
             total_count=total_count,
             page_size=page_size,
             offset=offset
@@ -178,10 +172,8 @@ def list_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, page_s
         
     except Exception as e:
         endpoint_instance.logger.error(f"Error listing KGEntities: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
-        return EntitiesResponse(
-            entities=JsonLdDocument(**empty_jsonld),
+        return QuadResponse(
+            results=[],
             total_count=0,
             page_size=page_size,
             offset=offset
@@ -206,7 +198,6 @@ def list_kgentities_with_graphs_impl(endpoint_instance, space_id: str, graph_id:
         EntitiesGraphResponse containing entities and optional complete graphs
     """
     from vitalgraph.model.kgentities_model import EntitiesGraphResponse
-    from vitalgraph.model.jsonld_model import JsonLdDocument
     
     endpoint_instance._log_method_call("list_kgentities_with_graphs", space_id=space_id, graph_id=graph_id, 
                          page_size=page_size, offset=offset, search=search, include_entity_graphs=include_entity_graphs)
@@ -218,7 +209,7 @@ def list_kgentities_with_graphs_impl(endpoint_instance, space_id: str, graph_id:
         if not include_entity_graphs:
             # Return standard response without complete graphs
             return EntitiesGraphResponse(
-                entities=entities_response.entities,
+                results=entities_response.results,
                 total_count=entities_response.total_count,
                 page_size=entities_response.page_size,
                 offset=entities_response.offset,
@@ -230,11 +221,11 @@ def list_kgentities_with_graphs_impl(endpoint_instance, space_id: str, graph_id:
         complete_graphs = {}
         
         # Extract entity URIs from the entities response
-        # This would need proper JSON-LD parsing in a real implementation
+        # This would need proper parsing in a real implementation
         # For now, we'll return the basic response
         
         return EntitiesGraphResponse(
-            entities=entities_response.entities,
+            results=entities_response.results,
             total_count=entities_response.total_count,
             page_size=entities_response.page_size,
             offset=entities_response.offset,
@@ -243,10 +234,8 @@ def list_kgentities_with_graphs_impl(endpoint_instance, space_id: str, graph_id:
         
     except Exception as e:
         endpoint_instance.logger.error(f"Error listing entities with graphs: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
         return EntitiesGraphResponse(
-            entities=JsonLdDocument(**empty_jsonld),
+            results=[],
             total_count=0,
             page_size=page_size,
             offset=offset,

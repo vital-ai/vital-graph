@@ -181,9 +181,9 @@ class ExportEndpoint:
             ),
             ExportJob(
                 export_id="export_003",
-                name="JSON-LD Export",
-                description="Export structured data in JSON-LD format",
-                export_format=ExportFormat.JSON_LD,
+                name="JSON Export",
+                description="Export structured data in JSON format",
+                export_format=ExportFormat.JSON,
                 space_id="space_002",
                 status=ExportStatus.CREATED,
                 created_date=datetime(2024, 1, 17, 14, 0, 0),

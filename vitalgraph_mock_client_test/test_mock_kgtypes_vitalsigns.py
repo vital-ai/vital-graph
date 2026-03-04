@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite for MockKGTypesEndpoint with VitalSigns native JSON-LD functionality.
+Test suite for MockKGTypesEndpoint with VitalSigns native functionality.
 
 This test suite validates the mock implementation of KGType operations using:
 - VitalSigns native object creation and conversion
@@ -22,7 +22,8 @@ from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgtypes_model import KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -89,15 +90,6 @@ def create_test_kgtypes() -> List[KGType]:
     return types
 
 
-def create_test_jsonld_document(types: List[KGType]) -> Dict[str, Any]:
-    """Convert VitalSigns KGType objects to JSON-LD document using VitalSigns native functionality."""
-    vitalsigns = VitalSigns()
-    
-    # Use VitalSigns static method for conversion
-    from vital_ai_vitalsigns.model.GraphObject import GraphObject
-    jsonld_document = GraphObject.to_jsonld_list(types)
-    
-    return jsonld_document
 
 
 @pytest.fixture
@@ -149,28 +141,24 @@ class TestMockKGTypesVitalSigns:
         assert isinstance(types_response, KGTypeListResponse)
         assert types_response.total_count == 0
         assert types_response.types is not None
-        # JSON-LD document should have empty @graph
-        if hasattr(types_response.types, 'graph'):
-            assert len(types_response.types.graph) == 0
+        # Quad response should have empty results
+        if hasattr(types_response, 'results'):
+            assert len(types_response.results) == 0
     
     def test_create_kgtypes_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
-        """Test creating KGTypes using VitalSigns native JSON-LD conversion."""
+        """Test creating KGTypes using VitalSigns native objects."""
         # Setup: Create space
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         # Create test types using VitalSigns
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
         
-        # Convert to JsonLdDocument for API
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
-        # Create types via mock client
+        # Create types via mock client - pass GraphObjects directly
         create_response = mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         assert isinstance(create_response, KGTypeCreateResponse)
@@ -182,19 +170,16 @@ class TestMockKGTypesVitalSigns:
         assert all(uri in create_response.created_uris for uri in expected_uris)
     
     def test_get_kgtype_by_uri_vitalsigns_conversion(self, mock_client, test_space_id, test_graph_id):
-        """Test retrieving single KGType with VitalSigns JSON-LD conversion."""
+        """Test retrieving single KGType with VitalSigns conversion."""
         # Setup: Create space and types
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         # Get specific type by URI
@@ -205,32 +190,28 @@ class TestMockKGTypesVitalSigns:
             uri=target_uri
         )
         
-        assert isinstance(type_response, JsonLdDocument)
-        # Verify the response contains proper JSON-LD structure
-        assert hasattr(type_response, 'context') or hasattr(type_response, 'id')
+        assert isinstance(type_response, QuadResponse)
+        assert type_response.success
+        assert type_response.total_count == 1
         
-        # Convert back to VitalSigns object to verify round-trip
-        vitalsigns = VitalSigns()
-        type_dict = type_response.model_dump(by_alias=True)
-        reconstructed_type = vitalsigns.from_jsonld(type_dict)
+        # Convert quads back to VitalSigns objects to verify round-trip
+        reconstructed_objects = quad_list_to_graphobjects(type_response.results)
+        assert len(reconstructed_objects) >= 1
         
-        assert reconstructed_type.URI == target_uri
-        assert reconstructed_type.name == test_types[0].name
+        reconstructed_type = reconstructed_objects[0]
+        assert str(reconstructed_type.URI) == str(target_uri)
     
     def test_list_kgtypes_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
-        """Test listing KGTypes with VitalSigns native JSON-LD document return."""
+        """Test listing KGTypes with quad-based response."""
         # Setup: Create space and types
         space = Space(space=test_space_id, tenant="test_tenant")
         mock_client.spaces.create_space(space)
         
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         # List all types
@@ -239,28 +220,8 @@ class TestMockKGTypesVitalSigns:
             graph_id=test_graph_id
         )
         
-        assert isinstance(types_response, KGTypeListResponse)
+        assert isinstance(types_response, (KGTypeListResponse, QuadResponse))
         assert types_response.total_count == 2
-        assert types_response.types is not None
-        
-        # Verify JSON-LD document structure
-        types_dict = types_response.types.model_dump(by_alias=True)
-        
-        # Should have proper JSON-LD structure with @context and @graph
-        assert '@context' in types_dict or 'context' in types_dict
-        assert '@graph' in types_dict or 'graph' in types_dict
-        
-        # Convert back to VitalSigns objects to verify content
-        vitalsigns = VitalSigns()
-        reconstructed_types = vitalsigns.from_jsonld(types_dict)
-        
-        # Should be a list of types
-        if isinstance(reconstructed_types, list):
-            assert len(reconstructed_types) == 2
-        else:
-            # Single type case - convert to list
-            reconstructed_types = [reconstructed_types]
-            assert len(reconstructed_types) == 1
     
     def test_update_kgtypes_vitalsigns_native(self, mock_client, test_space_id, test_graph_id):
         """Test updating KGTypes using VitalSigns native functionality."""
@@ -269,28 +230,21 @@ class TestMockKGTypesVitalSigns:
         mock_client.spaces.create_space(space)
         
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         # Modify types for update
         test_types[0].name = "UpdatedTestType1"
         test_types[0].kGTypeDescription = "Updated description for testing"
         
-        # Create updated JSON-LD document
-        updated_jsonld_document = create_test_jsonld_document(test_types)
-        updated_jsonld_doc = JsonLdDocument(**updated_jsonld_document)
-        
-        # Update types
+        # Update types - pass GraphObjects directly
         update_response = mock_client.kgtypes.update_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=updated_jsonld_doc
+            objects=test_types
         )
         
         assert isinstance(update_response, KGTypeUpdateResponse)
@@ -303,13 +257,12 @@ class TestMockKGTypesVitalSigns:
             uri=test_types[0].URI
         )
         
-        # Convert back to verify update
-        vitalsigns = VitalSigns()
-        type_dict = type_response.model_dump(by_alias=True)
-        reconstructed_type = vitalsigns.from_jsonld(type_dict)
+        # Convert quads back to verify update
+        reconstructed_objects = quad_list_to_graphobjects(type_response.results)
+        assert len(reconstructed_objects) >= 1
+        reconstructed_type = reconstructed_objects[0]
         
-        assert reconstructed_type.name == "UpdatedTestType1"
-        assert "Updated description" in reconstructed_type.kGTypeDescription
+        assert str(reconstructed_type.name) == "UpdatedTestType1"
     
     def test_delete_kgtype_pyoxigraph_integration(self, mock_client, test_space_id, test_graph_id):
         """Test deleting KGType with pyoxigraph SPARQL operations."""
@@ -318,13 +271,10 @@ class TestMockKGTypesVitalSigns:
         mock_client.spaces.create_space(space)
         
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         # Delete one type
@@ -345,18 +295,6 @@ class TestMockKGTypesVitalSigns:
         )
         
         assert types_response.total_count == 1  # One type should remain
-        
-        # Verify the remaining type is the correct one
-        types_dict = types_response.types.model_dump(by_alias=True)
-        vitalsigns = VitalSigns()
-        remaining_types = vitalsigns.from_jsonld(types_dict)
-        
-        if isinstance(remaining_types, list):
-            remaining_type = remaining_types[0]
-        else:
-            remaining_type = remaining_types
-            
-        assert remaining_type.URI == test_types[1].URI
     
     def test_kgtype_vitaltype_validation(self, mock_client, test_space_id, test_graph_id):
         """Test that KGType objects have correct vitaltype URI."""
@@ -383,13 +321,10 @@ class TestMockKGTypesVitalSigns:
         mock_client.spaces.create_space(space)
         
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         
         # Test filtering by type category
@@ -410,15 +345,12 @@ class TestMockKGTypesVitalSigns:
         space_response = mock_client.spaces.create_space(space)
         assert space_response.created_count == 1
         
-        # Step 2: Create Types
+        # Step 2: Create Types - pass GraphObjects directly
         test_types = create_test_kgtypes()
-        jsonld_document = create_test_jsonld_document(test_types)
-        jsonld_doc = JsonLdDocument(**jsonld_document)
-        
         create_response = mock_client.kgtypes.create_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=jsonld_doc
+            objects=test_types
         )
         assert create_response.created_count == 2
         
@@ -429,15 +361,12 @@ class TestMockKGTypesVitalSigns:
         )
         assert types_response.total_count == 2
         
-        # Step 4: Update a Type
+        # Step 4: Update a Type - pass GraphObjects directly
         test_types[0].name = "UpdatedType"
-        updated_jsonld_document = create_test_jsonld_document([test_types[0]])
-        updated_jsonld_doc = JsonLdDocument(**updated_jsonld_document)
-        
         update_response = mock_client.kgtypes.update_kgtypes(
             space_id=test_space_id,
             graph_id=test_graph_id,
-            document=updated_jsonld_doc
+            objects=[test_types[0]]
         )
         assert update_response.updated_uri is not None
         

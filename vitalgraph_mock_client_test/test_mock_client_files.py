@@ -27,7 +27,7 @@ from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import SPARQLGraphResponse
 from vitalgraph.model.files_model import FilesResponse, FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -282,11 +282,8 @@ class TestMockClientFiles:
             file2.fileLength = 427299
             files.append(file2)
             
-            # Convert to JSON-LD using VitalSigns
-            jsonld_data = GraphObject.to_jsonld_list(files)
-            files_data = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.create_file(self.test_space_id, files_data, self.test_graph_id)
+            # Pass GraphObjects directly to create method
+            response = self.client.create_file(self.test_space_id, files, self.test_graph_id)
             
             success = (
                 isinstance(response, FileCreateResponse) and
@@ -382,13 +379,10 @@ class TestMockClientFiles:
                     file_name = response.files.graph[0].get('http://vital.ai/ontology/vital#hasFileName', 
                                                            response.files.graph[0].get('vital:hasFileName', 'Unknown'))
                     files_count = len(response.files.graph)
-            elif hasattr(response, 'graph') and response.graph:
-                # Direct JsonLdDocument format
-                success = len(response.graph) > 0
-                if success:
-                    file_name = response.graph[0].get('http://vital.ai/ontology/vital#hasFileName',
-                                                     response.graph[0].get('vital:hasFileName', 'Unknown'))
-                    files_count = len(response.graph)
+            elif isinstance(response, QuadResponse):
+                # QuadResponse format
+                success = response.success and response.total_count > 0
+                files_count = response.total_count
             
             self.log_test_result(
                 "Get File",
@@ -532,11 +526,8 @@ class TestMockClientFiles:
             updated_file.fileName = "updated_2510.04871v1.pdf"
             updated_file.fileLength = 427299
             
-            # Convert to JSON-LD using VitalSigns
-            jsonld_data = GraphObject.to_jsonld_list([updated_file])
-            updated_data = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.update_file(self.test_space_id, updated_data, self.test_graph_id)
+            # Pass GraphObjects directly to update method
+            response = self.client.update_file(self.test_space_id, [updated_file], self.test_graph_id)
             
             success = (
                 isinstance(response, FileUpdateResponse) and

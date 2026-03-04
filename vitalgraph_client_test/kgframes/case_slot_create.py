@@ -19,11 +19,8 @@ from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_slot_creation_basic(client: VitalGraphClient, space_id: str, graph_id: str, frame_uri: str, logger: logging.Logger) -> bool:
@@ -41,19 +38,16 @@ async def test_slot_creation_basic(client: VitalGraphClient, space_id: str, grap
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#TestSlot"
         slot.textSlotValue = "Basic slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot creation
-        response = client.kgframes.create_frame_slots(
+        # Test slot creation - pass GraphObject directly
+        response = await client.kgframes.create_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document
+            objects=[slot]
         )
         
-        if response.success and response.slots_created > 0:
-            logger.info(f"✅ Basic slot creation successful: {response.slots_created} slots created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Basic slot creation successful: {response.created_count} slots created")
             return True
         else:
             logger.error(f"❌ Basic slot creation failed: {response.message}")
@@ -79,20 +73,17 @@ async def test_slot_creation_with_entity_uri(client: VitalGraphClient, space_id:
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#EntitySlot"
         slot.textSlotValue = "Entity slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot creation with entity URI
-        response = client.kgframes.create_frame_slots(
+        # Test slot creation with entity URI - pass GraphObject directly
+        response = await client.kgframes.create_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document,
+            objects=[slot],
             entity_uri=entity_uri
         )
         
-        if response.success and response.slots_created > 0:
-            logger.info(f"✅ Slot creation with entity URI successful: {response.slots_created} slots created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Slot creation with entity URI successful: {response.created_count} slots created")
             return True
         else:
             logger.error(f"❌ Slot creation with entity URI failed: {response.message}")
@@ -118,20 +109,17 @@ async def test_slot_creation_with_parent_uri(client: VitalGraphClient, space_id:
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#ParentSlot"
         slot.textSlotValue = "Parent slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot creation with parent URI
-        response = client.kgframes.create_frame_slots(
+        # Test slot creation with parent URI - pass GraphObject directly
+        response = await client.kgframes.create_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document,
+            objects=[slot],
             parent_uri=parent_uri
         )
         
-        if response.success and response.slots_created > 0:
-            logger.info(f"✅ Slot creation with parent URI successful: {response.slots_created} slots created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Slot creation with parent URI successful: {response.created_count} slots created")
             return True
         else:
             logger.error(f"❌ Slot creation with parent URI failed: {response.message}")
@@ -157,23 +145,20 @@ async def test_slot_creation_with_operation_modes(client: VitalGraphClient, spac
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#ModeSlot"
         slot.textSlotValue = "Mode slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test different operation modes
+        # Test different operation modes - pass GraphObject directly
         for mode in ["create", "update", "upsert"]:
             logger.info(f"   Testing operation mode: {mode}")
             
             try:
-                response = client.kgframes.create_frame_slots(
+                response = await client.kgframes.create_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=frame_uri,
-                    data=document,
+                    objects=[slot],
                     operation_mode=mode
                 )
                 
-                if not response.success:
+                if not response.is_success:
                     logger.error(f"❌ Slot creation with mode {mode} failed: {response.message}")
                     return False
             except Exception as mode_error:
@@ -208,19 +193,16 @@ async def test_slot_creation_multiple(client: VitalGraphClient, space_id: str, g
             slot.textSlotValue = f"Multi slot value {i}"
             slots.append(slot)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slots)
-        
-        # Test multiple slot creation
-        response = client.kgframes.create_frame_slots(
+        # Test multiple slot creation - pass GraphObjects directly
+        response = await client.kgframes.create_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document
+            objects=slots
         )
         
-        if response.success and response.slots_created >= 3:
-            logger.info(f"✅ Multiple slot creation successful: {response.slots_created} slots created")
+        if response.is_success and response.created_count >= 3:
+            logger.info(f"✅ Multiple slot creation successful: {response.created_count} slots created")
             return True
         else:
             logger.error(f"❌ Multiple slot creation failed: {response.message}")

@@ -26,7 +26,6 @@ class RDFFormat(Enum):
     XML = "xml"
     N3 = "n3"
     NT = "nt"
-    JSON_LD = "json-ld"
     TRIG = "trig"
     NQUADS = "nquads"
 
@@ -37,7 +36,6 @@ _FILETYPE_TO_RDFFORMAT = {
     FileType.RDF_XML: RDFFormat.XML,
     FileType.RDF_N3: RDFFormat.N3,
     FileType.RDF_NT: RDFFormat.NT,
-    FileType.RDF_JSON_LD: RDFFormat.JSON_LD,
     FileType.RDF_TRIG: RDFFormat.TRIG,
     FileType.RDF_NQUADS: RDFFormat.NQUADS,
 }
@@ -716,58 +714,6 @@ def _stream_parse_rdf_xml(file_path: str) -> Dict[str, Any]:
         return {
             'success': False,
             'error': f'Error parsing RDF/XML file: {str(e)}'
-        }
-
-
-def _stream_parse_json_ld(file_path: str) -> Dict[str, Any]:
-    """Stream parse JSON-LD file."""
-    try:
-        import json
-        
-        # First validate JSON structure
-        with open(file_path, 'r', encoding='utf-8') as f:
-            json_data = json.load(f)
-        
-        # Use rdflib to parse JSON-LD
-        temp_graph = Graph()
-        temp_graph.parse(file_path, format='json-ld')
-        
-        triple_count = 0
-        blank_node_count = 0
-        malformed_uri_count = 0
-        
-        for subject, predicate, obj in temp_graph:
-            triple_count += 1
-            
-            if isinstance(subject, BNode) or isinstance(obj, BNode):
-                blank_node_count += 1
-            
-            for node in [subject, predicate, obj]:
-                if isinstance(node, URIRef):
-                    uri_str = str(node)
-                    if ' ' in uri_str or '\n' in uri_str or '\t' in uri_str:
-                        malformed_uri_count += 1
-        
-        namespaces = {prefix: str(namespace) for prefix, namespace in temp_graph.namespaces()}
-        temp_graph = None
-        
-        return {
-            'success': True,
-            'triple_count': triple_count,
-            'blank_node_count': blank_node_count,
-            'malformed_uri_count': malformed_uri_count,
-            'namespaces': namespaces
-        }
-        
-    except json.JSONDecodeError as e:
-        return {
-            'success': False,
-            'error': f'Invalid JSON syntax: {str(e)}'
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f'Error parsing JSON-LD file: {str(e)}'
         }
 
 

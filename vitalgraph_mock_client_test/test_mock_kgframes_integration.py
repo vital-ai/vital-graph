@@ -7,7 +7,7 @@ This test suite validates the MockKGFramesEndpoint integration requirements:
 - Grouping URI enforcement for frame operations  
 - isinstance() type checking and Property object handling
 - Proper Property object casting and value access
-- VitalSigns native JSON-LD conversion
+- VitalSigns native quad conversion round-trip
 """
 
 import logging
@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -153,15 +152,11 @@ class TestMockKGFramesIntegration:
             # Create frame with VitalSigns objects
             frame_objects = self.create_test_frame_with_vitalsigns_patterns()
             
-            # Convert to JSON-LD document using VitalSigns native functionality
-            jsonld_document = GraphObject.to_jsonld_list(frame_objects)
-            document = JsonLdDocument(**jsonld_document)
-            
-            # Create frame using MockKGFramesEndpoint
+            # Create frame using MockKGFramesEndpoint - pass GraphObjects directly
             response = self.mock_client.kgframes.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=frame_objects
             )
             
             # Validate response uses VitalSigns patterns
@@ -265,14 +260,12 @@ class TestMockKGFramesIntegration:
         try:
             # Create a frame and check grouping URI assignment
             frame_objects = self.create_test_frame_with_vitalsigns_patterns()
-            jsonld_document = GraphObject.to_jsonld_list(frame_objects)
-            document = JsonLdDocument(**jsonld_document)
             
-            # Create frame
+            # Create frame - pass GraphObjects directly
             create_response = self.mock_client.kgframes.create_kgframes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=frame_objects
             )
             
             # Get frame with graph to check grouping URIs
@@ -368,41 +361,47 @@ class TestMockKGFramesIntegration:
             )
             return False
 
-    def test_vitalsigns_native_jsonld_conversion(self):
-        """Test VitalSigns native JSON-LD conversion functionality."""
+    def test_vitalsigns_native_quad_roundtrip(self):
+        """Test VitalSigns native quad conversion round-trip."""
         try:
+            from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
+            
             # Create VitalSigns objects
             frame_objects = self.create_test_frame_with_vitalsigns_patterns()
             
-            # Test VitalSigns native JSON-LD conversion
-            jsonld_document = GraphObject.to_jsonld_list(frame_objects)
+            # Convert to quads and back
+            quads = graphobjects_to_quad_list(frame_objects)
+            reconstructed = quad_list_to_graphobjects(quads)
             
-            # Validate JSON-LD structure
-            jsonld_tests = {
-                "Has @context": "@context" in jsonld_document,
-                "Has @graph": "@graph" in jsonld_document,
-                "Graph is list": isinstance(jsonld_document.get("@graph"), list),
-                "Graph not empty": len(jsonld_document.get("@graph", [])) > 0,
-                "Objects have @type": all(
-                    "@type" in obj or "type" in obj 
-                    for obj in jsonld_document.get("@graph", [])
-                    if isinstance(obj, dict)
+            # Validate round-trip
+            roundtrip_tests = {
+                "Quads not empty": len(quads) > 0,
+                "Reconstructed not empty": len(reconstructed) > 0,
+                "Same object count": len(reconstructed) == len(frame_objects),
+                "Objects have URI": all(
+                    hasattr(obj, 'URI') and obj.URI is not None
+                    for obj in reconstructed
+                ),
+                "Objects have type": all(
+                    hasattr(obj, 'vitaltype') and obj.vitaltype is not None
+                    for obj in reconstructed
                 )
             }
             
-            passed_tests = sum(1 for test_result in jsonld_tests.values() if test_result)
-            total_tests = len(jsonld_tests)
+            passed_tests = sum(1 for test_result in roundtrip_tests.values() if test_result)
+            total_tests = len(roundtrip_tests)
             success = passed_tests == total_tests
             
             self.log_test_result(
-                "VitalSigns Native JSON-LD Conversion",
+                "VitalSigns Native Quad Round-Trip",
                 success,
-                f"JSON-LD conversion tests: {passed_tests}/{total_tests} passed",
+                f"Quad round-trip tests: {passed_tests}/{total_tests} passed",
                 {
-                    "test_results": jsonld_tests,
+                    "test_results": roundtrip_tests,
                     "passed_tests": passed_tests,
                     "total_tests": total_tests,
-                    "object_count": len(frame_objects)
+                    "object_count": len(frame_objects),
+                    "quad_count": len(quads)
                 }
             )
             
@@ -410,7 +409,7 @@ class TestMockKGFramesIntegration:
             
         except Exception as e:
             self.log_test_result(
-                "VitalSigns Native JSON-LD Conversion",
+                "VitalSigns Native Quad Round-Trip",
                 False,
                 f"Error: {e}",
                 {"error": str(e)}
@@ -460,7 +459,7 @@ class TestMockKGFramesIntegration:
             self.test_property_object_handling,
             self.test_grouping_uri_enforcement,
             self.test_isinstance_type_checking,
-            self.test_vitalsigns_native_jsonld_conversion
+            self.test_vitalsigns_native_quad_roundtrip
         ]
         
         passed_tests = 0

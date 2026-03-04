@@ -12,7 +12,7 @@ import time
 from typing import Dict, Any, List
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
-from vitalgraph.model.jsonld_model import JsonLdDocument
+# Client uses GraphObjects directly
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot

@@ -22,7 +22,7 @@ from vitalgraph.mock.client.mock_vitalgraph_client import MockVitalGraphClient
 from vitalgraph.mock.client.space.mock_space_manager import MockSpaceManager
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgtypes_model import KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -99,38 +99,25 @@ class TestMockKGTypesEndpoint:
     def test_create_kgtypes(self):
         """Test creating KGTypes."""
         try:
-            # Create test KGTypes JSON-LD document
-            kgtypes_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGType/test-type-001",
-                        "@type": "haley:KGType",
-                        "vital-core:hasName": "TestType1",
-                        "haley:hasKGraphDescription": "A test type for mock client testing",
-                        "haley:hasKGModelVersion": "1.0.0",
-                        "haley:hasKGTypeVersion": "1.0.0"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGType/test-type-002",
-                        "@type": "haley:KGType",
-                        "vital-core:hasName": "TestType2",
-                        "haley:hasKGraphDescription": "Another test type for mock client testing",
-                        "haley:hasKGModelVersion": "1.0.0",
-                        "haley:hasKGTypeVersion": "1.0.0"
-                    }
-                ]
-            }
+            # Create test KGType GraphObjects
+            type1 = KGType()
+            type1.URI = "http://vital.ai/haley.ai/app/KGType/test-type-001"
+            type1.name = "TestType1"
+            type1.kGraphDescription = "A test type for mock client testing"
+            type1.kGModelVersion = "1.0.0"
+            type1.kGTypeVersion = "1.0.0"
             
-            document = JsonLdDocument(**kgtypes_jsonld)
+            type2 = KGType()
+            type2.URI = "http://vital.ai/haley.ai/app/KGType/test-type-002"
+            type2.name = "TestType2"
+            type2.kGraphDescription = "Another test type for mock client testing"
+            type2.kGModelVersion = "1.0.0"
+            type2.kGTypeVersion = "1.0.0"
+            
             response = self.endpoint.create_kgtypes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[type1, type2]
             )
             
             success = (
@@ -163,8 +150,8 @@ class TestMockKGTypesEndpoint:
             )
             
             success = (
-                isinstance(response, JsonLdDocument) and
-                (hasattr(response, 'id') or hasattr(response, 'context'))
+                isinstance(response, (QuadResponse, QuadResultsResponse)) and
+                response.success
             )
             
             self.log_test_result(
@@ -211,28 +198,18 @@ class TestMockKGTypesEndpoint:
     def test_update_kgtypes(self):
         """Test updating KGTypes."""
         try:
-            # Create updated KGType JSON-LD document
-            updated_kgtype_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": "http://vital.ai/haley.ai/app/KGType/test-type-001",
-                    "@type": "haley:KGType",
-                    "vital-core:hasName": "UpdatedTestType1",
-                    "haley:hasKGraphDescription": "Updated description for testing",
-                    "haley:hasKGModelVersion": "2.0.0",
-                    "haley:hasKGTypeVersion": "2.0.0"
-                }]
-            }
+            # Create updated KGType GraphObject
+            updated_type = KGType()
+            updated_type.URI = "http://vital.ai/haley.ai/app/KGType/test-type-001"
+            updated_type.name = "UpdatedTestType1"
+            updated_type.kGraphDescription = "Updated description for testing"
+            updated_type.kGModelVersion = "2.0.0"
+            updated_type.kGTypeVersion = "2.0.0"
             
-            document = JsonLdDocument(**updated_kgtype_jsonld)
             response = self.endpoint.update_kgtypes(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[updated_type]
             )
             
             success = (

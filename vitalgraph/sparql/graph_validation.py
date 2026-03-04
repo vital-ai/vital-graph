@@ -24,13 +24,11 @@ class EntityGraphValidator:
         self.vitalsigns = VitalSigns()
         self.logger = logging.getLogger(self.__class__.__name__)
     
-    def validate_and_separate_entity_graph(self, jsonld_document: dict) -> Dict[str, Dict]:
+    def validate_and_separate_entity_graph(self, objects: list) -> Dict[str, Dict]:
         """
-        Validate and separate entity graphs from JSON-LD document.
+        Validate and separate entity graphs from a list of VitalSigns objects.
         Uses Edge-based relationship discovery instead of direct properties.
         """
-        # Step 1: Convert JSON-LD to VitalSigns objects
-        objects = self.vitalsigns.from_jsonld_list(jsonld_document)
         
         # Step 2: Categorize objects using isinstance
         entities = []
@@ -177,13 +175,11 @@ class FrameGraphValidator:
         self.vitalsigns = VitalSigns()
         self.logger = logging.getLogger(self.__class__.__name__)
     
-    def validate_and_separate_frame_graph(self, jsonld_document: dict) -> Dict[str, Dict]:
+    def validate_and_separate_frame_graph(self, objects: list) -> Dict[str, Dict]:
         """
-        Validate and separate frame graphs from JSON-LD document.
+        Validate and separate frame graphs from a list of VitalSigns objects.
         Uses Edge-based relationship discovery for frame-to-frame and frame-to-slot relationships.
         """
-        # Step 1: Convert JSON-LD to VitalSigns objects
-        objects = self.vitalsigns.from_jsonld_list(jsonld_document)
         
         # Step 2: Categorize objects using isinstance
         frames = []

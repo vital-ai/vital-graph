@@ -19,11 +19,8 @@ from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: str, graph_id: str, entity_uri: Optional[str], logger: logging.Logger) -> bool:
@@ -45,23 +42,21 @@ async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: s
         frame.name = "Lifecycle Test Frame"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#LifecycleFrame"
         
-        # Convert VitalSigns object to JSON-LD using helper function
-        jsonld_obj = convert_to_jsonld_request(frame)
-        
-        create_response = client.kgframes.create_kgframes(
+        # Create frame - pass GraphObject directly
+        create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=jsonld_obj,
+            objects=[frame],
             entity_uri=entity_uri
         )
         
-        if not create_response.success:
+        if not create_response.is_success:
             logger.error(f"   ❌ Frame creation failed: {create_response.message}")
             return False
         
         # Step 2: Read frame
         logger.info("   Step 2: Reading frame...")
-        read_response = client.kgframes.get_kgframe(
+        read_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri
@@ -69,14 +64,12 @@ async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: s
         
         # Log what we received
         logger.info(f"   📦 Response received:")
-        logger.info(f"      - success: {read_response.success}")
+        logger.info(f"      - is_success: {read_response.is_success}")
         logger.info(f"      - message: {read_response.message}")
-        logger.info(f"      - frame type: {type(read_response.frame)}")
-        logger.info(f"      - frame value: {read_response.frame}")
-        if hasattr(read_response, 'complete_graph'):
-            logger.info(f"      - complete_graph: {read_response.complete_graph}")
+        logger.info(f"      - frame_graph type: {type(read_response.frame_graph)}")
+        logger.info(f"      - frame_graph value: {read_response.frame_graph}")
         
-        if not read_response.success or not read_response.frame:
+        if not read_response.is_success or not read_response.frame_graph:
             logger.error(f"   ❌ Frame reading failed: {read_response.message}")
             return False
         
@@ -89,29 +82,27 @@ async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: s
         updated_frame.name = "Updated Lifecycle Test Frame"
         updated_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#UpdatedLifecycleFrame"
         
-        # Convert VitalSigns object to JSON-LD using helper function
-        update_obj = convert_to_jsonld_request(updated_frame)
-        
-        update_response = client.kgframes.update_kgframes(
+        # Update frame - pass GraphObject directly
+        update_response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=update_obj,
+            objects=[updated_frame],
             entity_uri=entity_uri
         )
         
-        if not update_response.success:
+        if not update_response.is_success:
             logger.error(f"   ❌ Frame update failed: {update_response.message}")
             return False
         
         # Step 4: Delete frame
         logger.info("   Step 4: Deleting frame...")
-        delete_response = client.kgframes.delete_kgframe(
+        delete_response = await client.kgframes.delete_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri
         )
         
-        if not delete_response.success:
+        if not delete_response.is_success:
             logger.error(f"   ❌ Frame deletion failed: {delete_response.message}")
             return False
         
@@ -155,16 +146,15 @@ async def test_frame_slot_integration_workflow(client: VitalGraphClient, space_i
         slot2.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#IntegrationSlot"
         slot2.textSlotValue = "Integration slot value 2"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request([frame, slot1, slot2])
-        create_response = client.kgframes.create_kgframes_with_slots(
+        # Create frame with slots - pass GraphObjects directly
+        create_response = await client.kgframes.create_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame, slot1, slot2],
             entity_uri=entity_uri
         )
         
-        if not create_response.success:
+        if not create_response.is_success:
             logger.error(f"   ❌ Frame with slots creation failed: {create_response.message}")
             return False
         
@@ -178,42 +168,41 @@ async def test_frame_slot_integration_workflow(client: VitalGraphClient, space_i
         additional_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#AdditionalSlot"
         additional_slot.textSlotValue = "Additional slot value"
         
-        # Convert VitalSigns object to JSON-LD using helper function
-        slot_obj = convert_to_jsonld_request(additional_slot)
-        slot_response = client.kgframes.create_frame_slots(
+        # Add slot - pass GraphObject directly
+        slot_response = await client.kgframes.create_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=slot_obj,
+            objects=[additional_slot],
             entity_uri=entity_uri
         )
         
-        if not slot_response.success:
+        if not slot_response.is_success:
             logger.error(f"   ❌ Additional slot creation failed: {slot_response.message}")
             return False
         
         # Step 3: Retrieve frame with all slots
         logger.info("   Step 3: Retrieving frame with slots...")
-        get_response = client.kgframes.get_kgframe(
+        get_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri,
             include_frame_graph=True
         )
         
-        if not get_response.success:
+        if not get_response.is_success:
             logger.error(f"   ❌ Frame retrieval failed: {get_response.message}")
             return False
         
         # Step 4: Clean up
         logger.info("   Step 4: Cleaning up...")
-        delete_response = client.kgframes.delete_kgframe(
+        delete_response = await client.kgframes.delete_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri
         )
         
-        if not delete_response.success:
+        if not delete_response.is_success:
             logger.error(f"   ❌ Cleanup failed: {delete_response.message}")
             return False
         
@@ -245,22 +234,21 @@ async def test_batch_operations_integration(client: VitalGraphClient, space_id: 
             frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#BatchFrame"
             frames.append(frame)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frames)
-        create_response = client.kgframes.create_kgframes(
+        # Create batch frames - pass GraphObjects directly
+        create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=frames,
             entity_uri=entity_uri
         )
         
-        if not create_response.success or create_response.frames_created < 3:
+        if not create_response.is_success or create_response.created_count < 3:
             logger.error(f"   ❌ Batch frame creation failed: {create_response.message}")
             return False
         
         # Step 2: List frames to verify creation
         logger.info("   Step 2: Verifying batch creation...")
-        list_response = client.kgframes.list_kgframes(
+        list_response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
@@ -268,7 +256,7 @@ async def test_batch_operations_integration(client: VitalGraphClient, space_id: 
             search="Batch"
         )
         
-        if not list_response.success:
+        if not list_response.is_success:
             logger.error(f"   ❌ Frame listing failed: {list_response.message}")
             return False
         
@@ -276,13 +264,13 @@ async def test_batch_operations_integration(client: VitalGraphClient, space_id: 
         logger.info("   Step 3: Deleting multiple frames...")
         frame_uris = [str(frame.URI) for frame in frames]
         
-        delete_response = client.kgframes.delete_kgframes(
+        delete_response = await client.kgframes.delete_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             uri_list=",".join([str(uri) for uri in frame_uris])
         )
         
-        if not delete_response.success:
+        if not delete_response.is_success:
             logger.error(f"   ❌ Batch frame deletion failed: {delete_response.message}")
             return False
         
@@ -301,13 +289,13 @@ async def test_error_handling_integration(client: VitalGraphClient, space_id: st
     try:
         # Test 1: Invalid space/graph IDs
         logger.info("   Test 1: Invalid space/graph IDs...")
-        invalid_response = client.kgframes.list_kgframes(
+        invalid_response = await client.kgframes.list_kgframes(
             space_id="invalid-space",
             graph_id="invalid-graph"
         )
         
         # Should handle gracefully (either succeed with empty result or provide appropriate error)
-        if not invalid_response.success and "invalid" not in invalid_response.message.lower():
+        if not invalid_response.is_success and invalid_response.message and "invalid" not in invalid_response.message.lower():
             logger.warning(f"   ⚠️ Unexpected error for invalid IDs: {invalid_response.message}")
         
         # Test 2: Malformed data handling
@@ -320,30 +308,28 @@ async def test_error_handling_integration(client: VitalGraphClient, space_id: st
             invalid_frame.name = "Invalid Frame"
             invalid_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#InvalidFrame"
             
-            # Convert VitalSigns object to JSON-LD using helper function
-            invalid_obj = convert_to_jsonld_request(invalid_frame)
-            
-            malformed_response = client.kgframes.create_kgframes(
+            # Pass invalid GraphObject directly
+            malformed_response = await client.kgframes.create_kgframes(
                 space_id=space_id,
                 graph_id=graph_id,
-                data=invalid_obj
+                objects=[invalid_frame]
             )
             
-            if malformed_response.success:
+            if malformed_response.is_success:
                 logger.warning(f"   ⚠️ Invalid data was unexpectedly accepted")
         except Exception as e:
             logger.info(f"   ✅ Invalid data properly rejected: {type(e).__name__}")
         
         # Test 3: Non-existent operations
         logger.info("   Test 3: Non-existent resource operations...")
-        nonexistent_response = client.kgframes.get_kgframe(
+        nonexistent_response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri="urn:nonexistent-frame-999"
         )
         
         # Should handle gracefully
-        if not nonexistent_response.success or not nonexistent_response.frame:
+        if not nonexistent_response.is_success or not nonexistent_response.frame_graph:
             logger.info(f"   ✅ Non-existent resource properly handled")
         
         logger.info("✅ Error handling integration successful")

@@ -10,13 +10,18 @@ import logging
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+    extract_pagination_from_json_quads,
+    is_json_quads_response,
+)
 from ...model.objects_model import (
-    ObjectsResponse as ServerObjectsResponse,
     ObjectCreateResponse as ServerObjectCreateResponse,
     ObjectUpdateResponse as ServerObjectUpdateResponse,
     ObjectDeleteResponse as ServerObjectDeleteResponse
 )
-from ...model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
 from ..response.client_response import (
     ObjectResponse,
     ObjectsListResponse,
@@ -62,25 +67,18 @@ class ObjectsEndpoint(BaseEndpoint):
                 search=search
             )
             
-            server_response = await self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
-            
-            # Extract objects from server response - handle Union[JsonLdObject, JsonLdDocument]
-            objects = []
-            if hasattr(server_response, 'objects'):
-                if isinstance(server_response.objects, JsonLdObject):
-                    objects = [server_response.objects]
-                elif isinstance(server_response.objects, JsonLdDocument):
-                    objects = server_response.objects.graph if server_response.objects.graph else []
-            count = len(objects)
-            
+            response = await self._make_authenticated_request('GET', url, params=params)
+            response_data = response.json()
+            graph_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
+            pagination = extract_pagination_from_json_quads(response_data)
             return build_success_response(
                 ObjectsListResponse,
                 status_code=200,
-                message=f"Retrieved {count} objects",
-                objects=objects,
-                count=count,
-                page_size=page_size,
-                offset=offset
+                message=f"Retrieved {len(graph_objects)} objects",
+                objects=graph_objects,
+                count=pagination.get('total_count', len(graph_objects)),
+                page_size=pagination.get('page_size', page_size),
+                offset=pagination.get('offset', offset)
             )
             
         except VitalGraphClientError as e:
@@ -125,23 +123,15 @@ class ObjectsEndpoint(BaseEndpoint):
                 uri=uri
             )
             
-            server_response = await self._make_typed_request('GET', url, ServerObjectsResponse, params=params)
-            
-            # Extract single object from server response
-            object_data = None
-            if hasattr(server_response, 'objects'):
-                if isinstance(server_response.objects, JsonLdObject):
-                    object_data = server_response.objects
-                elif isinstance(server_response.objects, JsonLdDocument):
-                    objects = server_response.objects.graph if server_response.objects.graph else []
-                    object_data = objects[0] if objects else None
-            
-            if object_data:
+            response = await self._make_authenticated_request('GET', url, params=params)
+            response_data = response.json()
+            graph_objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS)
+            if graph_objects:
                 return build_success_response(
                     ObjectResponse,
                     status_code=200,
                     message=f"Retrieved object: {uri}",
-                    object=object_data
+                    object=graph_objects[0]
                 )
             else:
                 return build_error_response(
@@ -167,39 +157,34 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def create_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectCreateResponse:
+    async def create_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectCreateResponse:
         """
-        Create Objects from JSON-LD request.
+        Create Objects from GraphObjects using the configured wire format.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD request (JsonLdObject for single object or JsonLdDocument for multiple objects)
+            objects: List of GraphObject instances to create
             
         Returns:
             ObjectCreateResponse with .is_success property
-            
-        Raises:
-            VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, document=document)
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/objects"
-            params = build_query_params(
-                space_id=space_id,
-                graph_id=graph_id
+            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_authenticated_request(
+                'POST', url, params=params, json=body,
+                headers={'Content-Type': content_type}
             )
+            response_data = response.json()
             
-            server_response = await self._make_typed_request('POST', url, ServerObjectCreateResponse, params=params, json=document.model_dump(by_alias=True))
-            
-            # Extract created URIs from server response
-            created_uris = []
-            if hasattr(server_response, 'created_uris'):
-                created_uris = server_response.created_uris if isinstance(server_response.created_uris, list) else [server_response.created_uris]
-            
-            created_count = len(created_uris)
+            created_count = response_data.get('created_count', 0)
+            created_uris = response_data.get('created_uris', [])
             
             return build_success_response(
                 ObjectCreateResponse,
@@ -209,7 +194,6 @@ class ObjectsEndpoint(BaseEndpoint):
                 created_count=created_count,
                 created_uris=created_uris
             )
-            
         except VitalGraphClientError as e:
             return build_error_response(
                 ObjectCreateResponse,
@@ -218,7 +202,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=e.status_code or 500
             )
         except Exception as e:
-            logger.error(f"Error creating objects: {e}")
+            logger.error(f"Error creating objects from GraphObjects: {e}")
             return build_error_response(
                 ObjectCreateResponse,
                 error_code=500,
@@ -226,51 +210,44 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def update_objects(self, space_id: str, graph_id: str, document: JsonLdRequest) -> ObjectUpdateResponse:
+    async def update_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectUpdateResponse:
         """
-        Update Objects from JSON-LD request.
+        Update Objects from GraphObjects using the configured wire format.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD request (JsonLdObject for single object or JsonLdDocument for multiple objects)
+            objects: List of GraphObject instances to update
             
         Returns:
             ObjectUpdateResponse with .is_success property
-            
-        Raises:
-            VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, document=document)
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/objects"
-            params = build_query_params(
-                space_id=space_id,
-                graph_id=graph_id
+            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_authenticated_request(
+                'PUT', url, params=params, json=body,
+                headers={'Content-Type': content_type}
             )
+            response_data = response.json()
             
-            server_response = await self._make_typed_request('PUT', url, ServerObjectUpdateResponse, params=params, json=document.model_dump(by_alias=True))
-            
-            # Extract updated URIs from server response
-            updated_uris = []
-            if hasattr(server_response, 'updated_uris'):
-                updated_uris = server_response.updated_uris if isinstance(server_response.updated_uris, list) else [server_response.updated_uris]
-            elif hasattr(server_response, 'updated_uri') and server_response.updated_uri:
-                updated_uris = [server_response.updated_uri]
-            
-            updated_count = len(updated_uris)
+            updated_uris = response_data.get('updated_uris', [])
+            if not updated_uris and response_data.get('updated_uri'):
+                updated_uris = [response_data['updated_uri']]
             
             return build_success_response(
                 ObjectUpdateResponse,
                 status_code=200,
-                message=f"Updated {updated_count} objects",
+                message=f"Updated {len(updated_uris)} objects",
                 updated=True,
-                updated_count=updated_count,
+                updated_count=len(updated_uris),
                 updated_uris=updated_uris
             )
-            
         except VitalGraphClientError as e:
             return build_error_response(
                 ObjectUpdateResponse,
@@ -279,7 +256,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 status_code=e.status_code or 500
             )
         except Exception as e:
-            logger.error(f"Error updating objects: {e}")
+            logger.error(f"Error updating objects from GraphObjects: {e}")
             return build_error_response(
                 ObjectUpdateResponse,
                 error_code=500,

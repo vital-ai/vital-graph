@@ -268,26 +268,17 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
             # List remaining entities
             list_response = await client.kgentities.list_kgentities(test_space_id, test_graph_id, page_size=100)
             
-            # Handle Union response type
-            from vitalgraph.model.jsonld_model import JsonLdDocument
-            from vitalgraph.model.kgentities_model import EntitiesResponse
-            
-            if isinstance(list_response, JsonLdDocument):
-                remaining_entities = list_response.graph if list_response.graph else []
-            elif isinstance(list_response, EntitiesResponse):
-                remaining_entities = list_response.entities.graph if list_response.entities and list_response.entities.graph else []
-            else:
-                remaining_entities = []
-            
+            # Handle standardized client response
             cleanup_count = 0
-            for entity in remaining_entities:
-                try:
-                    entity_uri = entity.get('@id') or entity.get('URI')
-                    if entity_uri and 'test' in entity_uri.lower():  # Only clean up test entities
-                        await client.kgentities.delete_kgentity(test_space_id, test_graph_id, entity_uri)
-                        cleanup_count += 1
-                except Exception:
-                    pass  # Continue cleanup even if individual deletions fail
+            if hasattr(list_response, 'objects') and list_response.objects:
+                for obj in list_response.objects:
+                    try:
+                        entity_uri = str(obj.URI) if hasattr(obj, 'URI') else None
+                        if entity_uri and 'test' in entity_uri.lower():  # Only clean up test entities
+                            await client.kgentities.delete_kgentity(test_space_id, test_graph_id, entity_uri)
+                            cleanup_count += 1
+                    except Exception:
+                        pass  # Continue cleanup even if individual deletions fail
             
             if cleanup_count > 0:
                 print(f"   ✓ Cleaned up {cleanup_count} remaining test entities")
@@ -343,7 +334,7 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         
         print(f"\n🎉 KGEntities client testing completed!")
         print(f"✅ All modular test cases executed successfully!")
-        print(f"   • Union response types (EntitiesResponse | JsonLdDocument) ✓")
+        print(f"   • Standardized response types (GraphObject-based) ✓")
         print(f"   • New parameters (entity_type_uri, include_entity_graph) ✓")
         print(f"   • Entity query functionality (EntityQueryCriteria, QueryFilter) ✓")
         print(f"   • Operation modes (create/update/upsert with operation_mode) ✓")

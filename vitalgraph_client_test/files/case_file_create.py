@@ -33,7 +33,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
         file_node.URI = "haley:file_test_document_001"
         file_node.name = "Test Document"
         
-        # Pass GraphObject directly - no JSON-LD conversion needed
+        # Pass GraphObject directly - no extra conversion needed
         response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,
@@ -72,7 +72,7 @@ async def run_file_creation_tests(client, space_id: str, graph_id: str, logger=N
         file_node_2.URI = "haley:file_test_data_001"
         file_node_2.name = "Test Data"
         
-        # Pass GraphObjects directly - no JSON-LD conversion needed
+        # Pass GraphObjects directly - no extra conversion needed
         response = await client.files.create_file(
             space_id=space_id,
             graph_id=graph_id,

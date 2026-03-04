@@ -2,16 +2,14 @@
 Implementation Utilities for VitalGraph
 
 This module provides reusable utility functions that can be shared across
-KGType, KGEntity, KGFrame, and general object implementations. It handles JSON-LD
-processing, GraphObject conversion, transaction management, and conflict detection
+KGType, KGEntity, KGFrame, and general object implementations. It handles
+GraphObject conversion, transaction management, and conflict detection
 without containing any direct SQL code.
 """
 
 import logging
 from typing import List, Tuple, Optional, Dict, Any, Callable
-from pyld import jsonld
 from rdflib import Graph, URIRef
-import json
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -217,12 +215,12 @@ def validate_required_fields(obj_data: Dict, required_fields: List[str]) -> None
         raise ImplValidationError(f"Missing required fields: {', '.join(missing_fields)}")
 
 
-def extract_subject_uris(jsonld_objects: List[Dict]) -> List[str]:
+def extract_subject_uris(objects: List) -> List[str]:
     """
-    Extract subject URIs from JSON-LD objects.
+    Extract subject URIs from GraphObjects.
     
     Args:
-        jsonld_objects: List of JSON-LD object dictionaries
+        objects: List of GraphObjects with URI attribute
         
     Returns:
         List of subject URIs
@@ -231,10 +229,10 @@ def extract_subject_uris(jsonld_objects: List[Dict]) -> List[str]:
         ImplValidationError: If URIs are missing or invalid
     """
     subject_uris = []
-    for i, obj in enumerate(jsonld_objects):
-        uri = obj.get('@id') or obj.get('URI')
+    for i, obj in enumerate(objects):
+        uri = str(obj.URI)
         if not uri:
-            raise ImplValidationError(f"Object at index {i} missing URI (@id or URI field)")
+            raise ImplValidationError(f"Object at index {i} missing URI")
         
         validate_uri_format(uri)
         subject_uris.append(uri)

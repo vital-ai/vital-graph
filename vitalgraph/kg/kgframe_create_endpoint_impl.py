@@ -6,7 +6,6 @@ extracted from MockKGFramesEndpoint to improve code organization and maintainabi
 """
 
 from typing import List, Optional, Any
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.kgframes_model import FrameCreateResponse, SlotCreateResponse, FrameUpdateResponse
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
@@ -18,15 +17,15 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 import traceback
 
 
-def create_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameCreateResponse:
+def create_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, document) -> FrameCreateResponse:
     """
-    Create KGFrames from JSON-LD document with VitalSigns integration and grouping URI enforcement.
+    Create KGFrames from graph objects with VitalSigns integration and grouping URI enforcement.
     
     Args:
         endpoint_instance: The MockKGFramesEndpoint instance (for access to methods and logger)
         space_id: Space identifier
         graph_id: Graph identifier
-        document: JsonLdDocument containing KGFrame data
+        document: List of GraphObjects containing KGFrame data
         
     Returns:
         FrameCreateResponse with created URIs and count
@@ -49,10 +48,9 @@ def create_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, docume
         stripped_document = endpoint_instance._strip_grouping_uris(document)
         endpoint_instance.logger.info("Step 1: Stripped grouping URIs from document")
         
-        # Step 2: Create VitalSigns objects from JSON-LD using the same approach as MockKGEntitiesEndpoint
-        document_dict = stripped_document.model_dump(by_alias=True)
-        objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
-        endpoint_instance.logger.info(f"Step 2: Created {len(objects) if objects else 0} VitalSigns objects")
+        # Step 2: Accept graph objects directly
+        objects = stripped_document if isinstance(stripped_document, list) else [stripped_document]
+        endpoint_instance.logger.info(f"Step 2: Received {len(objects) if objects else 0} GraphObjects")
         
         if not objects:
             endpoint_instance.logger.warning("No objects created, returning early")
@@ -108,7 +106,7 @@ def create_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, docume
 
 
 def create_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, frame_uri: str, 
-                          document: JsonLdDocument, operation_mode: str = "create") -> SlotCreateResponse:
+                          document, operation_mode: str = "create") -> SlotCreateResponse:
     """
     Create slots within frame context using /kgframes/kgslots sub-endpoint.
     
@@ -117,7 +115,7 @@ def create_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, fra
         space_id: Space identifier
         graph_id: Graph identifier
         frame_uri: Parent frame URI
-        document: JsonLdDocument containing slots and related objects
+        document: List of GraphObjects containing slots and related objects
         operation_mode: "create", "update", or "upsert"
         
     Returns:
@@ -148,9 +146,8 @@ def create_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, fra
                 created_uris=[]
             )
         
-        # Step 2: Create VitalSigns objects from JSON-LD
-        document_dict = document.model_dump(by_alias=True) if hasattr(document, 'model_dump') else document
-        incoming_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Step 2: Accept graph objects directly
+        incoming_objects = document if isinstance(document, list) else [document]
         if not incoming_objects:
             return SlotCreateResponse(
                 message="No valid objects found in document",
@@ -305,15 +302,15 @@ def handle_create_mode_impl(endpoint_instance, space, graph_id: str, frame_uri: 
         )
 
 
-def create_kgframes_with_slots_impl(endpoint_instance, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameCreateResponse:
+def create_kgframes_with_slots_impl(endpoint_instance, space_id: str, graph_id: str, document) -> FrameCreateResponse:
     """
-    Create KGFrames with their associated slots from JSON-LD document using VitalSigns native functionality.
+    Create KGFrames with their associated slots using VitalSigns native functionality.
     
     Args:
         endpoint_instance: The MockKGFramesEndpoint instance (for access to methods and logger)
         space_id: Space identifier
         graph_id: Graph identifier
-        document: JsonLdDocument containing KGFrame and KGSlot data
+        document: List of GraphObjects containing KGFrame and KGSlot data
         
     Returns:
         FrameCreateResponse with created URIs and count
@@ -330,9 +327,8 @@ def create_kgframes_with_slots_impl(endpoint_instance, space_id: str, graph_id: 
                 created_uris=[]
             )
         
-        # Convert JSON-LD document to VitalSigns objects
-        document_dict = document.model_dump(by_alias=True)
-        objects = endpoint_instance._jsonld_to_vitalsigns_objects(document_dict)
+        # Accept graph objects directly
+        objects = document if isinstance(document, list) else [document]
         
         if not objects:
             return FrameCreateResponse(

@@ -25,7 +25,7 @@ from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import SPARQLGraphResponse
 from vitalgraph.model.kgentities_model import EntitiesResponse, EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -280,14 +280,8 @@ class TestMockClientKGEntities:
             # Create test KGEntities using VitalSigns
             test_entities = self._create_test_kgentities()
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list(test_entities)
-            
-            # Create JsonLdDocument
-            kgentities_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.create_kgentities(self.test_space_id, self.test_graph_id, kgentities_document)
+            # Pass GraphObjects directly to create method
+            response = self.client.create_kgentities(self.test_space_id, self.test_graph_id, test_entities)
             
             success = (
                 isinstance(response, EntityCreateResponse) and
@@ -326,41 +320,28 @@ class TestMockClientKGEntities:
         try:
             response = self.client.get_kgentity(self.test_space_id, self.test_graph_id, kgentity_uri)
             
-            # Handle both EntitiesResponse and JsonLdDocument return types
+            # Handle response types
             success = False
             kgentity_name = None
             entities_count = 0
             
             if isinstance(response, EntitiesResponse):
-                # Standard EntitiesResponse format
-                success = (
-                    hasattr(response, 'entities') and
-                    hasattr(response.entities, 'graph') and
-                    response.entities.graph and
-                    len(response.entities.graph) > 0
-                )
-                if success and response.entities.graph:
-                    # Find the KGEntity in the response
-                    for item in response.entities.graph:
-                        if item.get('@id') == kgentity_uri:
-                            kgentity_name = item.get('vital-core:hasName', 'Unknown')
-                            break
-                    entities_count = len(response.entities.graph)
-            elif hasattr(response, 'graph') and response.graph:
-                # Direct JsonLdDocument format
-                success = len(response.graph) > 0
-                if success:
-                    # Find the KGEntity in the response
-                    for item in response.graph:
-                        if item.get('@id') == kgentity_uri:
-                            kgentity_name = item.get('vital-core:hasName', 'Unknown')
-                            break
-                    entities_count = len(response.graph)
-            elif hasattr(response, 'id') and response.id == kgentity_uri:
-                # Single object JsonLdDocument format
-                success = True
-                kgentity_name = getattr(response, 'http://vital.ai/ontology/vital-core#hasName', {}).get('@value', 'Unknown')
-                entities_count = 1
+                # QuadResponse format
+                if isinstance(response, QuadResponse):
+                    success = response.success and response.total_count > 0
+                    entities_count = response.total_count
+                    if success and hasattr(response, 'results') and response.results:
+                        from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                        graph_objects = quad_list_to_graphobjects(response.results)
+                        for obj in graph_objects:
+                            if str(getattr(obj, 'URI', '')) == kgentity_uri:
+                                kgentity_name = getattr(obj, 'name', 'Unknown')
+                                break
+                        entities_count = len(graph_objects)
+                else:
+                    # Legacy EntitiesResponse format
+                    success = hasattr(response, 'entities') and response.entities is not None
+                    entities_count = 1 if success else 0
             
             self.log_test_result(
                 "Get KGEntity",
@@ -463,20 +444,8 @@ class TestMockClientKGEntities:
             updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#UpdatedPersonType"
             updated_entity.kGModelVersion = "2.0.0"
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list([updated_entity])
-            
-            # Ensure the JSON-LD has a graph array format
-            if 'graph' not in jsonld_data or jsonld_data['graph'] is None:
-                # Convert single object format to graph array format
-                single_obj = {k: v for k, v in jsonld_data.items() if k not in ['@context']}
-                jsonld_data['graph'] = [single_obj]
-            
-            # Create JsonLdDocument
-            update_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.update_kgentities(self.test_space_id, self.test_graph_id, update_document)
+            # Pass GraphObjects directly to update method
+            response = self.client.update_kgentities(self.test_space_id, self.test_graph_id, [updated_entity])
             
             success = (
                 isinstance(response, EntityUpdateResponse) and

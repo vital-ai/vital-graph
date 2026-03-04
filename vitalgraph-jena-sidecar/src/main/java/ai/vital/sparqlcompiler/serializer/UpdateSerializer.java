@@ -98,6 +98,10 @@ public class UpdateSerializer {
             result.put("dest", serializeTarget(add.getDest()));
             result.put("silent", add.isSilent());
 
+        } else if (update instanceof UpdateDeleteWhere delWhere) {
+            result.put("type", "UpdateDeleteWhere");
+            result.put("quads", serializeQuads(delWhere.getQuads()));
+
         } else {
             result.put("type", update.getClass().getSimpleName());
             result.put("string", update.toString());

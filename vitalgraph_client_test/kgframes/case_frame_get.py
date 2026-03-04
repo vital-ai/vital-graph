@@ -17,7 +17,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 
@@ -27,15 +27,15 @@ async def test_get_frame_by_uri(client: VitalGraphClient, space_id: str, graph_i
     
     try:
         # Test basic frame retrieval
-        response = client.kgframes.get_kgframe(
+        response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri
         )
         
-        if response.success and response.frame:
-            # JsonLdObject is a Pydantic model, access id attribute directly
-            frame_id = getattr(response.frame, 'id', 'Unknown URI')
+        if response.is_success and response.frame_graph:
+            # Access frame URI from response
+            frame_id = getattr(response.frame_graph, 'frame_uri', 'Unknown URI')
             logger.info(f"✅ Get frame by URI successful: {frame_id}")
             return True
         else:
@@ -53,19 +53,17 @@ async def test_get_frame_with_complete_graph(client: VitalGraphClient, space_id:
     
     try:
         # Test frame retrieval with complete graph
-        response = client.kgframes.get_kgframe(
+        response = await client.kgframes.get_kgframe(
             space_id=space_id,
             graph_id=graph_id,
             uri=frame_uri,
             include_frame_graph=True
         )
         
-        if response.success and response.frame:
+        if response.is_success and response.frame_graph:
             logger.info(f"✅ Get frame with complete graph successful")
-            if response.complete_graph:
-                # complete_graph is a JsonLdDocument object, access graph attribute
-                graph_items = response.complete_graph.graph if hasattr(response.complete_graph, 'graph') else []
-                logger.info(f"   Complete graph included with {len(graph_items)} components")
+            if response.frame_graph.objects:
+                logger.info(f"   Complete graph included with {len(response.frame_graph.objects)} components")
             return True
         else:
             logger.error(f"❌ Get frame with complete graph failed: {response.message}")
@@ -82,16 +80,16 @@ async def test_list_frames_basic(client: VitalGraphClient, space_id: str, graph_
     
     try:
         # Test basic frame listing
-        response = client.kgframes.list_kgframes(
+        response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
             offset=0
         )
         
-        if response.success:
+        if response.is_success:
             logger.info(f"✅ Basic frame listing successful: {response.total_count} total frames")
-            logger.info(f"   Retrieved {len(response.frames)} frames on this page")
+            logger.info(f"   Retrieved {len(response.objects) if response.objects else 0} frames on this page")
             return True
         else:
             logger.error(f"❌ Basic frame listing failed: {response.message}")
@@ -108,7 +106,7 @@ async def test_list_frames_with_entity_filter(client: VitalGraphClient, space_id
     
     try:
         # Test frame listing with entity filter
-        response = client.kgframes.list_kgframes(
+        response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
@@ -116,7 +114,7 @@ async def test_list_frames_with_entity_filter(client: VitalGraphClient, space_id
             entity_uri=entity_uri
         )
         
-        if response.success:
+        if response.is_success:
             logger.info(f"✅ Frame listing with entity filter successful: {response.total_count} frames for entity")
             return True
         else:
@@ -134,7 +132,7 @@ async def test_list_frames_with_parent_filter(client: VitalGraphClient, space_id
     
     try:
         # Test frame listing with parent filter
-        response = client.kgframes.list_kgframes(
+        response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
@@ -142,7 +140,7 @@ async def test_list_frames_with_parent_filter(client: VitalGraphClient, space_id
             parent_uri=parent_uri
         )
         
-        if response.success:
+        if response.is_success:
             logger.info(f"✅ Frame listing with parent filter successful: {response.total_count} child frames")
             return True
         else:
@@ -160,7 +158,7 @@ async def test_list_frames_with_search(client: VitalGraphClient, space_id: str, 
     
     try:
         # Test frame listing with search
-        response = client.kgframes.list_kgframes(
+        response = await client.kgframes.list_kgframes(
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
@@ -168,7 +166,7 @@ async def test_list_frames_with_search(client: VitalGraphClient, space_id: str, 
             search="Test"
         )
         
-        if response.success:
+        if response.is_success:
             logger.info(f"✅ Frame listing with search successful: {response.total_count} matching frames")
             return True
         else:

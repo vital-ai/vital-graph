@@ -6,11 +6,11 @@ extracted from MockKGFramesEndpoint to improve code organization and maintainabi
 """
 
 from typing import Optional
-from vitalgraph.model.kgframes_model import FramesResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 
 
-def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> FramesResponse:
+def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
     """
     List KGFrames with pagination and optional search using pyoxigraph SPARQL queries.
     
@@ -23,7 +23,7 @@ def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_siz
         search: Optional search term
         
     Returns:
-        FramesResponse with VitalSigns native JSON-LD document
+        QuadResponse with VitalSigns native objects
     """
     endpoint_instance._log_method_call("list_kgframes", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset, search=search)
     
@@ -31,11 +31,8 @@ def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_siz
         # Get space from space manager
         space = endpoint_instance.space_manager.get_space(space_id)
         if not space:
-            # Return empty response for non-existent space
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return FramesResponse(
-                frames=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
@@ -106,11 +103,8 @@ def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_siz
         results = endpoint_instance._execute_sparql_query(space, query)
         
         if not results.get("bindings"):
-            # No results found
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return FramesResponse(
-                frames=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
@@ -164,11 +158,10 @@ def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_siz
                 count_value = count_value.split("^^")[0].strip('"')
             total_count = int(count_value)
         
-        # Convert to JSON-LD document using VitalSigns
-        frames_jsonld = endpoint_instance._objects_to_jsonld_document(frames)
+        quads = graphobjects_to_quad_list(frames, graph_id)
         
-        return FramesResponse(
-            frames=JsonLdDocument(**frames_jsonld),
+        return QuadResponse(
+            results=quads,
             total_count=total_count,
             page_size=page_size,
             offset=offset
@@ -176,10 +169,8 @@ def list_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, page_siz
         
     except Exception as e:
         endpoint_instance.logger.error(f"Error listing KGFrames: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
-        return FramesResponse(
-            frames=JsonLdDocument(**empty_jsonld),
+        return QuadResponse(
+            results=[],
             total_count=0,
             page_size=page_size,
             offset=offset

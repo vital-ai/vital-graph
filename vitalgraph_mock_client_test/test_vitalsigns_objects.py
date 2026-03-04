@@ -6,7 +6,7 @@ Test script demonstrating the mock client with real VitalSigns objects:
 - Edge_hasKGSlot connections (frame to slots)
 - Frame-based relationship model (frame has slots pointing to entities)
 - Object instantiation, storage, and retrieval
-- JSON-LD and RDF triple conversion
+- Quad and RDF triple conversion
 - Complete CRUD lifecycle testing
 """
 
@@ -22,7 +22,6 @@ from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.sparql_model import SPARQLQueryRequest
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 # Import real VitalSigns objects
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
@@ -129,36 +128,9 @@ def create_test_objects():
     return objects
 
 
-def objects_to_jsonld_document(objects):
-    """Convert a list of VitalSigns objects to a JSON-LD document."""
-    import json
-    graph = []
-    for obj in objects:
-        # Use the real VitalSigns to_json() method and parse the JSON string
-        json_str = obj.to_json()
-        vitalsigns_dict = json.loads(json_str)
-        
-        # Convert VitalSigns format to JSON-LD format
-        jsonld_dict = {
-            "@id": vitalsigns_dict.get("URI"),
-            "@type": vitalsigns_dict.get("type")
-        }
-        
-        # Add all other properties, excluding VitalSigns metadata
-        for key, value in vitalsigns_dict.items():
-            if key not in ["URI", "type", "types", "http://vital.ai/ontology/vital-core#vitaltype"]:
-                jsonld_dict[key] = value
-        
-        graph.append(jsonld_dict)
-    
-    return JsonLdDocument(
-        context={
-            "@vocab": "http://vital.ai/ontology/haley-ai-kg#",
-            "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-            "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        graph=graph
-    )
+def objects_to_graphobject_list(objects):
+    """Return GraphObjects directly (no conversion needed)."""
+    return objects
 
 
 def verify_object_equality(original_obj, retrieved_data):
@@ -168,14 +140,15 @@ def verify_object_equality(original_obj, retrieved_data):
     if not retrieved_data:
         return False, "No retrieved data"
     
-    # Check URI (handle both @id and id fields)
-    retrieved_uri = retrieved_data.get("@id") or retrieved_data.get("id")
+    # GraphObject instance
+    retrieved_uri = str(retrieved_data.URI)
+    retrieved_type = retrieved_data.get_class_uri() if hasattr(retrieved_data, 'get_class_uri') else type(retrieved_data).__name__
+    
     if retrieved_uri != str(original_obj.URI):
         return False, f"URI mismatch: {retrieved_uri} != {original_obj.URI}"
     
-    # Check type (handle both @type and type fields)
+    # Check type
     expected_type = original_obj.get_class_uri()
-    retrieved_type = retrieved_data.get("@type") or retrieved_data.get("type")
     if retrieved_type != expected_type:
         return False, f"Type mismatch: {retrieved_type} != {expected_type}"
     
@@ -196,12 +169,12 @@ def verify_object_equality(original_obj, retrieved_data):
                     short_prop = prop_key.split("#")[-1]
                     retrieved_value = retrieved_data.get(short_prop)
             
-            # Handle expanded JSON-LD property values
+            # Handle expanded RDF property values
             if isinstance(retrieved_value, dict):
-                # Handle JSON-LD expanded form like {'@value': 'dog', 'type': 'xsd:string'}
+                # Handle RDF expanded form like {'@value': 'dog', 'type': 'xsd:string'}
                 if '@value' in retrieved_value:
                     retrieved_value = retrieved_value['@value']
-                # Handle JSON-LD object references like {'id': 'http://...'}
+                # Handle RDF object references like {'id': 'http://...'}
                 elif 'id' in retrieved_value:
                     retrieved_value = retrieved_value['id']
             
@@ -256,14 +229,9 @@ def main():
         for obj in test_objects:
             print(f"  - {obj.__class__.__name__}: {obj.URI}")
         
-        # Convert objects to JSON-LD document
-        print("\n📝 Converting objects to JSON-LD...")
-        jsonld_doc = objects_to_jsonld_document(test_objects)
-        print(f"Created JSON-LD document with {len(jsonld_doc.graph)} objects")
-        
-        # Store objects using create_objects
+        # Pass GraphObjects directly to create_objects
         print("\n💾 Storing objects in VitalGraph...")
-        create_response = client.create_objects("vitalsigns_test_space", graph_uri, jsonld_doc)
+        create_response = client.create_objects("vitalsigns_test_space", graph_uri, test_objects)
         print(f"✅ Stored {create_response.created_count} objects")
         
         # Query for all triples in the named graph
@@ -294,10 +262,10 @@ def main():
             print(f"Retrieved {len(retrieved_objects)} objects in current page:")
             
             
-            # Group by type (handle both @type and type fields)
+            # Group by type
             by_type = {}
             for obj in retrieved_objects:
-                obj_type = obj.get('@type') or obj.get('type', 'Unknown')
+                obj_type = type(obj).__name__
                 if obj_type not in by_type:
                     by_type[obj_type] = []
                 by_type[obj_type].append(obj)
@@ -312,12 +280,10 @@ def main():
         if hasattr(objects_response, 'objects') and hasattr(objects_response.objects, 'graph'):
             retrieved_objects = objects_response.objects.graph
             
-            # Create a map of retrieved objects by URI (handle both @id and id fields)
+            # Create a map of retrieved objects by URI
             retrieved_by_uri = {}
             for obj in retrieved_objects:
-                uri = obj.get('@id') or obj.get('id')
-                if uri:
-                    retrieved_by_uri[uri] = obj
+                retrieved_by_uri[str(obj.URI)] = obj
             
             # Verify each original object
             for original_obj in test_objects:

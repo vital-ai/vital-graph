@@ -6,10 +6,9 @@ extracted from MockKGFramesEndpoint to improve code organization and maintainabi
 """
 
 from vitalgraph.model.kgframes_model import FrameUpdateResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 
-def update_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, document: JsonLdDocument, 
+def update_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, document, 
                        operation_mode: str = "update", parent_uri: str = None) -> FrameUpdateResponse:
     """
     Update KGFrames with proper frame lifecycle management.
@@ -25,7 +24,7 @@ def update_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, docume
         endpoint_instance: The MockKGFramesEndpoint instance (for access to methods and logger)
         space_id: Space identifier
         graph_id: Graph identifier  
-        document: JsonLdDocument containing complete frame structure
+        document: List of GraphObjects containing complete frame structure
         operation_mode: "create", "update", or "upsert"
         parent_uri: Optional parent object URI (entity or parent frame)
         
@@ -57,9 +56,8 @@ def update_kgframes_impl(endpoint_instance, space_id: str, graph_id: str, docume
         stripped_document = endpoint_instance._strip_grouping_uris(document)
         endpoint_instance.logger.info("Step 2: Stripped client-provided grouping URIs")
         
-        # Step 3: Create VitalSigns objects and validate frame structure
-        document_dict = stripped_document.model_dump(by_alias=True)
-        incoming_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Step 3: Accept graph objects directly and validate frame structure
+        incoming_objects = stripped_document if isinstance(stripped_document, list) else [stripped_document]
         
         if not incoming_objects:
             return FrameUpdateResponse(
@@ -152,7 +150,7 @@ def handle_update_mode_impl(endpoint_instance, space, graph_id: str, frame_uri: 
         )
 
 
-def update_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, frame_uri: str, document: JsonLdDocument):
+def update_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, frame_uri: str, document):
     """
     Update slots for a specific frame using Edge_hasKGSlot relationships.
     
@@ -161,7 +159,7 @@ def update_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, fra
         space_id: Space identifier
         graph_id: Graph identifier
         frame_uri: Frame URI to update slots for
-        document: JsonLdDocument containing updated KGSlots
+        document: List of GraphObjects containing updated KGSlots
         
     Returns:
         SlotUpdateResponse containing operation result
@@ -180,9 +178,8 @@ def update_frame_slots_impl(endpoint_instance, space_id: str, graph_id: str, fra
                 updated_uri=""
             )
         
-        # Convert JSON-LD document to VitalSigns objects
-        document_dict = document.model_dump(by_alias=True)
-        objects = endpoint_instance._jsonld_to_vitalsigns_objects(document_dict)
+        # Accept graph objects directly
+        objects = document if isinstance(document, list) else [document]
         
         if not objects:
             return SlotUpdateResponse(

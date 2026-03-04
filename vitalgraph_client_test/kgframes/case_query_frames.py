@@ -18,7 +18,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities for quad conversion
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 
@@ -38,7 +38,7 @@ async def test_query_frames_basic(client: VitalGraphClient, space_id: str, graph
         )
         
         # Test basic frame query
-        response = client.kgframes.query_frames(
+        response = await client.kgframes.query_frames(
             space_id=space_id,
             graph_id=graph_id,
             query_request=query_request
@@ -74,7 +74,7 @@ async def test_query_frames_with_filters(client: VitalGraphClient, space_id: str
         )
         
         # Test frame query with filters
-        response = client.kgframes.query_frames(
+        response = await client.kgframes.query_frames(
             space_id=space_id,
             graph_id=graph_id,
             query_request=query_request
@@ -108,7 +108,7 @@ async def test_query_frames_with_sorting(client: VitalGraphClient, space_id: str
         )
         
         # Test frame query with sorting
-        response = client.kgframes.query_frames(
+        response = await client.kgframes.query_frames(
             space_id=space_id,
             graph_id=graph_id,
             query_request=query_request
@@ -147,7 +147,7 @@ async def test_query_frames_with_pagination(client: VitalGraphClient, space_id: 
                 offset=offset
             )
             
-            response = client.kgframes.query_frames(
+            response = await client.kgframes.query_frames(
                 space_id=space_id,
                 graph_id=graph_id,
                 query_request=query_request
@@ -190,7 +190,7 @@ async def test_query_frames_complex(client: VitalGraphClient, space_id: str, gra
         )
         
         # Test complex frame query
-        response = client.kgframes.query_frames(
+        response = await client.kgframes.query_frames(
             space_id=space_id,
             graph_id=graph_id,
             query_request=query_request
@@ -227,7 +227,7 @@ async def test_query_frames_empty_result(client: VitalGraphClient, space_id: str
         )
         
         # Test frame query with empty result
-        response = client.kgframes.query_frames(
+        response = await client.kgframes.query_frames(
             space_id=space_id,
             graph_id=graph_id,
             query_request=query_request

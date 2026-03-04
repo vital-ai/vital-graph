@@ -59,7 +59,7 @@ class KGEntityDeleteTester:
                 person_objects_1[0].URI = delete_test_uris[0]
                 person_objects_2[0].URI = delete_test_uris[1]
                 
-                # Convert to JSON-LD for client
+                # Convert to quads for client
                 from vital_ai_vitalsigns.model.GraphObject import GraphObject
                 
                 for i, person_objects in enumerate([person_objects_1, person_objects_2]):
@@ -164,16 +164,6 @@ class KGEntityDeleteTester:
                 for i in range(2):
                     batch_uri = f"http://vital.ai/test/client/batch_delete_entity_{i+1}"
                     
-                    batch_document_dict = {
-                        "@context": "urn:vital-ai:contexts:vital-core",
-                        "@graph": [
-                            {
-                                "@id": batch_uri,
-                                "@type": "http://vital.ai/ontology/haley-ai-kg#KGEntity",
-                                "http://vital.ai/ontology/vital-core#name": f"Batch Delete Entity {i+1}"
-                            }
-                        ]
-                    }
                     # Create batch entities using VitalSigns objects
                     batch_person_objects = self.data_creator.create_person_with_contact(f"Batch Delete Person {i+1}")
                     batch_person_objects[0].URI = batch_uri

@@ -17,7 +17,6 @@ class FileType(Enum):
     RDF_XML = "xml"
     RDF_N3 = "n3"
     RDF_NT = "nt"
-    RDF_JSON_LD = "json-ld"
     RDF_TRIG = "trig"
     RDF_NQUADS = "nquads"
     
@@ -79,8 +78,6 @@ def detect_rdf_format(file_path: str, content_sample: Optional[str] = None) -> O
         '.xml': FileType.RDF_XML,
         '.n3': FileType.RDF_N3,
         '.nt': FileType.RDF_NT,
-        '.jsonld': FileType.RDF_JSON_LD,
-        '.json': FileType.RDF_JSON_LD,  # Could be regular JSON too
         '.trig': FileType.RDF_TRIG,
         '.nq': FileType.RDF_NQUADS,
         '.nquads': FileType.RDF_NQUADS
@@ -95,9 +92,9 @@ def detect_rdf_format(file_path: str, content_sample: Optional[str] = None) -> O
         # Check for XML/RDF patterns
         if content_lower.startswith('<?xml') or '<rdf:' in content_lower:
             detected_format = FileType.RDF_XML
-        # Check for JSON-LD patterns
+        # Check for JSON patterns
         elif content_lower.startswith('{') and '@context' in content_lower:
-            detected_format = FileType.RDF_JSON_LD
+            detected_format = FileType.RDF_NQUADS
         # Check for Turtle patterns
         elif '@prefix' in content_lower or content_lower.startswith('@base'):
             detected_format = FileType.RDF_TURTLE

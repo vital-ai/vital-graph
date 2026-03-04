@@ -26,7 +26,7 @@ from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import SPARQLGraphResponse
 from vitalgraph.model.kgframes_model import FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -286,14 +286,8 @@ class TestMockClientKGFrames:
             # Create test KGFrames using VitalSigns
             test_frames = self._create_test_kgframes()
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list(test_frames)
-            
-            # Create JsonLdDocument
-            kgframes_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.create_kgframes(self.test_space_id, self.test_graph_id, kgframes_document)
+            # Pass GraphObjects directly to create method
+            response = self.client.create_kgframes(self.test_space_id, self.test_graph_id, test_frames)
             
             success = (
                 isinstance(response, FrameCreateResponse) and
@@ -332,41 +326,30 @@ class TestMockClientKGFrames:
         try:
             response = self.client.get_kgframe(self.test_space_id, self.test_graph_id, kgframe_uri)
             
-            # Handle both FramesResponse and JsonLdDocument return types
+            # Handle response types
             success = False
             kgframe_name = None
             frames_count = 0
             
-            if isinstance(response, FramesResponse):
-                # Standard FramesResponse format
+            if isinstance(response, QuadResponse):
+                # QuadResponse format
+                success = response.success and response.total_count > 0
+                frames_count = response.total_count
+                if success and hasattr(response, 'results') and response.results:
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    graph_objects = quad_list_to_graphobjects(response.results)
+                    for obj in graph_objects:
+                        if str(getattr(obj, 'URI', '')) == kgframe_uri:
+                            kgframe_name = getattr(obj, 'name', 'Unknown')
+                            break
+                    frames_count = len(graph_objects)
+            elif isinstance(response, FramesResponse):
+                # Legacy FramesResponse format
                 success = (
                     hasattr(response, 'frames') and
-                    hasattr(response.frames, 'graph') and
-                    response.frames.graph and
-                    len(response.frames.graph) > 0
+                    response.frames is not None
                 )
-                if success and response.frames.graph:
-                    # Find the KGFrame in the response
-                    for item in response.frames.graph:
-                        if item.get('@id') == kgframe_uri:
-                            kgframe_name = item.get('vital-core:hasName', 'Unknown')
-                            break
-                    frames_count = len(response.frames.graph)
-            elif hasattr(response, 'graph') and response.graph:
-                # Direct JsonLdDocument format
-                success = len(response.graph) > 0
-                if success:
-                    # Find the KGFrame in the response
-                    for item in response.graph:
-                        if item.get('@id') == kgframe_uri:
-                            kgframe_name = item.get('vital-core:hasName', 'Unknown')
-                            break
-                    frames_count = len(response.graph)
-            elif hasattr(response, 'id') and response.id == kgframe_uri:
-                # Single object JsonLdDocument format
-                success = True
-                kgframe_name = getattr(response, 'http://vital.ai/ontology/vital-core#hasName', {}).get('@value', 'Unknown')
-                frames_count = 1
+                frames_count = 1 if success else 0
             
             self.log_test_result(
                 "Get KGFrame",
@@ -470,20 +453,8 @@ class TestMockClientKGFrames:
             updated_frame.frameSequence = 100
             updated_frame.kGModelVersion = "2.0.0"
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list([updated_frame])
-            
-            # Ensure the JSON-LD has a graph array format
-            if 'graph' not in jsonld_data or jsonld_data['graph'] is None:
-                # Convert single object format to graph array format
-                single_obj = {k: v for k, v in jsonld_data.items() if k not in ['@context']}
-                jsonld_data['graph'] = [single_obj]
-            
-            # Create JsonLdDocument
-            update_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.update_kgframes(self.test_space_id, self.test_graph_id, update_document)
+            # Pass GraphObjects directly to update method
+            response = self.client.update_kgframes(self.test_space_id, self.test_graph_id, [updated_frame])
             
             success = (
                 isinstance(response, FrameUpdateResponse) and

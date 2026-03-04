@@ -121,6 +121,9 @@ class FusekiQueryUtils:
             GRAPH <{graph_uri}> {{
                 ?s ?p ?o .
                 VALUES ?s {{ {uri_values} }}
+                FILTER(?p != <http://vital.ai/vitalgraph/direct#hasEntityFrame> &&
+                       ?p != <http://vital.ai/vitalgraph/direct#hasFrame> &&
+                       ?p != <http://vital.ai/vitalgraph/direct#hasSlot>)
             }}
         }}
         """
@@ -175,51 +178,6 @@ class FusekiQueryUtils:
         
         logger.debug(f"Batch processing complete: {len(all_triples)} total triples retrieved")
         return all_triples
-    
-    @staticmethod
-    async def convert_triples_to_jsonld(triples_list: List[Tuple[str, str, str]], 
-                                      return_format: str = 'document') -> Dict[str, Any]:
-        """
-        Convert SPARQL triples to VitalSigns objects then to JSON-LD.
-        
-        Args:
-            triples_list: List of (subject, predicate, object) triples
-            return_format: 'document' for multiple objects, 'object' for single
-            
-        Returns:
-            JSON-LD document or object
-        """
-        logger = logging.getLogger(f"{__name__}.FusekiQueryUtils")
-        
-        if not triples_list:
-            logger.debug("No triples provided, returning empty JSON-LD document")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            return GraphObject.to_jsonld_list([])
-        
-        try:
-            # Convert triples to VitalSigns GraphObjects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
-            graph_objects = vitalsigns.from_triples_list(triples_list)
-            
-            logger.debug(f"Converted {len(triples_list)} triples to {len(graph_objects)} VitalSigns objects")
-            
-            # Convert to JSON-LD format based on object count and requested format
-            if return_format == 'object' and len(graph_objects) == 1:
-                result = graph_objects[0].to_jsonld()  # Single JSON-LD object
-                logger.debug("Returning single JSON-LD object")
-            else:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                result = GraphObject.to_jsonld_list(graph_objects)  # JSON-LD document with @graph
-                logger.debug(f"Returning JSON-LD document with {len(graph_objects)} objects")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error converting triples to JSON-LD: {e}")
-            # Return empty JSON-LD document on error
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            return GraphObject.to_jsonld_list([])
     
     @staticmethod
     async def check_uris_exist(fuseki_manager, space_id: str, uris: List[str]) -> List[str]:

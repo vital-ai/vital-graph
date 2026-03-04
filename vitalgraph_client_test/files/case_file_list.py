@@ -46,7 +46,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
             if created_file_uris:
                 logger.info("  🔍 Validating created files appear in list...")
                 
-                # Extract URIs from GraphObjects - direct access, no JSON-LD parsing
+                # Extract URIs from GraphObjects - direct access, no extra parsing
                 listed_uris = [str(obj.URI) for obj in response.files if hasattr(obj, 'URI')]
                 
                 # Check if created files appear in list
@@ -88,10 +88,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
                 files_data = response_page1.files
                 if hasattr(files_data, 'graph') and files_data.graph:
                     for file_obj in files_data.graph:
-                        if isinstance(file_obj, dict) and '@id' in file_obj:
-                            page1_uris.append(file_obj['@id'])
-                        elif hasattr(file_obj, 'id'):
-                            page1_uris.append(file_obj.id)
+                        page1_uris.append(str(file_obj.URI))
             
             logger.info(f"     Page 1 contains {len(page1_uris)} file(s)")
             
@@ -113,10 +110,7 @@ async def run_file_list_tests(client, space_id: str, graph_id: str, logger=None,
                         files_data = response_page2.files
                         if hasattr(files_data, 'graph') and files_data.graph:
                             for file_obj in files_data.graph:
-                                if isinstance(file_obj, dict) and '@id' in file_obj:
-                                    page2_uris.append(file_obj['@id'])
-                                elif hasattr(file_obj, 'id'):
-                                    page2_uris.append(file_obj.id)
+                                page2_uris.append(str(file_obj.URI))
                     
                     logger.info(f"     Page 2 contains {len(page2_uris)} file(s)")
                     

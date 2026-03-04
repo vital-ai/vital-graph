@@ -6,11 +6,10 @@ extracted from MockKGFramesEndpoint to improve code organization and maintainabi
 """
 
 from typing import List, Optional, Any
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 
 def get_frame_slots_complex_impl(endpoint_instance, space_id: str, graph_id: str, frame_uri: str, 
-                       kGSlotType: str = None) -> JsonLdDocument:
+                       kGSlotType: str = None) -> list:
     """
     Get all slots for a specific frame using /kgframes/kgslots sub-endpoint.
     
@@ -22,7 +21,7 @@ def get_frame_slots_complex_impl(endpoint_instance, space_id: str, graph_id: str
         kGSlotType: Optional filter by slot type URN
         
     Returns:
-        JsonLdDocument containing all slots for the frame
+        List of GraphObjects (slots for the frame)
     """
     endpoint_instance._log_method_call("get_frame_slots", space_id=space_id, graph_id=graph_id, 
                          frame_uri=frame_uri, kGSlotType=kGSlotType)
@@ -31,7 +30,7 @@ def get_frame_slots_complex_impl(endpoint_instance, space_id: str, graph_id: str
         # Get space from space manager
         space = endpoint_instance.space_manager.get_space(space_id)
         if not space:
-            return JsonLdDocument(context={}, graph=[])
+            return []
         
         # Build query for slots connected to this frame
         slot_type_filter = ""
@@ -77,7 +76,7 @@ def get_frame_slots_complex_impl(endpoint_instance, space_id: str, graph_id: str
         
         results = list(space.store.query(query))
         if not results:
-            return JsonLdDocument(context={}, graph=[])
+            return []
         
         # Convert results to triples format
         triples = []
@@ -103,20 +102,14 @@ def get_frame_slots_complex_impl(endpoint_instance, space_id: str, graph_id: str
         # Convert triples to VitalSigns objects
         vitalsigns_objects = endpoint_instance._convert_triples_to_vitalsigns_objects(triples)
         
-        if vitalsigns_objects:
-            # Convert to JSON-LD
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list(vitalsigns_objects)
-            return JsonLdDocument(**jsonld_data)
-        else:
-            return JsonLdDocument(context={}, graph=[])
+        return vitalsigns_objects if vitalsigns_objects else []
             
     except Exception as e:
         endpoint_instance.logger.error(f"Error getting frame slots: {e}")
-        return JsonLdDocument(context={}, graph=[])
+        return []
 
 
-def get_kgframe_impl(endpoint_instance, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> JsonLdDocument:
+def get_kgframe_impl(endpoint_instance, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> list:
     """
     Get a specific KGFrame by URI with optional complete graph using pyoxigraph SPARQL query.
     
@@ -128,7 +121,7 @@ def get_kgframe_impl(endpoint_instance, space_id: str, graph_id: str, uri: str, 
         include_frame_graph: If True, include complete frame graph (frames + slots + frame-to-frame edges)
         
     Returns:
-        JsonLdDocument with VitalSigns native JSON-LD conversion
+        List of GraphObjects
     """
     endpoint_instance._log_method_call("get_kgframe", space_id=space_id, graph_id=graph_id, uri=uri)
     
@@ -136,10 +129,7 @@ def get_kgframe_impl(endpoint_instance, space_id: str, graph_id: str, uri: str, 
         # Get space from space manager
         space = endpoint_instance.space_manager.get_space(space_id)
         if not space:
-            # Return empty document for non-existent space
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return []
         
         # Clean URI - handle VitalSigns property objects
         clean_uri = str(uri).strip('<>')
@@ -153,12 +143,10 @@ def get_kgframe_impl(endpoint_instance, space_id: str, graph_id: str, uri: str, 
         
     except Exception as e:
         endpoint_instance.logger.error(f"Error getting KGFrame {uri}: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
-        return JsonLdDocument(**empty_jsonld)
+        return []
 
 
-def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str, uri: str) -> JsonLdDocument:
+def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str, uri: str) -> list:
     """
     Get a specific KGFrame with its associated slots using pyoxigraph SPARQL queries.
     
@@ -169,7 +157,7 @@ def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str,
         uri: Frame URI
         
     Returns:
-        JsonLdDocument containing frame and its slots with VitalSigns native JSON-LD conversion
+        List of GraphObjects (frame and its slots)
     """
     endpoint_instance._log_method_call("get_kgframe_with_slots", space_id=space_id, graph_id=graph_id, uri=uri)
     
@@ -177,9 +165,7 @@ def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str,
         # Get space from space manager
         space = endpoint_instance.space_manager.get_space(space_id)
         if not space:
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return []
         
         # Clean URI - handle VitalSigns property objects
         clean_uri = str(uri).strip('<>')
@@ -223,9 +209,7 @@ def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str,
         results = endpoint_instance._execute_sparql_query(space, query)
         
         if not results.get("bindings"):
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return []
         
         # Group results by subject
         subjects_data = {}
@@ -254,18 +238,14 @@ def get_kgframe_with_slots_impl(endpoint_instance, space_id: str, graph_id: str,
             if obj:
                 all_objects.append(obj)
         
-        # Convert to JSON-LD document using VitalSigns
-        objects_jsonld = endpoint_instance._objects_to_jsonld_document(all_objects)
-        return JsonLdDocument(**objects_jsonld)
+        return all_objects
         
     except Exception as e:
         endpoint_instance.logger.error(f"Error getting KGFrame with slots {uri}: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
-        return JsonLdDocument(**empty_jsonld)
+        return []
 
 
-def get_single_frame_impl(endpoint_instance, space, graph_id: str, frame_uri: str) -> JsonLdDocument:
+def get_single_frame_impl(endpoint_instance, space, graph_id: str, frame_uri: str) -> list:
     """Get just the frame itself (standard retrieval)."""
     try:
         # Query for frame data
@@ -309,9 +289,7 @@ def get_single_frame_impl(endpoint_instance, space, graph_id: str, frame_uri: st
             alt_results = endpoint_instance._execute_sparql_query(space, alt_query)
             endpoint_instance.logger.info(f"DEBUG _get_single_frame: Alternative search found {len(alt_results.get('bindings', []))} frame-related triples")
             
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return []
         
         # Reconstruct frame properties
         properties = {}
@@ -342,37 +320,17 @@ def get_single_frame_impl(endpoint_instance, space, graph_id: str, frame_uri: st
         
         if frame:
             endpoint_instance.logger.info(f"DEBUG _get_single_frame: Successfully created frame object {frame.URI}")
-            # Convert to JSON-LD using VitalSigns native functionality with proper @graph structure
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            single_frame_jsonld = GraphObject.to_jsonld_list([frame])
-            
-            # Create proper @graph structure for JsonLdDocument
-            if '@context' in single_frame_jsonld:
-                # Single object format - wrap in @graph array
-                frame_jsonld = {
-                    '@context': single_frame_jsonld['@context'],
-                    '@graph': [single_frame_jsonld]
-                }
-            else:
-                # Already in @graph format
-                frame_jsonld = single_frame_jsonld
-            
-            endpoint_instance.logger.info(f"DEBUG _get_single_frame: Final JSON-LD has @graph: {'@graph' in frame_jsonld}")
-            return JsonLdDocument(**frame_jsonld)
+            return [frame]
         else:
             endpoint_instance.logger.info(f"DEBUG _get_single_frame: Failed to create frame object")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return []
             
     except Exception as e:
         endpoint_instance.logger.error(f"Error getting single frame {frame_uri}: {e}")
-        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-        empty_jsonld = GraphObject.to_jsonld_list([])
-        return JsonLdDocument(**empty_jsonld)
+        return []
 
 
-def get_frame_with_complete_graph_impl(endpoint_instance, space, graph_id: str, frame_uri: str) -> JsonLdDocument:
+def get_frame_with_complete_graph_impl(endpoint_instance, space, graph_id: str, frame_uri: str) -> list:
     """Get frame with complete graph using hasFrameGraphURI."""
     try:
         # Step 1: Get the frame itself
@@ -421,12 +379,8 @@ def get_frame_with_complete_graph_impl(endpoint_instance, space, graph_id: str, 
             vitalsigns_objects = endpoint_instance._convert_triples_to_vitalsigns_objects(triples)
             
             if vitalsigns_objects:
-                # Convert to JSON-LD using VitalSigns
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                complete_graph_jsonld = GraphObject.to_jsonld_list(vitalsigns_objects)
-                
                 endpoint_instance.logger.info(f"DEBUG _get_frame_with_complete_graph: Successfully created complete graph with {len(vitalsigns_objects)} objects")
-                return JsonLdDocument(**complete_graph_jsonld)
+                return vitalsigns_objects
         
         # Fallback to single frame if no complete graph found
         endpoint_instance.logger.info(f"DEBUG _get_frame_with_complete_graph: No complete graph found, returning single frame")

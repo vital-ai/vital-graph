@@ -25,7 +25,6 @@ class ExportFormat(str, Enum):
     """Export format enumeration."""
     RDF_TURTLE = "rdf_turtle"
     RDF_XML = "rdf_xml"
-    JSON_LD = "json_ld"
     CSV = "csv"
     EXCEL = "excel"
     JSON = "json"

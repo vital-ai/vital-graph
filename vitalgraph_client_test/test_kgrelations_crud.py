@@ -155,7 +155,7 @@ class KGRelationsTestRunner:
         """Create relation types, products, and relation instances."""
         logger.info("\n--- Creating Relation Data ---")
         
-        self.relation_type_uris, self.product_uris, self.relation_uris = create_all_relation_data(
+        self.relation_type_uris, self.product_uris, self.relation_uris = await create_all_relation_data(
             self.client,
             self.space_id,
             self.graph_id,

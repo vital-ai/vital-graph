@@ -5,7 +5,6 @@ Utility functions to support SPARQL package testing.
 
 import logging
 from typing import Dict, List, Any, Set
-from vitalgraph.sparql.triple_store import TemporaryTripleStore
 
 
 def setup_test_logging():
@@ -15,19 +14,6 @@ def setup_test_logging():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-
-def create_test_store_with_data(document: Dict[str, Any]) -> TemporaryTripleStore:
-    """Create a test triple store and load it with data.
-    
-    Args:
-        document: JSON-LD document to load
-        
-    Returns:
-        Loaded TemporaryTripleStore instance
-    """
-    store = TemporaryTripleStore()
-    store.load_jsonld_document(document)
-    return store
 
 
 def count_triples_by_subject(triples: List[Dict[str, str]]) -> Dict[str, int]:
@@ -158,46 +144,23 @@ def count_total_triples(graph_data: Dict[str, List]) -> int:
     return sum(len(triples) for triples in graph_data.values())
 
 
-def extract_uris_by_type(document: Dict[str, Any], rdf_type: str) -> List[str]:
-    """Extract URIs of objects with specific RDF type from JSON-LD document.
+def extract_uris_by_type(graph_objects: list, target_type: type) -> List[str]:
+    """Extract URIs of GraphObjects matching a specific type.
     
     Args:
-        document: JSON-LD document
-        rdf_type: RDF type to filter by (e.g., "haley:KGEntity")
+        graph_objects: List of GraphObject instances
+        target_type: Type class to filter by (e.g., KGEntity)
         
     Returns:
         List of URIs with the specified type
     """
     uris = []
-    
-    for obj in document.get('@graph', []):
-        if isinstance(obj, dict):
-            obj_type = obj.get('@type')
-            if obj_type == rdf_type:
-                obj_id = obj.get('@id')
-                if obj_id:
-                    uris.append(obj_id)
-    
+    for obj in graph_objects:
+        if isinstance(obj, target_type):
+            uri = getattr(obj, 'URI', None)
+            if uri:
+                uris.append(str(uri))
     return uris
-
-
-def create_minimal_jsonld_document(objects: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Create a minimal JSON-LD document with given objects.
-    
-    Args:
-        objects: List of object dictionaries
-        
-    Returns:
-        JSON-LD document
-    """
-    return {
-        "@context": {
-            "haley": "http://vital.ai/ontology/haley-ai-kg#",
-            "vital-core": "http://vital.ai/ontology/vital-core#",
-            "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        "@graph": objects
-    }
 
 
 def validate_sparql_query_syntax(query: str) -> bool:

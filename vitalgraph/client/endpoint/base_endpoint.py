@@ -11,6 +11,15 @@ from typing import Dict, Any, Optional, TypeVar, Type
 
 from pydantic import BaseModel
 from ..utils.client_utils import VitalGraphClientError
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    FORMAT_TO_ACCEPT,
+    FORMAT_TO_CONTENT_TYPE,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+    extract_pagination_from_json_quads,
+    is_json_quads_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +37,15 @@ class BaseEndpoint:
             client: The main VitalGraphClient instance
         """
         self.client = client
+    
+    @property
+    def wire_format(self) -> ClientWireFormat:
+        """Get the client's configured wire format."""
+        return getattr(self.client, 'wire_format', ClientWireFormat.JSON_QUADS)
+    
+    def _get_accept_header(self) -> str:
+        """Get the Accept header value for the current wire format."""
+        return FORMAT_TO_ACCEPT.get(self.wire_format, 'application/json')
     
     async def _make_authenticated_request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """

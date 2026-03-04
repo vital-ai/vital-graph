@@ -1,14 +1,14 @@
 """Temporary Triple Store Wrapper
 
 Provides a wrapper around pyoxigraph temporary stores with utility methods
-for loading JSON-LD documents and executing SPARQL queries.
+for loading RDF data and executing SPARQL queries.
 """
 
 import logging
 from typing import Dict, List, Any, Optional
 import pyoxigraph
 
-# VitalSigns imports for JSON-LD handling
+# VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -22,38 +22,12 @@ class TemporaryTripleStore:
         """Initialize temporary triple store.
         
         Args:
-            vitalsigns: Optional VitalSigns instance for JSON-LD conversion
+            vitalsigns: Optional VitalSigns instance for RDF conversion
         """
         self.store = pyoxigraph.Store()
         self.vitalsigns = vitalsigns or VitalSigns()
         self.logger = logging.getLogger(self.__class__.__name__)
         
-    def load_jsonld_document(self, document: Dict[str, Any]) -> None:
-        """Load JSON-LD document into the store.
-        
-        Args:
-            document: JSON-LD document to load
-            
-        Raises:
-            Exception: If loading fails
-        """
-        try:
-            # Convert JSON-LD document to string format for pyoxigraph
-            import json
-            jsonld_str = json.dumps(document)
-            
-            # Load into pyoxigraph store using the correct API
-            self.store.load(
-                jsonld_str.encode('utf-8'),
-                "application/ld+json"
-            )
-            
-            self.logger.debug(f"Loaded JSON-LD document with {len(document.get('@graph', []))} objects")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load JSON-LD document: {e}")
-            raise
-    
     def execute_query(self, sparql_query: str) -> List[Dict[str, Any]]:
         """Execute SPARQL query and return results.
         

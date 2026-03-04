@@ -617,7 +617,7 @@ class MockSpace:
         
         Args:
             data: RDF data as string
-            format_type: RDF format ("turtle", "ntriples", "jsonld", etc.)
+            format_type: RDF format ("turtle", "ntriples", "nquads", etc.)
             graph_id: Target graph ID (default graph if None)
             base_iri: Base IRI for relative URI resolution
             
@@ -630,7 +630,6 @@ class MockSpace:
                 "turtle": px.RdfFormat.TURTLE,
                 "ntriples": px.RdfFormat.N_TRIPLES,
                 "nquads": px.RdfFormat.N_QUADS,
-                "jsonld": px.RdfFormat.JSON_LD,
                 "rdfxml": px.RdfFormat.RDF_XML,
                 "trig": px.RdfFormat.TRIG
             }
@@ -693,7 +692,6 @@ class MockSpace:
                 "turtle": px.RdfFormat.TURTLE,
                 "ntriples": px.RdfFormat.N_TRIPLES,
                 "nquads": px.RdfFormat.N_QUADS,
-                "jsonld": px.RdfFormat.JSON_LD,
                 "rdfxml": px.RdfFormat.RDF_XML,
                 "trig": px.RdfFormat.TRIG
             }

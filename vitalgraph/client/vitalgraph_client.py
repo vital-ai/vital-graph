@@ -28,6 +28,7 @@ from .endpoint.import_endpoint import ImportEndpoint
 from .endpoint.export_endpoint import ExportEndpoint
 from .endpoint.entity_registry_endpoint import EntityRegistryClientEndpoint
 from .utils.client_utils import VitalGraphClientError
+from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
 
@@ -44,7 +45,8 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     def __init__(self, *, config: Optional[VitalGraphClientConfig] = None, 
                  token_expiry_seconds: Optional[int] = None,
-                 disable_proactive_refresh: bool = False):
+                 disable_proactive_refresh: bool = False,
+                 wire_format: ClientWireFormat = ClientWireFormat.JSON_QUADS):
         """
         Initialize the VitalGraph client.
         
@@ -79,6 +81,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.config: Optional[VitalGraphClientConfig] = None
         self.async_session: Optional[httpx.AsyncClient] = None
         self.is_open: bool = False
+        self.wire_format: ClientWireFormat = wire_format
         
         # JWT Authentication data
         self.access_token: Optional[str] = None
@@ -138,8 +141,10 @@ class VitalGraphClient(VitalGraphClientInterface):
         try:
             # Create async HTTP session
             timeout = self.config.get_timeout()
+            from .utils.format_helpers import FORMAT_TO_ACCEPT
+            accept_mime = FORMAT_TO_ACCEPT.get(self.wire_format, 'application/json')
             headers = {
-                'Accept': 'application/json',
+                'Accept': accept_mime,
                 'User-Agent': 'VitalGraph-Client/1.0'
             }
             
@@ -785,7 +790,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGType CRUD Methods - Delegated to KGTypesEndpoint
     
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'KGTypeListResponse':
+    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """
         List KGTypes with pagination and optional search.
         
@@ -801,7 +806,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.list_kgtypes(space_id, graph_id, page_size, offset, search)
     
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeListResponse':
+    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """
         Get a specific KGType by URI.
         
@@ -815,33 +820,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.get_kgtype(space_id, graph_id, uri)
     
-    async def create_kgtypes(self, space_id: str, graph_id: str, data: 'Union[JsonLdObject, JsonLdDocument]') -> 'KGTypeCreateResponse':
+    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List) -> 'KGTypeCreateResponse':
         """
-        Create KGTypes from JSON-LD data.
+        Create KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            data: JSON-LD data - either single object or document with @graph array
+            objects: List of GraphObject instances to create
             
         Returns:
             KGTypeCreateResponse containing operation result
         """
-        return await self.kgtypes.create_kgtypes(space_id, graph_id, data)
+        return await self.kgtypes.create_kgtypes(space_id, graph_id, objects)
     
-    async def update_kgtypes(self, space_id: str, graph_id: str, data: 'Union[JsonLdObject, JsonLdDocument]') -> 'KGTypeUpdateResponse':
+    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List) -> 'KGTypeUpdateResponse':
         """
-        Update KGTypes from JSON-LD data.
+        Update KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            data: JSON-LD data - either single object or document with @graph array
+            objects: List of GraphObject instances to update
             
         Returns:
             KGTypeUpdateResponse containing operation result
         """
-        return await self.kgtypes.update_kgtypes(space_id, graph_id, data)
+        return await self.kgtypes.update_kgtypes(space_id, graph_id, objects)
     
     async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeDeleteResponse':
         """
@@ -873,7 +878,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGFrame CRUD Methods - Delegated to KGFramesEndpoint
     
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'FramesResponse':
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """
         List KGFrames with pagination and optional search.
         
@@ -889,7 +894,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search)
     
-    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'FramesResponse':
+    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """
         Get a specific KGFrame by URI.
         
@@ -903,33 +908,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.get_kgframe(space_id, graph_id, uri)
     
-    async def create_kgframes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameCreateResponse':
+    async def create_kgframes(self, space_id: str, graph_id: str, objects: List) -> 'FrameCreateResponse':
         """
-        Create KGFrames from JSON-LD document.
+        Create KGFrames from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGFrames
+            objects: List of GraphObject instances (KGFrames)
             
         Returns:
             FrameCreateResponse containing operation result
         """
-        return await self.kgframes.create_kgframes(space_id, graph_id, document)
+        return await self.kgframes.create_kgframes(space_id, graph_id, objects)
     
-    async def update_kgframes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameUpdateResponse':
+    async def update_kgframes(self, space_id: str, graph_id: str, objects: List) -> 'FrameUpdateResponse':
         """
-        Update KGFrames from JSON-LD document.
+        Update KGFrames from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGFrames
+            objects: List of GraphObject instances (KGFrames)
             
         Returns:
             FrameUpdateResponse containing operation result
         """
-        return await self.kgframes.update_kgframes(space_id, graph_id, document)
+        return await self.kgframes.update_kgframes(space_id, graph_id, objects)
     
     async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'FrameDeleteResponse':
         """
@@ -961,9 +966,9 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGFrames with Slots Methods - Delegated to KGFramesEndpoint
     
-    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'FramesResponse':
+    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """
-        Get KGFrames with their associated slots.
+        Get KGFrames with their associated slots using pagination.
         
         Args:
             space_id: Space identifier
@@ -977,33 +982,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.get_kgframes_with_slots(space_id, graph_id, page_size, offset, search)
     
-    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameCreateResponse':
+    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> 'FrameCreateResponse':
         """
-        Create KGFrames with their associated slots from JSON-LD document.
+        Create KGFrames with their associated slots from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGFrames with slots
+            objects: List of GraphObject instances (KGFrames with slots)
             
         Returns:
             FrameCreateResponse containing operation result
         """
-        return await self.kgframes.create_kgframes_with_slots(space_id, graph_id, document)
+        return await self.kgframes.create_kgframes_with_slots(space_id, graph_id, objects)
     
-    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameUpdateResponse':
+    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> 'FrameUpdateResponse':
         """
-        Update KGFrames with their associated slots from JSON-LD document.
+        Update KGFrames with their associated slots from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGFrames with slots
+            objects: List of GraphObject instances (KGFrames with slots)
             
         Returns:
             FrameUpdateResponse containing operation result
         """
-        return await self.kgframes.update_kgframes_with_slots(space_id, graph_id, document)
+        return await self.kgframes.update_kgframes_with_slots(space_id, graph_id, objects)
     
     async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> 'FrameDeleteResponse':
         """
@@ -1051,33 +1056,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.get_kgentity(space_id, graph_id, uri)
     
-    async def create_kgentities(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'EntityCreateResponse':
+    async def create_kgentities(self, space_id: str, graph_id: str, objects: List) -> 'EntityCreateResponse':
         """
-        Create KGEntities from JSON-LD document.
+        Create KGEntities from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGEntities
+            objects: List of GraphObject instances (KGEntities)
             
         Returns:
             EntityCreateResponse containing operation result
         """
-        return await self.kgentities.create_kgentities(space_id, graph_id, document)
+        return await self.kgentities.create_kgentities(space_id, graph_id, objects)
     
-    async def update_kgentities(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'EntityUpdateResponse':
+    async def update_kgentities(self, space_id: str, graph_id: str, objects: List) -> 'EntityUpdateResponse':
         """
-        Update KGEntities from JSON-LD document.
+        Update KGEntities from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing KGEntities
+            objects: List of GraphObject instances (KGEntities)
             
         Returns:
             EntityUpdateResponse containing operation result
         """
-        return await self.kgentities.update_kgentities(space_id, graph_id, document)
+        return await self.kgentities.update_kgentities(space_id, graph_id, objects)
     
     async def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> 'EntityDeleteResponse':
         """
@@ -1127,7 +1132,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # Object CRUD Methods - Delegated to ObjectsEndpoint
     
-    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'ObjectsResponse':
+    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """
         List Objects with pagination and optional search.
         
@@ -1143,7 +1148,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.list_objects(space_id, graph_id, page_size, offset, search)
     
-    async def get_object(self, space_id: str, graph_id: str, uri: str) -> 'ObjectsResponse':
+    async def get_object(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """
         Get a specific Object by URI.
         
@@ -1157,33 +1162,33 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.get_object(space_id, graph_id, uri)
     
-    async def create_objects(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'ObjectCreateResponse':
+    async def create_objects(self, space_id: str, graph_id: str, objects: List) -> 'ObjectCreateResponse':
         """
-        Create Objects from JSON-LD document.
+        Create Objects from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing Objects
+            objects: List of GraphObject instances
             
         Returns:
             ObjectCreateResponse containing operation result
         """
-        return await self.objects.create_objects(space_id, graph_id, document)
+        return await self.objects.create_objects(space_id, graph_id, objects)
     
-    async def update_objects(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'ObjectUpdateResponse':
+    async def update_objects(self, space_id: str, graph_id: str, objects: List) -> 'ObjectUpdateResponse':
         """
-        Update Objects from JSON-LD document.
+        Update Objects from GraphObjects.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing Objects
+            objects: List of GraphObject instances
             
         Returns:
             ObjectUpdateResponse containing operation result
         """
-        return await self.objects.update_objects(space_id, graph_id, document)
+        return await self.objects.update_objects(space_id, graph_id, objects)
     
     async def delete_object(self, space_id: str, graph_id: str, uri: str) -> 'ObjectDeleteResponse':
         """
@@ -1215,7 +1220,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # File Management Methods - Delegated to FilesEndpoint
     
-    async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, offset: int = 0, file_filter: Optional[str] = None) -> 'FilesResponse':
+    async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, offset: int = 0, file_filter: Optional[str] = None) -> 'QuadResponse':
         """
         List files with pagination and optional filtering.
         
@@ -1231,7 +1236,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.list_files(space_id, graph_id, page_size, offset, file_filter)
     
-    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'JsonLdDocument':
+    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileResponse':
         """
         Get a specific file by URI.
         
@@ -1241,37 +1246,37 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_id: Graph identifier (optional)
             
         Returns:
-            JsonLdDocument containing File data
+            FileResponse containing File data
         """
         return await self.files.get_file(space_id, uri, graph_id)
     
-    async def create_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileCreateResponse':
+    async def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileCreateResponse':
         """
         Create new file node (metadata only).
         
         Args:
             space_id: Space identifier
-            document: JSON-LD document containing File metadata
+            objects: List of GraphObjects containing File metadata
             graph_id: Graph identifier (optional)
             
         Returns:
             FileCreateResponse containing operation result
         """
-        return await self.files.create_file(space_id, document, graph_id)
+        return await self.files.create_file(space_id, objects, graph_id)
     
-    async def update_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileUpdateResponse':
+    async def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileUpdateResponse':
         """
         Update file metadata.
         
         Args:
             space_id: Space identifier
-            document: JSON-LD document containing File metadata
+            objects: List of GraphObjects containing File metadata
             graph_id: Graph identifier (optional)
             
         Returns:
             FileUpdateResponse containing operation result
         """
-        return await self.files.update_file(space_id, document, graph_id)
+        return await self.files.update_file(space_id, objects, graph_id)
     
     async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileDeleteResponse':
         """
@@ -1287,7 +1292,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.delete_file(space_id, uri, graph_id)
     
-    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'JsonLdDocument':
+    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'FilesListResponse':
         """
         Get multiple files by URI list.
         
@@ -1297,7 +1302,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_id: Graph identifier (optional)
             
         Returns:
-            JsonLdDocument containing multiple files
+            FilesListResponse containing multiple files
         """
         return await self.files.get_files_by_uris(space_id, uri_list, graph_id)
     
@@ -1373,24 +1378,22 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # Interface-required file methods (delegated to existing implementations)
     
-    async def create_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileCreateResponse':
+    async def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileCreateResponse':
         """Create new file node (metadata only) - Interface method."""
-        return await self.files.create_file_node(space_id, graph_id or "default", document)
+        return await self.files.create_file_node(space_id, graph_id or "default", objects)
     
-    async def update_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileUpdateResponse':
+    async def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileUpdateResponse':
         """Update file metadata - Interface method.""" 
-        return await self.files.update_file_metadata(space_id, graph_id or "default", document)
+        return await self.files.update_file_metadata(space_id, graph_id or "default", objects)
     
     async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileDeleteResponse':
         """Delete file node by URI - Interface method."""
         return await self.files.delete_file_node(space_id, graph_id or "default", uri)
     
-    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'JsonLdDocument':
+    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'FilesListResponse':
         """Get multiple files by URI list - Interface method."""
-        # This delegates to the batch delete method since there's no get_files_by_uris in FilesEndpoint
-        # For now, return empty document - this method may need proper implementation
-        from ..model.jsonld_model import JsonLdDocument
-        return JsonLdDocument(graph=[])
+        # TODO: Implement proper delegation
+        return None
     
     # Data Import Methods - Delegated to ImportEndpoint
     
@@ -1402,7 +1405,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         
         Args:
             name: Import job name
-            import_type: Type of import (rdf_turtle, rdf_xml, json_ld, csv, excel, json)
+            import_type: Type of import (rdf_turtle, rdf_xml, csv, excel, json)
             space_id: Target space ID
             description: Optional job description
             graph_id: Optional target graph ID
@@ -1547,7 +1550,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         
         Args:
             name: Export job name
-            export_format: Export format (rdf_turtle, rdf_xml, json_ld, csv, excel, json, parquet)
+            export_format: Export format (rdf_turtle, rdf_xml, csv, excel, json, parquet)
             space_id: Source space ID
             description: Optional job description
             graph_id: Optional source graph ID
@@ -1829,19 +1832,19 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.triples.search_triples(space_id, graph_id, subject, predicate, object_value, limit, offset)
     
-    async def add_triples(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'TripleOperationResponse':
+    async def add_triples(self, space_id: str, graph_id: str, quad_request: 'QuadRequest') -> 'TripleOperationResponse':
         """
-        Add new triples to the specified graph.
+        Add new triples/quads to the specified graph.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JSON-LD document containing triples to add
+            quad_request: QuadRequest containing raw quads to add
             
         Returns:
             TripleOperationResponse containing operation result
         """
-        return await self.triples.add_triples(space_id, graph_id, document)
+        return await self.triples.add_triples(space_id, graph_id, quad_request)
     
     async def delete_triples(self, space_id: str, graph_id: str, 
                       subject: Optional[str] = None, predicate: Optional[str] = None, 

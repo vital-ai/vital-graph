@@ -697,23 +697,116 @@ class SPARQLUpdateParser:
     
     async def _resolve_insert_patterns_from_fuseki(self, space_id: str, sparql_update: str) -> List[tuple]:
         """
-        Resolve INSERT patterns by extracting INSERT triples from UPDATE operations.
-        
-        For UPDATE operations (DELETE/INSERT with WHERE), we need to extract the INSERT part
-        and resolve any variables using the WHERE clause.
+        Resolve INSERT patterns by extracting INSERT triples and resolving any
+        variables using the WHERE clause executed as a SELECT query on Fuseki.
         """
         try:
+            from rdflib import Variable, URIRef, Literal
+            
             logger.debug("🔍 Resolving INSERT patterns from UPDATE operation...")
             
-            # Extract INSERT triples from the SPARQL UPDATE query
+            # Step 1: Extract INSERT triples (may contain Variable objects)
             insert_triples = self._extract_insert_triples_from_update(sparql_update)
             
             if not insert_triples:
                 logger.warning("No INSERT triples found in UPDATE operation")
                 return []
             
-            logger.debug(f"✅ Extracted {len(insert_triples)} INSERT triples from UPDATE operation")
-            return insert_triples
+            # Step 2: Check if any triples contain unresolved Variables
+            has_variables = any(
+                isinstance(component, Variable)
+                for triple in insert_triples
+                for component in triple[:3]
+            )
+            
+            if not has_variables:
+                # All concrete — return as-is
+                logger.debug(f"✅ INSERT triples are all concrete ({len(insert_triples)} triples)")
+                return insert_triples
+            
+            # Step 3: Collect variable names used in INSERT patterns
+            insert_vars = set()
+            for triple in insert_triples:
+                for component in triple[:3]:
+                    if isinstance(component, Variable):
+                        insert_vars.add(str(component))
+            
+            logger.debug(f"🔍 INSERT patterns contain variables: {insert_vars}")
+            
+            # Step 4: Extract WHERE clause from SPARQL UPDATE and build SELECT query
+            if not self.fuseki_manager:
+                logger.error("❌ No Fuseki manager available for variable resolution")
+                return insert_triples  # Return unresolved as fallback
+            
+            # Build SELECT query by replacing DELETE/INSERT clauses with SELECT
+            import re
+            # Extract the WHERE clause from the original SPARQL
+            where_match = re.search(r'WHERE\s*\{', sparql_update, re.IGNORECASE)
+            if not where_match:
+                logger.warning("No WHERE clause found in UPDATE — cannot resolve variables")
+                return insert_triples
+            
+            # Find the matching closing brace for the WHERE clause
+            where_start = where_match.start()
+            brace_depth = 0
+            where_body = ""
+            for i in range(where_match.end() - 1, len(sparql_update)):
+                ch = sparql_update[i]
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+                    if brace_depth == 0:
+                        where_body = sparql_update[where_match.end():i]
+                        break
+            
+            if not where_body.strip():
+                logger.warning("Empty WHERE clause — cannot resolve variables")
+                return insert_triples
+            
+            var_list = ' '.join(f'?{v}' if not v.startswith('?') else v for v in insert_vars)
+            select_query = f"SELECT {var_list} WHERE {{{where_body}}}"
+            logger.debug(f"🔍 Resolving variables with SELECT: {select_query}")
+            
+            # Step 5: Execute SELECT on Fuseki
+            results = await self.fuseki_manager.query_dataset(space_id, select_query)
+            logger.debug(f"📊 Variable resolution returned {len(results)} binding rows")
+            
+            if not results:
+                logger.warning("WHERE clause returned no results — no INSERT triples to resolve")
+                return []
+            
+            # Step 6: Substitute bindings into INSERT patterns to produce concrete triples
+            resolved_triples = []
+            for row in results:
+                # Build binding map: variable_name -> concrete value
+                bindings = {}
+                if isinstance(row, dict):
+                    for var_name in insert_vars:
+                        clean_name = var_name.lstrip('?')
+                        if clean_name in row:
+                            val = row[clean_name]
+                            if isinstance(val, dict) and 'value' in val:
+                                val_type = val.get('type', 'uri')
+                                if val_type == 'uri':
+                                    bindings[var_name] = URIRef(val['value'])
+                                else:
+                                    bindings[var_name] = Literal(val['value'])
+                            else:
+                                bindings[var_name] = URIRef(str(val))
+                
+                if not bindings:
+                    continue
+                
+                # Substitute variables in each INSERT triple
+                for s, p, o, g in insert_triples:
+                    rs = bindings.get(str(s), s) if isinstance(s, Variable) else s
+                    rp = bindings.get(str(p), p) if isinstance(p, Variable) else p
+                    ro = bindings.get(str(o), o) if isinstance(o, Variable) else o
+                    resolved_triples.append((rs, rp, ro, g))
+            
+            logger.debug(f"✅ Resolved {len(resolved_triples)} concrete INSERT triples from {len(insert_triples)} patterns × {len(results)} bindings")
+            return resolved_triples
             
         except Exception as e:
             logger.error(f"❌ Error resolving INSERT patterns from UPDATE: {e}")

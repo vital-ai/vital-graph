@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from ...client.vitalgraph_client_inf import VitalGraphClientInterface
+from ...client.utils.format_helpers import ClientWireFormat
 from .endpoint.mock_spaces_endpoint import MockSpacesEndpoint
 from .endpoint.mock_users_endpoint import MockUsersEndpoint
 from .endpoint.mock_sparql_endpoint import MockSparqlEndpoint
@@ -32,17 +33,20 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     Mock implementation of VitalGraphClientInterface with in-memory storage.
     """
     
-    def __init__(self, config_path: Optional[str] = None, *, config: Optional[Any] = None):
+    def __init__(self, config_path: Optional[str] = None, *, config: Optional[Any] = None,
+                 wire_format: ClientWireFormat = ClientWireFormat.JSON_QUADS):
         """
         Initialize the mock VitalGraph client.
         
         Args:
             config_path: Optional config path (ignored in mock implementation)
             config: Optional config object (ignored in mock implementation)
+            wire_format: Wire format preference (stored for API parity, not used in mock)
         """
         self.config_path = config_path
         self.config_object = config
         self.is_open = False
+        self.wire_format: ClientWireFormat = wire_format
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # Initialize mock space manager
@@ -182,20 +186,20 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # KGType CRUD Methods - Delegate to MockKGTypesEndpoint
     
-    def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'KGTypeListResponse':
+    def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """List KGTypes with pagination and optional search."""
         return self.kgtypes.list_kgtypes(space_id, graph_id, page_size, offset, search)
     
-    def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeListResponse':
+    def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """Get a specific KGType by URI."""
         return self.kgtypes.get_kgtype(space_id, graph_id, uri)
     
-    def create_kgtypes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'KGTypeCreateResponse':
-        """Create KGTypes from JSON-LD document."""
+    def create_kgtypes(self, space_id: str, graph_id: str, document: List) -> 'KGTypeCreateResponse':
+        """Create KGTypes from graph objects."""
         return self.kgtypes.create_kgtypes(space_id, graph_id, document)
     
-    def update_kgtypes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'KGTypeUpdateResponse':
-        """Update KGTypes from JSON-LD document."""
+    def update_kgtypes(self, space_id: str, graph_id: str, document: List) -> 'KGTypeUpdateResponse':
+        """Update KGTypes from graph objects."""
         return self.kgtypes.update_kgtypes(space_id, graph_id, document)
     
     def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeDeleteResponse':
@@ -208,20 +212,20 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # KGFrame CRUD Methods - Delegate to MockKGFramesEndpoint
     
-    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'FramesResponse':
+    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """List KGFrames with pagination and optional search."""
         return self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search)
     
-    def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'FramesResponse':
+    def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """Get a specific KGFrame by URI."""
         return self.kgframes.get_kgframe(space_id, graph_id, uri)
     
-    def create_kgframes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameCreateResponse':
-        """Create KGFrames from JSON-LD document."""
+    def create_kgframes(self, space_id: str, graph_id: str, document: List) -> 'FrameCreateResponse':
+        """Create KGFrames from graph objects."""
         return self.kgframes.create_kgframes(space_id, graph_id, document)
     
-    def update_kgframes(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameUpdateResponse':
-        """Update KGFrames from JSON-LD document."""
+    def update_kgframes(self, space_id: str, graph_id: str, document: List) -> 'FrameUpdateResponse':
+        """Update KGFrames from graph objects."""
         return self.kgframes.update_kgframes(space_id, graph_id, document)
     
     def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'FrameDeleteResponse':
@@ -256,20 +260,20 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # Objects CRUD Methods - Delegate to MockObjectsEndpoint
     
-    def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'ObjectsResponse':
+    def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """List Objects with pagination and optional search."""
         return self.objects.list_objects(space_id, graph_id, page_size, offset, search)
     
-    def get_object(self, space_id: str, graph_id: str, uri: str) -> 'ObjectsResponse':
+    def get_object(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """Get a specific Object by URI."""
         return self.objects.get_object(space_id, graph_id, uri)
     
-    def create_objects(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'ObjectCreateResponse':
-        """Create Objects from JSON-LD document."""
+    def create_objects(self, space_id: str, graph_id: str, document: List) -> 'ObjectCreateResponse':
+        """Create Objects from graph objects."""
         return self.objects.create_objects(space_id, graph_id, document)
     
-    def update_objects(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'ObjectUpdateResponse':
-        """Update Objects from JSON-LD document."""
+    def update_objects(self, space_id: str, graph_id: str, document: List) -> 'ObjectUpdateResponse':
+        """Update Objects from graph objects."""
         return self.objects.update_objects(space_id, graph_id, document)
     
     def delete_object(self, space_id: str, graph_id: str, uri: str) -> 'ObjectDeleteResponse':
@@ -288,7 +292,7 @@ class MockVitalGraphClient(VitalGraphClientInterface):
         """List/search triples with pagination and filtering options."""
         return self.triples.list_triples(space_id, graph_id, page_size, offset, subject, predicate, object, object_filter)
     
-    def add_triples(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'TripleOperationResponse':
+    def add_triples(self, space_id: str, graph_id: str, document: List) -> 'TripleOperationResponse':
         """Add new triples to the specified graph."""
         return self.triples.add_triples(space_id, graph_id, document)
     
@@ -300,16 +304,16 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # KGFrames with Slots Methods - Delegate to MockKGFramesEndpoint
     
-    def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'FramesResponse':
+    def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
         """Get KGFrames with their associated slots."""
         return self.kgframes.get_kgframes_with_slots(space_id, graph_id, page_size, offset, search)
     
-    def create_kgframes_with_slots(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameCreateResponse':
-        """Create KGFrames with their associated slots from JSON-LD document."""
+    def create_kgframes_with_slots(self, space_id: str, graph_id: str, document: List) -> 'QuadResponse':
+        """Create KGFrames with their associated slots."""
         return self.kgframes.create_kgframes_with_slots(space_id, graph_id, document)
     
-    def update_kgframes_with_slots(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'FrameUpdateResponse':
-        """Update KGFrames with their associated slots from JSON-LD document."""
+    def update_kgframes_with_slots(self, space_id: str, graph_id: str, document: List) -> 'FrameUpdateResponse':
+        """Update KGFrames with their associated slots."""
         return self.kgframes.update_kgframes_with_slots(space_id, graph_id, document)
     
     def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> 'FrameDeleteResponse':
@@ -326,12 +330,12 @@ class MockVitalGraphClient(VitalGraphClientInterface):
         """Get a specific KGEntity by URI."""
         return self.kgentities.get_kgentity(space_id, graph_id, uri)
     
-    def create_kgentities(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'EntityCreateResponse':
-        """Create KGEntities from JSON-LD document."""
+    def create_kgentities(self, space_id: str, graph_id: str, document: List) -> 'EntityCreateResponse':
+        """Create KGEntities from graph objects."""
         return self.kgentities.create_kgentities(space_id, graph_id, document)
     
-    def update_kgentities(self, space_id: str, graph_id: str, document: 'JsonLdDocument') -> 'EntityUpdateResponse':
-        """Update KGEntities from JSON-LD document."""
+    def update_kgentities(self, space_id: str, graph_id: str, document: List) -> 'EntityUpdateResponse':
+        """Update KGEntities from graph objects."""
         return self.kgentities.update_kgentities(space_id, graph_id, document)
     
     def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> 'EntityDeleteResponse':
@@ -345,23 +349,23 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     # File Management Methods - Delegate to MockFilesEndpoint
     
     def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
-                  offset: int = 0, file_filter: Optional[str] = None) -> 'FilesResponse':
+                  offset: int = 0, file_filter: Optional[str] = None) -> 'QuadResponse':
         """List files with pagination and optional filtering."""
         return self.files.list_files(space_id, graph_id, page_size, offset, file_filter)
     
-    def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'JsonLdDocument':
+    def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> List:
         """Get a specific file by URI."""
         return self.files.get_file(space_id, uri, graph_id)
     
-    def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'JsonLdDocument':
+    def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> List:
         """Get multiple files by URI list."""
         return self.files.get_files_by_uris(space_id, uri_list, graph_id)
     
-    def create_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileCreateResponse':
+    def create_file(self, space_id: str, document: List, graph_id: Optional[str] = None) -> 'FileCreateResponse':
         """Create new file node (metadata only)."""
         return self.files.create_file(space_id, document, graph_id)
     
-    def update_file(self, space_id: str, document: 'JsonLdDocument', graph_id: Optional[str] = None) -> 'FileUpdateResponse':
+    def update_file(self, space_id: str, document: List, graph_id: Optional[str] = None) -> 'FileUpdateResponse':
         """Update file metadata."""
         return self.files.update_file(space_id, document, graph_id)
     

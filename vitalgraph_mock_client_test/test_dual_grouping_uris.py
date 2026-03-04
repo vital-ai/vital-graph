@@ -38,7 +38,6 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 # Import VitalGraph components
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.spaces_model import Space
 
 
@@ -185,15 +184,11 @@ class TestDualGroupingURIs:
             # Create test data
             objects = self.create_multi_frame_entity_graph()
             
-            # Convert to JSON-LD document
-            jsonld_data = GraphObject.to_jsonld_list(objects)
-            document = JsonLdDocument(**jsonld_data)
-            
-            # Create entity via endpoint (this should trigger dual grouping URI assignment)
+            # Create entity via endpoint - pass GraphObjects directly
             response = self.mock_client.create_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=objects
             )
             
             if response.created_count == 0:
@@ -216,26 +211,12 @@ class TestDualGroupingURIs:
                 logger.error(f"❌ Failed to retrieve entity: empty response")
                 return False
             
-            # Convert document back to VitalSigns objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
+            # Convert quad response to VitalSigns objects
+            from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
             
-            # Debug the entity response structure
-            entity_doc = entity_response.entity.model_dump()
-            logger.info(f"Entity document keys: {list(entity_doc.keys())}")
-            if '@graph' in entity_doc:
-                logger.info(f"@graph has {len(entity_doc['@graph'])} items")
-            else:
-                logger.info("No @graph in entity document")
-                
-            # Try to convert, but handle gracefully if it fails
-            try:
-                retrieved_objects = vitalsigns.from_jsonld_list(entity_doc)
-            except Exception as e:
-                logger.warning(f"JSON-LD conversion failed: {e}")
-                logger.info("✅ Core dual grouping functionality is working (entity created successfully)")
-                logger.info("✅ Dual grouping URIs are being assigned (visible in logs)")
-                return True  # Consider this a success since the core functionality works
+            retrieved_objects = []
+            if hasattr(entity_response, 'results') and entity_response.results:
+                retrieved_objects = quad_list_to_graphobjects(entity_response.results)
             logger.info(f"Retrieved {len(retrieved_objects)} objects from entity graph")
             
             entity_grouped_count = 0
@@ -284,26 +265,12 @@ class TestDualGroupingURIs:
                 logger.error(f"❌ Failed to retrieve frame graph: empty document")
                 return False
             
-            # Convert document back to VitalSigns objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vitalsigns = VitalSigns()
+            # Convert quad response to VitalSigns objects
+            from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
             
-            # Debug the frame response structure
-            frame_doc = frame_document.model_dump()
-            logger.info(f"Frame document keys: {list(frame_doc.keys())}")
-            if '@graph' in frame_doc:
-                logger.info(f"@graph has {len(frame_doc['@graph'])} items")
-            else:
-                logger.info("No @graph in frame document")
-                
-            # Try to convert, but handle gracefully if it fails
-            try:
-                frame_objects = vitalsigns.from_jsonld_list(frame_doc)
-            except Exception as e:
-                logger.warning(f"JSON-LD conversion failed: {e}")
-                logger.info("✅ Core frame retrieval functionality is working (frame found successfully)")
-                logger.info("✅ Frame-level grouping URIs are being assigned (visible in logs)")
-                return True  # Consider this a success since the core functionality works
+            frame_objects = []
+            if hasattr(frame_document, 'results') and frame_document.results:
+                frame_objects = quad_list_to_graphobjects(frame_document.results)
             logger.info(f"Retrieved {len(frame_objects)} objects from frame graph")
             
             # Count object types in frame graph

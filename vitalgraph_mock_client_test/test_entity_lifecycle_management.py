@@ -37,7 +37,6 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 # Import VitalGraph components
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.spaces_model import Space
 
 
@@ -159,13 +158,11 @@ class TestEntityLifecycleManagement:
             
             # Test CREATE mode - should succeed for new entity
             create_objects = self.create_test_entity_with_frames_and_slots("_create_mode")
-            create_document = GraphObject.to_jsonld_list(create_objects)
-            document = JsonLdDocument(**create_document)
             
             create_response = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=create_objects,
                 operation_mode="create"
             )
             
@@ -179,7 +176,7 @@ class TestEntityLifecycleManagement:
             create_response_2 = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=create_objects,
                 operation_mode="create"
             )
             
@@ -196,13 +193,10 @@ class TestEntityLifecycleManagement:
                 if hasattr(obj, 'textSlotValue'):
                     obj.textSlotValue = "Updated in UPDATE mode"
             
-            update_document = GraphObject.to_jsonld_list(update_objects)
-            document = JsonLdDocument(**update_document)
-            
             update_response = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=update_objects,
                 operation_mode="update"
             )
             
@@ -214,13 +208,11 @@ class TestEntityLifecycleManagement:
             
             # Test UPDATE mode on non-existent entity - should fail
             nonexistent_objects = self.create_test_entity_with_frames_and_slots("_nonexistent")
-            nonexistent_document = GraphObject.to_jsonld_list(nonexistent_objects)
-            document = JsonLdDocument(**nonexistent_document)
             
             update_response_2 = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=nonexistent_objects,
                 operation_mode="update"
             )
             
@@ -232,13 +224,11 @@ class TestEntityLifecycleManagement:
             
             # Test UPSERT mode - should work for both existing and new entities
             upsert_objects = self.create_test_entity_with_frames_and_slots("_upsert_mode")
-            upsert_document = GraphObject.to_jsonld_list(upsert_objects)
-            document = JsonLdDocument(**upsert_document)
             
             upsert_response = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=upsert_objects,
                 operation_mode="upsert"
             )
             

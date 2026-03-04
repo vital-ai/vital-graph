@@ -185,13 +185,8 @@ class KGTypeCreateTester:
             test_kgtype = test_kgtypes[-1]  # Use last KGType
             test_uri = str(test_kgtype.URI)
             
-            # Convert to JSON-LD using VitalSigns
-            jsonld_data = test_kgtype.to_jsonld()
-            
-            # Create using client - use JsonLdObject for single KGType
-            from vitalgraph.model.jsonld_model import JsonLdObject
-            jsonld_obj = JsonLdObject(**jsonld_data)
-            create_response = await self.client.create_kgtypes(space_id, graph_id, jsonld_obj)
+            # Create using client - pass GraphObject directly
+            create_response = await self.client.create_kgtypes(space_id, graph_id, [test_kgtype])
             
             if not create_response or not (hasattr(create_response, 'created_count') and create_response.created_count > 0):
                 error_msg = create_response.message if create_response and hasattr(create_response, 'message') else 'Unknown error'
@@ -204,20 +199,12 @@ class KGTypeCreateTester:
             # Verify by listing KGTypes and checking if our KGType exists
             try:
                 list_response = await self.client.list_kgtypes(space_id, graph_id, page_size=100)
-                if list_response and hasattr(list_response, 'data') and list_response.data:
-                    # Handle both JsonLdObject (single) and JsonLdDocument (multiple)
-                    from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
-                    if isinstance(list_response.data, JsonLdObject):
-                        kgtypes_data = [list_response.data]
-                    elif isinstance(list_response.data, JsonLdDocument):
-                        kgtypes_data = list_response.data.graph if list_response.data.graph else []
-                    else:
-                        kgtypes_data = []
-                    
+                if list_response and list_response.is_success and hasattr(list_response, 'objects') and list_response.objects:
                     # Check if our KGType URI is in the response
                     found_kgtype = any(
-                        kgtype.get('@id') == test_uri or kgtype.get('URI') == test_uri 
-                        for kgtype in kgtypes_data
+                        str(obj.URI) == test_uri
+                        for obj in list_response.objects
+                        if hasattr(obj, 'URI')
                     )
                     
                     if found_kgtype:

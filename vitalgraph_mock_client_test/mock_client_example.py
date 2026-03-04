@@ -23,7 +23,6 @@ from vitalgraph.model.kgtypes_model import KGTypeListResponse, KGTypeCreateRespo
 from vitalgraph.model.objects_model import ObjectsResponse, ObjectCreateResponse
 from vitalgraph.model.kgframes_model import FramesResponse, FrameCreateResponse
 from vitalgraph.model.kgentities_model import EntitiesResponse, EntityCreateResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -668,10 +667,8 @@ class MockClientExample:
             animal_type.kGModelVersion = "1.0.0"
             kgtypes.append(animal_type)
             
-            # Convert to JSON-LD and create
-            jsonld_data = GraphObject.to_jsonld_list(kgtypes)
-            kgtypes_data = JsonLdDocument(**jsonld_data)
-            kgtypes_create = self.client.create_kgtypes(self.test_space_id, self.graphs["kgtypes"], kgtypes_data)
+            # Convert to serialized format and create
+            kgtypes_create = self.client.create_kgtypes(self.test_space_id, self.graphs["kgtypes"], kgtypes)
             
             # === LIST KGTypes ===
             kgtypes_list = self.client.list_kgtypes(self.test_space_id, self.graphs["kgtypes"])
@@ -688,30 +685,12 @@ class MockClientExample:
             
             if person_get:
                 try:
-                    # Convert retrieved JSON-LD back to VitalSigns objects
-                    person_data = person_get.model_dump()
+                    # Convert quad response to VitalSigns objects
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
                     
-                    # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
-                    if 'graph' in person_data and person_data['graph'] is None:
-                        # This is a single object in JsonLdDocument format, convert to standard JSON-LD
-                        standard_jsonld = {
-                            '@context': person_data.get('context', {}),
-                            '@id': person_data.get('id'),
-                            '@type': person_data.get('type'),
-                            **{k: v for k, v in person_data.items() 
-                               if k not in ['context', 'graph', 'id', 'type']}
-                        }
-                        
-                        # Use VitalSigns generic conversion - no hardcoded classes
-                        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                        vs = VitalSigns()
-                        retrieved_person = vs.from_jsonld(standard_jsonld)
-                        retrieved_kgtypes = [retrieved_person] if retrieved_person else []
-                    else:
-                        # Use VitalSigns generic conversion for other formats
-                        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                        vs = VitalSigns()
-                        retrieved_kgtypes = vs.from_jsonld_list(person_data) or []
+                    retrieved_kgtypes = []
+                    if hasattr(person_get, 'results') and person_get.results:
+                        retrieved_kgtypes = quad_list_to_graphobjects(person_get.results)
                     
                     # Find the person type in the retrieved objects
                     for obj in retrieved_kgtypes:
@@ -754,9 +733,7 @@ class MockClientExample:
             updated_person.kGTypeVersion = "2.0.0"
             updated_person.kGModelVersion = "1.0.0"
             
-            update_jsonld = GraphObject.to_jsonld_list([updated_person])
-            update_data = JsonLdDocument(**update_jsonld)
-            update_response = self.client.update_kgtypes(self.test_space_id, self.graphs["kgtypes"], update_data)
+            update_response = self.client.update_kgtypes(self.test_space_id, self.graphs["kgtypes"], [updated_person])
             
             # === DELETE KGType ===
             animal_uri = "http://vital.ai/ontology/haley-ai-kg#Animal"
@@ -821,10 +798,7 @@ class MockClientExample:
             all_objects.extend(concept_objects)
             all_uri_maps.update(concept_uri_map)
             
-            # Convert all objects to JSON-LD and create
-            jsonld_data = GraphObject.to_jsonld_list(all_objects)
-            objects_document = JsonLdDocument(**jsonld_data)
-            objects_create = self.client.create_objects(self.test_space_id, self.graphs["objects"], objects_document)
+            objects_create = self.client.create_objects(self.test_space_id, self.graphs["objects"], all_objects)
             
             # === LIST Objects ===
             objects_list = self.client.list_objects(self.test_space_id, self.graphs["objects"])
@@ -851,46 +825,19 @@ class MockClientExample:
             
             if person_get and original_person:
                 try:
-                    # Convert retrieved JSON-LD back to VitalSigns objects
-                    if hasattr(person_get, 'model_dump'):
-                        person_data = person_get.model_dump()
-                        
-                        # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
-                        logger.info(f"Objects equality - person_data keys: {list(person_data.keys())}")
-                        logger.info(f"Objects equality - person_data has 'graph': {'graph' in person_data}")
-                        if 'graph' in person_data:
-                            logger.info(f"Objects equality - person_data['graph'] is None: {person_data['graph'] is None}")
-                        
-                        if 'graph' in person_data and person_data['graph'] is None:
-                            # This is a single object in JsonLdDocument format, convert to standard JSON-LD
-                            standard_jsonld = {
-                                '@context': person_data.get('context', {}),
-                                '@id': person_data.get('id'),
-                                '@type': person_data.get('type'),
-                                **{k: v for k, v in person_data.items() 
-                                   if k not in ['context', 'graph', 'id', 'type']}
-                            }
-                            
-                            # Use VitalSigns generic conversion - no hardcoded classes
-                            logger.info(f"Objects equality - standard_jsonld keys: {list(standard_jsonld.keys())}")
-                            logger.info(f"Objects equality - standard_jsonld @id: {standard_jsonld.get('@id')}")
-                            logger.info(f"Objects equality - standard_jsonld @type: {standard_jsonld.get('@type')}")
-                            
-                            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                            vs = VitalSigns()
-                            retrieved_person = vs.from_jsonld(standard_jsonld)
-                            retrieved_objects = [retrieved_person] if retrieved_person else []
-                        else:
-                            # Use VitalSigns generic conversion for other formats
-                            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                            vs = VitalSigns()
-                            retrieved_objects = vs.from_jsonld_list(person_data) or []
-                        
-                        # Find the person object in the retrieved objects
-                        for obj in retrieved_objects:
-                            if hasattr(obj, 'URI') and str(obj.URI) == person_uri:
-                                retrieved_person = obj
-                                break
+                    # Convert quad response to VitalSigns objects
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    
+                    retrieved_objects = []
+                    retrieved_person = None
+                    if hasattr(person_get, 'results') and person_get.results:
+                        retrieved_objects = quad_list_to_graphobjects(person_get.results)
+                    
+                    # Find the person object in the retrieved objects
+                    for obj in retrieved_objects:
+                        if hasattr(obj, 'URI') and str(obj.URI) == person_uri:
+                            retrieved_person = obj
+                            break
                         
                         if retrieved_person:
                             # Use GraphObjectEqualityUtils to compare objects
@@ -910,14 +857,10 @@ class MockClientExample:
                                 logger.warning(f"Retrieved name: {getattr(retrieved_person, 'name', 'None')}")
                         else:
                             logger.warning("Could not find retrieved person object for comparison")
-                            logger.warning(f"Retrieved objects count: {len(retrieved_objects) if 'retrieved_objects' in locals() else 'N/A'}")
-                            if 'retrieved_objects' in locals():
-                                for i, obj in enumerate(retrieved_objects[:3]):
-                                    logger.warning(f"  Retrieved object {i}: {getattr(obj, 'URI', 'No URI')} (type: {type(obj).__name__})")
+                            logger.warning(f"Retrieved objects count: {len(retrieved_objects)}")
+                            for i, obj in enumerate(retrieved_objects[:3]):
+                                logger.warning(f"  Retrieved object {i}: {getattr(obj, 'URI', 'No URI')} (type: {type(obj).__name__})")
                             equality_result = False
-                    else:
-                        logger.warning("Retrieved person_get does not have model_dump method")
-                        equality_result = False
                 except Exception as e:
                     logger.error(f"Error during equality comparison: {e}")
                     equality_result = False
@@ -947,9 +890,7 @@ class MockClientExample:
             updated_person.certainty = 0.97  # Higher certainty after update
             updated_person.pageRank = 0.86   # Higher page rank after update
             
-            update_jsonld = GraphObject.to_jsonld_list([updated_person])
-            update_data = JsonLdDocument(**update_jsonld)
-            update_response = self.client.update_objects(self.test_space_id, self.graphs["objects"], update_data)
+            update_response = self.client.update_objects(self.test_space_id, self.graphs["objects"], [updated_person])
             
             # === DELETE Object ===
             # Delete the concept entity (and its related edges will be orphaned)
@@ -1053,10 +994,7 @@ class MockClientExample:
             analysis_frame.certainty = 0.85
             frames.append(analysis_frame)
             
-            # Convert to JSON-LD and create
-            jsonld_data = GraphObject.to_jsonld_list(frames)
-            frames_document = JsonLdDocument(**jsonld_data)
-            frames_create = self.client.create_kgframes(self.test_space_id, self.graphs["kgframes"], frames_document)
+            frames_create = self.client.create_kgframes(self.test_space_id, self.graphs["kgframes"], frames)
             
             # === LIST KGFrames ===
             frames_list = self.client.list_kgframes(self.test_space_id, self.graphs["kgframes"])
@@ -1072,30 +1010,12 @@ class MockClientExample:
             
             if semantic_get:
                 try:
-                    # Convert retrieved JSON-LD back to VitalSigns objects
-                    frame_data = semantic_get.model_dump()
+                    # Convert quad response to VitalSigns objects
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
                     
-                    # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
-                    if 'graph' in frame_data and frame_data['graph'] is None:
-                        # This is a single object in JsonLdDocument format, convert to standard JSON-LD
-                        standard_jsonld = {
-                            '@context': frame_data.get('context', {}),
-                            '@id': frame_data.get('id'),
-                            '@type': frame_data.get('type'),
-                            **{k: v for k, v in frame_data.items() 
-                               if k not in ['context', 'graph', 'id', 'type']}
-                        }
-                        
-                        # Use VitalSigns generic conversion - no hardcoded classes
-                        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                        vs = VitalSigns()
-                        retrieved_frame = vs.from_jsonld(standard_jsonld)
-                        retrieved_frames = [retrieved_frame] if retrieved_frame else []
-                    else:
-                        # Use VitalSigns generic conversion for other formats
-                        from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                        vs = VitalSigns()
-                        retrieved_frames = vs.from_jsonld_list(frame_data) or []
+                    retrieved_frames = []
+                    if hasattr(semantic_get, 'results') and semantic_get.results:
+                        retrieved_frames = quad_list_to_graphobjects(semantic_get.results)
                     
                     for obj in retrieved_frames:
                         if hasattr(obj, 'URI') and obj.URI == semantic_uri:
@@ -1138,9 +1058,7 @@ class MockClientExample:
             updated_semantic.certainty = 0.96
             updated_semantic.pageRank = 0.82
             
-            update_jsonld = GraphObject.to_jsonld_list([updated_semantic])
-            update_data = JsonLdDocument(**update_jsonld)
-            update_response = self.client.update_kgframes(self.test_space_id, self.graphs["kgframes"], update_data)
+            update_response = self.client.update_kgframes(self.test_space_id, self.graphs["kgframes"], [updated_semantic])
             
             # === DELETE KGFrame ===
             analysis_uri = "http://vital.ai/haley.ai/app/KGFrame/analysis_frame_01"
@@ -1240,10 +1158,7 @@ class MockClientExample:
             concept_entity.pageRank = 0.65
             entities.append(concept_entity)
             
-            # Convert to JSON-LD and create
-            jsonld_data = GraphObject.to_jsonld_list(entities)
-            entities_document = JsonLdDocument(**jsonld_data)
-            entities_create = self.client.create_kgentities(self.test_space_id, self.graphs["kgentities"], entities_document)
+            entities_create = self.client.create_kgentities(self.test_space_id, self.graphs["kgentities"], entities)
             
             # === LIST KGEntities ===
             entities_list = self.client.list_kgentities(self.test_space_id, self.graphs["kgentities"])
@@ -1259,66 +1174,43 @@ class MockClientExample:
             
             if person_get:
                 try:
-                    # Check if person_get has the expected structure
-                    if hasattr(person_get, 'model_dump'):
-                        person_data = person_get.model_dump()
-                        logger.info(f"Retrieved person data structure: {type(person_data)}")
-                        logger.info(f"Retrieved person data keys: {person_data.keys() if isinstance(person_data, dict) else 'Not a dict'}")
+                    # Convert quad response to VitalSigns objects
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    
+                    retrieved_entities = []
+                    retrieved_person = None
+                    if hasattr(person_get, 'results') and person_get.results:
+                        retrieved_entities = quad_list_to_graphobjects(person_get.results)
+                    
+                    # Find the person object in the retrieved entities
+                    for obj in retrieved_entities:
+                        if hasattr(obj, 'URI') and str(obj.URI) == person_uri:
+                            retrieved_person = obj
+                            break
+                    
+                    if retrieved_person:
+                        kgentity_equality_result = GraphObjectEqualityUtils.equals(original_person, retrieved_person)
+                        logger.info(f"KGEntity equality check: Original vs Retrieved = {kgentity_equality_result}")
                         
-                        # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
-                        if 'graph' in person_data and person_data['graph'] is None:
-                            # This is a single object in JsonLdDocument format, convert to standard JSON-LD
-                            standard_jsonld = {
-                                '@context': person_data.get('context', {}),
-                                '@id': person_data.get('id'),
-                                '@type': person_data.get('type'),
-                                **{k: v for k, v in person_data.items() 
-                                   if k not in ['context', 'graph', 'id', 'type']}
-                            }
+                        if not kgentity_equality_result:
+                            logger.warning("KGEntities are not equal - checking differences:")
+                            logger.warning(f"Original URI: {getattr(original_person, 'URI', 'None')}")
+                            logger.warning(f"Retrieved URI: {getattr(retrieved_person, 'URI', 'None')}")
+                            logger.warning(f"Original name: {getattr(original_person, 'name', 'None')}")
+                            logger.warning(f"Retrieved name: {getattr(retrieved_person, 'name', 'None')}")
                             
-                            # Use VitalSigns generic conversion - no hardcoded classes
-                            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                            vs = VitalSigns()
-                            retrieved_person = vs.from_jsonld(standard_jsonld)
-                            retrieved_entities = [retrieved_person] if retrieved_person else []
-                        else:
-                            # Use VitalSigns generic conversion for other formats
-                            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-                            vs = VitalSigns()
-                            retrieved_entities = vs.from_jsonld_list(person_data) or []
-                        
-                        # Find the person object in the retrieved entities
-                        for obj in retrieved_entities:
-                            if hasattr(obj, 'URI') and str(obj.URI) == person_uri:
-                                retrieved_person = obj
-                                break
-                        
-                        if retrieved_person:
-                            kgentity_equality_result = GraphObjectEqualityUtils.equals(original_person, retrieved_person)
-                            logger.info(f"KGEntity equality check: Original vs Retrieved = {kgentity_equality_result}")
+                            # Check all properties that should be working
+                            props_to_check = ['URI', 'name', 'kGraphDescription', 'kGIdentifier', 'kGEntityType', 
+                                            'kGEntityTypeDescription', 'kGIndexDateTime', 'kGGraphAssertionDateTime', 
+                                            'kGNodeCacheDateTime', 'certainty', 'pageRank']
                             
-                            if not kgentity_equality_result:
-                                logger.warning("KGEntities are not equal - checking differences:")
-                                logger.warning(f"Original URI: {getattr(original_person, 'URI', 'None')}")
-                                logger.warning(f"Retrieved URI: {getattr(retrieved_person, 'URI', 'None')}")
-                                logger.warning(f"Original name: {getattr(original_person, 'name', 'None')}")
-                                logger.warning(f"Retrieved name: {getattr(retrieved_person, 'name', 'None')}")
-                                
-                                # Check all properties that should be working
-                                props_to_check = ['URI', 'name', 'kGraphDescription', 'kGIdentifier', 'kGEntityType', 
-                                                'kGEntityTypeDescription', 'kGIndexDateTime', 'kGGraphAssertionDateTime', 
-                                                'kGNodeCacheDateTime', 'certainty', 'pageRank']
-                                
-                                for prop in props_to_check:
-                                    orig_val = getattr(original_person, prop, '<MISSING>')
-                                    retr_val = getattr(retrieved_person, prop, '<MISSING>')
-                                    if orig_val != retr_val:
-                                        logger.warning(f"Property '{prop}': Original='{orig_val}' vs Retrieved='{retr_val}'")
-                        else:
-                            logger.warning("Could not find retrieved person KGEntity for comparison")
-                            kgentity_equality_result = False
+                            for prop in props_to_check:
+                                orig_val = getattr(original_person, prop, '<MISSING>')
+                                retr_val = getattr(retrieved_person, prop, '<MISSING>')
+                                if orig_val != retr_val:
+                                    logger.warning(f"Property '{prop}': Original='{orig_val}' vs Retrieved='{retr_val}'")
                     else:
-                        logger.warning("Retrieved person_get does not have model_dump method")
+                        logger.warning("Could not find retrieved person KGEntity for comparison")
                         kgentity_equality_result = False
                         
                 except Exception as e:
@@ -1348,9 +1240,7 @@ class MockClientExample:
             updated_person.certainty = 0.97
             updated_person.pageRank = 0.86
             
-            update_jsonld = GraphObject.to_jsonld_list([updated_person])
-            update_data = JsonLdDocument(**update_jsonld)
-            update_response = self.client.update_kgentities(self.test_space_id, self.graphs["kgentities"], update_data)
+            update_response = self.client.update_kgentities(self.test_space_id, self.graphs["kgentities"], [updated_person])
             
             # === DELETE KGEntity ===
             concept_uri = "http://vital.ai/haley.ai/app/KGEntity/concept_entity_01"

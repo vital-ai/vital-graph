@@ -26,29 +26,19 @@ class FilesImpl:
     
     async def list_files(self, space_id: str, graph_id: Optional[str] = None,
                         page_size: int = 100, offset: int = 0,
-                        file_filter: Optional[str] = None) -> Tuple[Dict[str, Any], int]:
+                        file_filter: Optional[str] = None) -> Tuple[List, int]:
         """
         List FileNode objects with pagination and filtering.
         
-        Args:
-            space_id: Space identifier
-            graph_id: Graph identifier (optional)
-            page_size: Number of files per page
-            offset: Offset for pagination
-            file_filter: Filter keyword for file names
-            
         Returns:
-            Tuple of (JSON-LD document, total count)
+            Tuple of (List[GraphObject], total_count)
         """
         try:
             self.logger.debug(f"Listing files in space {space_id}, graph {graph_id}")
             
-            # Get database space implementation
             from .impl_utils import get_db_space_impl
             db_space_impl = await get_db_space_impl(self.space_manager, space_id)
             
-            # Build filters for FileNode objects
-            # Note: VitalSigns FileNode uses 'vital#FileNode' not 'vital-core#FileNode'
             filters = {
                 'vitaltype_filter': 'http://vital.ai/ontology/vital#FileNode'
             }
@@ -56,7 +46,6 @@ class FilesImpl:
             if file_filter:
                 filters['search_text'] = file_filter
             
-            # Query for FileNode objects with pagination
             if not graph_id:
                 raise ValueError("graph_id is required for listing files")
             
@@ -68,14 +57,8 @@ class FilesImpl:
                 filters=filters
             )
             
-            # Use VitalSigns native functionality to convert GraphObjects to JSON-LD document
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            
-            # Let VitalSigns handle the complete JSON-LD document creation
-            jsonld_document = GraphObject.to_jsonld_list(graph_objects)
-            
             self.logger.debug(f"Listed {len(graph_objects)} files (total: {total_count})")
-            return jsonld_document, total_count
+            return graph_objects, total_count
             
         except Exception as e:
             self.logger.error(f"Error listing files: {e}")
@@ -118,26 +101,19 @@ class FilesImpl:
             raise
     
     async def get_files_by_uris(self, space_id: str, uri_list: List[str], 
-                               graph_id: Optional[str] = None) -> Tuple[Dict[str, Any], int]:
+                               graph_id: Optional[str] = None) -> Tuple[List, int]:
         """
         Get multiple FileNode objects by URI list.
         
-        Args:
-            space_id: Space identifier
-            uri_list: List of file URIs
-            graph_id: Graph identifier (optional)
-            
         Returns:
-            Tuple of (JSON-LD document, count)
+            Tuple of (List[GraphObject], count)
         """
         try:
             self.logger.debug(f"Getting {len(uri_list)} files from space {space_id}")
             
-            # Get database space implementation
             from .impl_utils import get_db_space_impl
             db_space_impl = await get_db_space_impl(self.space_manager, space_id)
             
-            # Get the file objects
             graph_objects = []
             for uri in uri_list:
                 try:
@@ -151,24 +127,20 @@ class FilesImpl:
                 except Exception as e:
                     self.logger.warning(f"Could not retrieve file {uri}: {e}")
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_document = GraphObject.to_jsonld_list(graph_objects)
-            
             self.logger.debug(f"Retrieved {len(graph_objects)} files")
-            return jsonld_document, len(graph_objects)
+            return graph_objects, len(graph_objects)
             
         except Exception as e:
             self.logger.error(f"Error getting files by URIs: {e}")
             raise
     
-    async def create_files(self, space_id: str, jsonld_document: Dict[str, Any], graph_id: str) -> List[str]:
+    async def create_files(self, space_id: str, graph_objects: List, graph_id: str) -> List[str]:
         """
         Create FileNode objects in the database.
         
         Args:
             space_id: Space identifier
-            jsonld_document: JSON-LD document with FileNode objects
+            graph_objects: List[GraphObject] FileNode objects to create
             graph_id: Graph identifier (required)
             
         Returns:
@@ -176,20 +148,12 @@ class FilesImpl:
         """
         try:
             from .impl_utils import get_db_space_impl, batch_check_subject_uri_conflicts
-            from ...utils.data_format_utils import batch_jsonld_to_graphobjects, batch_graphobjects_to_quads
+            from ...utils.data_format_utils import batch_graphobjects_to_quads
             
-            objects_data = jsonld_document.get("@graph", [])
-            self.logger.debug(f"Creating {len(objects_data)} file nodes in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Creating {len(graph_objects)} file nodes in space {space_id}, graph {graph_id}")
             
-            if not objects_data:
+            if not graph_objects:
                 return []
-            
-            # Convert JSON-LD to GraphObjects (FileNode objects)
-            # Note: VitalSigns FileNode uses 'vital#FileNode' not 'vital-core#FileNode'
-            graph_objects = await batch_jsonld_to_graphobjects(
-                jsonld_document,
-                vitaltype_validator=lambda vt: vt == 'http://vital.ai/ontology/vital#FileNode'
-            )
             
             # Check for URI conflicts
             subject_uris = [str(obj.URI) for obj in graph_objects]

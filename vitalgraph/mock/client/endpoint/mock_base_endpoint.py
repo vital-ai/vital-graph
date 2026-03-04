@@ -1,13 +1,13 @@
 """Mock Base Endpoint
 
 Base class for all mock endpoint implementations.
-Provides common functionality and structure for mock endpoints with VitalSigns native JSON-LD support.
+Provides common functionality and structure for mock endpoints with VitalSigns native support.
 """
 
 from typing import Dict, Any, Optional, List, Union
 import logging
 
-# VitalSigns imports for native JSON-LD functionality
+# VitalSigns imports for native functionality
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGEntity import KGEntity
@@ -40,7 +40,7 @@ class MockBaseEndpoint:
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # Initialize VitalSigns for native JSON-LD operations
+        # Initialize VitalSigns for native operations
         self.vitalsigns = VitalSigns()
     
     def _create_stub_response(self, operation: str, **kwargs) -> Dict[str, Any]:
@@ -98,227 +98,6 @@ class MockBaseEndpoint:
             **kwargs: Method keyword arguments
         """
         self.logger.info(f"Mock {method_name} called with args={args}, kwargs={kwargs}")
-    
-    def _jsonld_to_triples(self, jsonld_obj: Dict[str, Any], graph_id: str = None) -> list:
-        """
-        Convert a JSON-LD object to RDF triples (VitalSigns-style).
-        
-        Args:
-            jsonld_obj: JSON-LD object dictionary
-            graph_id: Optional graph identifier
-            
-        Returns:
-            List of triple dictionaries
-        """
-        triples = []
-        subject_uri = jsonld_obj.get("@id")
-        
-        if not subject_uri:
-            return triples
-        
-        for key, value in jsonld_obj.items():
-            if key == "@id":
-                continue
-            elif key == "@type":
-                # Handle type specially
-                type_uri = self._expand_uri(value)
-                triples.append({
-                    "subject": subject_uri,
-                    "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-                    "object": type_uri,
-                    "graph": graph_id
-                })
-                self.logger.debug(f"Created type triple: {subject_uri} -> {type_uri}")
-            else:
-                # Handle other properties
-                pred_uri = self._expand_uri(key)
-                obj_value = self._format_object_value(value)
-                triples.append({
-                    "subject": subject_uri,
-                    "predicate": pred_uri,
-                    "object": obj_value,
-                    "graph": graph_id
-                })
-        
-        return triples
-    
-    def _triples_to_jsonld(self, triples: list, subject_uri: str) -> Dict[str, Any]:
-        """
-        Convert RDF triples back to JSON-LD object (VitalSigns-style).
-        
-        Args:
-            triples: List of triple dictionaries for the subject
-            subject_uri: Subject URI to reconstruct
-            
-        Returns:
-            JSON-LD object dictionary
-        """
-        obj = {"@id": subject_uri}
-        
-        for triple in triples:
-            if triple["subject"] != subject_uri:
-                continue
-                
-            pred = triple["predicate"]
-            obj_val = triple["object"]
-            
-            if pred == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type":
-                # For type, keep the full URI to maintain compatibility
-                obj["@type"] = obj_val
-            else:
-                prop_name = self._compact_uri(pred)
-                obj[prop_name] = obj_val
-        
-        return obj
-    
-    def _expand_uri(self, uri_or_curie: str) -> str:
-        """
-        Expand a CURIE or short form to full URI.
-        
-        Args:
-            uri_or_curie: URI, CURIE, or short form
-            
-        Returns:
-            Full URI
-        """
-        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
-        if validate_rfc3986(uri_or_curie, rule='URI'):
-            return uri_or_curie
-        elif uri_or_curie.startswith("rdfs:"):
-            return f"http://www.w3.org/2000/01/rdf-schema#{uri_or_curie.replace('rdfs:', '')}"
-        elif uri_or_curie.startswith("rdf:"):
-            return f"http://www.w3.org/1999/02/22-rdf-syntax-ns#{uri_or_curie.replace('rdf:', '')}"
-        elif uri_or_curie.startswith("foaf:"):
-            return f"http://xmlns.com/foaf/0.1/{uri_or_curie.replace('foaf:', '')}"
-        elif ":" not in uri_or_curie:
-            # Assume it's a VitalGraph property
-            return f"http://vital.ai/ontology/haley-ai-kg#{uri_or_curie}"
-        else:
-            return uri_or_curie
-    
-    def _compact_uri(self, full_uri: str) -> str:
-        """
-        Compact a full URI to a shorter form when possible.
-        
-        Args:
-            full_uri: Full URI
-            
-        Returns:
-            Compacted URI or original if no compaction possible
-        """
-        # Use string matching for namespace compaction (this is legitimate use of startswith for namespace prefixes)
-        if full_uri.startswith("http://www.w3.org/2000/01/rdf-schema#"):
-            return f"rdfs:{full_uri.replace('http://www.w3.org/2000/01/rdf-schema#', '')}"
-        elif full_uri.startswith("http://www.w3.org/1999/02/22-rdf-syntax-ns#"):
-            return f"rdf:{full_uri.replace('http://www.w3.org/1999/02/22-rdf-syntax-ns#', '')}"
-        elif full_uri.startswith("http://xmlns.com/foaf/0.1/"):
-            return f"foaf:{full_uri.replace('http://xmlns.com/foaf/0.1/', '')}"
-        elif full_uri.startswith("http://vital.ai/ontology/haley-ai-kg#"):
-            return full_uri.replace("http://vital.ai/ontology/haley-ai-kg#", "")
-        else:
-            return full_uri
-    
-    def _format_object_value(self, value: Any) -> str:
-        """
-        Format an object value for RDF storage.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted string value
-        """
-        if isinstance(value, dict) and "@id" in value:
-            return value["@id"]
-        elif isinstance(value, (int, float, bool)):
-            return str(value)
-        else:
-            return str(value)
-    
-    def _delete_object_triples(self, space, subject_uri: str, graph_id: str = None):
-        """
-        Delete all triples for a given subject (VitalSigns update pattern).
-        
-        Args:
-            space: Mock space instance
-            subject_uri: Subject URI to delete triples for
-            graph_id: Optional graph identifier
-        """
-        try:
-            # Clean URI (remove angle brackets if present)
-            clean_uri = subject_uri.strip('<>')
-            
-            # Query for all triples with this subject
-            query = f"""
-            SELECT ?p ?o WHERE {{
-                <{clean_uri}> ?p ?o .
-            }}
-            """
-            result = space.query_sparql(query)
-            
-            if result.get("bindings"):
-                for binding in result["bindings"]:
-                    pred = binding.get("p", {}).get("value", "").strip('<>')
-                    obj = binding.get("o", {}).get("value", "").strip('<>')
-                    if pred and obj:
-                        space.remove_quad(clean_uri, pred, obj, graph_id)
-                        
-        except Exception as e:
-            self.logger.debug(f"Error deleting triples for {subject_uri}: {e}")
-    
-    def _get_object_from_triples(self, space, subject_uri: str, graph_id: str = None) -> Dict[str, Any]:
-        """
-        Reconstruct an object from its triples (VitalSigns-style).
-        
-        Args:
-            space: Mock space instance
-            subject_uri: Subject URI to reconstruct
-            graph_id: Optional graph identifier
-            
-        Returns:
-            JSON-LD object dictionary
-        """
-        try:
-            # Clean URI (remove angle brackets if present)
-            clean_uri = subject_uri.strip('<>')
-            
-            # Query for all triples with this subject
-            if graph_id:
-                query = f"""
-                SELECT ?p ?o WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{clean_uri}> ?p ?o .
-                    }}
-                }}
-                """
-            else:
-                query = f"""
-                SELECT ?p ?o WHERE {{
-                    <{clean_uri}> ?p ?o .
-                }}
-                """
-            result = space.query_sparql(query)
-            
-            if result.get("bindings"):
-                # Convert query results to triple format
-                triples = []
-                for binding in result["bindings"]:
-                    pred = binding.get("p", {}).get("value", "").strip('<>')
-                    obj = binding.get("o", {}).get("value", "").strip('<>')
-                    if pred and obj:
-                        triples.append({
-                            "subject": clean_uri,
-                            "predicate": pred,
-                            "object": obj
-                        })
-                
-                # Convert triples back to JSON-LD object
-                return self._triples_to_jsonld(triples, clean_uri)
-            
-        except Exception as e:
-            self.logger.debug(f"Error reconstructing object {subject_uri}: {e}")
-        
-        return None
     
     # ========================================
     # VitalSigns Native Helper Functions
@@ -404,42 +183,24 @@ class MockBaseEndpoint:
             self.logger.error(f"  Properties: {properties}")
             return None
     
-    def _objects_to_jsonld_document(self, objects: List[GraphObject]) -> Dict[str, Any]:
+    def _objects_to_quad_response(self, objects: List[GraphObject]) -> Dict[str, Any]:
         """
-        Convert VitalSigns objects to JSON-LD document using native VitalSigns methods.
+        Convert VitalSigns objects to a quad response dict.
         
         Args:
             objects: List of VitalSigns GraphObject instances
             
         Returns:
-            Complete JSON-LD document with @context and @graph
+            Dict with 'results' key containing quad dicts
         """
         try:
-            if not objects:
-                # Return empty document using VitalSigns native method
-                return GraphObject.to_jsonld_list([])
-            
-            # Use VitalSigns native to_jsonld_list method
-            jsonld_result = GraphObject.to_jsonld_list(objects)
-            
-            # Ensure the context includes the vital prefixes that the test expects
-            if '@context' not in jsonld_result:
-                jsonld_result['@context'] = {}
-            
-            # Add the vital prefixes to the context
-            jsonld_result['@context'].update({
-                "vital": "http://vital.ai/ontology/vital#",
-                "vital-core": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#"
-            })
-            
-            return jsonld_result
+            from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
+            quads = graphobjects_to_quad_list(objects)
+            return {"results": [q.model_dump() for q in quads]}
             
         except Exception as e:
-            self.logger.error(f"Error converting objects to JSON-LD document: {e}")
-            # Fallback to empty FileNode list
-            from vital_ai_domain.model.FileNode import FileNode
-            return FileNode.to_jsonld_list([])
+            self.logger.error(f"Error converting objects to quad response: {e}")
+            return {"results": []}
     
     def _instantiate_vitalsigns_object(self, vitaltype_uri: str, uri: str, **properties) -> GraphObject:
         """
@@ -662,75 +423,32 @@ class MockBaseEndpoint:
             self.logger.error(f"Error converting triples to VitalSigns objects: {e}")
             return []
     
-    def _triples_to_jsonld_document(self, triples: List[tuple]) -> Dict[str, Any]:
+    def _triples_to_quad_response(self, triples: List[tuple]) -> Dict[str, Any]:
         """
-        Convert RDF triples to JSON-LD document structure.
+        Convert RDF triples to a quad response dict.
         
         Args:
             triples: List of RDF triples (subject, predicate, object)
             
         Returns:
-            JSON-LD document dictionary
+            Dict with 'results' key containing quad dicts
         """
         try:
-            # Create basic JSON-LD structure using Pydantic field names
-            context = {
-                "vital": "http://vital.ai/ontology/vital-core#",
-                "haley": "http://vital.ai/ontology/haley-ai-kg#",
-                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdfs": "http://www.w3.org/2000/01/rdf-schema#"
-            }
-            graph_items = []
-            
-            # Group triples by subject
-            subjects = {}
+            results = []
             for subject, predicate, obj in triples:
-                if subject not in subjects:
-                    subjects[subject] = {"@id": subject}
-                
-                # Handle special RDF predicates
-                if predicate == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type":
-                    # Convert rdf:type to @type in JSON-LD
-                    if "@type" not in subjects[subject]:
-                        subjects[subject]["@type"] = obj
-                    else:
-                        # Convert to array if multiple types
-                        current_type = subjects[subject]["@type"]
-                        if not isinstance(current_type, list):
-                            subjects[subject]["@type"] = [current_type]
-                        subjects[subject]["@type"].append(obj)
-                else:
-                    # Add regular predicate-object pair
-                    if predicate not in subjects[subject]:
-                        subjects[subject][predicate] = obj
-                    else:
-                        # Convert to array if multiple values
-                        current_value = subjects[subject][predicate]
-                        if not isinstance(current_value, list):
-                            subjects[subject][predicate] = [current_value]
-                        subjects[subject][predicate].append(obj)
+                results.append({
+                    "s": str(subject),
+                    "p": str(predicate),
+                    "o": str(obj),
+                    "g": ""
+                })
             
-            # Add all subjects to graph
-            graph_items = list(subjects.values())
-            
-            # Debug logging
-            self.logger.info(f"Converted {len(triples)} triples to {len(subjects)} subjects")
-            self.logger.info(f"Subjects: {list(subjects.keys())}")
-            if subjects:
-                first_subject = list(subjects.values())[0]
-                self.logger.info(f"First subject structure: {first_subject}")
-            
-            # Return dictionary with proper field names for JsonLdDocument
-            return {
-                "@context": context,
-                "@graph": graph_items
-            }
+            self.logger.info(f"Converted {len(triples)} triples to {len(results)} quads")
+            return {"results": results}
             
         except Exception as e:
-            self.logger.error(f"Error converting triples to JSON-LD document: {e}")
-            # Return empty JSON-LD document
-            from ai_haley_kg_domain.model.KGEntity import KGEntity
-            return KGEntity.to_jsonld_list([])
+            self.logger.error(f"Error converting triples to quad response: {e}")
+            return {"results": []}
     
     def _execute_sparql_query(self, space, query: str) -> Dict[str, Any]:
         """
@@ -866,83 +584,6 @@ class MockBaseEndpoint:
             
         except Exception as e:
             self.logger.error(f"Error logging quads in store: {e}")
-    
-    def _jsonld_to_vitalsigns_objects(self, jsonld_document: Dict[str, Any]) -> List[GraphObject]:
-        """
-        Convert JSON-LD document to VitalSigns objects using native functionality.
-        
-        Args:
-            jsonld_document: JSON-LD document dictionary (JsonLdDocument format)
-            
-        Returns:
-            List of VitalSigns GraphObject instances
-        """
-        try:
-            # Convert JsonLdDocument format to standard JSON-LD format that VitalSigns expects
-            # JsonLdDocument has: context, graph, id, type, and property fields
-            # Standard JSON-LD has: @context, @graph (optional), @id, @type, and property fields
-            
-            if ('graph' in jsonld_document and jsonld_document['graph'] is None) or ('@graph' in jsonld_document and jsonld_document['@graph'] is None):
-                # Single object format - convert JsonLdDocument to standard JSON-LD
-                standard_jsonld = {
-                    '@context': jsonld_document.get('context', jsonld_document.get('@context', {})),
-                    '@id': jsonld_document.get('id'),
-                    '@type': jsonld_document.get('type')
-                }
-                
-                # Add all other properties (skip JsonLdDocument metadata fields)
-                for key, value in jsonld_document.items():
-                    if key not in ['context', 'graph', 'id', 'type', '@context', '@graph']:
-                        standard_jsonld[key] = value
-                
-                # Use VitalSigns to convert from standard JSON-LD - use fixed conversion
-                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
-                objects = create_vitalsigns_objects_from_jsonld(standard_jsonld, self.logger)
-                obj = objects[0] if objects else None
-                
-                # Handle None result
-                if obj is None:
-                    self.logger.warning(f"VitalSigns returned None for converted JSON-LD: {standard_jsonld}")
-                    return []
-                
-                return [obj]
-                
-            elif "@graph" in jsonld_document and jsonld_document["@graph"] is not None:
-                # Multi-object format with @graph array - use fixed conversion
-                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
-                objects = create_vitalsigns_objects_from_jsonld(jsonld_document, self.logger)
-                
-                # Handle None result from VitalSigns
-                if objects is None:
-                    self.logger.warning(f"VitalSigns from_jsonld_list returned None for document: {jsonld_document}")
-                    return []
-                
-                # Ensure we return a list
-                if not isinstance(objects, list):
-                    objects = [objects] if objects else []
-                
-                return objects
-            else:
-                # Try direct conversion (already in standard JSON-LD format) - use fixed conversion
-                from vitalgraph.utils.vitalsigns_helpers import create_vitalsigns_objects_from_jsonld
-                objects = create_vitalsigns_objects_from_jsonld(jsonld_document, self.logger)
-                obj = objects[0] if objects else None
-                
-                # Handle None result
-                if obj is None:
-                    self.logger.warning(f"VitalSigns returned None for JSON-LD document: {jsonld_document}")
-                    return []
-                
-                # Ensure we return a list
-                if not isinstance(obj, list):
-                    return [obj]
-                else:
-                    return obj
-            
-        except Exception as e:
-            self.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
-            self.logger.error(f"Document keys: {list(jsonld_document.keys()) if jsonld_document else 'None'}")
-            return []
     
     def _get_vitaltype_uri(self, obj_type: str) -> str:
         """

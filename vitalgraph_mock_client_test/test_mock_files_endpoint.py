@@ -193,43 +193,30 @@ class TestMockFilesEndpoint:
     def test_create_file_nodes(self):
         """Test creating file metadata nodes."""
         try:
-            # Create JSON-LD document with file metadata
-            files_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-file-001.txt",
-                        "@type": "vital:FileNode",
-                        "vital:hasFileName": "test-file-001.txt",
-                        "vital:hasFileType": "text/plain",
-                        "vital:hasFileLength": 1024
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-file-002.bin",
-                        "@type": "vital:FileNode",
-                        "vital:hasFileName": "test-file-002.bin",
-                        "vital:hasFileType": "application/octet-stream",
-                        "vital:hasFileLength": 2048
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-file-003.json",
-                        "@type": "vital:FileNode",
-                        "vital:hasFileName": "test-file-003.json",
-                        "vital:hasFileType": "application/json",
-                        "vital:hasFileLength": 512
-                    }
-                ]
-            }
+            # Create FileNode GraphObjects directly
+            from vital_ai_domain.model.FileNode import FileNode
             
-            from vitalgraph.model.jsonld_model import JsonLdDocument
-            document = JsonLdDocument(**files_jsonld)
+            file1 = FileNode()
+            file1.URI = "http://vital.ai/haley.ai/app/test-file-001.txt"
+            file1.fileName = "test-file-001.txt"
+            file1.fileType = "text/plain"
+            file1.fileLength = 1024
+            
+            file2 = FileNode()
+            file2.URI = "http://vital.ai/haley.ai/app/test-file-002.bin"
+            file2.fileName = "test-file-002.bin"
+            file2.fileType = "application/octet-stream"
+            file2.fileLength = 2048
+            
+            file3 = FileNode()
+            file3.URI = "http://vital.ai/haley.ai/app/test-file-003.json"
+            file3.fileName = "test-file-003.json"
+            file3.fileType = "application/json"
+            file3.fileLength = 512
+            
             response = self.endpoint.create_file(
                 space_id=self.test_space_id,
-                document=document,
+                objects=[file1, file2, file3],
                 graph_id=self.test_graph_id
             )
             
@@ -312,13 +299,20 @@ class TestMockFilesEndpoint:
                 graph_id=self.test_graph_id
             )
             
-            # Check if we got a valid JsonLdDocument with file data
+            # Check if we got valid file data
             has_file_data = False
-            if response and hasattr(response, 'graph') and response.graph:
+            if response and hasattr(response, 'results') and response.results:
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                graph_objects = quad_list_to_graphobjects(response.results)
+                has_file_data = len(graph_objects) > 0
+                for obj in graph_objects:
+                    if str(getattr(obj, 'URI', '')) == file_uri:
+                        has_file_data = True
+                        break
+            elif response and hasattr(response, 'graph') and response.graph:
                 has_file_data = len(response.graph) > 0
-                # Check if the file has the expected URI
-                for file_data in response.graph:
-                    if file_data.get('@id') == file_uri:
+                for obj in response.graph:
+                    if str(getattr(obj, 'URI', '')) == file_uri:
                         has_file_data = True
                         break
             
@@ -402,7 +396,7 @@ class TestMockFilesEndpoint:
                 offset=0
             )
             
-            # Check if we have a valid JsonLdDocument with files
+            # Check if we have valid files
             files_count = 0
             if hasattr(response, 'files') and hasattr(response.files, 'graph'):
                 files_count = len(response.files.graph) if response.files.graph else 0
@@ -441,7 +435,7 @@ class TestMockFilesEndpoint:
                 file_filter="test"
             )
             
-            # Check if we have a valid JsonLdDocument with files
+            # Check if we have valid files
             files_count = 0
             if hasattr(response, 'files') and hasattr(response.files, 'graph'):
                 files_count = len(response.files.graph) if response.files.graph else 0
@@ -468,27 +462,18 @@ class TestMockFilesEndpoint:
             return
         
         try:
-            # Create updated JSON-LD document
-            updated_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": file_uri,
-                    "@type": "vital:FileNode",
-                    "vital:hasFileName": "updated-test-file.txt",
-                    "vital:hasFileType": "text/plain",
-                    "vital:hasFileLength": 2048
-                }]
-            }
+            # Create updated FileNode GraphObject directly
+            from vital_ai_domain.model.FileNode import FileNode
             
-            from vitalgraph.model.jsonld_model import JsonLdDocument
-            document = JsonLdDocument(**updated_jsonld)
+            updated_file = FileNode()
+            updated_file.URI = file_uri
+            updated_file.fileName = "updated-test-file.txt"
+            updated_file.fileType = "text/plain"
+            updated_file.fileLength = 2048
+            
             response = self.endpoint.update_file(
                 space_id=self.test_space_id,
-                document=document,
+                objects=[updated_file],
                 graph_id=self.test_graph_id
             )
             

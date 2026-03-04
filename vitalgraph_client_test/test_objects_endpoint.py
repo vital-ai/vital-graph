@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.client.response.client_response import ObjectsListResponse, ObjectResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 
 def setup_logging():
@@ -141,19 +140,15 @@ async def test_objects_endpoint(config_path: str):
         
         print(f"   ✓ Created {len(objects)} VitalSigns KGEntity objects")
         
-        # Convert VitalSigns objects to JSON-LD for endpoint
-        print("\n5. Converting to JSON-LD and inserting via objects endpoint...")
-        jsonld_data = GraphObject.to_jsonld_list(objects)
-        from vitalgraph.model.jsonld_model import JsonLdDocument
-        test_objects_doc = JsonLdDocument(**jsonld_data)
-        
-        create_response = await client.objects.create_objects(space_id, graph_id, test_objects_doc)
+        # Insert via objects endpoint - pass GraphObjects directly
+        print("\n5. Inserting VitalSigns objects via objects endpoint...")
+        create_response = await client.objects.create_objects(space_id, graph_id, objects)
         print(f"   ✓ Test objects created: {create_response.created_count} objects")
         
         # Test 1: List objects with pagination
         print("\n6. Testing List Objects (Paginated)...")
         try:
-            objects_response: ObjectsResponse = await client.list_objects(
+            objects_response = await client.objects.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=5,
@@ -172,8 +167,8 @@ async def test_objects_endpoint(config_path: str):
             # Show first object
             if objects:
                 first_obj = objects[0]
-                print(f"     - First object URI: {first_obj.get('@id', 'N/A')}")
-                print(f"     - First object type: {first_obj.get('vitaltype', 'N/A')}")
+                print(f"     - First object URI: {first_obj.URI}")
+                print(f"     - First object type: {type(first_obj).__name__}")
             else:
                 print(f"     - No objects found in response")
                 
@@ -185,7 +180,7 @@ async def test_objects_endpoint(config_path: str):
         # Test 2: Count objects
         print("\n7. Testing Object Count...")
         try:
-            count_response: ObjectsResponse = await client.list_objects(
+            count_response = await client.objects.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100,
@@ -203,7 +198,7 @@ async def test_objects_endpoint(config_path: str):
         # Test 3: Search functionality
         print("\n8. Testing Search Objects...")
         try:
-            search_response: ObjectsResponse = await client.list_objects(
+            search_response = await client.objects.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=3,
@@ -216,7 +211,7 @@ async def test_objects_endpoint(config_path: str):
             # Access objects from the response (now a list)
             objects = search_response.objects
             for i, obj in enumerate(objects[:2]):
-                print(f"     - Match {i+1}: {obj.get('@id', 'N/A') if isinstance(obj, dict) else obj}")
+                print(f"     - Match {i+1}: {obj.URI}")
                 
         except VitalGraphClientError as e:
             print(f"   ❌ Search error: {e}")
@@ -226,7 +221,7 @@ async def test_objects_endpoint(config_path: str):
         # Test 4: Verify objects exist
         print("\n9. Testing Object Verification...")
         try:
-            verify_response = await client.list_objects(
+            verify_response = await client.objects.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=100
@@ -237,7 +232,7 @@ async def test_objects_endpoint(config_path: str):
             print(f"   ✓ Verified {len(objects)} objects exist")
             if objects:
                 for i, obj in enumerate(objects[:3]):
-                    print(f"     - Object {i+1}: {obj.get('@id', 'N/A')}")
+                    print(f"     - Object {i+1}: {obj.URI}")
             else:
                 print("   ⚠️  No objects found")
                 
@@ -249,7 +244,7 @@ async def test_objects_endpoint(config_path: str):
         # Test 5: List with offset
         print("\n10. Testing List with Offset...")
         try:
-            offset_response = await client.list_objects(
+            offset_response = await client.objects.list_objects(
                 space_id=space_id,
                 graph_id=graph_id,
                 page_size=2,
@@ -273,7 +268,7 @@ async def test_objects_endpoint(config_path: str):
         try:
             print(f"   Testing different page sizes:")
             for page_size in [1, 2, 5]:
-                page_response = await client.list_objects(
+                page_response = await client.objects.list_objects(
                     space_id=space_id,
                     graph_id=graph_id,
                     page_size=page_size,
@@ -300,15 +295,8 @@ async def test_objects_endpoint(config_path: str):
             updated_entity.name = "Updated Test Entity 1"
             updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#GenericEntity"
             
-            # Convert to JSON-LD - use JsonLdObject for single object
-            updated_jsonld = GraphObject.to_jsonld_list([updated_entity])
-            from vitalgraph.model.jsonld_model import JsonLdObject
-            # Extract the single object from the @graph array
-            single_object_data = updated_jsonld['@graph'][0]
-            single_object_data['@context'] = updated_jsonld['@context']
-            updated_object = JsonLdObject(**single_object_data)
-            
-            update_response = await client.objects.update_objects(space_id, graph_id, updated_object)
+            # Update via client - pass GraphObject directly
+            update_response = await client.objects.update_objects(space_id, graph_id, [updated_entity])
             print(f"   ✓ Objects updated successfully")
             print(f"     - Updated count: {update_response.updated_count}")
             if update_response.updated_uris:
@@ -395,20 +383,8 @@ async def main():
     print("Starting VitalGraph Objects Endpoint Testing...")
     print("📋 Note: Compatible with new structured response models")
     
-    # Determine config file path (required for JWT client)
-    config_dir = Path(__file__).parent.parent / "vitalgraphclient_config"
-    config_file = config_dir / "vitalgraphclient-config.yaml"
-    
-    if config_file.exists():
-        config_path = str(config_file)
-        print(f"✓ Found config file: {config_path}")
-    else:
-        print(f"❌ Config file not found: {config_file}")
-        print("   JWT client requires a configuration file.")
-        print("   Please ensure vitalgraphclient-config.yaml exists in the vitalgraphclient_config directory.")
-        return 1
-    
-    # Test objects endpoint
+    # Test objects endpoint (client uses environment variables for config)
+    config_path = None
     success = await test_objects_endpoint(config_path)
     
     if success:

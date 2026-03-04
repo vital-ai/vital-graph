@@ -1,32 +1,30 @@
 """
 KG Entities REST API endpoint for VitalGraph.
 
-This module provides REST API endpoints for managing KG entities using JSON-LD 1.1 format.
+This module provides REST API endpoints for managing KG entities.
 KG entities represent knowledge graph entities with their associated triples and frame relationships.
 """
 
 import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Query, Depends, Request, Response, Body
+from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
 
-# Legacy import removed - now using kg_impl processors directly
-from vitalgraph.model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from ..model.kgentities_model import (
-    EntitiesResponse,
     EntityCreateResponse,
     EntityUpdateResponse,
     EntityDeleteResponse,
-    EntityFramesResponse,
     EntityFramesMultiResponse,
     EntityGraphResponse,
     EntityQueryRequest,
     EntityQueryResponse,
     EntitiesGraphResponse
 )
-from ..model.kgframes_model import FramesResponse, FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse
+from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse
 # Import VitalSigns integration patterns from mock
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from ..sparql.graph_validation import EntityGraphValidator
@@ -87,7 +85,7 @@ class KGEntitiesEndpoint:
     def _setup_routes(self):
         """Setup FastAPI routes for KG entities management."""
         
-        @self.router.get("/kgentities", response_model=Union[EntitiesResponse, JsonLdDocument, JsonLdObject], tags=["KG Entities"])
+        @self.router.get("/kgentities", tags=["KG Entities"])
         async def list_or_get_entities(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -100,7 +98,7 @@ class KGEntitiesEndpoint:
             id: Optional[str] = Query(None, description="Single reference ID to retrieve"),
             id_list: Optional[str] = Query(None, description="Comma-separated list of reference IDs"),
             include_entity_graph: bool = Query(False, description="If True, include complete entity graphs with frames and slots"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
             List KG entities with pagination, or get specific entities by URI(s) or reference ID(s).
@@ -148,15 +146,18 @@ class KGEntitiesEndpoint:
         
         @self.router.post("/kgentities", response_model=Union[EntityCreateResponse, EntityUpdateResponse], tags=["KG Entities"])
         async def create_or_update_entities(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
             operation_mode: OperationMode = Query(OperationMode.CREATE, description="Operation mode: create, update, or upsert"),
             parent_uri: Optional[str] = Query(None, description="Parent entity URI for hierarchical relationships"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            """Create or update entities. Uses discriminated union to automatically handle single entities (JsonLdObject) or multiple entities (JsonLdDocument)."""
-            return await self._create_or_update_entities(space_id, graph_id, request, operation_mode, parent_uri, current_user)
+            """Create or update entities from JSON Quads."""
+            quads = body.quads
+            return await self._create_or_update_entities(
+                space_id, graph_id, quads, operation_mode, parent_uri, current_user
+            )
         
         
         @self.router.delete("/kgentities", response_model=EntityDeleteResponse, tags=["KG Entities"])
@@ -184,12 +185,12 @@ class KGEntitiesEndpoint:
                     deleted_uris=[]
                 )
         
-        @self.router.get("/kgentities/kgframes", response_model=Union[FramesResponse, FrameGraphsResponse], response_model_by_alias=True, tags=["KG Entities"])
+        @self.router.get("/kgentities/kgframes", response_model=Union[QuadResponse, FrameGraphsResponse], response_model_by_alias=True, tags=["KG Entities"])
         async def get_entity_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             entity_uri: Optional[str] = Query(None, description="Entity URI to get frames for"),
-            frame_uris: Optional[List[str]] = Query(None, description="Specific frame URIs to retrieve (returns N JsonLD documents)"),
+            frame_uris: Optional[List[str]] = Query(None, description="Specific frame URIs to retrieve (returns N quad-format documents)"),
             parent_frame_uri: Optional[str] = Query(None, description="Parent frame URI for hierarchical filtering"),
             page_size: int = Query(10, ge=1, le=1000, description="Number of frames per page"),
             offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -212,27 +213,26 @@ class KGEntitiesEndpoint:
                 search: Optional search term
                 
             Returns:
-                Dictionary with entity frames data or N JsonLD documents if frame_uris provided
+                Dictionary with entity frames data or N quad-format documents if frame_uris provided
             """
             return await self._get_kgentity_frames(space_id, graph_id, entity_uri, frame_uris, page_size, offset, search, current_user, parent_frame_uri)
         
         @self.router.post("/kgentities/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Entities"])
         async def create_or_update_entity_frames(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             entity_uri: str = Query(..., description="Entity URI"),
             operation_mode: OperationMode = Query(OperationMode.CREATE, description="Operation mode: create, update, or upsert"),
             parent_frame_uri: Optional[str] = Query(None, description="Parent frame URI for hierarchical operations"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="GraphObjects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            """Create or update entity frames. Uses discriminated union to automatically handle single frames (JsonLdObject) or multiple frames (JsonLdDocument)."""
+            """Create or update entity frames from JSON Quads."""
+            quads = body.quads
             if operation_mode == OperationMode.UPDATE:
-                # For updates, use the update-specific method
-                return await self._update_entity_frames(space_id, graph_id, entity_uri, request, current_user, parent_frame_uri)
+                return await self._update_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
             else:
-                # For create/upsert, use the create method
-                return await self._create_or_update_frames(space_id, graph_id, request, operation_mode, entity_uri=entity_uri, current_user=current_user, parent_frame_uri=parent_frame_uri)
+                return await self._create_or_update_frames(space_id, graph_id, quads, operation_mode, entity_uri=entity_uri, current_user=current_user, parent_frame_uri=parent_frame_uri)
         
         @self.router.delete("/kgentities/kgframes", tags=["KG Entities"])
         async def delete_entity_frames(
@@ -252,7 +252,7 @@ class KGEntitiesEndpoint:
             frame_uri_list = [uri.strip() for uri in frame_uris.split(',') if uri.strip()]
             return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri)
         
-        @self.router.post("/kgentities/query", response_model=EntitiesResponse, tags=["KG Entities"])
+        @self.router.post("/kgentities/query", response_model=QuadResponse, tags=["KG Entities"])
         async def query_entities(
             query_request: EntityQueryRequest,
             space_id: str = Query(..., description="Space ID"),
@@ -265,33 +265,20 @@ class KGEntitiesEndpoint:
             return await self._query_kgentities(space_id, graph_id, query_request, current_user)
         
     
-    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict) -> EntitiesResponse:
-        """List entities using KGEntityListProcessor and convert to JsonLD response."""
-        from ..model.kgentities_model import EntitiesResponse
-        from ..model.jsonld_model import JsonLdDocument
-        
+    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict):
+        """List entities using KGEntityListProcessor."""
         try:
             self.logger.debug(f"Listing KGEntities from space {space_id}, graph {graph_id}")
             
-            # Backend setup (following _get_entity_by_uri pattern)
+            # Backend setup
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return EntitiesResponse(
-                    entities=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return EntitiesResponse(
-                    entities=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             backend_adapter = create_backend_adapter(backend)
             
@@ -309,43 +296,20 @@ class KGEntitiesEndpoint:
                 include_entity_graph=include_entity_graph
             )
             
-            # Convert GraphObjects to JsonLD
-            if not result.entities or len(result.entities) == 0:
-                # Empty results
-                jsonld_document = JsonLdDocument(
-                    context={"@vocab": "http://vital.ai/ontology/haley-ai-kg#"},
-                    graph=[]
-                )
-            elif len(result.entities) == 1:
-                # Single entity - use JsonLdObject
-                entity_dict = result.entities[0].to_jsonld()
-                jsonld_document = JsonLdObject(**entity_dict)
-            else:
-                # Multiple entities - use JsonLdDocument
-                entities_dict = GraphObject.to_jsonld_list(result.entities)
-                jsonld_document = JsonLdDocument(**entities_dict)
-            
-            # Create EntitiesResponse with pagination metadata
-            return EntitiesResponse(
-                entities=jsonld_document,
+            quads = graphobjects_to_quad_list(result.entities or [], graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=result.total_count,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
             )
             
         except Exception as e:
             self.logger.error(f"Error listing KGEntities: {e}")
-            return EntitiesResponse(
-                entities=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
-    async def _get_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: Optional[str], include_entity_graph: bool, current_user: Dict, reference_id: Optional[str] = None) -> Union[JsonLdObject, JsonLdDocument]:
-        """Get single entity by URI or reference ID using original working implementation."""
-        from ..model.jsonld_model import JsonLdObject, JsonLdDocument
-        
+    async def _get_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: Optional[str], include_entity_graph: bool, current_user: Dict, reference_id: Optional[str] = None):
+        """Get single entity by URI or reference ID."""
         try:
             if uri:
                 self.logger.debug(f"Getting KGEntity {uri} from space {space_id}, graph {graph_id}")
@@ -354,16 +318,15 @@ class KGEntitiesEndpoint:
             else:
                 raise ValueError("Either uri or reference_id must be provided")
             
-            # Use the original working retrieval logic that matches the insertion system
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return JsonLdObject()
+                return QuadResultsResponse(results=[], total_count=0)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return JsonLdObject()
+                return QuadResultsResponse(results=[], total_count=0)
             
             # Use backend adapter for consistent retrieval
             backend_adapter = create_backend_adapter(backend)
@@ -383,186 +346,127 @@ class KGEntitiesEndpoint:
             
             self.logger.debug(f"🔍 KGEntityGetProcessor returned {len(graph_objects) if graph_objects else 0} objects for entity {uri} (include_entity_graph={include_entity_graph})")
             
-            # Convert GraphObjects back to JsonLD for response
-            if not graph_objects or len(graph_objects) == 0:
-                # Return empty JsonLdDocument for no results
-                return JsonLdDocument(
-                    context={"@vocab": "http://vital.ai/ontology/haley-ai-kg#"},
-                    graph=[]
-                )
-            elif len(graph_objects) == 1:
-                # Single entity - return as JsonLdObject
-                entity_dict = graph_objects[0].to_jsonld()
-                return JsonLdObject(**entity_dict)
-            else:
-                # Multiple entities - return as JsonLdDocument
-                entities_dict = GraphObject.to_jsonld_list(graph_objects)
-                return JsonLdDocument(**entities_dict)
+            quads = graphobjects_to_quad_list(graph_objects or [], graph_id)
+            return QuadResultsResponse(
+                results=quads,
+                total_count=len(graph_objects) if graph_objects else 0,
+            )
             
         except Exception as e:
             self.logger.error(f"Error getting KGEntity: {e}")
-            return JsonLdObject()
+            return QuadResultsResponse(results=[], total_count=0)
     
-    async def _get_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: Optional[List[str]], include_entity_graph: bool, current_user: Dict, reference_ids: Optional[List[str]] = None) -> JsonLdDocument:
+    async def _get_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: Optional[List[str]], include_entity_graph: bool, current_user: Dict, reference_ids: Optional[List[str]] = None):
         """Get multiple entities by URI list or reference ID list using initialized processors."""
         try:
             if uris:
                 self.logger.debug(f"Getting {len(uris)} KGEntities by URIs from space {space_id}, graph {graph_id}")
-                self.logger.debug(f"🔍 Requested URIs: {uris}")
                 identifiers = uris
                 use_reference_ids = False
             elif reference_ids:
                 self.logger.debug(f"Getting {len(reference_ids)} KGEntities by reference IDs from space {space_id}, graph {graph_id}")
-                self.logger.debug(f"🔍 Requested reference IDs: {reference_ids}")
                 identifiers = reference_ids
                 use_reference_ids = True
             else:
                 raise ValueError("Either uris or reference_ids must be provided")
             
-            # Get all entities concurrently using asyncio.gather()
-            async def _fetch_by_identifier(identifier):
+            # Get backend
+            space_record = self.space_manager.get_space(space_id)
+            if not space_record:
+                return QuadResponse(results=[], total_count=0, page_size=len(identifiers), offset=0)
+            space_impl = space_record.space_impl
+            backend = space_impl.get_db_space_impl()
+            if not backend:
+                return QuadResponse(results=[], total_count=0, page_size=len(identifiers), offset=0)
+            
+            backend_adapter = create_backend_adapter(backend)
+            get_processor = KGEntityGetProcessor(logger=self.logger)
+            
+            # Fetch all entities concurrently, collecting GraphObjects
+            async def _fetch_objects(identifier):
                 try:
-                    if use_reference_ids:
-                        return await self._get_entity_by_uri(
-                            space_id=space_id,
-                            graph_id=graph_id,
-                            uri=None,
-                            include_entity_graph=include_entity_graph,
-                            current_user=current_user,
-                            reference_id=identifier
-                        )
-                    else:
-                        return await self._get_entity_by_uri(
-                            space_id=space_id,
-                            graph_id=graph_id,
-                            uri=identifier,
-                            include_entity_graph=include_entity_graph,
-                            current_user=current_user
-                        )
+                    uri = None if use_reference_ids else identifier
+                    ref_id = identifier if use_reference_ids else None
+                    objs = await get_processor.get_entity(
+                        space_id=space_id,
+                        graph_id=graph_id or "default",
+                        entity_uri=uri,
+                        reference_id=ref_id,
+                        include_entity_graph=include_entity_graph,
+                        backend_adapter=backend_adapter
+                    )
+                    return objs or []
                 except Exception as e:
                     self.logger.warning(f"Failed to get entity {identifier}: {e}")
-                    return None
+                    return []
             
-            results = await asyncio.gather(*[_fetch_by_identifier(ident) for ident in identifiers])
+            results = await asyncio.gather(*[_fetch_objects(ident) for ident in identifiers])
             
-            all_entities = []
-            for identifier, entity_doc in zip(identifiers, results):
-                if entity_doc:
-                    if hasattr(entity_doc, 'graph') and entity_doc.graph:
-                        self.logger.debug(f"\U0001f50d Adding {len(entity_doc.graph)} objects from JsonLdDocument")
-                        all_entities.extend(entity_doc.graph)
-                    elif hasattr(entity_doc, 'model_dump'):
-                        entity_dict = entity_doc.model_dump(by_alias=True)
-                        self.logger.debug(f"\U0001f50d Adding 1 object from JsonLdObject")
-                        all_entities.append(entity_dict)
-                    else:
-                        self.logger.warning(f"\U0001f50d Unknown entity doc type: {type(entity_doc)}")
-                else:
-                    self.logger.warning(f"\U0001f50d No entity doc returned for {identifier}")
+            all_objects = []
+            for objs in results:
+                all_objects.extend(objs)
             
-            # Return JsonLdDocument with all found entities
-            return JsonLdDocument(
-                context="https://vitalgraph.ai/contexts/vital-core",
-                graph=all_entities
+            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            return QuadResponse(
+                results=quads,
+                total_count=len(all_objects),
+                page_size=len(identifiers),
+                offset=0,
             )
             
         except Exception as e:
             self.logger.error(f"Error getting KGEntities: {e}")
-            return JsonLdDocument(graph=[])
+            return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
     
-    async def _create_or_update_entities(self, space_id: str, graph_id: str, request: JsonLdRequest, operation_mode: OperationMode, parent_uri: Optional[str], current_user: Dict) -> Union[EntityCreateResponse, EntityUpdateResponse]:
-        """Create or update KG entities using refactored kg_impl implementation."""
-        _lock_ctxs = []  # list of (entity_uri, lock_ctx) for cleanup
+    async def _create_or_update_entities(
+        self, space_id: str, graph_id: str,
+        quads: List[Quad],
+        operation_mode: OperationMode, parent_uri: Optional[str],
+        current_user: Dict,
+    ) -> Union[EntityCreateResponse, EntityUpdateResponse]:
+        """Create or update entities from quads."""
+        vitalsigns_objects = quad_list_to_graphobjects(quads)
+        _lock_ctxs = []
         try:
-            self.logger.debug(f"Processing KG entities in space '{space_id}', graph '{graph_id}', operation_mode='{operation_mode}', parent_uri='{parent_uri}'")
-            
-            # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
+                msg = "graph_id is required for entity creation/update"
                 if operation_mode == OperationMode.CREATE:
-                    from ..model.kgentities_model import EntityCreateResponse
-                    return EntityCreateResponse(
-                        success=False,
-                        message="graph_id is required for entity creation/update",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    from ..model.kgentities_model import EntityUpdateResponse
-                    return EntityUpdateResponse(
-                        success=False,
-                        message="graph_id is required for entity creation/update",
-                        updated_uri="",
-                        updated_count=0
-                    )
-            
-            # Get backend implementation via generic interface
+                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
+                msg = f"Space {space_id} not found"
                 if operation_mode == OperationMode.CREATE:
-                    from ..model.kgentities_model import EntityCreateResponse
-                    return EntityCreateResponse(
-                        success=False,
-                        message=f"Space {space_id} not found",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    from ..model.kgentities_model import EntityUpdateResponse
-                    return EntityUpdateResponse(
-                        success=False,
-                        message=f"Space {space_id} not found",
-                        updated_uri="",
-                        updated_count=0
-                    )
-            
+                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
+                msg = "Backend implementation not available"
                 if operation_mode == OperationMode.CREATE:
-                    from ..model.kgentities_model import EntityCreateResponse
-                    return EntityCreateResponse(
-                        success=False,
-                        message="Backend implementation not available",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    from ..model.kgentities_model import EntityUpdateResponse
-                    return EntityUpdateResponse(
-                        success=False,
-                        message="Backend implementation not available",
-                        updated_uri="",
-                        updated_count=0
-                    )
-            
-            # Convert operation mode to kg_impl format
-            impl_operation_mode = self._convert_operation_mode(operation_mode)
-            
-            # Create backend adapter for kg_impl
-            backend_adapter = create_backend_adapter(backend_impl)
-            
-            # Convert JsonLD to GraphObjects first (endpoint handles conversion)
-            vitalsigns_objects = self._convert_jsonld_to_graph_objects(request)
+                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
             if not vitalsigns_objects:
+                msg = "No valid objects found in request"
                 if operation_mode == OperationMode.CREATE:
-                    from ..model.kgentities_model import EntityCreateResponse
-                    return EntityCreateResponse(
-                        success=False,
-                        message="No valid objects found in request",
-                        created_count=0,
-                        created_uris=[]
-                    )
-                else:
-                    from ..model.kgentities_model import EntityUpdateResponse
-                    return EntityUpdateResponse(
-                        success=False,
-                        message="No valid objects found in request",
-                        updated_uri="",
-                        updated_count=0
-                    )
-            
-            # Acquire entity-level advisory locks for all entities in the request.
-            # Sort URIs to prevent deadlocks when multiple requests lock the same set.
+                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
+            # Validate that at least one KGEntity instance is present
+            entity_objects = [obj for obj in vitalsigns_objects if isinstance(obj, KGEntity)]
+            if not entity_objects:
+                msg = "No valid KGEntity objects found in request"
+                if operation_mode == OperationMode.CREATE:
+                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+
+            impl_operation_mode = self._convert_operation_mode(operation_mode)
+            backend_adapter = create_backend_adapter(backend_impl)
+
+            # Acquire entity-level advisory locks
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
             if _lm:
                 entity_uris_to_lock = sorted(set(
@@ -576,51 +480,31 @@ class KGEntitiesEndpoint:
                         _lock_ctxs.append((_euri, _lctx))
                     except Exception as _le:
                         self.logger.warning(f"⚠️ Could not acquire entity lock for {_euri}: {_le}")
-            
-            # Use appropriate processor based on operation mode
+
             if operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
-            else:
-                # Use kg_impl processor for the core logic
-                processor = KGEntityCreateProcessor(backend_adapter)
-                result = await processor.create_or_update_entities(
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    vitalsigns_objects=vitalsigns_objects,
-                    operation_mode=impl_operation_mode,
-                    parent_uri=parent_uri
-                )
-            
-            # Handle any errors in the result - return the result as-is since it already contains proper error information
-            
-            return result
-                
+
+            processor = KGEntityCreateProcessor(backend_adapter)
+            return await processor.create_or_update_entities(
+                space_id=space_id,
+                graph_id=graph_id,
+                vitalsigns_objects=vitalsigns_objects,
+                operation_mode=impl_operation_mode,
+                parent_uri=parent_uri,
+            )
+
         except Exception as e:
-            self.logger.error(f"Error processing entities: {e}")
+            self.logger.error(f"Error processing entities (new format): {e}")
             if operation_mode == OperationMode.CREATE:
-                from ..model.kgentities_model import EntityCreateResponse
-                return EntityCreateResponse(
-                    success=False,
-                    message=f"Failed to process entities: {str(e)}",
-                    created_count=0,
-                    created_uris=[]
-                )
-            else:
-                from ..model.kgentities_model import EntityUpdateResponse
-                return EntityUpdateResponse(
-                    success=False,
-                    message=f"Failed to process entities: {str(e)}",
-                    updated_uri="",
-                    updated_count=0
-                )
+                return EntityCreateResponse(success=False, message=f"Failed to process entities: {e}", created_count=0, created_uris=[])
+            return EntityUpdateResponse(success=False, message=f"Failed to process entities: {e}", updated_uri="", updated_count=0)
         finally:
-            # Release all entity locks in reverse order
             for _euri, _lctx in reversed(_lock_ctxs):
                 try:
                     await _lctx.__aexit__(None, None, None)
                 except Exception as _ue:
                     self.logger.warning(f"⚠️ Error releasing entity lock for {_euri}: {_ue}")
-    
+
     async def _handle_update_mode(self, backend_adapter, space_id: str, graph_id: str, 
                                  vitalsigns_objects: List[GraphObject], current_user: Dict) -> EntityUpdateResponse:
         """Handle UPDATE mode using KGEntityUpdateProcessor with DELETE + INSERT pattern."""
@@ -710,11 +594,6 @@ class KGEntitiesEndpoint:
                 message=f"Error updating entities: {str(e)}",
                 updated_uri=""
             )
-    
-    def _convert_jsonld_to_graph_objects(self, jsonld_data: Union[JsonLdObject, JsonLdDocument]) -> List[GraphObject]:
-        """Convert JSON-LD data to VitalSigns GraphObject instances using JSON-LD utilities."""
-        from ..kg_impl.kg_jsonld_utils import KGJsonLdUtils
-        return KGJsonLdUtils.convert_jsonld_to_graph_objects(jsonld_data)
     
     def _extract_entity_uris(self, graph_objects: List[GraphObject]) -> List[str]:
         """
@@ -935,36 +814,20 @@ class KGEntitiesEndpoint:
                 deleted_uris=[]
             )
     
-    async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None) -> 'FramesResponse':
+    async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
         """Get frames associated with KGEntities using SPARQL query processor."""
         try:
             self.logger.debug(f"Getting KGEntity frames in space {space_id}, graph {graph_id}, entity_uri {entity_uri}, frame_uris {frame_uris}, parent_frame_uri {parent_frame_uri}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                from ..model.kgentities_model import FramesResponse
-                from ..model.jsonld_model import JsonLdDocument
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                from ..model.kgentities_model import FramesResponse
-                from ..model.jsonld_model import JsonLdDocument
-                return FramesResponse(
-                    frames=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
-                )
+                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
-            # Create backend adapter and SPARQL processor
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             
@@ -980,111 +843,54 @@ class KGEntitiesEndpoint:
                 space_id, graph_id, entity_uri, page_size, offset, search, parent_frame_uri
             )
             
-            self.logger.debug(f"🔍 DEBUG: Frame query results: {frame_results}")
-            self.logger.debug(f"🔍 DEBUG: Found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
+            self.logger.debug(f"Found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
             
             # Get all triples for the frame URIs and convert to VitalSigns objects
             frames = []
             if frame_results['frame_uris']:
-                # Get triples for all frame subjects
                 triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_results['frame_uris'])
-                self.logger.debug(f"🔍 DEBUG: Got {len(triples)} triples for {len(frame_results['frame_uris'])} frame URIs")
-                
-                # Convert triples to VitalSigns frame objects
                 frames = self._convert_triples_to_vitalsigns_frames(triples)
-                self.logger.debug(f"🔍 DEBUG: Converted to {len(frames)} VitalSigns frame objects")
+                self.logger.debug(f"Converted to {len(frames)} VitalSigns frame objects")
             
-            # Convert frames to JSON-LD document (same pattern as KGFramesEndpoint)
-            from ..model.jsonld_model import JsonLdDocument, JsonLdObject
-            
-            if len(frames) == 1:
-                # Single frame - return as JsonLdObject using to_jsonld()
-                single_frame_dict = frames[0].to_jsonld()
-                jsonld_response = JsonLdObject(**single_frame_dict)
-            elif len(frames) == 0:
-                # No frames - return empty JsonLdDocument
-                jsonld_response = JsonLdDocument(graph=[])
-            else:
-                # Multiple frames - convert each frame individually then wrap in JsonLdDocument
-                jsonld_objects = []
-                for frame in frames:
-                    try:
-                        frame_dict = frame.to_jsonld()
-                        # Remove individual @context - document-level context is sufficient
-                        if '@context' in frame_dict:
-                            del frame_dict['@context']
-                        jsonld_objects.append(frame_dict)
-                    except Exception as e:
-                        self.logger.warning(f"Error converting frame to JSON-LD: {e}")
-                        continue
-                
-                jsonld_response = JsonLdDocument(
-                    context={"@vocab": "http://vital.ai/ontology/haley-ai-kg#"},
-                    graph=jsonld_objects
-                )
-            
-            # Return proper FramesResponse
-            from ..model.kgframes_model import FramesResponse
-            
-            # Debug: Check what we're returning
-            if hasattr(jsonld_response, 'graph'):
-                self.logger.debug(f"🔍 DEBUG: Returning JsonLdDocument with {len(jsonld_response.graph)} objects in graph")
-            else:
-                self.logger.debug(f"🔍 DEBUG: Returning JsonLdObject")
-            
-            response = FramesResponse(
-                frames=jsonld_response,
+            quads = graphobjects_to_quad_list(frames, graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=frame_results['total_count'],
                 page_size=page_size,
-                offset=offset
+                offset=offset,
             )
-            
-            # Debug: Check the response after creation
-            if hasattr(response.frames, 'graph'):
-                self.logger.debug(f"🔍 DEBUG: FramesResponse.frames.graph has {len(response.frames.graph)} objects")
-            
-            return response
             
         except Exception as e:
             self.logger.error(f"Error getting KGEntity frames: {e}")
-            from ..model.kgframes_model import FramesResponse
-            from ..model.jsonld_model import JsonLdDocument
-            return FramesResponse(
-                frames=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
-            )
+            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
     async def _get_individual_frame(self, space_id: str, graph_id: str, frame_uri: str, include_frame_graph: bool = False, current_user: Dict = None):
         """Get an individual frame by URI using SPARQL query processor."""
         try:
             self.logger.debug(f"Getting individual frame {frame_uri} from space {space_id}, graph {graph_id}")
             
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                from ..model.jsonld_model import JsonLdObject
-                return JsonLdObject()
+                class FrameResponse:
+                    def __init__(self, graph): self.graph = []
+                return FrameResponse([])
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                from ..model.jsonld_model import JsonLdObject
-                return JsonLdObject()
+                class FrameResponse:
+                    def __init__(self, graph): self.graph = []
+                return FrameResponse([])
             
-            # Create backend adapter and SPARQL processor
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
             
-            # Use processor to get individual frame
             frame_data = await sparql_processor.get_individual_frame(space_id, graph_id, frame_uri, include_frame_graph)
             
             if not frame_data or not frame_data.get('subject_uris'):
-                # Return empty response instead of 404 - service should never return 404 for valid requests
                 class FrameResponse:
                     def __init__(self, success, message, data):
                         self.success = success
@@ -1097,16 +903,11 @@ class KGEntitiesEndpoint:
                     data=None
                 )
             
-            self.logger.debug(f"🔍 Found {len(frame_data['subject_uris'])} objects for frame {frame_uri}")
+            self.logger.debug(f"Found {len(frame_data['subject_uris'])} objects for frame {frame_uri}")
             
-            # Get all triples for the subject URIs
             triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_data['subject_uris'])
-            
-            # Convert triples to VitalSigns objects
             frame_objects = self._convert_triples_to_vitalsigns_frames(triples)
             
-            # Return VitalSigns objects directly instead of converting to JSON
-            # This avoids unnecessary JSON serialization/deserialization
             class FrameResponse:
                 def __init__(self, graph):
                     self.graph = graph
@@ -1115,14 +916,15 @@ class KGEntitiesEndpoint:
             
         except Exception as e:
             self.logger.error(f"Error getting individual frame: {e}")
-            from ..model.jsonld_model import JsonLdObject
-            return JsonLdObject()
+            class FrameResponse:
+                def __init__(self, graph): self.graph = []
+            return FrameResponse([])
     
-    async def _create_or_update_frames(self, space_id: str, graph_id: str, request: Any, operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None):
-        """Create or update frames for KGEntities integration using KGEntityFrameCreateProcessor."""
+    async def _create_or_update_frames(self, space_id: str, graph_id: str, quads: List[Quad], operation_mode: Any, parent_uri: str = None, entity_uri: str = None, current_user: Dict = None, parent_frame_uri: str = None):
+        """Create or update frames for KGEntities integration from quads."""
+        graph_objects = quad_list_to_graphobjects(quads)
         _lock_ctx = None
         try:
-            # Validate required parameters for KGEntities frame operations
             if not entity_uri:
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
@@ -1134,7 +936,6 @@ class KGEntitiesEndpoint:
             
             self.logger.debug(f"Creating/updating frames for entity {entity_uri} in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameCreateResponse
@@ -1167,18 +968,7 @@ class KGEntitiesEndpoint:
                     self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
                     _lock_ctx = None
             
-            # Create backend adapter
             backend_adapter = create_backend_adapter(backend_impl)
-            
-            # Convert JSON-LD document to VitalSigns objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vs = VitalSigns()
-            
-            # Get the JSON-LD document
-            jsonld_document = request.model_dump(by_alias=True)
-            
-            # Convert to VitalSigns objects
-            graph_objects = vs.from_jsonld_list(jsonld_document)
             
             if not graph_objects:
                 from ..model.kgframes_model import FrameCreateResponse
@@ -1338,16 +1128,15 @@ class KGEntitiesEndpoint:
                     self.logger.warning(f"⚠️ Error releasing entity lock for frame {uri}: {_ue}")
     
     async def _create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
-                                   request: JsonLdDocument, operation_mode: OperationMode, current_user: Dict, 
+                                   quads: List[Quad], operation_mode: OperationMode, current_user: Dict, 
                                    parent_frame_uri: Optional[str] = None) -> FrameCreateResponse:
-        """Create or update frames within entity context using Edge_hasEntityKGFrame relationships."""
+        """Create or update frames within entity context from quads."""
+        graph_objects = quad_list_to_graphobjects(quads)
         _lock_ctx = None
         try:
-            # Handle both OperationMode enum and string types
             mode_str = operation_mode.value if hasattr(operation_mode, 'value') else str(operation_mode)
             self.logger.debug(f"Processing entity frames for {entity_uri} in space {space_id}, graph {graph_id}, mode '{mode_str}'")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 return FrameCreateResponse(
@@ -1376,19 +1165,6 @@ class KGEntitiesEndpoint:
             except Exception as _le:
                 self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
                 _lock_ctx = None
-            
-            # Convert JSON-LD to VitalSigns graph objects via triples
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            
-            # Initialize VitalSigns for object conversion
-            vs = VitalSigns()
-            
-            # Convert JSON-LD document to VitalSigns objects
-            jsonld_document = request.model_dump(by_alias=True)
-            
-            # Use VitalSigns native JSON-LD processing to create graph objects
-            graph_objects = vs.from_jsonld_list(jsonld_document)
             
             processed_frames = []
             
@@ -1469,7 +1245,7 @@ class KGEntitiesEndpoint:
             
             connection_edges = hierarchical_processor.create_connection_edges(entity_uri, processed_frames, parent_frame_uri)
             
-            # Convert VitalSigns graph objects back to JSON-LD for backend processing
+            # Convert VitalSigns graph objects for backend processing
             all_graph_objects = processed_frames + connection_edges
             
             # Create backend adapter for frame operations
@@ -1631,9 +1407,10 @@ class KGEntitiesEndpoint:
                     self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_ue}")
     
     async def _update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, 
-                                   request: JsonLdDocument, current_user: Dict, 
+                                   quads: List[Quad], current_user: Dict, 
                                    parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
-        """Update frames within entity context using complete frame replacement."""
+        """Update frames within entity context from quads."""
+        graph_objects = quad_list_to_graphobjects(quads)
         _lock_ctx = None
         try:
             import time as _time
@@ -1643,7 +1420,6 @@ class KGEntitiesEndpoint:
             else:
                 self.logger.debug(f"Updating TOP-LEVEL entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
@@ -1666,21 +1442,14 @@ class KGEntitiesEndpoint:
             _u1 = _time.time()
             self.logger.info(f"⏱️ UPDATE_ENDPOINT get_backend: {_u1-_u0:.3f}s")
             
-            # Convert JSON-LD to VitalSigns graph objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
             from ai_haley_kg_domain.model.KGFrame import KGFrame
-            vs = VitalSigns()
-            jsonld_document = request.model_dump(by_alias=True)
-            self.logger.debug(f"🔍 Update request JSON-LD has {len(jsonld_document.get('graph', []))} objects")
-            graph_objects = vs.from_jsonld_list(jsonld_document)
-            self.logger.debug(f"🔍 Converted to {len(graph_objects)} VitalSigns objects")
+            self.logger.debug(f"Update received {len(graph_objects)} VitalSigns objects")
             for i, obj in enumerate(graph_objects):
                 obj_type = type(obj).__name__
                 obj_uri = str(obj.URI) if hasattr(obj, 'URI') else 'NO_URI'
-                self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
+                self.logger.debug(f"  Object {i+1}: {obj_type} - {obj_uri}")
             
             _u2 = _time.time()
-            self.logger.info(f"⏱️ UPDATE_ENDPOINT jsonld_to_vitalsigns: {_u2-_u1:.3f}s ({len(graph_objects)} objects)")
             
             # Acquire entity-level advisory lock to prevent concurrent modifications
             _lock_manager = getattr(space_impl.backend, 'entity_lock_manager', None)
@@ -1962,10 +1731,8 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error validating entity-frame relationships: {e}")
             return False
     
-    async def _query_kgentities(self, space_id: str, graph_id: str, query_request: Any, current_user: Dict) -> 'EntitiesResponse':
+    async def _query_kgentities(self, space_id: str, graph_id: str, query_request: Any, current_user: Dict):
         """Query KGEntities using criteria-based search with SPARQL processor."""
-        from ..model.kgentities_model import EntitiesResponse
-        from ..model.jsonld_model import JsonLdDocument
         from ..kg_impl.kg_backend_utils import create_backend_adapter
         from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
         try:
@@ -1973,42 +1740,26 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Query request: {query_request.model_dump_json()}")
             self.logger.debug(f"Query criteria: {query_request.criteria}")
             
-            # Get backend implementation via generic interface
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
-                return EntitiesResponse(
-                    entities=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=0,
-                    offset=0
-                )
+                return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return EntitiesResponse(
-                    entities=JsonLdDocument(graph=[]),
-                    total_count=0,
-                    page_size=0,
-                    offset=0
-                )
-            
-            # Create backend adapter and SPARQL processor
+                return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
             
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
             
-            # Execute query using SPARQL processor
             query_results = await sparql_processor.execute_entity_query(space_id, graph_id, query_request)
             
-            # Fetch actual entity objects for the URIs
             entity_uris = query_results['entity_uris']
+            all_objects = []
             if entity_uris:
-                # Get entities using the same approach as _get_entities_by_uris
                 from ..kg_impl.kgentity_get_impl import KGEntityGetProcessor
                 processor = KGEntityGetProcessor(self.logger)
                 
-                # Fetch all entities concurrently
                 async def _fetch_query_entity(uri):
                     try:
                         return await processor.get_entity(
@@ -2024,39 +1775,21 @@ class KGEntitiesEndpoint:
                 
                 fetch_results = await asyncio.gather(*[_fetch_query_entity(uri) for uri in entity_uris])
                 
-                entities = []
                 for entity_list in fetch_results:
                     if entity_list:
-                        entities.extend(entity_list)
-                
-                # Convert to JSON-LD - handle single vs multiple entities
-                if len(entities) == 1:
-                    # Single entity - use JsonLdObject
-                    entity_dict = entities[0].to_jsonld()
-                    entities_doc = JsonLdObject(**entity_dict)
-                else:
-                    # Multiple entities - use JsonLdDocument
-                    entities_dict = GraphObject.to_jsonld_list(entities)
-                    entities_doc = JsonLdDocument(**entities_dict)
-            else:
-                entities_doc = JsonLdDocument(graph=[])
+                        all_objects.extend(entity_list)
             
-            # Create response with actual entities
-            return EntitiesResponse(
-                entities=entities_doc,
+            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=query_results['total_count'],
                 page_size=query_results['page_size'],
-                offset=query_results['offset']
+                offset=query_results['offset'],
             )
             
         except Exception as e:
             self.logger.error(f"Error querying KGEntities: {e}")
-            return EntitiesResponse(
-                entities=JsonLdDocument(graph=[]),
-                total_count=0,
-                page_size=0,
-                offset=0
-            )
+            return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
     
     def _convert_query_criteria_to_sparql(self, criteria):
         """Convert Pydantic EntityQueryCriteria to SPARQL dataclass format."""
@@ -2167,7 +1900,7 @@ class KGEntitiesEndpoint:
             complete_graphs = None
             if include_entity_graphs:
                 # Extract complete graphs from the entities response
-                # The graphs are already embedded in the entities JSON-LD when include_entity_graph=True
+                # The graphs are already embedded in the entities response when include_entity_graph=True
                 # So we can extract them from the entity objects
                 complete_graphs = []
                 if entities_response.entities:
@@ -2175,7 +1908,7 @@ class KGEntitiesEndpoint:
                         if hasattr(entity, 'graph') and entity.graph:
                             complete_graphs.append(entity.graph)
                         elif hasattr(entity, 'data') and entity.data:
-                            # Handle JsonLdDocument format
+                            # Handle nested data format
                             if hasattr(entity.data, 'graph'):
                                 complete_graphs.append(entity.data.graph)
                 
@@ -2195,15 +1928,13 @@ class KGEntitiesEndpoint:
     
     # Entity-Frame Relationship Methods (from mock implementation)
     
-    async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument, operation_mode: str = "create") -> 'FrameCreateResponse':
+    async def create_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, graph_objects: List, operation_mode: str = "create") -> 'FrameCreateResponse':
         """Create frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
             self.logger.debug(f"Creating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
-            # Use the existing _create_or_update_frames implementation
             from vitalgraph.endpoint.kgentities_endpoint import OperationMode
             
-            # Convert operation_mode string to OperationMode enum
             if operation_mode.upper() == "UPDATE":
                 op_mode = OperationMode.UPDATE
             elif operation_mode.upper() == "UPSERT":
@@ -2211,13 +1942,12 @@ class KGEntitiesEndpoint:
             else:
                 op_mode = OperationMode.CREATE
             
-            # Get current user context (mock for now)
             current_user = {"username": "system", "user_id": "system"}
             
             result = await self._create_or_update_frames(
                 space_id=space_id,
                 graph_id=graph_id,
-                request=document,
+                graph_objects=graph_objects,
                 operation_mode=op_mode,
                 entity_uri=entity_uri,
                 current_user=current_user
@@ -2262,13 +1992,12 @@ class KGEntitiesEndpoint:
             self.logger.error(f"Error getting triples for subjects: {e}")
             return []
 
-    async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, document: JsonLdDocument) -> 'FrameUpdateResponse':
+    async def update_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, graph_objects: List) -> 'FrameUpdateResponse':
         """Update frames within entity context using Edge_hasEntityKGFrame relationships."""
         try:
-            self.logger.debug(f"🔄 Starting frame update for entity {entity_uri}: {len(document.graph) if document.graph else 0} frame objects")
             self.logger.debug(f"Updating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
+            self.logger.debug(f"Received {len(graph_objects) if graph_objects else 0} VitalSigns objects")
             
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
@@ -2288,24 +2017,10 @@ class KGEntitiesEndpoint:
                     updated_count=0
                 )
             
-            # Create backend adapter
             from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend_impl)
             
-            # Convert JSON-LD document to VitalSigns objects
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vs = VitalSigns()
-            
-            # Get the JSON-LD document
-            jsonld_document = document.model_dump(by_alias=True)
-            self.logger.debug(f"🔄 Converting JSON-LD document with {len(jsonld_document.get('graph', []))} objects")
-            
-            # Convert to VitalSigns objects
-            graph_objects = vs.from_jsonld_list(jsonld_document)
-            self.logger.debug(f"🔄 Converted to {len(graph_objects) if graph_objects else 0} VitalSigns objects")
-            
             if not graph_objects:
-                self.logger.error("❌ No valid objects found in JSON-LD document for frame update")
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
                     message="No valid objects found in request",
@@ -2313,7 +2028,6 @@ class KGEntitiesEndpoint:
                     updated_count=0
                 )
             
-            # Use KGEntityFrameUpdateProcessor to handle frame updates
             frame_update_processor = KGEntityFrameUpdateProcessor(backend_adapter, self.logger)
             
             # Update frames using processor
@@ -2491,20 +2205,20 @@ class KGEntitiesEndpoint:
                 if 'error' in frame_data:
                     # Pass through error responses
                     frame_graphs[frame_uri] = frame_data
-                elif 'triples' in frame_data and frame_data['triples']:
+                elif 'typed_triples' in frame_data and frame_data['typed_triples']:
                     # Convert SPARQL result tuples to VitalSigns GraphObjects
                     try:
                         from rdflib import URIRef, Literal
-                        from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
                         
-                        # Convert string tuples to RDFLib Triple objects
+                        # Convert typed tuples to RDFLib Triple objects using SPARQL type and datatype info
                         rdflib_triples = []
-                        for subject_str, predicate_str, object_str in frame_data['triples']:
+                        for subject_str, predicate_str, object_str, object_type, obj_datatype in frame_data['typed_triples']:
                             subject = URIRef(subject_str)
                             predicate = URIRef(predicate_str)
-                            # Use VitalSigns RFC 3986 validation to determine if object is URI or Literal
-                            if validate_rfc3986(object_str, rule='URI'):
+                            if object_type == 'uri':
                                 obj = URIRef(object_str)
+                            elif obj_datatype:
+                                obj = Literal(object_str, datatype=URIRef(obj_datatype))
                             else:
                                 obj = Literal(object_str)
                             rdflib_triples.append((subject, predicate, obj))
@@ -2520,10 +2234,10 @@ class KGEntitiesEndpoint:
                             object_types[obj_type] = object_types.get(obj_type, 0) + 1
                         self.logger.debug(f"🔍 Frame {frame_uri}: Created objects: {object_types}")
                         
-                        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                        jsonld_dict = GraphObject.to_jsonld_list(graph_objects)
-                        frame_graphs[frame_uri] = jsonld_dict
-                        self.logger.debug(f"🔍 Frame {frame_uri}: Retrieved {len(graph_objects)} objects from {len(frame_data['triples'])} triples")
+                        from vitalgraph.utils.quad_format_utils import graphobjects_to_json_quads_response
+                        quad_response = graphobjects_to_json_quads_response(graph_objects, graph_uri=full_graph_uri)
+                        frame_graphs[frame_uri] = quad_response
+                        self.logger.debug(f"🔍 Frame {frame_uri}: Retrieved {len(graph_objects)} objects from {len(frame_data['typed_triples'])} triples")
                     except Exception as vs_error:
                         self.logger.warning(f"VitalSigns conversion error for frame {frame_uri}: {vs_error}")
                         # Don't include frames with conversion errors
@@ -2542,8 +2256,7 @@ class KGEntitiesEndpoint:
             
         except Exception as e:
             self.logger.error(f"Error in specific frame graph retrieval: {e}")
-            from ..model.jsonld_model import JsonLdDocument
-            return JsonLdDocument(graph=[])
+            return {"frame_graphs": {}, "entity_uri": "", "requested_frames": 0, "retrieved_frames": 0, "validation_results": {}}
     
     def _extract_frame_uris_from_results(self, results) -> List[str]:
         """Extract frame URIs from SPARQL query results."""

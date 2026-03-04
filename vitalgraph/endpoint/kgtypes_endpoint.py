@@ -1,32 +1,31 @@
 """KG Types Endpoint for VitalGraph
 
-Implements REST API endpoints for KG type management operations using JSON-LD 1.1 format.
+Implements REST API endpoints for KG type management operations.
 Based on the planned API specification in docs/planned_rest_api_endpoints.md
 """
 
 from typing import Dict, Any, Optional, List, Union
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
+from fastapi import APIRouter, HTTPException, Depends, Query, Body, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
 from datetime import datetime
 
-from pyld import jsonld
 import vital_ai_vitalsigns as vitalsigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGType import KGType
 
-# Legacy import removed - now using kg_impl processors directly
 from ..kg_impl.kgtypes_create_impl import KGTypesCreateProcessor
 from ..kg_impl.kgtypes_read_impl import KGTypesReadProcessor
 from ..kg_impl.kgtypes_update_impl import KGTypesUpdateProcessor
 from ..kg_impl.kgtypes_delete_impl import KGTypesDeleteProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from ..model.kgtypes_model import KGTypeFilter
 from vitalgraph.model.kgtypes_model import (
-    KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse,
-    KGTypeCreateRequest, KGTypeUpdateRequest, KGTypeGetResponse, KGTypeBatchDeleteRequest
+    KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse,
+    KGTypeCreateRequest, KGTypeUpdateRequest, KGTypeBatchDeleteRequest
 )
 
 
@@ -48,62 +47,13 @@ class KGTypesEndpoint:
         self._setup_routes()
     
     
-    def _jsonld_to_vitalsigns_objects(self, data: JsonLdRequest) -> List[GraphObject]:
-        """
-        Convert Pydantic JSON-LD models to VitalSigns KGType objects using VitalSigns 0.1.40 JSON-LD API.
-        
-        Args:
-            data: JsonLdRequest (discriminated union of JsonLdObject or JsonLdDocument)
-            
-        Returns:
-            List[GraphObject]: List of VitalSigns KGType objects
-        """
-        try:
-            # Use VitalSigns 0.1.40 native JSON-LD conversion methods
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            
-            # Convert Pydantic model to JSON-LD dictionary
-            if isinstance(data, JsonLdObject):
-                # Single object - use from_jsonld()
-                jsonld_dict = data.model_dump(by_alias=True)
-                graph_object = GraphObject.from_jsonld(jsonld_dict)
-                graph_objects = [graph_object] if graph_object else []
-            elif isinstance(data, JsonLdDocument):
-                # Document with @graph array - use from_jsonld_list()
-                jsonld_dict = data.model_dump(by_alias=True)
-                graph_objects = GraphObject.from_jsonld_list(jsonld_dict)
-            else:
-                raise ValueError(f"Unsupported data type: {type(data)}")
-            
-            # Filter to ensure we only have valid GraphObject instances
-            kgtype_objects = []
-            for obj in graph_objects:
-                if isinstance(obj, GraphObject):
-                    kgtype_objects.append(obj)
-            
-            self.logger.info(f"Converted {len(kgtype_objects)} objects from JSON-LD using VitalSigns 0.1.40 native methods")
-            return kgtype_objects
-            
-        except Exception as e:
-            self.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
-            raise
-    
-    def _validate_operation_compatibility(self, operation: str, format_type: str, object_count: int):
-        """Validate that operation type matches data format."""
-        if operation == "single_update" and format_type == "multiple":
-            raise ValueError("Cannot use JsonLdDocument for single object update operations")
-        if operation == "batch_create" and format_type == "single":
-            raise ValueError("Cannot use JsonLdObject for batch operations")
-        if format_type == "single" and object_count > 1:
-            raise ValueError("JsonLdObject format detected but multiple objects provided")
-    
     def _setup_routes(self):
         """Setup KG types routes."""
         
         # GET /api/graphs/kgtypes - List KG types with pagination/filtering
         @self.router.get(
             "/kgtypes",
-            response_model=Union[KGTypeGetResponse, KGTypeListResponse],
+            response_model=None,
             tags=["KG Types"],
             summary="List KG Types",
             description="List KG types in graph with pagination and filtering options. Returns KGTypeGetResponse for single URI, KGTypeListResponse for lists/searches."
@@ -116,7 +66,7 @@ class KGTypesEndpoint:
             search: Optional[str] = Query(None, description="Search text to filter types"),
             uri: Optional[str] = Query(None, description="Get specific type by URI"),
             uri_list: Optional[str] = Query(None, description="Get multiple types by comma-separated URI list"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             # Handle specific URI request
             if uri:
@@ -131,7 +81,7 @@ class KGTypesEndpoint:
                 return await self._list_kgtypes(
                     space_id, graph_id, page_size, offset, 
                     filter=None, current_user=current_user, 
-                    search=search
+                    search=search,
                 )
         
         # POST /api/graphs/kgtypes - Create new KG types
@@ -143,10 +93,13 @@ class KGTypesEndpoint:
             description="Create new KG types in the specified graph"
         )
         async def create_kgtypes(
-            request: KGTypeCreateRequest = Body(..., description="KGType creation request with Union data support"),
-            current_user: Dict = Depends(self.auth_dependency)
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            body: QuadRequest = Body(..., description="KGType objects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            return await self._create_kgtypes(request.space_id, request.graph_id, request.data, current_user)
+            quads = body.quads
+            return await self._create_kgtypes(space_id, graph_id, quads, current_user)
         
         # PUT /api/graphs/kgtypes - Update KG types
         @self.router.put(
@@ -157,10 +110,13 @@ class KGTypesEndpoint:
             description="Update existing KG types in the specified graph"
         )
         async def update_kgtypes(
-            request: KGTypeUpdateRequest = Body(..., description="KGType update request with Union data support"),
-            current_user: Dict = Depends(self.auth_dependency)
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph ID"),
+            body: QuadRequest = Body(..., description="KGType objects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
-            return await self._update_kgtypes(request.space_id, request.graph_id, request.data, current_user)
+            quads = body.quads
+            return await self._update_kgtypes(space_id, graph_id, quads, current_user)
         
         # DELETE /api/graphs/kgtypes - Delete KG types
         @self.router.delete(
@@ -188,14 +144,14 @@ class KGTypesEndpoint:
         offset: int,
         filter: Optional[str] = None,
         current_user: Dict = None,
-        search: Optional[str] = None
-    ) -> KGTypeListResponse:
-        """List KG types with filtering and pagination using JSON-LD format."""
+        search: Optional[str] = None,
+    ) -> QuadResponse:
+        """List KG types with filtering and pagination."""
         
         try:
             self.logger.info(f"Listing KG types in space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
             
-            # Get complete JSON-LD document from new atomic processor
+            # Get complete document from atomic processor
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
@@ -220,57 +176,13 @@ class KGTypesEndpoint:
             
             self.logger.info(f"🔍 LIST: Received {len(triples)} RDFLib triples, total_count: {total_count}")
             
-            # Handle empty list case
-            if not triples or len(triples) == 0:
-                # Create empty JSON-LD document for empty results
-                final_jsonld = {
-                    "@context": {"@vocab": "http://vital.ai/ontology/"},
-                    "@graph": []
-                }
-                jsonld_doc = JsonLdDocument(**final_jsonld)
-            else:
-                # Convert RDFLib triples to VitalSigns GraphObjects
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                graph_objects = GraphObject.from_triples_list(triples)
-                
-                # Check if single or multiple objects
-                if len(graph_objects) == 1:
-                    # Single object - use JsonLdObject
-                    jsonld_dict = graph_objects[0].to_jsonld()
-                    # Ensure @type field is present
-                    if '@type' not in jsonld_dict and 'type' in jsonld_dict:
-                        jsonld_dict['@type'] = jsonld_dict.pop('type')
-                    jsonld_doc = JsonLdObject(**jsonld_dict)
-                else:
-                    # Multiple objects - use JsonLdDocument
-                    final_jsonld = GraphObject.to_jsonld_list(graph_objects)
-                    
-                    # Ensure @type fields are present in @graph objects
-                    if '@graph' in final_jsonld:
-                        for obj in final_jsonld['@graph']:
-                            if '@type' not in obj and 'type' in obj:
-                                obj['@type'] = obj.pop('type')
-                    
-                    jsonld_doc = JsonLdDocument(**final_jsonld)
-            
-            return KGTypeListResponse(
-                success=True,
-                message=f"Successfully listed {total_count} KGTypes",
-                data=jsonld_doc,
+            graph_objects = GraphObject.from_triples_list(triples) if triples else []
+            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            return QuadResponse(
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
-                pagination={
-                    "page": (offset // page_size) + 1,
-                    "limit": page_size,
-                    "total": total_count,
-                    "pages": (total_count + page_size - 1) // page_size
-                },
-                meta={
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "version": "1.0",
-                    "format": "JSON-LD 1.1"
-                }
+                results=quads,
             )
         
         except HTTPException:
@@ -287,8 +199,8 @@ class KGTypesEndpoint:
         space_id: str,
         graph_id: str,
         uri: str,
-        current_user: Dict
-    ) -> KGTypeGetResponse:
+        current_user: Dict,
+    ) -> QuadResultsResponse:
         """Get a specific KGType by URI."""
         try:
             space_record = self.space_manager.get_space(space_id)
@@ -310,27 +222,17 @@ class KGTypesEndpoint:
             
             if not kgtype_object:
                 self.logger.warning(f"🔍 GET: KGType not found: {uri}")
-                # Return empty response instead of 404 - service should never return 404
-                return KGTypeGetResponse(
-                    success=True,
+                return QuadResultsResponse(
                     message=f"KGType with URI '{uri}' not found",
-                    data=None
+                    total_count=0,
+                    results=[],
                 )
             
-            # Convert VitalSigns GraphObject to JsonLdObject
-            jsonld_dict = kgtype_object.to_jsonld()
-            
-            # Fix @type field - convert array to string if needed for VitalSigns compatibility
-            if '@type' in jsonld_dict and isinstance(jsonld_dict['@type'], list) and len(jsonld_dict['@type']) == 1:
-                jsonld_dict['@type'] = jsonld_dict['@type'][0]
-            
-            # Create JsonLdObject that preserves @type field
-            jsonld_obj = JsonLdObject(**jsonld_dict)
-            
-            return KGTypeGetResponse(
-                success=True,
-                message=f"Successfully retrieved KGType: {uri}",
-                data=jsonld_obj
+            quads = graphobjects_to_quad_list([kgtype_object], graph_id)
+            return QuadResultsResponse(
+                message=f"Found KGType '{uri}'",
+                total_count=1,
+                results=quads,
             )
         except HTTPException:
             raise
@@ -346,13 +248,11 @@ class KGTypesEndpoint:
         space_id: str,
         graph_id: str,
         uri_list: str,
-        current_user: Dict
-    ) -> KGTypeListResponse:
+        current_user: Dict,
+    ) -> QuadResponse:
         """Get multiple KGTypes by URI list."""
         try:
             uris = [u.strip() for u in uri_list.split(',') if u.strip()]
-            
-            # Get complete JSON-LD document from new atomic processor
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
@@ -372,39 +272,12 @@ class KGTypesEndpoint:
             
             self.logger.info(f"🔍 GET_BY_URIS: Received {len(kgtype_objects)} KGType GraphObjects for {len(uris)} URIs")
             
-            # Convert VitalSigns GraphObjects to JsonLdDocument
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            final_jsonld = GraphObject.to_jsonld_list(kgtype_objects)
-            
-            # Ensure @type fields are present in @graph objects
-            if '@graph' in final_jsonld:
-                for obj in final_jsonld['@graph']:
-                    if '@type' not in obj and 'type' in obj:
-                        obj['@type'] = obj.pop('type')
-            
-            jsonld_doc = JsonLdDocument(**final_jsonld)
-            
-            # Get count from the converted objects
-            object_count = len(graph_objects)
-            
-            return KGTypeListResponse(
-                success=True,
-                message=f"Successfully retrieved {object_count} KGTypes",
-                data=jsonld_doc,
-                total_count=object_count,
-                page_size=object_count,
+            quads = graphobjects_to_quad_list(kgtype_objects, graph_id)
+            return QuadResponse(
+                total_count=len(kgtype_objects),
+                page_size=len(kgtype_objects),
                 offset=0,
-                pagination={
-                    "page": 1,
-                    "limit": object_count,
-                    "total": object_count,
-                    "pages": 1
-                },
-                meta={
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                    "version": "1.0",
-                    "format": "JSON-LD 1.1"
-                }
+                results=quads,
             )
         except HTTPException:
             raise
@@ -419,221 +292,99 @@ class KGTypesEndpoint:
         self,
         space_id: str,
         graph_id: str,
-        data: JsonLdRequest,
+        quads: List[Quad],
         current_user: Dict
     ) -> KGTypeCreateResponse:
-        """Create KG types from JSON-LD document or object using proper VitalGraph patterns."""
-        
+        """Create KG types from quads."""
         try:
-            self.logger.info(f"Creating KG types in space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
-            
-            # Validate space manager (same as triples endpoint)
-            if self.space_manager is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Space manager not available"
-                )
-            
-            # Validate space exists (same as triples endpoint)
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
-            # Validate input data
-            if isinstance(data, JsonLdObject):
-                if not data.id or not data.type:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid request: JsonLdObject must have @id and @type"
-                    )
-            elif isinstance(data, JsonLdDocument):
-                if not data.graph or len(data.graph) == 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid request: JsonLdDocument must have non-empty @graph"
-                    )
+            self.logger.info(f"Creating KG types in space '{space_id}', graph '{graph_id}'")
+
+            # Convert quads to GraphObjects and validate
+            kgtype_objects = quad_list_to_graphobjects(quads)
+            typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
+            if not typed_objects:
+                raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
+            kgtype_objects = typed_objects
+
+            if not self.space_manager or not self.space_manager.has_space(space_id):
+                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+            space_record = self.space_manager.get_space(space_id)
+            space_impl = space_record.space_impl
+            backend = space_impl.get_db_space_impl()
+            backend_adapter = create_backend_adapter(backend)
+
+            if len(kgtype_objects) == 1:
+                created_uri = await self.kgtypes_create_processor.create_kgtype(
+                    backend=backend_adapter, space_id=space_id, graph_id=graph_id, kgtype_object=kgtype_objects[0])
+                created_uris = [created_uri]
             else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid data type: expected JsonLdObject or JsonLdDocument"
-                )
-            
-            # Always use batch operations for consistency and to avoid manual JSON-LD document creation
-            try:
-                # Use new atomic KGTypes CREATE processor
-                space_record = self.space_manager.get_space(space_id)
-                if not space_record:
-                    raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-                
-                space_impl = space_record.space_impl
-                backend = space_impl.get_db_space_impl()
-                if not backend:
-                    raise HTTPException(status_code=500, detail="Backend implementation not available")
-                
-                backend_adapter = create_backend_adapter(backend)
-                # Convert JSON-LD to VitalSigns objects for the processor
-                kgtype_objects = self._jsonld_to_vitalsigns_objects(data)
-                
-                # Handle single vs multiple objects appropriately
-                if len(kgtype_objects) == 1:
-                    # Single GraphObject - use single create method
-                    created_uri = await self.kgtypes_create_processor.create_kgtype(
-                        backend=backend_adapter,
-                        space_id=space_id,
-                        graph_id=graph_id,
-                        kgtype_object=kgtype_objects[0]
-                    )
-                    created_uris = [created_uri]
-                else:
-                    # Multiple GraphObjects - use batch create method
-                    created_uris = await self.kgtypes_create_processor.create_kgtypes_batch(
-                        backend=backend_adapter,
-                        space_id=space_id,
-                        graph_id=graph_id,
-                        kgtype_objects=kgtype_objects
-                    )
-                
-                created_count = len(created_uris)
-                self.logger.info(f"Created {created_count} KGTypes: {created_uris}")
-                
-                return KGTypeCreateResponse(
-                    success=True,
-                    message=f"Successfully created {created_count} KG type definitions in graph '{graph_id}' in space '{space_id}'",
-                    created_count=created_count,
-                    created_uris=created_uris
-                )
-                
-            except Exception as e:
-                self.logger.error(f"Create operation failed: {e}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to create KGTypes: {str(e)}"
-                )
-        
+                created_uris = await self.kgtypes_create_processor.create_kgtypes_batch(
+                    backend=backend_adapter, space_id=space_id, graph_id=graph_id, kgtype_objects=kgtype_objects)
+            return KGTypeCreateResponse(
+                success=True,
+                message=f"Successfully created {len(created_uris)} KG type definitions",
+                created_count=len(created_uris),
+                created_uris=created_uris
+            )
         except HTTPException:
             raise
         except Exception as e:
-            self.logger.error(f"Error creating KG types: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error creating KG types: {str(e)}"
-            )
-    
+            self.logger.error(f"Error creating KG types from objects: {e}")
+            raise HTTPException(status_code=500, detail=f"Error creating KG types: {str(e)}")
+
     async def _update_kgtypes(
         self,
         space_id: str,
         graph_id: str,
-        data: JsonLdRequest,
+        quads: List[Quad],
         current_user: Dict
     ) -> KGTypeUpdateResponse:
-        """Update KG types from JSON-LD document or object using proper VitalGraph patterns."""
-        
+        """Update KG types from quads."""
         try:
-            self.logger.info(f"Updating KG types in space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
-            
-            # Validate space manager (same as triples endpoint)
-            if self.space_manager is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Space manager not available"
-                )
-            
-            # Validate space exists (same as triples endpoint)
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
-            # Validate input data
-            if isinstance(data, JsonLdObject):
-                if not data.id or not data.type:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid request: JsonLdObject must have @id and @type"
-                    )
-            elif isinstance(data, JsonLdDocument):
-                if not data.graph or len(data.graph) == 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Invalid request: JsonLdDocument must have non-empty @graph"
-                    )
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid data type: expected JsonLdObject or JsonLdDocument"
-                )
-            
-            # Always use batch operations for consistency and to avoid manual JSON-LD document creation
-            try:
-                # Use new atomic KGTypes UPDATE processor
-                space_record = self.space_manager.get_space(space_id)
-                if not space_record:
-                    raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-                
-                space_impl = space_record.space_impl
-                backend = space_impl.get_db_space_impl()
-                if not backend:
-                    raise HTTPException(status_code=500, detail="Backend implementation not available")
-                
-                backend_adapter = create_backend_adapter(backend)
-                
-                # Convert JSON-LD to VitalSigns objects using VitalSigns utilities
-                kgtype_objects = self._jsonld_to_vitalsigns_objects(data)
-                
-                # Prepare kgtype_updates dict mapping URI to GraphObject list
-                kgtype_updates = {}
-                for kgtype_obj in kgtype_objects:
-                    uri = str(kgtype_obj.URI)
-                    kgtype_updates[uri] = [kgtype_obj]
-                
-                updated_uris = await self.kgtypes_update_processor.update_kgtypes_batch(
-                    backend=backend_adapter,
-                    space_id=space_id,
-                    graph_id=graph_id,
-                    kgtype_updates=kgtype_updates
-                )
-                
-                updated_count = len(updated_uris)
-                self.logger.info(f"Updated {updated_count} KGTypes: {updated_uris}")
-                
-                # Return the first URI as the primary updated URI
-                primary_uri = updated_uris[0] if updated_uris else ""
-                return KGTypeUpdateResponse(
-                    success=True,
-                    message=f"Successfully updated {updated_count} KG type definitions in graph '{graph_id}' in space '{space_id}'",
-                    updated_count=updated_count,
-                    updated_uris=updated_uris
-                )
-                
-            except Exception as e:
-                self.logger.error(f"Update operation failed: {e}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Failed to update KGTypes: {str(e)}"
-                )
-        
+            self.logger.info(f"Updating KG types in space '{space_id}', graph '{graph_id}'")
+
+            # Convert quads to GraphObjects and validate
+            kgtype_objects = quad_list_to_graphobjects(quads)
+            typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
+            if not typed_objects:
+                raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
+            kgtype_objects = typed_objects
+
+            if not self.space_manager or not self.space_manager.has_space(space_id):
+                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+            space_record = self.space_manager.get_space(space_id)
+            space_impl = space_record.space_impl
+            backend = space_impl.get_db_space_impl()
+            backend_adapter = create_backend_adapter(backend)
+
+            kgtype_updates = {}
+            for kgtype_obj in kgtype_objects:
+                uri = str(kgtype_obj.URI)
+                kgtype_updates[uri] = [kgtype_obj]
+            updated_uris = await self.kgtypes_update_processor.update_kgtypes_batch(
+                backend=backend_adapter, space_id=space_id, graph_id=graph_id, kgtype_updates=kgtype_updates)
+            return KGTypeUpdateResponse(
+                success=True,
+                message=f"Successfully updated {len(updated_uris)} KG type definitions",
+                updated_count=len(updated_uris),
+                updated_uris=updated_uris
+            )
         except HTTPException:
             raise
         except Exception as e:
-            self.logger.error(f"Error updating KG types: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error updating KG types: {str(e)}"
-            )
-    
+            self.logger.error(f"Error updating KG types from objects: {e}")
+            raise HTTPException(status_code=500, detail=f"Error updating KG types: {str(e)}")
+
     async def _delete_kgtypes(
         self,
         space_id: str,
         graph_id: str,
         uri: Optional[str],
         uri_list: Optional[str],
-        document: Optional[JsonLdDocument],
+        document: Optional[Any],
         current_user: Dict
     ) -> KGTypeDeleteResponse:
-        """Delete KG types by URI, URI list, or JSON-LD document using proper VitalGraph patterns."""
+        """Delete KG types by URI, URI list, or document using proper VitalGraph patterns."""
         
         try:
             self.logger.info(f"Deleting KG types from space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
@@ -656,7 +407,7 @@ class KGTypesEndpoint:
             if not uri and not uri_list and not (document and document.graph):
                 raise HTTPException(
                     status_code=400,
-                    detail="Invalid request: must provide uri, uri_list, or document with @graph"
+                    detail="Invalid request: must provide uri, uri_list, or document with objects"
                 )
             
             deleted_count = 0
@@ -729,17 +480,17 @@ class KGTypesEndpoint:
                     delete_method = f"URI list with {len(uris)} URIs"
                     
                 elif document and document.graph:
-                    # Delete KGTypes specified in JSON-LD document
+                    # Delete KGTypes specified in document
                     uris_to_delete = []
                     for kgtype_obj in document.graph:
-                        kgtype_uri = kgtype_obj.get('@id') or kgtype_obj.get('URI')
+                        kgtype_uri = str(kgtype_obj.URI)
                         if kgtype_uri:
                             uris_to_delete.append(kgtype_uri)
                     
                     if not uris_to_delete:
                         raise HTTPException(
                             status_code=400,
-                            detail="Invalid document: no valid URIs found in @graph objects"
+                            detail="Invalid document: no valid URIs found in objects"
                         )
                     
                     space_record = self.space_manager.get_space(space_id)
@@ -759,7 +510,7 @@ class KGTypesEndpoint:
                         kgtype_uris=uris_to_delete
                     )
                     deleted_uris = uris_to_delete[:deleted_count] if deleted_count > 0 else []
-                    delete_method = f"JSON-LD document with {len(uris_to_delete)} type definitions"
+                    delete_method = f"document with {len(uris_to_delete)} type definitions"
                 
                 # Ensure all URIs are strings (handle CombinedProperty from VitalSigns)
                 deleted_uris_str = [str(u) for u in deleted_uris] if deleted_uris else []

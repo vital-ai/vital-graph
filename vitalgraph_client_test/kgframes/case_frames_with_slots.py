@@ -19,11 +19,8 @@ from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_get_frames_with_slots(client: VitalGraphClient, space_id: str, graph_id: str, logger: logging.Logger) -> bool:
@@ -33,7 +30,7 @@ async def test_get_frames_with_slots(client: VitalGraphClient, space_id: str, gr
     try:
         # Test basic frames with slots retrieval
         test_frame_uri = "http://vital.ai/test/kgentity/frame/test_person_contact"
-        response = client.kgframes.get_kgframes_with_slots(
+        response = await client.kgframes.get_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=test_frame_uri,
@@ -41,15 +38,11 @@ async def test_get_frames_with_slots(client: VitalGraphClient, space_id: str, gr
             offset=0
         )
         
-        if hasattr(response, 'success') and response.success:
+        if response.is_success:
             total_count = getattr(response, 'total_count', 0)
-            frames = getattr(response, 'frames', [])
-            logger.info(f"✅ Get frames with slots successful: {total_count} total frames")
-            logger.info(f"   Retrieved {len(frames)} frames on this page")
-            return True
-        elif hasattr(response, 'frames'):
-            frames = getattr(response, 'frames', [])
-            logger.info(f"✅ Get frames with slots successful: Retrieved {len(frames)} frames")
+            objects = response.objects or []
+            logger.info(f"✅ Get frames with slots successful: {total_count} total")
+            logger.info(f"   Retrieved {len(objects)} objects on this page")
             return True
         else:
             logger.error(f"❌ Get frames with slots failed: {response.message}")
@@ -67,7 +60,7 @@ async def test_get_frames_with_slots_filtered(client: VitalGraphClient, space_id
     try:
         # Test frames with slots retrieval with entity filter
         test_frame_uri = "http://vital.ai/test/kgentity/frame/test_person_personal"
-        response = client.kgframes.get_kgframes_with_slots(
+        response = await client.kgframes.get_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=test_frame_uri,
@@ -76,13 +69,9 @@ async def test_get_frames_with_slots_filtered(client: VitalGraphClient, space_id
             entity_uri=entity_uri
         )
         
-        if hasattr(response, 'success') and response.success:
+        if response.is_success:
             total_count = getattr(response, 'total_count', 0)
-            logger.info(f"✅ Get frames with slots (filtered) successful: {total_count} frames for entity")
-            return True
-        elif hasattr(response, 'frames'):
-            frames = getattr(response, 'frames', [])
-            logger.info(f"✅ Get frames with slots (filtered) successful: Retrieved {len(frames)} frames")
+            logger.info(f"✅ Get frames with slots (filtered) successful: {total_count} items for entity")
             return True
         else:
             logger.error(f"❌ Get frames with slots (filtered) failed: {response.message}")
@@ -120,19 +109,16 @@ async def test_create_frames_with_slots(client: VitalGraphClient, space_id: str,
         slot2.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#IntegratedSlot"
         slot2.textSlotValue = "Integrated slot value 2"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request([frame, slot1, slot2])
-        
-        # Test frame with slots creation
-        response = client.kgframes.create_kgframes_with_slots(
+        # Test frame with slots creation - pass GraphObjects directly
+        response = await client.kgframes.create_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame, slot1, slot2],
             entity_uri=entity_uri
         )
         
-        if response.success and response.frames_created > 0:
-            logger.info(f"✅ Create frames with slots successful: {response.frames_created} frames, {response.slots_created} slots created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Create frames with slots successful: {response.created_count} items created")
             return True
         else:
             logger.error(f"❌ Create frames with slots failed: {response.message}")
@@ -181,19 +167,16 @@ async def test_update_frames_with_slots(client: VitalGraphClient, space_id: str,
         edge2.edgeSource = str(frame_uri)
         edge2.edgeDestination = str(slot2.URI)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request([frame, slot1, slot2, edge1, edge2])
-        
-        # Test frame with slots update
-        response = client.kgframes.update_kgframes_with_slots(
+        # Test frame with slots update - pass GraphObjects directly
+        response = await client.kgframes.update_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame, slot1, slot2, edge1, edge2],
             entity_uri=entity_uri
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Update frames with slots successful: {response.frames_updated} frames, {response.slots_updated} slots updated")
+        if response.is_success:
+            logger.info(f"✅ Update frames with slots successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Update frames with slots failed: {response.message}")
@@ -204,22 +187,45 @@ async def test_update_frames_with_slots(client: VitalGraphClient, space_id: str,
         return False
 
 
-async def test_delete_frames_with_slots(client: VitalGraphClient, space_id: str, graph_id: str, frame_uris: list[str], logger: logging.Logger) -> bool:
-    """Test deleting frames with slots cascading."""
+async def test_delete_frames_with_slots(client: VitalGraphClient, space_id: str, graph_id: str, entity_uri: Optional[str], logger: logging.Logger) -> bool:
+    """Test deleting frames with slots cascading. Creates its own temp data to avoid destroying shared test data."""
     logger.info("🧪 Testing delete frames with slots...")
     
     try:
-        # Test frame with slots deletion
-        response = client.kgframes.delete_kgframes_with_slots(
+        # Create temporary frames specifically for this delete test
+        test_data_creator = ClientTestDataCreator()
+        
+        temp_frames = []
+        for i in range(2):
+            frame = KGFrame()
+            frame.URI = str(test_data_creator.generate_test_uri("frame", f"delete_test_{i:03d}"))
+            frame.name = f"Temp Delete Test Frame {i}"
+            frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#TempDeleteFrame"
+            temp_frames.append(frame)
+        
+        # Create the temp frames first
+        create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            uri_list=",".join([str(uri) for uri in frame_uris])
+            objects=temp_frames,
+            entity_uri=entity_uri
         )
         
-        if response.success and response.frames_deleted > 0:
-            logger.info(f"✅ Delete frames with slots successful: {response.frames_deleted} frames deleted")
-            if response.slots_deleted and response.slots_deleted > 0:
-                logger.info(f"   Also deleted {response.slots_deleted} associated slots")
+        if not create_response.is_success:
+            logger.error(f"❌ Failed to create temp frames for delete test: {create_response.message}")
+            return False
+        
+        temp_uris = [str(f.URI) for f in temp_frames]
+        
+        # Now test deletion of the temp frames
+        response = await client.kgframes.delete_kgframes_with_slots(
+            space_id=space_id,
+            graph_id=graph_id,
+            uri_list=",".join(temp_uris)
+        )
+        
+        if response.is_success and response.deleted_count > 0:
+            logger.info(f"✅ Delete frames with slots successful: {response.deleted_count} items deleted")
             return True
         else:
             logger.error(f"❌ Delete frames with slots failed: {response.message}")
@@ -250,7 +256,7 @@ async def run_frames_with_slots_tests(client: VitalGraphClient, space_id: str, g
         tests.append(("Update Frames with Slots", lambda: test_update_frames_with_slots(client, space_id, graph_id, frame_uri, entity_uri, logger)))
     
     if frame_uris and len(frame_uris) > 0:
-        tests.append(("Delete Frames with Slots", lambda: test_delete_frames_with_slots(client, space_id, graph_id, frame_uris, logger)))
+        tests.append(("Delete Frames with Slots", lambda: test_delete_frames_with_slots(client, space_id, graph_id, entity_uri, logger)))
     
     results = []
     for test_name, test_func in tests:

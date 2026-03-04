@@ -82,12 +82,12 @@ async def main():
             raw_data = raw_resp.json()
             if isinstance(raw_data, dict):
                 print(f"  Response keys: {list(raw_data.keys())}")
-                if '@graph' in raw_data:
-                    print(f"  @graph length: {len(raw_data['@graph'])}")
-                    if raw_data['@graph']:
-                        print(f"  @graph[0] keys: {list(raw_data['@graph'][0].keys()) if isinstance(raw_data['@graph'][0], dict) else type(raw_data['@graph'][0])}")
-                if 'graph' in raw_data:
-                    print(f"  graph length: {len(raw_data['graph'])}")
+                if 'results' in raw_data:
+                    print(f"  results length: {len(raw_data['results'])}")
+                    if raw_data['results']:
+                        print(f"  results[0] keys: {list(raw_data['results'][0].keys()) if isinstance(raw_data['results'][0], dict) else type(raw_data['results'][0])}")
+                if 'total_count' in raw_data:
+                    print(f"  total_count: {raw_data['total_count']}")
                 raw_str = json.dumps(raw_data, indent=2, default=str)
                 print(f"  Response size: {len(raw_str)} chars")
                 print(f"  First 2000 chars:\n{raw_str[:2000]}")

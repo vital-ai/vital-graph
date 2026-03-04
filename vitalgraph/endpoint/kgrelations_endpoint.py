@@ -1,7 +1,7 @@
 """
 KG Relations REST API endpoint for VitalGraph.
 
-This module provides REST API endpoints for managing KG relations using JSON-LD 1.1 format.
+This module provides REST API endpoints for managing KG relations.
 KG relations represent direct entity-to-entity relationships in the knowledge graph.
 """
 
@@ -11,7 +11,8 @@ from fastapi import APIRouter, Query, Depends, HTTPException, Body
 from pydantic import BaseModel, Field
 from enum import Enum
 
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from fastapi import Request
+
 from ..model.kgrelations_model import (
     RelationsResponse,
     RelationResponse,
@@ -29,6 +30,10 @@ from ..kg_impl.kgrelations_create_impl import KGRelationsCreateProcessor, Operat
 from ..kg_impl.kgrelations_read_impl import KGRelationsReadProcessor
 from ..kg_impl.kgrelations_delete_impl import KGRelationsDeleteProcessor
 from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
+from vital_ai_vitalsigns.model.GraphObject import GraphObject
+from fastapi import Response as FastAPIResponse
 
 
 class OperationMode(str, Enum):
@@ -55,7 +60,7 @@ class KGRelationsEndpoint:
     def _setup_routes(self):
         """Set up FastAPI routes for KG Relations operations."""
         
-        @self.router.get("/kgrelations", response_model=Union[RelationsResponse, RelationResponse], tags=["KG Relations"])
+        @self.router.get("/kgrelations", tags=["KG Relations"])
         async def list_or_get_relations(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -66,7 +71,7 @@ class KGRelationsEndpoint:
             direction: str = Query("all", description="Direction filter: all, incoming, outgoing"),
             page_size: int = Query(10, ge=1, le=1000, description="Number of relations per page"),
             offset: int = Query(0, ge=0, description="Offset for pagination"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
             List KG Relations with filtering and pagination, or get specific relation by URI.
@@ -98,21 +103,23 @@ class KGRelationsEndpoint:
         
         @self.router.post("/kgrelations", response_model=Union[RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse], tags=["KG Relations"])
         async def create_or_update_relations(
-            request: JsonLdRequest,
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
             operation_mode: OperationMode = Query(OperationMode.CREATE, description="Operation mode: create, update, or upsert"),
-            current_user: Dict = Depends(self.auth_dependency)
+            body: QuadRequest = Body(..., description="Relation objects serialized as JSON Quads"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             """
-            Create, update, or upsert KG Relations from JSON-LD document or object.
-            Uses discriminated union to automatically handle single objects (JsonLdObject) or multiple objects (JsonLdDocument).
+            Create, update, or upsert KG Relations from JSON Quads.
             
             - CREATE: Create new relations (fails if relation URIs already exist)
             - UPDATE: Update existing relations (fails if relation URIs don't exist)
             - UPSERT: Create or update relations (always succeeds)
             """
-            return await self._create_or_update_relations(space_id, graph_id, request, operation_mode, current_user)
+            quads = body.quads
+            return await self._create_or_update_relations(
+                space_id, graph_id, quads, operation_mode, current_user
+            )
         
         @self.router.delete("/kgrelations", response_model=RelationDeleteResponse, tags=["KG Relations"])
         async def delete_relations(
@@ -156,12 +163,11 @@ class KGRelationsEndpoint:
     
     async def _list_relations(self, space_id: str, graph_id: str, entity_source_uri: Optional[str],
                             entity_destination_uri: Optional[str], relation_type_uri: Optional[str],
-                            direction: str, page_size: int, offset: int, current_user: Dict) -> RelationsResponse:
+                            direction: str, page_size: int, offset: int, current_user: Dict) -> QuadResponse:
         """List KG Relations with filtering and pagination."""
         try:
             self.logger.info(f"Listing KG Relations in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
@@ -171,34 +177,27 @@ class KGRelationsEndpoint:
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
             
-            # Create backend adapter
             backend = FusekiPostgreSQLBackendAdapter(backend_impl)
-            
-            # Create read processor
             read_processor = KGRelationsReadProcessor(backend)
             
-            # List relations using processor
             triples, total_count = await read_processor.list_relations(
                 space_id, graph_id, entity_source_uri, entity_destination_uri,
                 relation_type_uri, direction, page_size, offset
             )
             
-            # Convert triples to JSON-LD document
             if triples:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                graph_objects = GraphObject.from_triples_list(triples)
-                relations_doc = self._relations_to_jsonld_document(graph_objects)
+                from vital_ai_vitalsigns.vitalsigns import VitalSigns
+                vs = VitalSigns()
+                graph_objects = vs.from_triples_list(triples)
             else:
-                relations_doc = JsonLdDocument(**{
-                    "@context": {"@vocab": "http://vital.ai/ontology/"},
-                    "@graph": []
-                })
+                graph_objects = []
             
-            return RelationsResponse(
-                relations=relations_doc,
+            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            return QuadResponse(
+                results=quads,
                 total_count=total_count,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
             )
             
         except HTTPException:
@@ -210,12 +209,11 @@ class KGRelationsEndpoint:
                 detail=f"Failed to list KG Relations: {str(e)}"
             )
     
-    async def _get_relation(self, space_id: str, graph_id: str, relation_uri: str, current_user: Dict) -> RelationResponse:
+    async def _get_relation(self, space_id: str, graph_id: str, relation_uri: str, current_user: Dict) -> QuadResultsResponse:
         """Get a specific KG Relation by URI."""
         try:
             self.logger.info(f"Getting KG Relation {relation_uri} in space {space_id}, graph {graph_id}")
             
-            # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
@@ -225,28 +223,23 @@ class KGRelationsEndpoint:
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
             
-            # Create backend adapter
             backend = FusekiPostgreSQLBackendAdapter(backend_impl)
-            
-            # Create read processor
             read_processor = KGRelationsReadProcessor(backend)
             
-            # Get relation using processor
             triples = await read_processor.get_relation_by_uri(space_id, graph_id, relation_uri)
             
-            # Convert triples to JSON-LD document
             if triples:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                graph_objects = GraphObject.from_triples_list(triples)
-                relation_doc = self._relations_to_jsonld_document(graph_objects)
+                from vital_ai_vitalsigns.vitalsigns import VitalSigns
+                vs = VitalSigns()
+                graph_objects = vs.from_triples_list(triples)
             else:
-                # Return empty JSON-LD document for not found
-                relation_doc = JsonLdDocument(**{
-                    "@context": {"@vocab": "http://vital.ai/ontology/"},
-                    "@graph": []
-                })
+                graph_objects = []
             
-            return RelationResponse(relation=relation_doc)
+            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            return QuadResultsResponse(
+                results=quads,
+                total_count=len(graph_objects),
+            )
             
         except HTTPException:
             raise
@@ -257,31 +250,37 @@ class KGRelationsEndpoint:
                 detail=f"Failed to get KG Relation: {str(e)}"
             )
     
-    async def _create_or_update_relations(self, space_id: str, graph_id: str, request: JsonLdRequest,
-                                        operation_mode: OperationMode, current_user: Dict) -> Union[RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse]:
-        """Create, update, or upsert KG Relations."""
+    async def _create_or_update_relations(
+        self, space_id: str, graph_id: str, quads: List[Quad],
+        operation_mode: OperationMode, current_user: Dict,
+    ) -> Union[RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse]:
+        """Create, update, or upsert KG Relations from quads."""
         try:
             self.logger.info(f"Processing KG Relations in space {space_id}, graph {graph_id}, mode '{operation_mode.value}'")
-            
+
+            graph_objects = quad_list_to_graphobjects(quads)
+            if not graph_objects:
+                raise HTTPException(status_code=400, detail="No valid objects found in request")
+
+            # Validate that objects contain Edge instances (relations are edges)
+            from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
+            edge_objects = [obj for obj in graph_objects if isinstance(obj, VITAL_Edge)]
+            if not edge_objects:
+                raise HTTPException(status_code=400, detail="No valid Edge/relation objects found in request")
+
             # Get backend implementation
             space_record = self.space_manager.get_space(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
-            
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
-            
-            # Create backend adapter
             backend = FusekiPostgreSQLBackendAdapter(backend_impl)
-            
-            # Convert JSON-LD to VitalSigns relation objects
-            relations = self._jsonld_document_to_relations(request)
-            
+
             # Create processor
             create_processor = KGRelationsCreateProcessor(backend)
-            
+
             # Map operation mode
             if operation_mode == OperationMode.CREATE:
                 mode = CreateOperationMode.CREATE
@@ -289,20 +288,21 @@ class KGRelationsEndpoint:
                 mode = CreateOperationMode.UPDATE
             else:
                 mode = CreateOperationMode.UPSERT
-            
+
             # Process relations using processor
             return await create_processor.create_or_update_relations(
-                space_id, graph_id, relations, mode
+                space_id, graph_id, edge_objects, mode
             )
-            
+
         except HTTPException:
             raise
         except Exception as e:
-            self.logger.error(f"Error processing KG Relations: {e}")
+            self.logger.error(f"Error processing KG Relations from objects: {e}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to process KG Relations: {str(e)}"
             )
+
     
     async def _delete_relations(self, space_id: str, graph_id: str, request: RelationDeleteRequest, current_user: Dict) -> RelationDeleteResponse:
         """Delete KG Relations by URIs."""
@@ -486,93 +486,6 @@ class KGRelationsEndpoint:
         # TODO: Implement conversion to VitalSigns Edge_hasKGRelation objects
         return []
     
-    def _relations_to_jsonld_document(self, relations: List):
-        """Convert relation objects to JSON-LD document or object."""
-        try:
-            if not relations:
-                return JsonLdDocument(**{
-                    "@context": {"@vocab": "http://vital.ai/ontology/"},
-                    "@graph": []
-                })
-            
-            # Convert VitalSigns objects to JSON-LD
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject
-            
-            # Handle both list of GraphObjects and single GraphObject
-            if isinstance(relations, list):
-                jsonld = GraphObject.to_jsonld_list(relations)
-            else:
-                jsonld = GraphObject.to_jsonld_list([relations])
-            
-            # Ensure @type fields are present
-            if '@graph' in jsonld:
-                for obj in jsonld['@graph']:
-                    if '@type' not in obj and 'type' in obj:
-                        obj['@type'] = obj.pop('type')
-            
-            # Return JsonLdObject for single relation, JsonLdDocument for multiple
-            if '@graph' in jsonld and len(jsonld['@graph']) == 1:
-                # Single object - return JsonLdObject
-                single_obj = jsonld['@graph'][0]
-                if '@context' in jsonld:
-                    single_obj['@context'] = jsonld['@context']
-                return JsonLdObject(**single_obj)
-            else:
-                # Multiple objects - return JsonLdDocument
-                return JsonLdDocument(**jsonld)
-            
-        except Exception as e:
-            self.logger.error(f"Error converting relations to JSON-LD: {e}")
-            return JsonLdDocument(**{
-                "@context": {"@vocab": "http://vital.ai/ontology/"},
-                "@graph": []
-            })
-    
-    def _jsonld_document_to_relations(self, document: JsonLdRequest) -> List:
-        """Convert JSON-LD document or object to VitalSigns relation objects."""
-        try:
-            # Convert Pydantic model to dict
-            from vital_ai_vitalsigns.vitalsigns import VitalSigns
-            vs = VitalSigns()
-            
-            jsonld_data = document.model_dump(by_alias=True)
-            
-            # If it's a JsonLdObject (single object), wrap it in a document structure
-            if isinstance(document, JsonLdObject):
-                # Single object - wrap in @graph array for VitalSigns
-                context = jsonld_data.pop('@context', {})
-                jsonld_document = {
-                    '@context': context,
-                    '@graph': [jsonld_data]
-                }
-            else:
-                # Already a document with @graph
-                jsonld_document = jsonld_data
-            
-            # Convert to VitalSigns objects using from_jsonld_list
-            graph_objects = vs.from_jsonld_list(jsonld_document)
-            
-            if not graph_objects:
-                self.logger.warning("No objects converted from JSON-LD")
-                return []
-            
-            # Ensure we have a list
-            if not isinstance(graph_objects, list):
-                graph_objects = [graph_objects]
-            
-            # Filter for relation objects (Edge_hasKGRelation)
-            from ai_haley_kg_domain.model.Edge_hasKGRelation import Edge_hasKGRelation
-            filtered_relations = [obj for obj in graph_objects if isinstance(obj, Edge_hasKGRelation)]
-            
-            self.logger.info(f"Converted JSON-LD to {len(filtered_relations)} relation objects")
-            return filtered_relations
-            
-        except Exception as e:
-            self.logger.error(f"Error converting JSON-LD to relations: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return []
     
     def _validate_relations(self, relations: List) -> None:
         """Validate relation objects."""

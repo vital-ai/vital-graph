@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Any, List
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
-from vitalgraph.model.jsonld_model import JsonLdDocument
+# Client uses GraphObjects directly
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.KGIntegerSlot import KGIntegerSlot
@@ -403,20 +403,18 @@ class FrameOperationsTester:
                                     logger.info(f"   ✅ Deleted frame returned error (as expected): {frame_data.message}")
                                 else:
                                     logger.warning(f"   ⚠️  Frame returned unexpected error: {frame_data.error}")
-                            elif hasattr(frame_data, 'model_dump'):
-                                frame_dict = frame_data.model_dump(by_alias=True)
-                                objects_in_graph = frame_dict.get('@graph', [])
-                                logger.error(f"   ❌ Deleted frame still exists with {len(objects_in_graph)} objects")
-                                if objects_in_graph:
-                                    for obj in objects_in_graph:
-                                        logger.error(f"      Object type: {obj.get('@type', 'NO_TYPE')}, ID: {obj.get('@id', 'NO_ID')}")
+                            elif hasattr(frame_data, 'results'):
+                                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                                frame_objects = quad_list_to_graphobjects(frame_data.results) if frame_data.results else []
+                                logger.error(f"   ❌ Deleted frame still exists with {len(frame_objects)} objects")
+                                if frame_objects:
+                                    for obj in frame_objects:
+                                        logger.error(f"      Object type: {type(obj).__name__}, URI: {getattr(obj, 'URI', 'NO_URI')}")
                                 results["tests_failed"] += 1
                                 results["errors"].append("Deleted frame still returned by get operation")
                                 return results
                             else:
-                                frame_dict = frame_data
-                                objects_in_graph = frame_dict.get('@graph', [])
-                                logger.error(f"   ❌ Deleted frame still exists with {len(objects_in_graph)} objects")
+                                logger.error(f"   ❌ Deleted frame still exists (unexpected response type: {type(frame_data).__name__})")
                                 results["tests_failed"] += 1
                                 results["errors"].append("Deleted frame still returned by get operation")
                                 return results

@@ -6,7 +6,7 @@ This script demonstrates:
 - VitalSigns native object creation and conversion
 - pyoxigraph in-memory SPARQL quad store operations
 - Complete CRUD operations for various object types
-- Real JSON-LD handling without mock data generation
+- Real quad handling without mock data generation
 - Graph-based operations and filtering
 """
 
@@ -68,7 +68,7 @@ class TestMockObjectsEndpoint:
                 graph_id=self.test_graph_id
             )
             
-            # Check if we have a valid JsonLdDocument with no objects
+            # Check if we have no objects
             objects_count = 0
             if hasattr(response, 'objects') and hasattr(response.objects, 'graph'):
                 objects_count = len(response.objects.graph) if response.objects.graph else 0
@@ -93,40 +93,28 @@ class TestMockObjectsEndpoint:
     def test_create_objects(self):
         """Test creating new objects."""
         try:
-            # Create JSON-LD document with KGEntity objects using correct schema properties
-            objects_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-001",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "Test Entity 1",
-                        "haley:hasKGraphDescription": "A test KG entity"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-002",
-                        "@type": "haley:KGEntity", 
-                        "vital-core:hasName": "Test Entity 2",
-                        "haley:hasKGraphDescription": "Another test KG entity"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-003",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "Test Entity 3",
-                        "haley:hasKGraphDescription": "Third test KG entity"
-                    }
-                ]
-            }
+            # Create KGEntity GraphObjects directly
+            from ai_haley_kg_domain.model.KGEntity import KGEntity
             
-            from vitalgraph.model.jsonld_model import JsonLdDocument
+            entity1 = KGEntity()
+            entity1.URI = "http://vital.ai/haley.ai/app/test-entity-001"
+            entity1.name = "Test Entity 1"
+            entity1.kGraphDescription = "A test KG entity"
+            
+            entity2 = KGEntity()
+            entity2.URI = "http://vital.ai/haley.ai/app/test-entity-002"
+            entity2.name = "Test Entity 2"
+            entity2.kGraphDescription = "Another test KG entity"
+            
+            entity3 = KGEntity()
+            entity3.URI = "http://vital.ai/haley.ai/app/test-entity-003"
+            entity3.name = "Test Entity 3"
+            entity3.kGraphDescription = "Third test KG entity"
+            
             response = self.endpoint.create_objects(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=JsonLdDocument(**objects_jsonld)
+                objects=[entity1, entity2, entity3]
             )
             
             success = (
@@ -161,13 +149,19 @@ class TestMockObjectsEndpoint:
                 graph_id=self.test_graph_id
             )
             
-            # Check if we have a valid JsonLdDocument with the object
+            # Check if we got the object
             objects_count = 0
             object_type = None
-            if response and hasattr(response, 'graph') and response.graph:
+            if response and hasattr(response, 'results') and response.results:
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                graph_objects = quad_list_to_graphobjects(response.results)
+                objects_count = len(graph_objects)
+                if objects_count > 0:
+                    object_type = type(graph_objects[0]).__name__
+            elif response and hasattr(response, 'graph') and response.graph:
                 objects_count = len(response.graph)
                 if objects_count > 0:
-                    object_type = response.graph[0].get('@type', 'Unknown')
+                    object_type = type(response.graph[0]).__name__ if hasattr(response.graph[0], 'URI') else 'Unknown'
             
             success = (
                 response is not None and
@@ -198,7 +192,7 @@ class TestMockObjectsEndpoint:
                 graph_id=self.test_graph_id
             )
             
-            # Check if we have a valid JsonLdDocument with objects
+            # Check if we have objects
             objects_count = 0
             if hasattr(response, 'objects') and hasattr(response.objects, 'graph'):
                 objects_count = len(response.objects.graph) if response.objects.graph else 0
@@ -229,15 +223,19 @@ class TestMockObjectsEndpoint:
                 offset=0
             )
             
-            # Check if we have a valid JsonLdDocument with objects
+            # Check if we have objects with pagination
             objects_count = 0
             object_types = []
-            if hasattr(response, 'objects') and hasattr(response.objects, 'graph'):
-                objects_count = len(response.objects.graph) if response.objects.graph else 0
-                if response.objects.graph:
-                    for obj_data in response.objects.graph:
-                        obj_type = obj_data.get('@type', 'Unknown')
-                        object_types.append(obj_type)
+            if hasattr(response, 'results') and response.results:
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                graph_objects = quad_list_to_graphobjects(response.results)
+                objects_count = len(graph_objects)
+                for obj in graph_objects:
+                    object_types.append(type(obj).__name__)
+            elif hasattr(response, 'objects') and hasattr(response.objects, 'graph') and response.objects.graph:
+                objects_count = len(response.objects.graph)
+                for obj in response.objects.graph:
+                    object_types.append(type(obj).__name__ if hasattr(obj, 'URI') else 'Unknown')
             
             success = (
                 hasattr(response, 'objects') and
@@ -267,7 +265,7 @@ class TestMockObjectsEndpoint:
                 search="test"
             )
             
-            # Check if we have a valid JsonLdDocument response
+            # Check if we have matching objects
             objects_count = 0
             if hasattr(response, 'objects') and hasattr(response.objects, 'graph'):
                 objects_count = len(response.objects.graph) if response.objects.graph else 0
@@ -294,27 +292,19 @@ class TestMockObjectsEndpoint:
             return
         
         try:
-            # Create updated JSON-LD document with valid KGEntity properties
-            updated_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": object_uris[0],
-                    "@type": "haley:KGEntity",
-                    "vital-core:hasName": "Updated Test Entity",
-                    "haley:hasKGraphDescription": "An updated test KG entity",
-                    "haley:hasKGEntityType": "http://vital.ai/ontology/haley-ai-kg#PersonType"
-                }]
-            }
+            # Create updated KGEntity GraphObject directly
+            from ai_haley_kg_domain.model.KGEntity import KGEntity
             
-            from vitalgraph.model.jsonld_model import JsonLdDocument
+            updated_entity = KGEntity()
+            updated_entity.URI = object_uris[0]
+            updated_entity.name = "Updated Test Entity"
+            updated_entity.kGraphDescription = "An updated test KG entity"
+            updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#PersonType"
+            
             response = self.endpoint.update_objects(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=JsonLdDocument(**updated_jsonld)
+                objects=[updated_entity]
             )
             
             success = (
@@ -397,42 +387,25 @@ class TestMockObjectsEndpoint:
     def test_graph_operations(self):
         """Test graph-specific operations."""
         try:
-            # Create objects in different graphs
-            graph1_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": "http://vital.ai/haley.ai/app/graph1-object",
-                    "@type": "haley:KGEntity",
-                    "vital-core:hasName": "Graph 1 Object",
-                    "haley:hasKGraphDescription": "Object in graph 1"
-                }]
-            }
+            # Create objects in different graphs using GraphObjects
+            from ai_haley_kg_domain.model.KGEntity import KGEntity
             
-            graph2_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": "http://vital.ai/haley.ai/app/graph2-object",
-                    "@type": "haley:KGEntity",
-                    "vital-core:hasName": "Graph 2 Object",
-                    "haley:hasKGraphDescription": "Object in graph 2"
-                }]
-            }
+            graph1_entity = KGEntity()
+            graph1_entity.URI = "http://vital.ai/haley.ai/app/graph1-object"
+            graph1_entity.name = "Graph 1 Object"
+            graph1_entity.kGraphDescription = "Object in graph 1"
+            
+            graph2_entity = KGEntity()
+            graph2_entity.URI = "http://vital.ai/haley.ai/app/graph2-object"
+            graph2_entity.name = "Graph 2 Object"
+            graph2_entity.kGraphDescription = "Object in graph 2"
             
             # Create in different graphs
-            from vitalgraph.model.jsonld_model import JsonLdDocument
             print(f"DEBUG: Creating object in graph: http://vital.ai/graph/test-graph-1")
             response1 = self.endpoint.create_objects(
                 space_id=self.test_space_id,
                 graph_id="http://vital.ai/graph/test-graph-1",
-                document=JsonLdDocument(**graph1_jsonld)
+                objects=[graph1_entity]
             )
             print(f"DEBUG: Created {len(response1.created_uris)} objects in graph 1: {response1.created_uris}")
             
@@ -440,7 +413,7 @@ class TestMockObjectsEndpoint:
             response2 = self.endpoint.create_objects(
                 space_id=self.test_space_id,
                 graph_id="http://vital.ai/graph/test-graph-2",
-                document=JsonLdDocument(**graph2_jsonld)
+                objects=[graph2_entity]
             )
             print(f"DEBUG: Created {len(response2.created_uris)} objects in graph 2: {response2.created_uris}")
             

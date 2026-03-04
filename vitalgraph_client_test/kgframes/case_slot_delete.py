@@ -17,7 +17,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities for quad conversion
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 
@@ -27,15 +27,15 @@ async def test_delete_specific_slots(client: VitalGraphClient, space_id: str, gr
     
     try:
         # Test specific slot deletion
-        response = client.kgframes.delete_frame_slots(
+        response = await client.kgframes.delete_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
             slot_uris=slot_uris
         )
         
-        if response.success and response.slots_deleted > 0:
-            logger.info(f"✅ Specific slot deletion successful: {response.slots_deleted} slots deleted")
+        if response.is_success and response.deleted_count > 0:
+            logger.info(f"✅ Specific slot deletion successful: {response.deleted_count} slots deleted")
             return True
         else:
             logger.error(f"❌ Specific slot deletion failed: {response.message}")
@@ -60,15 +60,15 @@ async def test_delete_all_frame_slots(client: VitalGraphClient, space_id: str, g
         ]
         
         # Test deleting all slots
-        response = client.kgframes.delete_frame_slots(
+        response = await client.kgframes.delete_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
             slot_uris=all_slot_uris
         )
         
-        if response.success:
-            logger.info(f"✅ All frame slots deletion successful: {response.slots_deleted} slots deleted")
+        if response.is_success:
+            logger.info(f"✅ All frame slots deletion successful: {response.deleted_count} slots deleted")
             return True
         else:
             logger.error(f"❌ All frame slots deletion failed: {response.message}")
@@ -90,7 +90,7 @@ async def test_delete_nonexistent_slots(client: VitalGraphClient, space_id: str,
             "urn:test-nonexistent-slot-998"
         ]
         
-        response = client.kgframes.delete_frame_slots(
+        response = await client.kgframes.delete_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
@@ -98,7 +98,7 @@ async def test_delete_nonexistent_slots(client: VitalGraphClient, space_id: str,
         )
         
         # Should either succeed with 0 deletions or fail gracefully
-        if response.success or "not found" in response.message.lower():
+        if response.is_success or (response.message and "not found" in response.message.lower()):
             logger.info(f"✅ Non-existent slot deletion handled gracefully")
             return True
         else:
@@ -119,7 +119,7 @@ async def test_delete_slots_from_nonexistent_frame(client: VitalGraphClient, spa
         nonexistent_frame_uri = "urn:test-nonexistent-frame-999"
         slot_uris = ["urn:test-slot-001"]
         
-        response = client.kgframes.delete_frame_slots(
+        response = await client.kgframes.delete_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=nonexistent_frame_uri,
@@ -127,7 +127,7 @@ async def test_delete_slots_from_nonexistent_frame(client: VitalGraphClient, spa
         )
         
         # Should handle gracefully
-        if response.success or "not found" in response.message.lower() or "frame" in response.message.lower():
+        if response.is_success or (response.message and ("not found" in response.message.lower() or "frame" in response.message.lower())):
             logger.info(f"✅ Slot deletion from non-existent frame handled gracefully")
             return True
         else:
@@ -145,7 +145,7 @@ async def test_delete_empty_slot_list(client: VitalGraphClient, space_id: str, g
     
     try:
         # Test deletion with empty slot list
-        response = client.kgframes.delete_frame_slots(
+        response = await client.kgframes.delete_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
@@ -153,7 +153,7 @@ async def test_delete_empty_slot_list(client: VitalGraphClient, space_id: str, g
         )
         
         # Should handle gracefully (either succeed with 0 deletions or provide appropriate message)
-        if response.success or "empty" in response.message.lower() or "no slots" in response.message.lower():
+        if response.is_success or (response.message and ("empty" in response.message.lower() or "no slots" in response.message.lower())):
             logger.info(f"✅ Empty slot list deletion handled gracefully")
             return True
         else:

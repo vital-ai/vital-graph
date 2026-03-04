@@ -76,7 +76,7 @@ def handle_entity_update_mode_impl(endpoint_instance, space, graph_id: str, enti
         )
 
 
-def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, document, 
+def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, objects: list, 
                           operation_mode: str = "update", parent_uri: str = None) -> EntityUpdateResponse:
     """
     Update KGEntities with proper entity lifecycle management.
@@ -92,7 +92,7 @@ def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
         endpoint_instance: The MockKGEntitiesEndpoint instance (for access to methods and logger)
         space_id: Space identifier
         graph_id: Graph identifier  
-        document: JsonLdDocument containing complete entity graph structure
+        objects: List of GraphObjects containing complete entity graph structure
         operation_mode: "create", "update", or "upsert"
         parent_uri: Optional parent object URI (entity or parent frame)
         
@@ -100,7 +100,7 @@ def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
         EntityUpdateResponse with updated URI and operation details
     """
     endpoint_instance._log_method_call("update_kgentities", space_id=space_id, graph_id=graph_id, 
-                         document=document, operation_mode=operation_mode, parent_uri=parent_uri)
+                         objects=objects, operation_mode=operation_mode, parent_uri=parent_uri)
     
     try:
         # Get space from space manager
@@ -120,17 +120,13 @@ def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
                     updated_uri=""
                 )
         
-        # Step 2: Strip client-provided grouping URIs (server authority)
-        stripped_document = endpoint_instance._strip_grouping_uris(document)
-        endpoint_instance.logger.info("Step 2: Stripped client-provided grouping URIs")
-        
-        # Step 3: Create VitalSigns objects and validate entity graph structure
-        document_dict = stripped_document.model_dump(by_alias=True)
-        incoming_objects = endpoint_instance._create_vitalsigns_objects_from_jsonld(document_dict)
+        # Step 2: Use incoming GraphObjects directly (server sets grouping URIs)
+        incoming_objects = list(objects) if objects else []
+        endpoint_instance.logger.info(f"Step 2: Received {len(incoming_objects)} GraphObjects")
         
         if not incoming_objects:
             return EntityUpdateResponse(
-                message="No valid objects found in document",
+                message="No valid objects found",
                 updated_uri=""
             )
         
@@ -166,7 +162,7 @@ def update_kgentities_impl(endpoint_instance, space_id: str, graph_id: str, docu
         )
 
 
-def update_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, entity_uri: str, document) -> FrameUpdateResponse:
+def update_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, entity_uri: str, objects: list) -> FrameUpdateResponse:
     """
     Update frames within entity context using Edge_hasKGFrame relationships.
     
@@ -175,7 +171,7 @@ def update_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, e
         space_id: Space identifier
         graph_id: Graph identifier
         entity_uri: Entity URI to update frames for
-        document: JSON-LD document containing updated frames
+        objects: List of GraphObjects containing updated frames
         
     Returns:
         FrameUpdateResponse with update details
@@ -194,80 +190,9 @@ def update_entity_frames_impl(endpoint_instance, space_id: str, graph_id: str, e
                 updated_uri=""
             )
         
-        # Convert JSON-LD document to VitalSigns objects
-        try:
-            jsonld_data = document.model_dump(by_alias=True)
-            endpoint_instance.logger.info(f"Update frames JSON-LD data structure: {jsonld_data}")
-            
-            # Check if the document has a @graph array
-            if '@graph' in jsonld_data and jsonld_data['@graph']:
-                # Process each object in the @graph array
-                objects = []
-                for graph_obj in jsonld_data['@graph']:
-                    # Check if this is a KGFrame object
-                    obj_type = graph_obj.get('@type', '')
-                    if 'KGFrame' in obj_type or obj_type.endswith('#KGFrame'):
-                        # Create a KGFrame object for update
-                        frame = KGFrame()
-                        if '@id' in graph_obj:
-                            frame.URI = graph_obj['@id']
-                        # Handle different name field formats
-                        if 'vital-core:hasName' in graph_obj:
-                            frame.name = graph_obj['vital-core:hasName']
-                        elif 'hasName' in graph_obj:
-                            frame.name = graph_obj['hasName']
-                        elif 'name' in graph_obj:
-                            frame.name = graph_obj['name']
-                        
-                        endpoint_instance.logger.info(f"Parsed KGFrame for update: URI={frame.URI}, name={getattr(frame, 'name', 'None')}")
-                        objects.append(frame)
-            elif 'type' in jsonld_data and 'KGFrame' in jsonld_data.get('type', ''):
-                # Single object at root level (VitalSigns format)
-                objects = []
-                frame = KGFrame()
-                if 'id' in jsonld_data:
-                    frame.URI = jsonld_data['id']
-                # Handle name field - it's nested in VitalSigns format
-                name_field = jsonld_data.get('http://vital.ai/ontology/vital-core#hasName', {})
-                if isinstance(name_field, dict) and '@value' in name_field:
-                    frame.name = name_field['@value']
-                
-                endpoint_instance.logger.info(f"Parsed single KGFrame for update: URI={frame.URI}, name={getattr(frame, 'name', 'None')}")
-                objects.append(frame)
-            else:
-                # Try VitalSigns conversion as fallback
-                try:
-                    objects = endpoint_instance.vitalsigns.from_jsonld_list(jsonld_data)
-                    if objects is None:
-                        objects = []
-                except Exception as vs_error:
-                    endpoint_instance.logger.warning(f"VitalSigns conversion failed: {vs_error}, using manual parsing")
-                    # Try to manually parse the document structure
-                    objects = []
-                    if isinstance(jsonld_data, dict):
-                        # Single object case
-                        if '@type' in jsonld_data and 'KGFrame' in jsonld_data.get('@type', ''):
-                            frame = KGFrame()
-                            if '@id' in jsonld_data:
-                                frame.URI = jsonld_data['@id']
-                            if 'vital-core:hasName' in jsonld_data:
-                                frame.name = jsonld_data['vital-core:hasName']
-                            objects.append(frame)
-            
-            # Ensure objects is a list
-            if not isinstance(objects, list):
-                objects = [objects] if objects is not None else []
-            
-            if not objects:
-                return FrameUpdateResponse(
-                    message="No valid frames found in document",
-                    updated_uri=""
-                )
-            
-        except Exception as e:
-            endpoint_instance.logger.error(f"Error converting JSON-LD to VitalSigns objects: {e}")
+        if not objects:
             return FrameUpdateResponse(
-                message=f"Error processing document: {e}",
+                message="No valid frames found in objects",
                 updated_uri=""
             )
         

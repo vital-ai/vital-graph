@@ -22,7 +22,7 @@ from vitalgraph.mock.client.mock_vitalgraph_client import MockVitalGraphClient
 from vitalgraph.mock.client.space.mock_space_manager import MockSpaceManager
 from vitalgraph.model.spaces_model import Space
 from vitalgraph.model.kgentities_model import EntitiesResponse, EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -99,36 +99,23 @@ class TestMockKGEntitiesEndpoint:
     def test_create_kgentities(self):
         """Test creating KGEntities."""
         try:
-            # Create test KGEntities JSON-LD document using correct schema properties
-            kgentities_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGEntity/test-entity-001",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "TestEntity1",
-                        "haley:hasKGraphDescription": "A test entity for mock client testing",
-                        "haley:hasKGEntityType": "http://vital.ai/ontology/haley-ai-kg#PersonType"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/KGEntity/test-entity-002",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "TestEntity2",
-                        "haley:hasKGraphDescription": "Another test entity for mock client testing",
-                        "haley:hasKGEntityType": "http://vital.ai/ontology/haley-ai-kg#OrganizationType"
-                    }
-                ]
-            }
+            # Create test KGEntity GraphObjects
+            entity1 = KGEntity()
+            entity1.URI = "http://vital.ai/haley.ai/app/KGEntity/test-entity-001"
+            entity1.name = "TestEntity1"
+            entity1.kGraphDescription = "A test entity for mock client testing"
+            entity1.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#PersonType"
             
-            document = JsonLdDocument(**kgentities_jsonld)
+            entity2 = KGEntity()
+            entity2.URI = "http://vital.ai/haley.ai/app/KGEntity/test-entity-002"
+            entity2.name = "TestEntity2"
+            entity2.kGraphDescription = "Another test entity for mock client testing"
+            entity2.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#OrganizationType"
+            
             response = self.endpoint.create_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[entity1, entity2]
             )
             
             success = (
@@ -161,8 +148,8 @@ class TestMockKGEntitiesEndpoint:
             )
             
             success = (
-                isinstance(response, JsonLdDocument) and
-                (hasattr(response, 'id') or hasattr(response, 'context'))
+                isinstance(response, (QuadResponse, QuadResultsResponse)) and
+                response.success
             )
             
             self.log_test_result(
@@ -209,27 +196,17 @@ class TestMockKGEntitiesEndpoint:
     def test_update_kgentities(self):
         """Test updating KGEntities."""
         try:
-            # Create updated KGEntity JSON-LD document
-            updated_kgentity_jsonld = {
-                "@context": {
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                "@graph": [{
-                    "@id": "http://vital.ai/haley.ai/app/KGEntity/test-entity-001",
-                    "@type": "haley:KGEntity",
-                    "vital-core:hasName": "UpdatedTestEntity1",
-                    "haley:hasKGraphDescription": "Updated description for testing",
-                    "haley:hasKGEntityType": "http://vital.ai/ontology/haley-ai-kg#PersonType"
-                }]
-            }
+            # Create updated KGEntity GraphObject
+            updated_entity = KGEntity()
+            updated_entity.URI = "http://vital.ai/haley.ai/app/KGEntity/test-entity-001"
+            updated_entity.name = "UpdatedTestEntity1"
+            updated_entity.kGraphDescription = "Updated description for testing"
+            updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#PersonType"
             
-            document = JsonLdDocument(**updated_kgentity_jsonld)
             response = self.endpoint.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document
+                objects=[updated_entity]
             )
             
             success = (

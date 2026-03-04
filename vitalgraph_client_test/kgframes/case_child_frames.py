@@ -17,11 +17,8 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_create_child_frames(client: VitalGraphClient, space_id: str, graph_id: str, parent_frame_uri: str, logger: logging.Logger) -> bool:
@@ -42,19 +39,16 @@ async def test_create_child_frames(client: VitalGraphClient, space_id: str, grap
             # Note: Parent relationship would be handled by edges in a complete implementation
             child_frames.append(frame)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(child_frames)
-        
-        # Test child frame creation
-        response = client.kgframes.create_child_frames(
+        # Test child frame creation - pass GraphObjects directly
+        response = await client.kgframes.create_child_frames(
             space_id=space_id,
             graph_id=graph_id,
             parent_frame_uri=parent_frame_uri,
-            data=document
+            objects=child_frames
         )
         
-        if response.success and response.frames_created > 0:
-            logger.info(f"✅ Child frame creation successful: {response.frames_created} child frames created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Child frame creation successful: {response.created_count} child frames created")
             return True
         else:
             logger.error(f"❌ Child frame creation failed: {response.message}")
@@ -83,19 +77,16 @@ async def test_update_child_frames(client: VitalGraphClient, space_id: str, grap
             # Note: Parent relationship would be handled by edges in a complete implementation
             child_frames.append(frame)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(child_frames)
-        
-        # Test child frame update
-        response = client.kgframes.update_child_frames(
+        # Test child frame update - pass GraphObjects directly
+        response = await client.kgframes.update_child_frames(
             space_id=space_id,
             graph_id=graph_id,
             parent_frame_uri=parent_frame_uri,
-            data=document
+            objects=child_frames
         )
         
-        if response.success and response.frames_updated > 0:
-            logger.info(f"✅ Child frame update successful: {response.frames_updated} child frames updated")
+        if response.is_success:
+            logger.info(f"✅ Child frame update successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Child frame update failed: {response.message}")
@@ -112,15 +103,15 @@ async def test_delete_child_frames(client: VitalGraphClient, space_id: str, grap
     
     try:
         # Test child frame deletion
-        response = client.kgframes.delete_child_frames(
+        response = await client.kgframes.delete_child_frames(
             space_id=space_id,
             graph_id=graph_id,
             parent_frame_uri=parent_frame_uri,
             frame_uris=child_frame_uris
         )
         
-        if response.success and response.frames_deleted > 0:
-            logger.info(f"✅ Child frame deletion successful: {response.frames_deleted} child frames deleted")
+        if response.is_success and response.deleted_count > 0:
+            logger.info(f"✅ Child frame deletion successful: {response.deleted_count} child frames deleted")
             return True
         else:
             logger.error(f"❌ Child frame deletion failed: {response.message}")
@@ -145,15 +136,15 @@ async def test_delete_all_child_frames(client: VitalGraphClient, space_id: str, 
         ]
         
         # Test deleting all child frames
-        response = client.kgframes.delete_child_frames(
+        response = await client.kgframes.delete_child_frames(
             space_id=space_id,
             graph_id=graph_id,
             parent_frame_uri=parent_frame_uri,
             frame_uris=all_child_frame_uris
         )
         
-        if response.success:
-            logger.info(f"✅ All child frames deletion successful: {response.frames_deleted} child frames deleted")
+        if response.is_success:
+            logger.info(f"✅ All child frames deletion successful: {response.deleted_count} child frames deleted")
             return True
         else:
             logger.error(f"❌ All child frames deletion failed: {response.message}")
@@ -181,19 +172,16 @@ async def test_child_frames_with_nonexistent_parent(client: VitalGraphClient, sp
         orphan_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#OrphanChildFrame"
         # Note: Parent relationship would be handled by edges in a complete implementation
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(orphan_frame)
-        
-        # Test child frame creation with non-existent parent
-        response = client.kgframes.create_child_frames(
+        # Test child frame creation with non-existent parent - pass GraphObject directly
+        response = await client.kgframes.create_child_frames(
             space_id=space_id,
             graph_id=graph_id,
             parent_frame_uri=nonexistent_parent_uri,
-            data=document
+            objects=[orphan_frame]
         )
         
         # Should handle gracefully (either succeed or provide appropriate error)
-        if response.success or "not found" in response.message.lower() or "parent" in response.message.lower():
+        if response.is_success or (response.message and ("not found" in response.message.lower() or "parent" in response.message.lower())):
             logger.info(f"✅ Child frames with non-existent parent handled gracefully")
             return True
         else:

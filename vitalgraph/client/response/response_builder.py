@@ -1,7 +1,7 @@
 """
 Response Builder Utilities
 
-Utilities for converting JSON-LD to VitalSigns GraphObjects and building
+Utilities for converting server responses to VitalSigns GraphObjects and building
 standardized response objects.
 """
 
@@ -63,54 +63,6 @@ from .client_response import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=VitalGraphResponse)
-
-
-def jsonld_to_graph_objects(jsonld_data: Dict[str, Any], vs: VitalSigns) -> List[GraphObject]:
-    """
-    Convert JSON-LD data to VitalSigns GraphObjects.
-    
-    Args:
-        jsonld_data: JSON-LD document or graph data
-        vs: VitalSigns instance for deserialization
-        
-    Returns:
-        List of GraphObject instances
-        
-    Raises:
-        Exception: If JSON-LD parsing fails
-    """
-    try:
-        if not jsonld_data:
-            return []
-        
-        graph_data = jsonld_data.get('@graph', [])
-        if not graph_data:
-            if '@id' in jsonld_data:
-                graph_data = [jsonld_data]
-            else:
-                return []
-        
-        # Use from_jsonld_list for batch conversion
-        try:
-            objects = vs.from_jsonld_list(jsonld_data)
-            return objects if objects else []
-        except Exception as e:
-            logger.warning(f"Batch deserialization failed, trying individual: {e}")
-            # Fallback to individual deserialization
-            objects = []
-            for item in graph_data:
-                try:
-                    obj = vs.from_jsonld(item)
-                    if obj:
-                        objects.append(obj)
-                except Exception as item_error:
-                    logger.warning(f"Failed to deserialize object {item.get('@id', 'unknown')}: {item_error}")
-                    continue
-            return objects
-        
-    except Exception as e:
-        logger.error(f"Failed to convert JSON-LD to GraphObjects: {e}")
-        raise
 
 
 def count_object_types(objects: List[GraphObject]) -> Dict[str, int]:

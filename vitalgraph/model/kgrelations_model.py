@@ -7,18 +7,18 @@ Following established VitalGraph patterns for consistent API design.
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument, JsonLdObject
+from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
 
 
-class RelationsResponse(BasePaginatedResponse):
-    """Response model for relations listing."""
-    relations: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing relations")
+class RelationsResponse(QuadResponse):
+    """Response model for relations listing (paginated quad results)."""
+    pass
 
 
-class RelationResponse(BaseModel):
-    """Response model for single relation."""
-    relation: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing the relation")
+class RelationResponse(QuadResultsResponse):
+    """Response model for single relation (non-paginated quad results)."""
+    pass
 
 
 class RelationCreateResponse(BaseCreateResponse):

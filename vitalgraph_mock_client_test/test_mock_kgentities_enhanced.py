@@ -10,7 +10,7 @@ This test suite validates the enhanced mock implementation of KGEntity operation
 - Enhanced parameters: include_entity_graph, delete_entity_graph
 - Entity-frame relationship methods: create_entity_frames, update_entity_frames, delete_entity_frames, get_entity_frames
 - Concrete slot classes with actual slot values (textSlotValue, integerSlotValue, booleanSlotValue)
-- VitalSigns native JSON-LD functionality with Edge-based relationships
+- VitalSigns native quad functionality with Edge-based relationships
 - pyoxigraph in-memory SPARQL quad store for data persistence
 - Direct test runner format (no pytest dependency)
 """
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, '/Users/hadfield/Local/vital-git/vital-graph')
 
 from vitalgraph.mock.client.mock_vitalgraph_client import MockVitalGraphClient
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.kgentities_model import EntitiesResponse, EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
 from vitalgraph.model.kgframes_model import FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
 
 from ai_haley_kg_domain.model.KGEntity import KGEntity
@@ -181,10 +181,7 @@ def create_test_frames_document() -> Dict[str, Any]:
     frame2.kGFrameType = "urn:SimpleNewFrameType"
     objects.append(frame2)
     
-    # Convert to JSON-LD using VitalSigns
-    jsonld_document = GraphObject.to_jsonld_list(objects)
-    
-    return jsonld_document
+    return objects
 
 
 class TestEnhancedMockKGEntitiesEndpoint:
@@ -232,15 +229,12 @@ class TestEnhancedMockKGEntitiesEndpoint:
             
             # Create test entities with frames
             test_objects = create_test_entity_with_frames()
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_document = GraphObject.to_jsonld_list(test_objects)
-            jsonld_doc = JsonLdDocument(**jsonld_document)
             
-            # Create entities with frames
+            # Create entities with frames - pass GraphObjects directly
             create_response = self.endpoint.create_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=jsonld_doc
+                objects=test_objects
             )
             
             # Test: List entities with include_entity_graph=True
@@ -301,16 +295,15 @@ class TestEnhancedMockKGEntitiesEndpoint:
         try:
             entity_uri = "http://vital.ai/haley.ai/app/KGEntity/test_entity_001"
             
-            # Create frames document
-            frames_document = create_test_frames_document()
-            frames_doc = JsonLdDocument(**frames_document)
+            # Create frames as GraphObjects
+            frames_objects = create_test_frames_document()
             
-            # Test: Create frames for entity
+            # Test: Create frames for entity - pass GraphObjects directly
             response = self.endpoint.create_entity_frames(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
                 entity_uri=entity_uri,
-                document=frames_doc
+                objects=frames_objects
             )
             
             success = (
@@ -345,7 +338,7 @@ class TestEnhancedMockKGEntitiesEndpoint:
                 entity_uri=entity_uri
             )
             
-            success = isinstance(response, JsonLdDocument)
+            success = isinstance(response, (QuadResponse, QuadResultsResponse, dict)) and response is not None
             
             self.log_test_result(
                 "Get Entity Frames",
@@ -373,15 +366,12 @@ class TestEnhancedMockKGEntitiesEndpoint:
             updated_frame.name = "UpdatedFrame1"
             # Use only basic properties that exist
             
-            jsonld_document = GraphObject.to_jsonld_list([updated_frame])
-            frames_doc = JsonLdDocument(**jsonld_document)
-            
-            # Test: Update frames for entity
+            # Test: Update frames for entity - pass GraphObjects directly
             response = self.endpoint.update_entity_frames(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
                 entity_uri=entity_uri,
-                document=frames_doc
+                objects=[updated_frame]
             )
             
             success = (

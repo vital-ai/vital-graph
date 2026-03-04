@@ -7,7 +7,7 @@ This test suite validates the new KG endpoint functionality including:
 - Frame-slot relationship operations (create_frame_slots, get_frame_slots, etc.)
 - Enhanced parameters (include_entity_graph, delete_entity_graph, include_frame_graph)
 - Proper edge-based relationships using Edge_hasEntityKGFrame and Edge_hasKGSlot
-- VitalSigns native JSON-LD functionality with concrete slot values
+- VitalSigns native quad functionality with concrete slot values
 """
 
 import logging
@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -204,13 +203,11 @@ class TestKGEndpointEnhancements:
             
             # Create test entity
             entity = create_test_entity()
-            entity_jsonld = GraphObject.to_jsonld_list([entity])
-            entity_doc = JsonLdDocument(**entity_jsonld)
             
             entity_response = self.mock_client.kgentities.create_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=entity_doc
+                objects=[entity]
             )
             
             # Check if entity was created successfully (response exists and no error)
@@ -231,15 +228,13 @@ class TestKGEndpointEnhancements:
         try:
             # Create frames with slots
             frame_objects = create_test_frames_with_slots()
-            frame_jsonld = GraphObject.to_jsonld_list(frame_objects)
-            frame_doc = JsonLdDocument(**frame_jsonld)
             
-            # Create entity frames
+            # Create entity frames - pass GraphObjects directly
             response = self.mock_client.kgentities.create_entity_frames(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
                 entity_uri=self.entity_uri,
-                document=frame_doc
+                objects=frame_objects
             )
             
             success = hasattr(response, 'created_count') and response.created_count >= 1
@@ -273,7 +268,7 @@ class TestKGEndpointEnhancements:
                 if response.graph:
                     print(f"DEBUG: get_entity_frames graph length: {len(response.graph)}")
             
-            # Check if we got a valid JSON-LD document
+            # Check if we got a valid response with graph data
             success = (
                 hasattr(response, 'graph') and 
                 response.graph is not None and 
@@ -302,15 +297,12 @@ class TestKGEndpointEnhancements:
             additional_slot.textSlotValue = "Additional Value"
             additional_slot.kGSlotType = "urn:EnhancedTextSlotType"
             
-            slot_jsonld = GraphObject.to_jsonld_list([additional_slot])
-            slot_doc = JsonLdDocument(**slot_jsonld)
-            
-            # Create frame slots
+            # Create frame slots - pass GraphObjects directly
             response = self.mock_client.kgframes.create_frame_slots(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
                 frame_uri=self.frame_uri,
-                document=slot_doc
+                objects=[additional_slot]
             )
             
             success = hasattr(response, 'created_count') and response.created_count >= 1
@@ -335,7 +327,7 @@ class TestKGEndpointEnhancements:
                 frame_uri=self.frame_uri
             )
             
-            # Check if we got a valid JSON-LD document with slots
+            # Check if we got a valid response with slots
             success = (
                 hasattr(response, 'graph') and 
                 response.graph is not None and 
@@ -436,7 +428,7 @@ class TestKGEndpointEnhancements:
                 include_frame_graph=True
             )
             
-            # Check if we got a valid JSON-LD document
+            # Check if we got a valid response with graph data
             success = (
                 hasattr(response, 'graph') and 
                 response.graph is not None
@@ -514,15 +506,17 @@ class TestKGEndpointEnhancements:
             test_frame.name = "VitalSigns Integration Test Frame"
             test_frame.kGFrameType = "urn:VitalSignsTestFrameType"
             
-            # Test VitalSigns JSON-LD conversion
-            jsonld_doc = GraphObject.to_jsonld_list([test_frame])
+            # Test VitalSigns quad round-trip
+            from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
+            quads = graphobjects_to_quad_list([test_frame])
+            reconstructed = quad_list_to_graphobjects(quads)
             
-            # Validate JSON-LD structure
+            # Validate round-trip
             vitalsigns_tests = {
                 "VitalSigns object creation": isinstance(test_frame, KGFrame),
                 "GraphObject inheritance": isinstance(test_frame, GraphObject),
-                "JSON-LD conversion": isinstance(jsonld_doc, dict),
-                "Has @context": "@context" in jsonld_doc,
+                "Quad conversion": len(quads) > 0,
+                "Round-trip success": len(reconstructed) == 1,
                 "Property access": hasattr(test_frame, 'name'),
                 "Property value set": test_frame.name == "VitalSigns Integration Test Frame"
             }
@@ -538,7 +532,7 @@ class TestKGEndpointEnhancements:
                 {
                     "test_results": vitalsigns_tests,
                     "frame_uri": str(test_frame.URI),
-                    "jsonld_keys": list(jsonld_doc.keys()) if isinstance(jsonld_doc, dict) else []
+                    "quad_count": len(quads)
                 }
             )
             

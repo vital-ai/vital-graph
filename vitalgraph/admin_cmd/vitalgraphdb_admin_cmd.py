@@ -900,7 +900,7 @@ class VitalGraphDBAdminREPL:
     
     def _collect_file_format_interactive(self, params: dict) -> bool:
         """Collect and validate file format interactively."""
-        valid_formats = ['turtle', 'xml', 'nt', 'n3', 'json-ld', 'auto-detect']
+        valid_formats = ['turtle', 'xml', 'nt', 'n3', 'auto-detect']
         
         while True:
             try:
@@ -1058,8 +1058,7 @@ class VitalGraphDBAdminREPL:
                 '.xml': 'xml',
                 '.nt': 'nt',
                 '.n3': 'n3',
-                '.jsonld': 'json-ld',
-                '.json': 'json-ld'
+                '.json': 'nquads'
             }
             params['file_format'] = format_map.get(suffix)
             if params['file_format']:

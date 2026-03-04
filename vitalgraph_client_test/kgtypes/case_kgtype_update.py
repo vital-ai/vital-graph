@@ -132,29 +132,12 @@ class KGTypeUpdateTester:
                 if list_response.is_success and list_response.type:
                     retrieved_kgtype = list_response.type
                     
-                    # Convert JsonLdObject to dict if needed
-                    from vitalgraph.model.jsonld_model import JsonLdObject
-                    if isinstance(retrieved_kgtype, JsonLdObject):
-                        retrieved_kgtype = retrieved_kgtype.model_dump(by_alias=True)
-                    
-                    # Log the retrieved KGType data for debugging
-                    logger.info(f"  Retrieved KGType JSON-LD: {retrieved_kgtype}")
-                    
-                    # Try to convert back to VitalSigns object and log it
-                    try:
-                        from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                        retrieved_obj = GraphObject.from_jsonld(retrieved_kgtype)
-                        if retrieved_obj:
-                            logger.info(f"  Retrieved KGType as VitalSigns object: {retrieved_obj.to_json()}")
-                    except Exception as conv_e:
-                        logger.info(f"  Could not convert retrieved KGType to VitalSigns: {conv_e}")
-                    
-                    retrieved_description = retrieved_kgtype.get('kGraphDescription', 
-                                                               retrieved_kgtype.get('http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription', ''))
+                    # Work with GraphObject directly
+                    logger.info(f"  Retrieved KGType as VitalSigns object: {retrieved_kgtype.to_json()}")
+                    retrieved_uri = str(retrieved_kgtype.URI)
+                    retrieved_description = str(retrieved_kgtype.kGraphDescription) if hasattr(retrieved_kgtype, 'kGraphDescription') else ''
                     
                     # Precise verification - check if we got the exact KGType we updated
-                    retrieved_uri = retrieved_kgtype.get('@id') or retrieved_kgtype.get('URI')
-                    
                     if retrieved_uri != test_uri:
                         return {
                             'name': 'KGType Update with Verification',

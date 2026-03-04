@@ -1,5 +1,5 @@
 """
-Mock implementation of KGTypesEndpoint for testing with VitalSigns native JSON-LD functionality.
+Mock implementation of KGTypesEndpoint for testing with VitalSigns native functionality.
 
 This implementation uses:
 - VitalSigns native object creation and conversion
@@ -11,9 +11,10 @@ This implementation uses:
 from typing import Dict, Any, Optional, List
 from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.kgtypes_model import (
-    KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
+    KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from ai_haley_kg_domain.model.KGType import KGType
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -21,7 +22,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 class MockKGTypesEndpoint(MockBaseEndpoint):
     """Mock implementation of KGTypesEndpoint with VitalSigns native functionality."""
     
-    def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypeListResponse:
+    def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """
         List KGTypes with pagination and optional search using pyoxigraph SPARQL queries.
         
@@ -33,7 +34,7 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             search: Optional search term
             
         Returns:
-            KGTypeListResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         self._log_method_call("list_kgtypes", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset, search=search)
         
@@ -41,14 +42,9 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id)
             if not space:
-                # Return empty response for non-existent space
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return KGTypeListResponse(
-                    types=JsonLdDocument(**empty_jsonld),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
+                return QuadResponse(
+                    results=[], success=True,
+                    total_count=0, page_size=page_size, offset=offset
                 )
             
             # Get KGType vitaltype URI
@@ -90,13 +86,9 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             
             if not results.get("bindings"):
                 # No results found
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return KGTypeListResponse(
-                    types=JsonLdDocument(**empty_jsonld),
-                    total_count=0,
-                    page_size=page_size,
-                    offset=offset
+                return QuadResponse(
+                    results=[], success=True,
+                    total_count=0, page_size=page_size, offset=offset
                 )
             
             # Group results by subject to reconstruct types
@@ -138,28 +130,21 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                     count_value = count_value.split("^^")[0].strip('"')
                 total_count = int(count_value)
             
-            # Convert to JSON-LD document using VitalSigns
-            types_jsonld = self._objects_to_jsonld_document(types)
+            quads = graphobjects_to_quad_list(types, graph_id)
             
-            return KGTypeListResponse(
-                types=JsonLdDocument(**types_jsonld),
-                total_count=total_count,
-                page_size=page_size,
-                offset=offset
+            return QuadResponse(
+                results=quads, success=True,
+                total_count=total_count, page_size=page_size, offset=offset
             )
             
         except Exception as e:
             self.logger.error(f"Error listing KGTypes: {e}")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return KGTypeListResponse(
-                types=JsonLdDocument(**empty_jsonld),
-                total_count=0,
-                page_size=page_size,
-                offset=offset
+            return QuadResponse(
+                results=[], success=False,
+                total_count=0, page_size=page_size, offset=offset
             )
     
-    def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> JsonLdDocument:
+    def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> QuadResponse:
         """
         Get a specific KGType by URI using pyoxigraph SPARQL query.
         
@@ -169,7 +154,7 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             uri: Type URI
             
         Returns:
-            JsonLdDocument with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results
         """
         self._log_method_call("get_kgtype", space_id=space_id, graph_id=graph_id, uri=uri)
         
@@ -177,10 +162,10 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id)
             if not space:
-                # Return empty document for non-existent space
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], success=False,
+                    total_count=0, page_size=1, offset=0
+                )
             
             # Clean URI
             clean_uri = uri.strip('<>')
@@ -197,10 +182,10 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             results = self._execute_sparql_query(space, query)
             
             if not results.get("bindings"):
-                # Type not found
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], success=False,
+                    total_count=0, page_size=1, offset=0
+                )
             
             # Reconstruct type properties
             properties = {}
@@ -214,19 +199,23 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
             kgtype = self._convert_sparql_to_vitalsigns_object(kgtype_vitaltype, clean_uri, properties)
             
             if kgtype:
-                # Convert to JSON-LD using VitalSigns native functionality
-                type_jsonld = kgtype.to_jsonld()
-                return JsonLdDocument(**type_jsonld)
+                quads = graphobjects_to_quad_list([kgtype], graph_id)
+                return QuadResponse(
+                    results=quads, success=True,
+                    total_count=1, page_size=1, offset=0
+                )
             else:
-                from vital_ai_vitalsigns.model.GraphObject import GraphObject
-                empty_jsonld = GraphObject.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], success=False,
+                    total_count=0, page_size=1, offset=0
+                )
                 
         except Exception as e:
             self.logger.error(f"Error getting KGType {uri}: {e}")
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            empty_jsonld = GraphObject.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return QuadResponse(
+                results=[], success=False,
+                total_count=0, page_size=1, offset=0
+            )
     
     def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
         """
@@ -240,7 +229,7 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
         Returns:
             KGTypeCreateResponse with created URIs and count
         """
-        self._log_method_call("create_kgtypes", space_id=space_id, graph_id=graph_id, objects=objects)
+        self._log_method_call("create_kgtypes", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -252,7 +241,6 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                     created_uris=[]
                 )
             
-            # Objects are already VitalSigns GraphObjects
             if not objects:
                 return KGTypeCreateResponse(
                     message="No objects provided",
@@ -302,7 +290,7 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
         Returns:
             KGTypeUpdateResponse with updated URI
         """
-        self._log_method_call("update_kgtypes", space_id=space_id, graph_id=graph_id, objects=objects)
+        self._log_method_call("update_kgtypes", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -313,7 +301,6 @@ class MockKGTypesEndpoint(MockBaseEndpoint):
                     updated_uri=""
                 )
             
-            # Objects are already VitalSigns GraphObjects
             if not objects:
                 return KGTypeUpdateResponse(
                     message="No objects provided",

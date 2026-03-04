@@ -25,7 +25,8 @@ from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import SPARQLGraphResponse
 from vitalgraph.model.objects_model import ObjectsResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
+from ai_haley_kg_domain.model.KGEntity import KGEntity
 
 
 class TestMockClientObjects:
@@ -240,36 +241,25 @@ class TestMockClientObjects:
     def test_create_objects(self):
         """Test creating new objects."""
         try:
-            # Create JSON-LD document with KGEntity objects using correct schema properties
-            objects_data = JsonLdDocument(
-                context={
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                graph=[
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-001",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "Test Entity 1",
-                        "haley:hasKGraphDescription": "A test KG entity"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-002",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "Test Entity 2",
-                        "haley:hasKGraphDescription": "Another test KG entity"
-                    },
-                    {
-                        "@id": "http://vital.ai/haley.ai/app/test-entity-003",
-                        "@type": "haley:KGEntity",
-                        "vital-core:hasName": "Test Entity 3",
-                        "haley:hasKGraphDescription": "Third test KG entity"
-                    }
-                ]
-            )
+            # Create KGEntity GraphObjects directly
+            entity1 = KGEntity()
+            entity1.URI = "http://vital.ai/haley.ai/app/test-entity-001"
+            entity1.name = "Test Entity 1"
+            entity1.kGraphDescription = "A test KG entity"
             
-            response = self.client.create_objects(self.test_space_id, self.test_graph_id, objects_data)
+            entity2 = KGEntity()
+            entity2.URI = "http://vital.ai/haley.ai/app/test-entity-002"
+            entity2.name = "Test Entity 2"
+            entity2.kGraphDescription = "Another test KG entity"
+            
+            entity3 = KGEntity()
+            entity3.URI = "http://vital.ai/haley.ai/app/test-entity-003"
+            entity3.name = "Test Entity 3"
+            entity3.kGraphDescription = "Third test KG entity"
+            
+            test_objects = [entity1, entity2, entity3]
+            
+            response = self.client.create_objects(self.test_space_id, self.test_graph_id, test_objects)
             
             success = (
                 isinstance(response, ObjectCreateResponse) and
@@ -308,28 +298,25 @@ class TestMockClientObjects:
         try:
             response = self.client.get_object(self.test_space_id, self.test_graph_id, object_uri)
             
-            # Handle both ObjectsResponse and JsonLdDocument return types
+            # Handle response types
             success = False
             object_type = None
             objects_count = 0
             
-            if isinstance(response, ObjectsResponse):
-                # Standard ObjectsResponse format
-                success = (
-                    hasattr(response, 'objects') and
-                    hasattr(response.objects, 'graph') and
-                    response.objects.graph and
-                    len(response.objects.graph) > 0
-                )
-                if success and response.objects.graph:
-                    object_type = response.objects.graph[0].get('@type', 'Unknown')
-                    objects_count = len(response.objects.graph)
-            elif hasattr(response, 'graph') and response.graph:
-                # Direct JsonLdDocument format
-                success = len(response.graph) > 0
-                if success:
-                    object_type = response.graph[0].get('@type', 'Unknown')
-                    objects_count = len(response.graph)
+            if isinstance(response, QuadResponse):
+                # QuadResponse format
+                success = response.success and response.total_count > 0
+                objects_count = response.total_count
+                if success and hasattr(response, 'results') and response.results:
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    graph_objects = quad_list_to_graphobjects(response.results)
+                    if graph_objects:
+                        object_type = type(graph_objects[0]).__name__
+                    objects_count = len(graph_objects)
+            elif isinstance(response, ObjectsResponse):
+                # Legacy ObjectsResponse format
+                success = hasattr(response, 'objects') and response.objects is not None
+                objects_count = 1 if success else 0
             
             self.log_test_result(
                 "Get Object",
@@ -360,11 +347,16 @@ class TestMockClientObjects:
             
             objects_count = 0
             object_types = []
-            if hasattr(response.objects, 'graph') and response.objects.graph:
+            if hasattr(response, 'results') and response.results:
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                graph_objects = quad_list_to_graphobjects(response.results)
+                objects_count = len(graph_objects)
+                for obj in graph_objects:
+                    object_types.append(type(obj).__name__)
+            elif hasattr(response, 'objects') and hasattr(response.objects, 'graph') and response.objects.graph:
                 objects_count = len(response.objects.graph)
-                for obj_data in response.objects.graph:
-                    obj_type = obj_data.get('@type', 'Unknown')
-                    object_types.append(obj_type)
+                for obj in response.objects.graph:
+                    object_types.append(type(obj).__name__ if hasattr(obj, 'URI') else 'Unknown')
             
             self.log_test_result(
                 "List Objects (With Data)",
@@ -424,23 +416,14 @@ class TestMockClientObjects:
             return
         
         try:
-            # Create updated JSON-LD document with valid KGEntity properties
-            updated_data = JsonLdDocument(
-                context={
-                    "vital": "http://vital.ai/ontology/vital#",
-                    "vital-core": "http://vital.ai/ontology/vital-core#",
-                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                },
-                graph=[{
-                    "@id": object_uris[0],
-                    "@type": "haley:KGEntity",
-                    "vital-core:hasName": "Updated Test Entity",
-                    "haley:hasKGraphDescription": "An updated test KG entity",
-                    "haley:hasKGEntityType": "http://vital.ai/ontology/haley-ai-kg#PersonType"
-                }]
-            )
+            # Create updated KGEntity GraphObject directly
+            updated_entity = KGEntity()
+            updated_entity.URI = object_uris[0]
+            updated_entity.name = "Updated Test Entity"
+            updated_entity.kGraphDescription = "An updated test KG entity"
+            updated_entity.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#PersonType"
             
-            response = self.client.update_objects(self.test_space_id, self.test_graph_id, updated_data)
+            response = self.client.update_objects(self.test_space_id, self.test_graph_id, [updated_entity])
             
             success = (
                 isinstance(response, ObjectUpdateResponse) and

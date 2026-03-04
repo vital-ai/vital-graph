@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.files_model import (
-    FilesResponse, FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
+    FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 
@@ -153,7 +154,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
         self.clear_minio_storage()
     
     def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
-                  offset: int = 0, file_filter: Optional[str] = None) -> FilesResponse:
+                  offset: int = 0, file_filter: Optional[str] = None) -> QuadResponse:
         """
         List files with pagination and optional filtering using pyoxigraph SPARQL queries.
         
@@ -165,7 +166,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
             file_filter: Optional filter term
             
         Returns:
-            FilesResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         self._log_method_call("list_files", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset, file_filter=file_filter)
         
@@ -173,11 +174,8 @@ class MockFilesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id) if self.space_manager else None
             if not space:
-                # Return empty response for non-existent space
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return FilesResponse(
-                    files=JsonLdDocument(**empty_jsonld),
+                return QuadResponse(
+                    results=[],
                     total_count=0,
                     page_size=page_size,
                     offset=offset
@@ -224,11 +222,8 @@ class MockFilesEndpoint(MockBaseEndpoint):
             results = self._execute_sparql_query(space, query)
             
             if not results.get("bindings"):
-                # No results found
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return FilesResponse(
-                    files=JsonLdDocument(**empty_jsonld),
+                return QuadResponse(
+                    results=[],
                     total_count=0,
                     page_size=page_size,
                     offset=offset
@@ -278,11 +273,10 @@ class MockFilesEndpoint(MockBaseEndpoint):
                 else:
                     total_count = int(count_value)
             
-            # Convert to JSON-LD document using VitalSigns
-            files_jsonld = self._objects_to_jsonld_document(files)
+            quads = graphobjects_to_quad_list(files, graph_id)
             
-            return FilesResponse(
-                files=JsonLdDocument(**files_jsonld),
+            return QuadResponse(
+                results=quads,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset
@@ -290,16 +284,14 @@ class MockFilesEndpoint(MockBaseEndpoint):
             
         except Exception as e:
             self.logger.error(f"Error listing files: {e}")
-            from vital_ai_domain.model.FileNode import FileNode
-            empty_jsonld = FileNode.to_jsonld_list([])
-            return FilesResponse(
-                files=JsonLdDocument(**empty_jsonld),
+            return QuadResponse(
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
             )
     
-    def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> JsonLdDocument:
+    def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> QuadResponse:
         """
         Get a specific file by URI using pyoxigraph SPARQL query.
         
@@ -309,7 +301,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
             graph_id: Graph identifier (optional)
             
         Returns:
-            JsonLdDocument with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results
         """
         self._log_method_call("get_file", space_id=space_id, uri=uri, graph_id=graph_id)
         
@@ -317,10 +309,9 @@ class MockFilesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id) if self.space_manager else None
             if not space:
-                # Return empty document for non-existent space
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Clean URI - but keep it for the SPARQL query
             clean_uri = uri.strip('<>')
@@ -358,10 +349,9 @@ class MockFilesEndpoint(MockBaseEndpoint):
             self.logger.info(f"get_file query returned {len(results.get('bindings', []))} bindings for URI: {clean_uri}")
             
             if not results.get("bindings"):
-                # File not found
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Group results by subject (same as list_files)
             subjects_data = {}
@@ -386,36 +376,23 @@ class MockFilesEndpoint(MockBaseEndpoint):
                     self.logger.error(f"Failed to convert subject {subject_uri} to FileNode")
             
             if files:
-                # Convert to JSON-LD document using VitalSigns
-                files_jsonld = self._objects_to_jsonld_document(files)
-                self.logger.info(f"get_file final JSON-LD: {files_jsonld}")
-                
-                # Ensure the JSON-LD has a @graph structure that the test expects
-                if '@graph' not in files_jsonld:
-                    # Convert single object to @graph array format
-                    single_obj = {k: v for k, v in files_jsonld.items() if k not in ['@context']}
-                    files_jsonld = {
-                        '@context': files_jsonld.get('@context', {}),
-                        '@graph': [single_obj]
-                    }
-                
-                result_doc = JsonLdDocument(**files_jsonld)
-                self.logger.info(f"get_file returned JsonLdDocument: {result_doc}")
-                self.logger.info(f"get_file JsonLdDocument.graph: {result_doc.graph}")
-                return result_doc
+                self.logger.info(f"get_file returning {len(files)} file objects as quads")
+                quads = graphobjects_to_quad_list(files, graph_id)
+                return QuadResponse(
+                    results=quads, total_count=len(files), page_size=len(files), offset=0
+                )
             else:
-                # No files found - return empty
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
                 
         except Exception as e:
             self.logger.error(f"Error getting file {uri}: {e}")
-            from vital_ai_domain.model.FileNode import FileNode
-            empty_jsonld = FileNode.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return QuadResponse(
+                results=[], total_count=0, page_size=1, offset=0
+            )
     
-    def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> JsonLdDocument:
+    def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> QuadResponse:
         """
         Get multiple files by URI list using pyoxigraph SPARQL queries.
         
@@ -425,7 +402,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
             graph_id: Graph identifier (optional)
             
         Returns:
-            JsonLdDocument with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results
         """
         self._log_method_call("get_files_by_uris", space_id=space_id, uri_list=uri_list, graph_id=graph_id)
         
@@ -433,17 +410,17 @@ class MockFilesEndpoint(MockBaseEndpoint):
             # Get space from space manager
             space = self.space_manager.get_space(space_id) if self.space_manager else None
             if not space:
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Parse URI list
             uris = [uri.strip().strip('<>') for uri in uri_list.split(',') if uri.strip()]
             
             if not uris:
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Build SPARQL query for multiple URIs
             uri_values = ' '.join([f'<{uri}>' for uri in uris])
@@ -461,9 +438,9 @@ class MockFilesEndpoint(MockBaseEndpoint):
             results = self._execute_sparql_query(space, query)
             
             if not results.get("bindings"):
-                from vital_ai_domain.model.FileNode import FileNode
-                empty_jsonld = FileNode.to_jsonld_list([])
-                return JsonLdDocument(**empty_jsonld)
+                return QuadResponse(
+                    results=[], total_count=0, page_size=1, offset=0
+                )
             
             # Group results by subject
             subjects_data = {}
@@ -484,29 +461,30 @@ class MockFilesEndpoint(MockBaseEndpoint):
                 if file_obj:
                     files.append(file_obj)
             
-            # Convert to JSON-LD document using VitalSigns
-            files_jsonld = self._objects_to_jsonld_document(files)
-            return JsonLdDocument(**files_jsonld)
+            quads = graphobjects_to_quad_list(files, graph_id)
+            return QuadResponse(
+                results=quads, total_count=len(files), page_size=len(files), offset=0
+            )
             
         except Exception as e:
             self.logger.error(f"Error getting files by URIs: {e}")
-            from vital_ai_domain.model.FileNode import FileNode
-            empty_jsonld = FileNode.to_jsonld_list([])
-            return JsonLdDocument(**empty_jsonld)
+            return QuadResponse(
+                results=[], total_count=0, page_size=1, offset=0
+            )
     
-    def create_file(self, space_id: str, document: JsonLdDocument, graph_id: Optional[str] = None) -> FileCreateResponse:
+    def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> FileCreateResponse:
         """
         Create new file node (metadata only) using VitalSigns native functionality.
         
         Args:
             space_id: Space identifier
-            document: JsonLdDocument containing file metadata
+            objects: List of GraphObjects containing file metadata
             graph_id: Graph identifier (optional)
             
         Returns:
             FileCreateResponse with created URIs and count
         """
-        self._log_method_call("create_file", space_id=space_id, document=document, graph_id=graph_id)
+        self._log_method_call("create_file", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -518,9 +496,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
                     created_uris=[]
                 )
             
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            files = self._jsonld_to_vitalsigns_objects(document_dict)
+            files = objects if isinstance(objects, list) else [objects]
             
             if not files:
                 return FileCreateResponse(
@@ -549,19 +525,19 @@ class MockFilesEndpoint(MockBaseEndpoint):
                 created_uris=[]
             )
     
-    def update_file(self, space_id: str, document: JsonLdDocument, graph_id: Optional[str] = None) -> FileUpdateResponse:
+    def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> FileUpdateResponse:
         """
         Update file metadata using VitalSigns native functionality.
         
         Args:
             space_id: Space identifier
-            document: JsonLdDocument containing updated file metadata
+            objects: List of GraphObjects containing updated file metadata
             graph_id: Graph identifier (optional)
             
         Returns:
             FileUpdateResponse with updated URI
         """
-        self._log_method_call("update_file", space_id=space_id, document=document, graph_id=graph_id)
+        self._log_method_call("update_file", space_id=space_id, graph_id=graph_id)
         
         try:
             # Get space from space manager
@@ -572,9 +548,7 @@ class MockFilesEndpoint(MockBaseEndpoint):
                     updated_uri=None
                 )
             
-            # Convert JSON-LD document to VitalSigns objects
-            document_dict = document.model_dump(by_alias=True)
-            files = self._jsonld_to_vitalsigns_objects(document_dict)
+            files = objects if isinstance(objects, list) else [objects]
             
             if not files:
                 return FileUpdateResponse(

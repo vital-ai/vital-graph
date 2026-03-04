@@ -6,19 +6,9 @@ Pydantic models for KG frame management operations.
 from typing import List, Optional, Any, Dict, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument, JsonLdObject
+from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse, BaseOperationResponse
 from .kgentities_model import SlotCriteria, SortCriteria
-
-
-class FramesResponse(BasePaginatedResponse):
-    """Response model for frames listing."""
-    frames: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing frames")
-    
-    @property
-    def success(self) -> bool:
-        """Always return True for successful GET responses."""
-        return True
 
 
 class FrameCreateResponse(BaseCreateResponse):
@@ -81,8 +71,8 @@ class FrameQueryResponse(BasePaginatedResponse):
 
 class FrameGraphResponse(BaseOperationResponse):
     """Response model for frame with optional complete graph."""
-    frame: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing the frame")
-    complete_graph: Optional[Union[JsonLdObject, JsonLdDocument]] = Field(None, description="Complete frame graph when include_frame_graph=True")
+    frame: Optional[QuadResultsResponse] = Field(None, description="Frame data as quad results")
+    complete_graph: Optional[QuadResultsResponse] = Field(None, description="Complete frame graph when include_frame_graph=True")
 
 
 class FrameGraphDeleteResponse(BaseDeleteResponse):
@@ -90,10 +80,9 @@ class FrameGraphDeleteResponse(BaseDeleteResponse):
     deleted_graph_components: Optional[Dict[str, int]] = Field(None, description="Count of deleted components by type")
 
 
-class FramesGraphResponse(BasePaginatedResponse):
-    """Enhanced response model for frames with optional graph data."""
-    frames: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing frames")
-    complete_graphs: Optional[Dict[str, Union[JsonLdObject, JsonLdDocument]]] = Field(None, description="Complete graphs by frame URI when include_frame_graph=True")
+class FramesGraphResponse(QuadResponse):
+    """Enhanced response model for frames with optional graph data (paginated quad results)."""
+    complete_graphs: Optional[Dict[str, QuadResultsResponse]] = Field(None, description="Complete graphs by frame URI when include_frame_graph=True")
 
 
 # Slot Response Models
@@ -138,9 +127,9 @@ class FrameErrorInfo(BaseModel):
 
 class FrameGraphsResponse(BaseModel):
     """Enhanced response model for specific frame graph retrieval with frame_uris parameter."""
-    frame_graphs: Dict[str, Union[JsonLdDocument, FrameErrorInfo, Dict[str, Any]]] = Field(
+    frame_graphs: Dict[str, Union[QuadResultsResponse, FrameErrorInfo]] = Field(
         ..., 
-        description="Dictionary mapping frame URIs to their complete graphs (JsonLD documents) or error information"
+        description="Dictionary mapping frame URIs to their complete graphs (as quad results) or error information"
     )
     entity_uri: str = Field(..., description="The entity URI that owns the frames")
     requested_frames: int = Field(..., description="Total number of frame URIs requested")

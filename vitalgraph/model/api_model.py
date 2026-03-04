@@ -7,7 +7,7 @@ These models provide consistent structure and reduce code duplication.
 from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
-from .jsonld_model import JsonLdDocument, JsonLdObject
+from .quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 
 
 class BasePaginatedResponse(BaseModel):
@@ -17,9 +17,8 @@ class BasePaginatedResponse(BaseModel):
     offset: int = Field(..., description="Offset for pagination")
 
 
-class BaseJsonLdResponse(BasePaginatedResponse):
-    """Base model for JSON-LD paginated responses."""
-    data: Union[JsonLdObject, JsonLdDocument] = Field(..., description="Single JSON-LD object or JSON-LD document containing the response data")
+class BaseQuadListResponse(QuadResponse):
+    """Base model for paginated quad list responses with optional extra metadata."""
     pagination: Optional[Dict[str, Any]] = Field(None, description="Additional pagination information")
     meta: Optional[Dict[str, Any]] = Field(None, description="Response metadata")
 
@@ -69,7 +68,7 @@ class BaseJobResponse(BaseModel):
 
 
 class BaseListResponse(BaseModel):
-    """Base model for simple list responses without JSON-LD."""
+    """Base model for simple list responses."""
     items: List[Dict[str, Any]] = Field(..., description="List of items")
     total_count: int = Field(..., description="Total number of items available")
     page_size: int = Field(..., description="Number of items per page")

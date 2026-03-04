@@ -19,11 +19,8 @@ from ai_haley_kg_domain.model.KGTextSlot import KGTextSlot
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_slot_update_basic(client: VitalGraphClient, space_id: str, graph_id: str, frame_uri: str, slot_uri: str, logger: logging.Logger) -> bool:
@@ -41,19 +38,16 @@ async def test_slot_update_basic(client: VitalGraphClient, space_id: str, graph_
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#UpdatedSlot"
         slot.textSlotValue = "Updated slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot update
-        response = client.kgframes.update_frame_slots(
+        # Test slot update - pass GraphObject directly
+        response = await client.kgframes.update_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document
+            objects=[slot]
         )
         
-        if response.success and response.slots_updated > 0:
-            logger.info(f"✅ Basic slot update successful: {response.slots_updated} slots updated")
+        if response.is_success:
+            logger.info(f"✅ Basic slot update successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Basic slot update failed: {response.message}")
@@ -79,20 +73,17 @@ async def test_slot_update_with_entity_uri(client: VitalGraphClient, space_id: s
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#EntityUpdatedSlot"
         slot.textSlotValue = "Updated entity slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot update with entity URI
-        response = client.kgframes.update_frame_slots(
+        # Test slot update with entity URI - pass GraphObject directly
+        response = await client.kgframes.update_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document,
+            objects=[slot],
             entity_uri=entity_uri
         )
         
-        if response.success and response.slots_updated > 0:
-            logger.info(f"✅ Slot update with entity URI successful: {response.slots_updated} slots updated")
+        if response.is_success:
+            logger.info(f"✅ Slot update with entity URI successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Slot update with entity URI failed: {response.message}")
@@ -118,20 +109,17 @@ async def test_slot_update_with_parent_uri(client: VitalGraphClient, space_id: s
         slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#ParentUpdatedSlot"
         slot.textSlotValue = "Updated parent slot value"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slot)
-        
-        # Test slot update with parent URI
-        response = client.kgframes.update_frame_slots(
+        # Test slot update with parent URI - pass GraphObject directly
+        response = await client.kgframes.update_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document,
+            objects=[slot],
             parent_uri=parent_uri
         )
         
-        if response.success and response.slots_updated > 0:
-            logger.info(f"✅ Slot update with parent URI successful: {response.slots_updated} slots updated")
+        if response.is_success:
+            logger.info(f"✅ Slot update with parent URI successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Slot update with parent URI failed: {response.message}")
@@ -160,19 +148,16 @@ async def test_slot_update_multiple(client: VitalGraphClient, space_id: str, gra
             slot.textSlotValue = f"Batch updated slot value {i+1}"
             slots.append(slot)
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(slots)
-        
-        # Test multiple slot update
-        response = client.kgframes.update_frame_slots(
+        # Test multiple slot update - pass GraphObjects directly
+        response = await client.kgframes.update_frame_slots(
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            data=document
+            objects=slots
         )
         
-        if response.success and response.slots_updated > 0:
-            logger.info(f"✅ Multiple slot update successful: {response.slots_updated} slots updated")
+        if response.is_success:
+            logger.info(f"✅ Multiple slot update successful: updated_uri={response.updated_uri}")
             return True
         else:
             logger.error(f"❌ Multiple slot update failed: {response.message}")

@@ -1,6 +1,6 @@
 """Triples Endpoint for VitalGraph
 
-Implements REST API endpoints for triple management operations using JSON-LD 1.1 format.
+Implements REST API endpoints for triple management operations using quad-based wire format.
 Based on the planned API specification in docs/planned_rest_api_endpoints.md
 """
 
@@ -11,9 +11,7 @@ from pydantic import BaseModel, Field
 import logging
 from datetime import datetime
 
-from pyld import jsonld
-
-from ..model.jsonld_model import JsonLdDocument, JsonLdObject, JsonLdRequest
+from ..model.quad_model import QuadRequest
 from ..model.triples_model import (
     TripleListRequest,
     TripleListResponse,
@@ -63,12 +61,12 @@ class TriplesEndpoint:
             response_model=TripleOperationResponse,
             tags=["Triples"],
             summary="Add Triples",
-            description="Add new triples to the specified graph. Uses discriminated union to automatically handle single objects (JsonLdObject) or multiple objects (JsonLdDocument)."
+            description="Add new triples to the specified graph. Accepts a QuadRequest containing N-Quads-encoded triples."
         )
         async def add_triples(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
-            request: JsonLdRequest = Body(..., description="JSON-LD document or object to add"),
+            request: QuadRequest = Body(..., description="Quads to add"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             return await self._add_triples(space_id, graph_id, request, current_user)
@@ -79,12 +77,12 @@ class TriplesEndpoint:
             response_model=TripleOperationResponse,
             tags=["Triples"],
             summary="Delete Triples",
-            description="Delete specific triples from the specified graph. Uses discriminated union to automatically handle single objects (JsonLdObject) or multiple objects (JsonLdDocument)."
+            description="Delete specific triples from the specified graph. Accepts a QuadRequest containing N-Quads-encoded triples."
         )
         async def delete_triples(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
-            request: JsonLdRequest = Body(..., description="JSON-LD document or object to delete"),
+            request: QuadRequest = Body(..., description="Quads to delete"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             return await self._delete_triples(space_id, graph_id, request, current_user)
@@ -101,7 +99,7 @@ class TriplesEndpoint:
         object_filter: Optional[str],
         current_user: Dict
     ) -> TripleListResponse:
-        """List triples with filtering and pagination using JSON-LD format."""
+        """List triples with filtering and pagination."""
         
         try:
             self.logger.info(f"Listing triples in space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
@@ -151,30 +149,20 @@ class TriplesEndpoint:
                 # Execute SPARQL query via hybrid backend
                 results = await db_space_impl.query_quads(space_id, sparql_query)
                 
-                # Convert SPARQL results to JSON-LD format
-                # Group triples by subject to create proper JSON-LD objects
-                subjects_map = {}
+                # Convert SPARQL results to Quad models
+                from ..model.quad_model import Quad
+                quad_results = []
                 for result in results:
-                    subject_uri = result.get('s', {}).get('value', '')
-                    predicate = result.get('p', {}).get('value', '')
-                    obj_value = self._convert_sparql_binding_to_jsonld(result.get('o', {}))
+                    s_val = result.get('s', {}).get('value', '')
+                    p_val = result.get('p', {}).get('value', '')
+                    o_binding = result.get('o', {})
                     
-                    if subject_uri not in subjects_map:
-                        subjects_map[subject_uri] = {
-                            "@id": subject_uri,
-                            "@type": "http://www.w3.org/2000/01/rdf-schema#Resource"  # Default RDF type
-                        }
+                    s_enc = f"<{s_val}>"
+                    p_enc = f"<{p_val}>"
+                    o_enc = self._sparql_binding_to_nquads_term(o_binding)
+                    g_enc = f"<{graph_id}>" if graph_id else None
                     
-                    # Add predicate-object to subject
-                    if predicate in subjects_map[subject_uri]:
-                        # Multiple values for same predicate - convert to array
-                        if not isinstance(subjects_map[subject_uri][predicate], list):
-                            subjects_map[subject_uri][predicate] = [subjects_map[subject_uri][predicate]]
-                        subjects_map[subject_uri][predicate].append(obj_value)
-                    else:
-                        subjects_map[subject_uri][predicate] = obj_value
-                
-                triples_data = list(subjects_map.values())
+                    quad_results.append(Quad(s=s_enc, p=p_enc, o=o_enc, g=g_enc))
                 
                 query_time = time.time() - start_time
                 
@@ -192,43 +180,15 @@ class TriplesEndpoint:
                     detail=f"Failed to execute SPARQL query: {str(e)}"
                 )
             
-            # Build JSON-LD response
-            # Use JsonLdObject for single result, JsonLdDocument for multiple or empty
-            context = {
-                "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-                "xsd": "http://www.w3.org/2001/XMLSchema#"
-            }
-            
-            if len(triples_data) == 1:
-                # Single result - use JsonLdObject
-                jsonld_doc = JsonLdObject(
-                    **{
-                        "@context": context,
-                        **triples_data[0]
-                    }
-                )
-            else:
-                # Multiple results or empty - use JsonLdDocument
-                jsonld_doc = JsonLdDocument(
-                    **{
-                        "@context": context,
-                        "@graph": triples_data
-                    }
-                )
-            
             # Calculate pagination info
             total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
             current_page = (offset // page_size) + 1
             
-            self.logger.info(f"🔧 CREATING TripleListResponse with total_count={total_count}, page_size={page_size}, offset={offset}")
-            
             return TripleListResponse(
-                data=jsonld_doc,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
+                results=quad_results,
                 pagination={
                     "page": current_page,
                     "limit": page_size,
@@ -239,7 +199,7 @@ class TriplesEndpoint:
                 meta={
                     "timestamp": datetime.now().isoformat() + "Z",
                     "version": "1.0",
-                    "format": "JSON-LD 1.1",
+                    "format": "JSON Quads",
                     "space_id": space_id,
                     "graph_id": graph_id,
                     "filters": {
@@ -264,13 +224,13 @@ class TriplesEndpoint:
         self,
         space_id: str,
         graph_id: str,
-        document: JsonLdRequest,
+        quad_request: QuadRequest,
         current_user: Dict
     ) -> TripleOperationResponse:
-        """Add JSON-LD document or object to the graph."""
+        """Add quads to the graph. Operates at the raw triples level — no GraphObject validation."""
         
         try:
-            self.logger.info(f"Adding JSON-LD document to space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
+            self.logger.info(f"Adding quads to space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
             
             # Validate space manager
             if self.space_manager is None:
@@ -304,13 +264,13 @@ class TriplesEndpoint:
                     detail="Database-specific space implementation not available"
                 )
             
-            # Convert JSON-LD document to RDF quads
-            quads = await self._jsonld_to_quads(document, graph_id)
+            # Convert Quad models directly to RDF quads — no GraphObject validation
+            quads = self._quad_request_to_rdf_quads(quad_request, graph_id)
             
             if not quads:
                 return TripleOperationResponse(
                     success=True,
-                    message=f"No triples found in JSON-LD document for graph '{graph_id}' in space '{space_id}'",
+                    message=f"No triples found in request for graph '{graph_id}' in space '{space_id}'",
                     affected_count=0
                 )
             
@@ -340,13 +300,13 @@ class TriplesEndpoint:
         self,
         space_id: str,
         graph_id: str,
-        document: JsonLdRequest,
+        quad_request: QuadRequest,
         current_user: Dict
     ) -> TripleOperationResponse:
-        """Delete JSON-LD document or object from the graph."""
+        """Delete quads from the graph. Operates at the raw triples level — no GraphObject validation."""
         
         try:
-            self.logger.info(f"Deleting JSON-LD document from space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
+            self.logger.info(f"Deleting quads from space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
             
             # Validate space manager
             if self.space_manager is None:
@@ -380,13 +340,13 @@ class TriplesEndpoint:
                     detail="Database-specific space implementation not available"
                 )
             
-            # Convert JSON-LD document to RDF quads
-            quads = await self._jsonld_to_quads(document, graph_id)
+            # Convert Quad models directly to RDF quads — no GraphObject validation
+            quads = self._quad_request_to_rdf_quads(quad_request, graph_id)
             
             if not quads:
                 return TripleOperationResponse(
                     success=True,
-                    message=f"No triples found in JSON-LD document for graph '{graph_id}' in space '{space_id}'",
+                    message=f"No triples found in request for graph '{graph_id}' in space '{space_id}'",
                     affected_count=0
                 )
             
@@ -418,77 +378,46 @@ class TriplesEndpoint:
                 detail=f"Error deleting triples: {str(e)}"
             )
     
-    def _convert_object_to_jsonld_value(self, obj):
-        """Convert an RDFLib object to a JSON-LD value."""
-        from rdflib import URIRef, Literal, BNode
+    def _quad_request_to_rdf_quads(self, quad_request: QuadRequest, graph_id: str):
+        """Convert QuadRequest directly to RDFLib quads. No GraphObject validation.
         
-        if isinstance(obj, URIRef):
-            return {"@id": str(obj)}
-        elif isinstance(obj, Literal):
-            result = str(obj)
-            if obj.language:
-                return {"@value": result, "@language": obj.language}
-            elif obj.datatype:
-                return {"@value": result, "@type": str(obj.datatype)}
-            else:
-                return result
-        elif isinstance(obj, BNode):
-            return {"@id": f"_:{obj}"}
-        else:
-            return str(obj)
+        Quad fields use N-Quads term encoding (e.g. <http://...>, "value"^^<xsd:int>).
+        """
+        from rdflib import URIRef
+        from ..utils.quad_format_utils import nquads_term_to_rdflib
+        
+        quads = []
+        graph_uri = URIRef(graph_id)
+        
+        for q in quad_request.quads:
+            s = nquads_term_to_rdflib(q.s)
+            p = nquads_term_to_rdflib(q.p)
+            o = nquads_term_to_rdflib(q.o)
+            g = nquads_term_to_rdflib(q.g) if q.g else graph_uri
+            quads.append((s, p, o, g))
+        
+        self.logger.info(f"Converted {len(quads)} quads from QuadRequest")
+        return quads
     
-    async def _jsonld_to_quads(self, document: JsonLdRequest, graph_id: str):
-        """Convert JSON-LD document or object to RDF quads."""
-        from rdflib import Graph, URIRef, Namespace
-        import json
+    def _sparql_binding_to_nquads_term(self, binding: dict) -> str:
+        """Convert a SPARQL result binding to an N-Quads encoded term string."""
+        binding_type = binding.get('type', 'literal')
+        value = binding.get('value', '')
         
-        try:
-            # Convert Pydantic model to dict for JSON-LD processing
-            doc_dict = document.model_dump(by_alias=True)
-            
-            # If it's a JsonLdObject (single object), wrap it in a document structure
-            if isinstance(document, JsonLdObject):
-                # Single object - wrap in @graph array for RDFLib
-                context = doc_dict.pop('@context', {})
-                doc_dict = {
-                    '@context': context,
-                    '@graph': [doc_dict]
-                }
-            
-            # Handle empty @graph arrays - return empty list immediately
-            # This prevents RDFLib from creating spurious triples from @context
-            if '@graph' in doc_dict and len(doc_dict['@graph']) == 0:
-                self.logger.info("Empty @graph array - returning 0 quads")
-                return []
-            
-            # Create RDFLib graph and parse JSON-LD
-            g = Graph()
-            
-            # Convert to JSON string for RDFLib parsing
-            json_str = json.dumps(doc_dict)
-            
-            # Parse JSON-LD into RDFLib graph
-            g.parse(data=json_str, format='json-ld')
-            
-            # Convert triples to quads with specified graph
-            graph_uri = URIRef(graph_id)
-            quads = []
-            
-            self.logger.info(f"RDFLib graph has {len(g)} triples")
-            for s, p, o in g:
-                self.logger.info(f"Triple: {s} {p} {o} (types: {type(s).__name__}, {type(p).__name__}, {type(o).__name__})")
-                # Keep RDFLib objects to preserve type information
-                quads.append((s, p, o, graph_uri))
-            
-            self.logger.info(f"Converted JSON-LD document to {len(quads)} quads")
-            return quads
-            
-        except Exception as e:
-            self.logger.error(f"Error converting JSON-LD to quads: {e}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid JSON-LD document: {str(e)}"
-            )
+        if binding_type == 'uri':
+            return f"<{value}>"
+        elif binding_type == 'bnode':
+            return f"_:{value}"
+        elif binding_type == 'literal':
+            escaped = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+            if 'xml:lang' in binding:
+                return f'"{escaped}"@{binding["xml:lang"]}'
+            elif 'datatype' in binding:
+                return f'"{escaped}"^^<{binding["datatype"]}>'
+            else:
+                return f'"{escaped}"'
+        else:
+            return f'"{value}"'
     
     def _build_sparql_query(self, graph_id: str, subject: str = None, predicate: str = None, 
                            object: str = None, object_filter: str = None, 
@@ -574,8 +503,8 @@ class TriplesEndpoint:
         
         return "\n".join(query_parts)
     
-    def _convert_sparql_binding_to_jsonld(self, binding: dict) -> dict:
-        """Convert a SPARQL binding to JSON-LD format."""
+    def _convert_sparql_binding_to_rdf_term(self, binding: dict) -> dict:
+        """Convert a SPARQL binding to an RDF term dict."""
         if binding['type'] == 'uri':
             return {"@id": binding['value']}
         elif binding['type'] == 'literal':
@@ -843,7 +772,7 @@ class TriplesEndpoint:
                             object_lang = None
                             object_datatype_id = None
                         
-                        # Create JSON-LD triple structure for UI
+                        # Create RDF term structure for UI
                         if object_type == 'U':  # URI
                             object_value = {"@id": object_text}
                         else:  # Literal
@@ -855,7 +784,7 @@ class TriplesEndpoint:
                             else:
                                 object_value = object_text
                         
-                        # Create JSON-LD object structure
+                        # Create RDF triple structure
                         triple = {
                             "@id": subject_uri,
                             predicate_uri: object_value
@@ -873,9 +802,9 @@ class TriplesEndpoint:
             # Fallback to empty list if query fails
             return []
     
-    def _convert_term_to_jsonld(self, term_text: str, term_type: str, 
+    def _convert_term_to_rdf_value(self, term_text: str, term_type: str, 
                                term_language: str = None, term_datatype: str = None) -> dict:
-        """Convert database term to JSON-LD format."""
+        """Convert database term to an RDF value dict."""
         if term_type == 'U':  # URI
             return {"@id": term_text}
         elif term_type == 'L':  # Literal
@@ -894,10 +823,10 @@ class TriplesEndpoint:
         else:  # Blank node
             return {"@id": term_text}
     
-    def _convert_term_to_jsonld_with_type(self, term_text: str, term_type: str, 
+    def _convert_term_to_rdf_value_with_type(self, term_text: str, term_type: str, 
                                          term_language: str = None, term_datatype: str = None) -> dict:
-        """Convert database term to JSON-LD format with explicit type information for UI."""
-        base_value = self._convert_term_to_jsonld(term_text, term_type, term_language, term_datatype)
+        """Convert database term to an RDF value dict with explicit type information for UI."""
+        base_value = self._convert_term_to_rdf_value(term_text, term_type, term_language, term_datatype)
         
         # Handle case where base_value is a string (simple literal)
         if isinstance(base_value, str):

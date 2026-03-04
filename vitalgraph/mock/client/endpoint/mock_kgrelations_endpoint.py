@@ -1,5 +1,5 @@
 """
-Mock implementation of KGRelationsEndpoint for testing with VitalSigns native JSON-LD functionality.
+Mock implementation of KGRelationsEndpoint for testing with VitalSigns native functionality.
 
 This implementation uses:
 - VitalSigns native object creation and conversion
@@ -15,7 +15,7 @@ from vitalgraph.model.kgrelations_model import (
     RelationUpsertResponse, RelationDeleteRequest, RelationDeleteResponse,
     RelationQueryRequest, RelationQueryResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from ai_haley_kg_domain.model.Edge_hasKGRelation import Edge_hasKGRelation
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
@@ -50,7 +50,7 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             offset: Offset for pagination
             
         Returns:
-            RelationsResponse with VitalSigns native JSON-LD document
+            RelationsResponse with VitalSigns native objects
         """
         self._log_method_call("list_relations", space_id, graph_id, 
                              entity_source_uri=entity_source_uri,
@@ -80,23 +80,16 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             # Convert SPARQL results to VitalSigns objects
             relations = self._sparql_results_to_relations(result)
             
-            # Convert to JSON-LD document
-            if relations:
-                jsonld_doc = self._relations_to_jsonld_document(relations)
-            else:
-                jsonld_doc = JsonLdDocument(
-                    context=self._get_vitalsigns_context(),
-                    graph=[]
-                )
-            
             # Get total count for pagination
             total_count = self._get_relations_count(
                 space, graph_id, entity_source_uri, entity_destination_uri,
                 relation_type_uri, direction
             )
             
+            quads = graphobjects_to_quad_list(relations, graph_id) if relations else []
+            
             return RelationsResponse(
-                relations=jsonld_doc,
+                results=quads,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset
@@ -104,9 +97,8 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             
         except Exception as e:
             self.logger.error(f"Failed to list relations: {e}")
-            # Return empty response on error
             return RelationsResponse(
-                relations=JsonLdDocument(context=self._get_vitalsigns_context(), graph=[]),
+                results=[],
                 total_count=0,
                 page_size=page_size,
                 offset=offset
@@ -147,22 +139,21 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             if not relations:
                 raise ValueError(f"Relation {relation_uri} not found")
             
-            # Convert to JSON-LD document (single relation)
-            jsonld_doc = self._relations_to_jsonld_document([relations[0]])
+            quads = graphobjects_to_quad_list([relations[0]], graph_id)
             
-            return RelationResponse(relation=jsonld_doc)
+            return RelationResponse(results=quads, total_count=1)
             
         except Exception as e:
             self.logger.error(f"Failed to get relation {relation_uri}: {e}")
             raise
     
-    def create_relations(self, space_id: str, graph_id: str, document: JsonLdDocument) -> RelationCreateResponse:
-        """Create KG Relations from JSON-LD document."""
+    def create_relations(self, space_id: str, graph_id: str, document: List) -> RelationCreateResponse:
+        """Create KG Relations from graph objects."""
         self._log_method_call("create_relations", space_id, graph_id)
         
         try:
-            # Convert JSON-LD to VitalSigns objects
-            relations = self._jsonld_document_to_relations(document)
+            # Accept graph objects directly
+            relations = self._document_to_relations(document)
             
             # Validate relations
             self._validate_relations(relations)
@@ -180,13 +171,13 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             self.logger.error(f"Failed to create relations: {e}")
             raise
     
-    def update_relations(self, space_id: str, graph_id: str, document: JsonLdDocument) -> RelationUpdateResponse:
+    def update_relations(self, space_id: str, graph_id: str, document: List) -> RelationUpdateResponse:
         """Update KG Relations with proper validation."""
         self._log_method_call("update_relations", space_id, graph_id)
         
         try:
-            # Convert JSON-LD to VitalSigns objects
-            relations = self._jsonld_document_to_relations(document)
+            # Accept graph objects directly
+            relations = self._document_to_relations(document)
             
             # Validate relations exist
             self._validate_relations_exist(space_id, graph_id, relations)
@@ -203,13 +194,13 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             self.logger.error(f"Failed to update relations: {e}")
             raise
     
-    def upsert_relations(self, space_id: str, graph_id: str, document: JsonLdDocument) -> RelationUpsertResponse:
+    def upsert_relations(self, space_id: str, graph_id: str, document: List) -> RelationUpsertResponse:
         """Upsert KG Relations (create or update)."""
         self._log_method_call("upsert_relations", space_id, graph_id)
         
         try:
-            # Convert JSON-LD to VitalSigns objects
-            relations = self._jsonld_document_to_relations(document)
+            # Accept graph objects directly
+            relations = self._document_to_relations(document)
             
             # Determine which relations exist
             existing_uris = self._get_existing_relation_uris(space_id, graph_id, relations)
@@ -503,81 +494,45 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
         
         return relations
     
-    def _relations_to_jsonld_document(self, relations: List[Edge_hasKGRelation]) -> JsonLdDocument:
-        """Convert relation objects to JSON-LD document."""
-        
-        jsonld_list = []
-        for relation in relations:
-            try:
-                # Use the object's native to_jsonld method (returns dict)
-                jsonld_obj = relation.to_jsonld()
-                jsonld_list.append(jsonld_obj)
-            except Exception as e:
-                self.logger.warning(f"Failed to convert relation {relation.URI} to JSON-LD: {e}")
-                continue
-        
-        return JsonLdDocument(
-            context=self._get_vitalsigns_context(),
-            graph=jsonld_list
-        )
+    def _relations_to_quad_list(self, relations: List[Edge_hasKGRelation], graph_id: str = None) -> list:
+        """Convert relation objects to quad list."""
+        return graphobjects_to_quad_list(relations, graph_id)
     
-    def _jsonld_document_to_relations(self, document: JsonLdDocument) -> List[Edge_hasKGRelation]:
-        """Convert JSON-LD document to VitalSigns relation objects."""
+    def _document_to_relations(self, document) -> List[Edge_hasKGRelation]:
+        """Extract Edge_hasKGRelation objects from a list of GraphObjects or a wrapper with .graph."""
         try:
             relations = []
             
-            # Extract graph objects from document
-            if hasattr(document, 'graph') and document.graph:
-                for json_obj in document.graph:
-                    try:
-                        # Create Edge_hasKGRelation from JSON
-                        relation = Edge_hasKGRelation()
-                        
-                        # Map JSON-LD fields to relation properties
-                        if isinstance(json_obj, dict):
-                            # Set URI from JSON-LD (strip < > if present)
-                            if 'id' in json_obj:
-                                relation.URI = self._clean_uri(json_obj['id'])
-                            elif '@id' in json_obj:
-                                relation.URI = self._clean_uri(json_obj['@id'])
-                            elif 'URI' in json_obj:
-                                relation.URI = self._clean_uri(json_obj['URI'])
-                            
-                            # Set edge source (JSON-LD format uses {'id': 'value'})
-                            if 'http://vital.ai/ontology/vital-core#hasEdgeSource' in json_obj:
-                                source_obj = json_obj['http://vital.ai/ontology/vital-core#hasEdgeSource']
-                                if isinstance(source_obj, dict) and 'id' in source_obj:
-                                    relation.edgeSource = self._clean_uri(source_obj['id'])
-                                elif isinstance(source_obj, str):
-                                    relation.edgeSource = self._clean_uri(source_obj)
-                            
-                            # Set edge destination (JSON-LD format uses {'id': 'value'})
-                            if 'http://vital.ai/ontology/vital-core#hasEdgeDestination' in json_obj:
-                                dest_obj = json_obj['http://vital.ai/ontology/vital-core#hasEdgeDestination']
-                                if isinstance(dest_obj, dict) and 'id' in dest_obj:
-                                    relation.edgeDestination = self._clean_uri(dest_obj['id'])
-                                elif isinstance(dest_obj, str):
-                                    relation.edgeDestination = self._clean_uri(dest_obj)
-                            
-                            # Set relation type (JSON-LD format uses {'id': 'value'})
-                            if 'http://vital.ai/ontology/haley-ai-kg#hasKGRelationType' in json_obj:
-                                type_obj = json_obj['http://vital.ai/ontology/haley-ai-kg#hasKGRelationType']
-                                if isinstance(type_obj, dict) and 'id' in type_obj:
-                                    relation.kGRelationType = self._clean_uri(type_obj['id'])
-                                elif isinstance(type_obj, str):
-                                    relation.kGRelationType = self._clean_uri(type_obj)
-                        
-                        relations.append(relation)
-                        
-                    except Exception as e:
-                        self.logger.warning(f"Failed to convert JSON object to relation: {e}")
-                        continue
+            # Determine the source list of objects
+            if isinstance(document, list):
+                items = document
+            elif hasattr(document, 'graph') and document.graph:
+                items = document.graph
+            else:
+                return relations
+            
+            for obj in items:
+                if isinstance(obj, Edge_hasKGRelation):
+                    relations.append(obj)
+                elif isinstance(obj, VITAL_Edge):
+                    # Copy edge properties into an Edge_hasKGRelation
+                    relation = Edge_hasKGRelation()
+                    relation.URI = obj.URI
+                    if hasattr(obj, 'edgeSource'):
+                        relation.edgeSource = obj.edgeSource
+                    if hasattr(obj, 'edgeDestination'):
+                        relation.edgeDestination = obj.edgeDestination
+                    if hasattr(obj, 'kGRelationType'):
+                        relation.kGRelationType = obj.kGRelationType
+                    relations.append(relation)
+                else:
+                    self.logger.warning(f"Skipping non-relation object: {type(obj).__name__}")
             
             return relations
             
         except Exception as e:
-            self.logger.error(f"Failed to convert JSON-LD document to relations: {e}")
-            raise ValueError(f"Invalid JSON-LD document for relations: {e}")
+            self.logger.error(f"Failed to extract relations: {e}")
+            raise ValueError(f"Invalid input for relations: {e}")
     
     def _validate_relations(self, relations: List[Edge_hasKGRelation]) -> None:
         """Validate relation objects."""
@@ -688,7 +643,7 @@ class MockKGRelationsEndpoint(MockBaseEndpoint):
             return 0
     
     def _get_vitalsigns_context(self) -> Dict[str, Any]:
-        """Get VitalSigns JSON-LD context."""
+        """Get VitalSigns namespace context."""
         # TODO: Use proper VitalSigns context
         return {
             "@vocab": "http://vital.ai/ontology/vital-core#",

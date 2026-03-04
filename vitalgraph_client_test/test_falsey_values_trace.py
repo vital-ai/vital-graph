@@ -3,15 +3,18 @@
 Falsey Values Trace Test
 
 Traces exactly where boolean `false` and float `0.0` values get dropped
-during entity graph creation. Tests each layer of the pipeline:
+during entity graph creation. Tests each layer of the quad pipeline:
 
 1. VitalSigns object creation (client-side)
-2. to_jsonld() conversion (client-side)
-3. Pydantic model serialization (client-side)
-4. HTTP POST body (wire format)
-5. Server-side VitalSigns round-trip
-6. to_rdf() conversion (server-side)
-7. Fuseki storage verification
+2. graphobjects_to_quad_list() conversion (client-side)
+3. QuadRequest Pydantic model_dump roundtrip (client-side)
+4. JSON serialization / wire format
+5. Server-side QuadRequest deserialization
+6. quad_list_to_graphobjects() roundtrip (server-side)
+7. to_rdf() conversion (server-side)
+8. Full end-to-end via client
+9. Fuseki storage verification
+10. Read-back via client API
 
 Usage:
     /opt/homebrew/anaconda3/envs/vital-graph/bin/python vitalgraph_client_test/test_falsey_values_trace.py
@@ -51,7 +54,8 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 
 # Client imports
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
-from vitalgraph.model.jsonld_model import JsonLdObject, JsonLdDocument
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
+from vitalgraph.model.quad_model import Quad, QuadRequest
 
 
 SPACE_ID = "space_falsey_test"
@@ -154,97 +158,85 @@ async def main():
     assert currency_slot.currencySlotValue == 0.0, f"Expected 0.0, got {currency_slot.currencySlotValue}"
     logger.info("  ✅ VitalSigns objects have correct falsey values")
     
-    # ---- STEP 2: to_jsonld conversion ----
-    trace_step(2, "GraphObject.to_jsonld_list() conversion")
+    # ---- STEP 2: graphobjects_to_quad_list conversion ----
+    trace_step(2, "graphobjects_to_quad_list() conversion")
     
-    jsonld_dict = GraphObject.to_jsonld_list(objects)
+    quads = graphobjects_to_quad_list(objects)
     
-    # Find the boolean slot and currency slot in the JSON-LD
-    bool_slot_jsonld = None
-    currency_slot_jsonld = None
-    text_slot_jsonld = None
+    bool_pred = "http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue"
+    currency_pred = "http://vital.ai/ontology/haley-ai-kg#hasCurrencySlotValue"
+    text_pred = "http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue"
     
-    for item in jsonld_dict.get('@graph', []):
-        item_id = item.get('@id', '')
-        if item_id == BOOL_SLOT_URI:
-            bool_slot_jsonld = item
-        elif item_id == CURRENCY_SLOT_URI:
-            currency_slot_jsonld = item
-        elif item_id == TEXT_SLOT_URI:
-            text_slot_jsonld = item
+    # Find quads for our slots
+    bool_quad = None
+    currency_quad = None
+    text_quad = None
     
-    logger.info(f"\n  Boolean slot JSON-LD:")
-    logger.info(f"  {json.dumps(bool_slot_jsonld, indent=4, default=str)}")
+    for q in quads:
+        s_uri = q.s.strip('<>')
+        p_uri = q.p.strip('<>')
+        if s_uri == BOOL_SLOT_URI and p_uri == bool_pred:
+            bool_quad = q
+        elif s_uri == CURRENCY_SLOT_URI and p_uri == currency_pred:
+            currency_quad = q
+        elif s_uri == TEXT_SLOT_URI and p_uri == text_pred:
+            text_quad = q
     
-    logger.info(f"\n  Currency slot JSON-LD:")
-    logger.info(f"  {json.dumps(currency_slot_jsonld, indent=4, default=str)}")
+    logger.info(f"  Total quads generated: {len(quads)}")
+    logger.info(f"  Boolean quad: {bool_quad}")
+    logger.info(f"  Currency quad: {currency_quad}")
+    logger.info(f"  Text quad: {text_quad}")
     
-    logger.info(f"\n  Text slot JSON-LD:")
-    logger.info(f"  {json.dumps(text_slot_jsonld, indent=4, default=str)}")
-    
-    # Check if the falsey values survived to_jsonld_list
-    bool_key = "http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue"
-    currency_key = "http://vital.ai/ontology/haley-ai-kg#hasCurrencySlotValue"
-    text_key = "http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue"
-    
-    if bool_slot_jsonld and bool_key in bool_slot_jsonld:
-        logger.info(f"  ✅ Boolean false IS in JSON-LD: {bool_slot_jsonld[bool_key]}")
+    if bool_quad:
+        logger.info(f"  ✅ Boolean false IS in quads: {bool_quad.o}")
         tests_passed += 1
     else:
-        logger.info(f"  ❌ Boolean false is MISSING from JSON-LD!")
-        logger.info(f"     Keys present: {list(bool_slot_jsonld.keys()) if bool_slot_jsonld else 'NONE'}")
+        logger.info(f"  ❌ Boolean false is MISSING from quads!")
         tests_failed += 1
     
-    if currency_slot_jsonld and currency_key in currency_slot_jsonld:
-        logger.info(f"  ✅ Currency 0.0 IS in JSON-LD: {currency_slot_jsonld[currency_key]}")
+    if currency_quad:
+        logger.info(f"  ✅ Currency 0.0 IS in quads: {currency_quad.o}")
         tests_passed += 1
     else:
-        logger.info(f"  ❌ Currency 0.0 is MISSING from JSON-LD!")
-        logger.info(f"     Keys present: {list(currency_slot_jsonld.keys()) if currency_slot_jsonld else 'NONE'}")
+        logger.info(f"  ❌ Currency 0.0 is MISSING from quads!")
         tests_failed += 1
     
-    if text_slot_jsonld and text_key in text_slot_jsonld:
-        logger.info(f"  ✅ Text value IS in JSON-LD: {text_slot_jsonld[text_key]}")
+    if text_quad:
+        logger.info(f"  ✅ Text value IS in quads: {text_quad.o}")
         tests_passed += 1
     else:
-        logger.info(f"  ❌ Text value is MISSING from JSON-LD!")
+        logger.info(f"  ❌ Text value is MISSING from quads!")
         tests_failed += 1
     
-    # ---- STEP 3: Pydantic model roundtrip ----
-    trace_step(3, "Pydantic JsonLdDocument model_dump roundtrip")
+    # ---- STEP 3: Pydantic QuadRequest model_dump roundtrip ----
+    trace_step(3, "Pydantic QuadRequest model_dump roundtrip")
     
-    doc = JsonLdDocument(
-        context=jsonld_dict.get('@context', 'http://vital.ai/ontology/vital-core'),
-        graph=jsonld_dict['@graph']
-    )
-    doc.jsonld_type = 'document'
-    
-    dumped = doc.model_dump(by_alias=True)
+    quad_request = QuadRequest(quads=quads)
+    dumped = quad_request.model_dump()
     
     # Find the slots in the dumped output
     dumped_bool = None
     dumped_currency = None
-    for item in dumped.get('@graph', []):
-        if item.get('@id') == BOOL_SLOT_URI:
+    for item in dumped.get('quads', []):
+        s_uri = item.get('s', '').strip('<>')
+        p_uri = item.get('p', '').strip('<>')
+        if s_uri == BOOL_SLOT_URI and p_uri == bool_pred:
             dumped_bool = item
-        elif item.get('@id') == CURRENCY_SLOT_URI:
+        elif s_uri == CURRENCY_SLOT_URI and p_uri == currency_pred:
             dumped_currency = item
     
-    logger.info(f"\n  Dumped boolean slot:")
-    logger.info(f"  {json.dumps(dumped_bool, indent=4, default=str)}")
+    logger.info(f"\n  Dumped boolean quad: {dumped_bool}")
+    logger.info(f"  Dumped currency quad: {dumped_currency}")
     
-    logger.info(f"\n  Dumped currency slot:")
-    logger.info(f"  {json.dumps(dumped_currency, indent=4, default=str)}")
-    
-    if dumped_bool and bool_key in dumped_bool:
-        logger.info(f"  ✅ Boolean false survived model_dump: {dumped_bool[bool_key]}")
+    if dumped_bool:
+        logger.info(f"  ✅ Boolean false survived model_dump: {dumped_bool['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Boolean false DROPPED by model_dump!")
         tests_failed += 1
     
-    if dumped_currency and currency_key in dumped_currency:
-        logger.info(f"  ✅ Currency 0.0 survived model_dump: {dumped_currency[currency_key]}")
+    if dumped_currency:
+        logger.info(f"  ✅ Currency 0.0 survived model_dump: {dumped_currency['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Currency 0.0 DROPPED by model_dump!")
@@ -258,64 +250,62 @@ async def main():
     
     parsed_bool = None
     parsed_currency = None
-    for item in parsed_back.get('@graph', []):
-        if item.get('@id') == BOOL_SLOT_URI:
+    for item in parsed_back.get('quads', []):
+        s_uri = item.get('s', '').strip('<>')
+        p_uri = item.get('p', '').strip('<>')
+        if s_uri == BOOL_SLOT_URI and p_uri == bool_pred:
             parsed_bool = item
-        elif item.get('@id') == CURRENCY_SLOT_URI:
+        elif s_uri == CURRENCY_SLOT_URI and p_uri == currency_pred:
             parsed_currency = item
     
-    if parsed_bool and bool_key in parsed_bool:
-        logger.info(f"  ✅ Boolean false survived JSON roundtrip: {parsed_bool[bool_key]}")
+    if parsed_bool:
+        logger.info(f"  ✅ Boolean false survived JSON roundtrip: {parsed_bool['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Boolean false DROPPED in JSON roundtrip!")
         tests_failed += 1
     
-    if parsed_currency and currency_key in parsed_currency:
-        logger.info(f"  ✅ Currency 0.0 survived JSON roundtrip: {parsed_currency[currency_key]}")
+    if parsed_currency:
+        logger.info(f"  ✅ Currency 0.0 survived JSON roundtrip: {parsed_currency['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Currency 0.0 DROPPED in JSON roundtrip!")
         tests_failed += 1
     
-    # ---- STEP 5: Server-side Pydantic model deserialization ----
-    trace_step(5, "Server-side Pydantic deserialization (JsonLdDocument from JSON)")
+    # ---- STEP 5: Server-side QuadRequest deserialization from JSON ----
+    trace_step(5, "Server-side Pydantic deserialization (QuadRequest from JSON)")
     
-    from vitalgraph.model.jsonld_model import get_jsonld_discriminator
-    disc = get_jsonld_discriminator(parsed_back)
-    logger.info(f"  Discriminator result: {disc}")
-    
-    # Simulate what FastAPI does - parse JSON into Pydantic model
-    server_doc = JsonLdDocument(**parsed_back)
-    server_dumped = server_doc.model_dump(by_alias=True)
+    server_request = QuadRequest(**parsed_back)
+    server_dumped = server_request.model_dump()
     
     server_bool = None
     server_currency = None
-    for item in server_dumped.get('@graph', []):
-        if item.get('@id') == BOOL_SLOT_URI:
+    for item in server_dumped.get('quads', []):
+        s_uri = item.get('s', '').strip('<>')
+        p_uri = item.get('p', '').strip('<>')
+        if s_uri == BOOL_SLOT_URI and p_uri == bool_pred:
             server_bool = item
-        elif item.get('@id') == CURRENCY_SLOT_URI:
+        elif s_uri == CURRENCY_SLOT_URI and p_uri == currency_pred:
             server_currency = item
     
-    if server_bool and bool_key in server_bool:
-        logger.info(f"  ✅ Boolean false survived server Pydantic roundtrip: {server_bool[bool_key]}")
+    if server_bool:
+        logger.info(f"  ✅ Boolean false survived server Pydantic roundtrip: {server_bool['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Boolean false DROPPED by server Pydantic!")
         tests_failed += 1
     
-    if server_currency and currency_key in server_currency:
-        logger.info(f"  ✅ Currency 0.0 survived server Pydantic roundtrip: {server_currency[currency_key]}")
+    if server_currency:
+        logger.info(f"  ✅ Currency 0.0 survived server Pydantic roundtrip: {server_currency['o']}")
         tests_passed += 1
     else:
         logger.info(f"  ❌ Currency 0.0 DROPPED by server Pydantic!")
         tests_failed += 1
     
-    # ---- STEP 6: VitalSigns from_jsonld_list roundtrip ----
-    trace_step(6, "VitalSigns from_jsonld_list() roundtrip on server side")
+    # ---- STEP 6: quad_list_to_graphobjects roundtrip ----
+    trace_step(6, "quad_list_to_graphobjects() roundtrip on server side")
     
-    vs = VitalSigns()
-    reconstructed_objects = vs.from_jsonld_list(server_dumped)
+    reconstructed_objects = quad_list_to_graphobjects(server_request.quads)
     
     recon_bool = None
     recon_currency = None
@@ -334,10 +324,10 @@ async def main():
         val = recon_bool.booleanSlotValue
         logger.info(f"  Boolean slot reconstructed value: {val} (type: {type(val).__name__})")
         if val is not None and val == False:
-            logger.info(f"  ✅ Boolean false survived from_jsonld_list")
+            logger.info(f"  ✅ Boolean false survived quad_list_to_graphobjects")
             tests_passed += 1
         else:
-            logger.info(f"  ❌ Boolean false LOST in from_jsonld_list! Value is: {val}")
+            logger.info(f"  ❌ Boolean false LOST in quad_list_to_graphobjects! Value is: {val}")
             tests_failed += 1
     else:
         logger.info(f"  ❌ Boolean slot object NOT FOUND in reconstructed objects!")
@@ -347,10 +337,10 @@ async def main():
         val = recon_currency.currencySlotValue
         logger.info(f"  Currency slot reconstructed value: {val} (type: {type(val).__name__})")
         if val is not None and val == 0.0:
-            logger.info(f"  ✅ Currency 0.0 survived from_jsonld_list")
+            logger.info(f"  ✅ Currency 0.0 survived quad_list_to_graphobjects")
             tests_passed += 1
         else:
-            logger.info(f"  ❌ Currency 0.0 LOST in from_jsonld_list! Value is: {val}")
+            logger.info(f"  ❌ Currency 0.0 LOST in quad_list_to_graphobjects! Value is: {val}")
             tests_failed += 1
     else:
         logger.info(f"  ❌ Currency slot object NOT FOUND in reconstructed objects!")
@@ -594,12 +584,12 @@ async def main():
                 val = read_bool_slot.booleanSlotValue
                 logger.info(f"\n  Boolean slot from API: booleanSlotValue = {val!r} (type: {type(val).__name__})")
                 
-                # Also dump the raw JSON-LD for this object
+                # Also dump the quad representation for this object
                 try:
-                    jsonld = read_bool_slot.to_jsonld()
-                    logger.info(f"  Boolean slot JSON-LD: {json.dumps(json.loads(jsonld) if isinstance(jsonld, str) else jsonld, indent=2)}")
-                except Exception as je:
-                    logger.info(f"  (Could not dump JSON-LD: {je})")
+                    slot_quads = graphobjects_to_quad_list([read_bool_slot])
+                    logger.info(f"  Boolean slot quads: {[q.model_dump() for q in slot_quads]}")
+                except Exception as qe:
+                    logger.info(f"  (Could not dump quads: {qe})")
                 
                 # CombinedProperty wraps the value; use == and bool() for comparison
                 if val is not None and bool(val) == False:

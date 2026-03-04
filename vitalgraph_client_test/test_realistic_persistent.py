@@ -500,16 +500,16 @@ async def main():
             page_size=20
         )
         
-        # Convert frames response to GraphObjects
-        if frames_response.frames and hasattr(frames_response.frames, 'graph'):
-            vs = VitalSigns()
-            frame_objects = []
-            for frame_data in frames_response.frames.graph:
-                frame_obj = vs.from_jsonld(frame_data)
-                frame_objects.append(frame_obj)
+        # Extract GraphObjects from quad response
+        from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+        if hasattr(frames_response, 'quads') and frames_response.quads:
+            frame_objects = quad_list_to_graphobjects(frames_response.quads)
+            frame_objects = [obj for obj in frame_objects if isinstance(obj, KGFrame)]
             pretty_print_frames_list(frame_objects, "All Organization Frames")
-        else:
+        elif hasattr(frames_response, 'total_count'):
             print(f"Found {frames_response.total_count} frames")
+        else:
+            print(f"No frames found in response")
         
         # ============================================================================
         # STEP 4: View Management Frame (Hierarchical)
@@ -523,18 +523,15 @@ async def main():
             include_frame_graph=True
         )
         
-        if hasattr(management_response, 'success') and management_response.success:
-            # Convert to GraphObjects
-            vs = VitalSigns()
-            if management_response.complete_graph:
-                mgmt_objects = vs.from_jsonld_list(management_response.complete_graph.model_dump(by_alias=True))
-                # Separate frame and slots
-                mgmt_frame = [obj for obj in mgmt_objects if isinstance(obj, KGFrame)][0]
-                mgmt_slots = [obj for obj in mgmt_objects if hasattr(obj, 'kGSlotType')]
-                pretty_print_frame_with_slots(mgmt_frame, mgmt_slots, "Management Frame (with CEO sub-frame)")
+        if management_response.is_success and management_response.frame_graph:
+            # GraphObjects are already deserialized in the response
+            mgmt_objects = management_response.frame_graph.objects
+            mgmt_frames = [obj for obj in mgmt_objects if isinstance(obj, KGFrame)]
+            mgmt_slots = [obj for obj in mgmt_objects if hasattr(obj, 'kGSlotType')]
+            if mgmt_frames:
+                pretty_print_frame_with_slots(mgmt_frames[0], mgmt_slots, "Management Frame (with CEO sub-frame)")
             else:
-                mgmt_frame = vs.from_jsonld(management_response.frame.model_dump(by_alias=True))
-                pretty_print_frame_with_slots(mgmt_frame, [], "Management Frame")
+                print("   No frame found in management response")
         
         # ============================================================================
         # STEP 5: Update CEO Information (Realistic Change)
@@ -566,10 +563,9 @@ async def main():
                 print("   ⚠️  CEO frame retrieved but complete_graph is None")
                 print(f"   Frame type: {type(ceo_response.frame).__name__}")
             
-        if hasattr(ceo_response, 'complete_graph') and ceo_response.complete_graph:
-            # Convert to GraphObjects
-            vs = VitalSigns()
-            ceo_objects = vs.from_jsonld_list(ceo_response.complete_graph.model_dump(by_alias=True))
+        if ceo_response.is_success and ceo_response.frame_graph:
+            # GraphObjects are already deserialized in the response
+            ceo_objects = ceo_response.frame_graph.objects
             
             # Find the CEO name and start date slots by slot type
             ceo_name_slot = None
@@ -583,23 +579,16 @@ async def main():
                     elif slot_type == 'http://vital.ai/ontology/haley-ai-kg#OfficerStartDateSlot':
                         ceo_start_slot = obj
             
-            # Update CEO name
+            # Update CEO name - pass GraphObject directly
             if ceo_name_slot:
                 print(f"   Updating CEO name from '{ceo_name_slot.textSlotValue}' to 'Sarah Johnson'...")
                 ceo_name_slot.textSlotValue = "Sarah Johnson"
                 
-                # For single object, use to_jsonld() which returns proper JsonLdObject format
-                slot_jsonld = ceo_name_slot.to_jsonld()
-                # Remove @graph wrapper if present (to_jsonld should return flat object)
-                if '@graph' in slot_jsonld and isinstance(slot_jsonld['@graph'], list) and len(slot_jsonld['@graph']) == 1:
-                    slot_jsonld = slot_jsonld['@graph'][0]
-                
-                from vitalgraph.model.jsonld_model import JsonLdObject
                 update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=ceo_frame_uri,
-                    data=JsonLdObject(**slot_jsonld)
+                    objects=[ceo_name_slot]
                 )
                 
                 if hasattr(update_response, 'success'):
@@ -613,23 +602,16 @@ async def main():
             else:
                 print("   ❌ CEO name slot not found!")
             
-            # Update start date
+            # Update start date - pass GraphObject directly
             if ceo_start_slot:
                 print(f"   Updating CEO start date from '{ceo_start_slot.dateTimeSlotValue}' to '2024-01-01'...")
                 ceo_start_slot.dateTimeSlotValue = datetime(2024, 1, 1)
                 
-                # For single object, use to_jsonld() which returns proper JsonLdObject format
-                slot_jsonld = ceo_start_slot.to_jsonld()
-                # Remove @graph wrapper if present (to_jsonld should return flat object)
-                if '@graph' in slot_jsonld and isinstance(slot_jsonld['@graph'], list) and len(slot_jsonld['@graph']) == 1:
-                    slot_jsonld = slot_jsonld['@graph'][0]
-                
-                from vitalgraph.model.jsonld_model import JsonLdObject
                 update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=ceo_frame_uri,
-                    data=JsonLdObject(**slot_jsonld)
+                    objects=[ceo_start_slot]
                 )
                 
                 if hasattr(update_response, 'success'):
@@ -643,7 +625,7 @@ async def main():
             else:
                 print("   ❌ CEO start date slot not found!")
         else:
-            print("   ❌ Failed to retrieve CEO frame or frame has no complete_graph")
+            print("   ❌ Failed to retrieve CEO frame or frame has no frame_graph")
             if hasattr(ceo_response, 'success'):
                 print(f"   Response success: {ceo_response.success}")
             print(f"   Response type: {type(ceo_response).__name__}")
@@ -657,16 +639,14 @@ async def main():
             include_frame_graph=True
         )
         
-        if hasattr(ceo_updated_response, 'success') and ceo_updated_response.success:
-            vs = VitalSigns()
-            if ceo_updated_response.complete_graph:
-                ceo_objects = vs.from_jsonld_list(ceo_updated_response.complete_graph.model_dump(by_alias=True))
-                ceo_frame = [obj for obj in ceo_objects if isinstance(obj, KGFrame)][0]
-                ceo_slots = [obj for obj in ceo_objects if hasattr(obj, 'kGSlotType')]
-                pretty_print_frame_with_slots(ceo_frame, ceo_slots, "CEO Frame After Update")
+        if ceo_updated_response.is_success and ceo_updated_response.frame_graph:
+            ceo_objects = ceo_updated_response.frame_graph.objects
+            ceo_frames = [obj for obj in ceo_objects if isinstance(obj, KGFrame)]
+            ceo_slots = [obj for obj in ceo_objects if hasattr(obj, 'kGSlotType')]
+            if ceo_frames:
+                pretty_print_frame_with_slots(ceo_frames[0], ceo_slots, "CEO Frame After Update")
             else:
-                ceo_frame = vs.from_jsonld(ceo_updated_response.frame.model_dump(by_alias=True))
-                pretty_print_frame_with_slots(ceo_frame, [], "CEO Frame After Update")
+                print("   No frame found in CEO response")
         
         # ============================================================================
         # STEP 6: Update Company Information (Growth)
@@ -689,10 +669,9 @@ async def main():
             if not company_response.complete_graph:
                 print("   ⚠️  Company frame retrieved but complete_graph is None")
                 
-        if hasattr(company_response, 'complete_graph') and company_response.complete_graph:
-            # Convert to GraphObjects
-            vs = VitalSigns()
-            company_objects = vs.from_jsonld_list(company_response.complete_graph.model_dump(by_alias=True))
+        if company_response.is_success and company_response.frame_graph:
+            # GraphObjects are already deserialized in the response
+            company_objects = company_response.frame_graph.objects
             
             # Find employee count slot by slot type
             employee_slot = None
@@ -703,22 +682,16 @@ async def main():
                         employee_slot = obj
                         break
             
+            # Update employee count - pass GraphObject directly
             if employee_slot:
                 print(f"   Updating employee count from {employee_slot.integerSlotValue} to 1200...")
                 employee_slot.integerSlotValue = 1200
                 
-                # For single object, use to_jsonld() which returns proper JsonLdObject format
-                slot_jsonld = employee_slot.to_jsonld()
-                # Remove @graph wrapper if present
-                if '@graph' in slot_jsonld and isinstance(slot_jsonld['@graph'], list) and len(slot_jsonld['@graph']) == 1:
-                    slot_jsonld = slot_jsonld['@graph'][0]
-                
-                from vitalgraph.model.jsonld_model import JsonLdObject
                 update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=company_frame_uri,
-                    data=JsonLdObject(**slot_jsonld)
+                    objects=[employee_slot]
                 )
                 
                 if hasattr(update_response, 'success'):
@@ -731,7 +704,7 @@ async def main():
             else:
                 print("   ❌ Employee count slot not found!")
         else:
-            print("   ❌ Failed to retrieve company frame or frame has no complete_graph")
+            print("   ❌ Failed to retrieve company frame or frame has no frame_graph")
         
         # View updated company frame
         print_subsection("Updated Company Info Frame")
@@ -742,16 +715,14 @@ async def main():
             include_frame_graph=True
         )
         
-        if hasattr(company_updated_response, 'success') and company_updated_response.success:
-            vs = VitalSigns()
-            if company_updated_response.complete_graph:
-                company_objects = vs.from_jsonld_list(company_updated_response.complete_graph.model_dump(by_alias=True))
-                company_frame = [obj for obj in company_objects if isinstance(obj, KGFrame)][0]
-                company_slots = [obj for obj in company_objects if hasattr(obj, 'kGSlotType')]
-                pretty_print_frame_with_slots(company_frame, company_slots, "Company Info Frame After Update")
+        if company_updated_response.is_success and company_updated_response.frame_graph:
+            company_objects = company_updated_response.frame_graph.objects
+            company_frames = [obj for obj in company_objects if isinstance(obj, KGFrame)]
+            company_slots = [obj for obj in company_objects if hasattr(obj, 'kGSlotType')]
+            if company_frames:
+                pretty_print_frame_with_slots(company_frames[0], company_slots, "Company Info Frame After Update")
             else:
-                company_frame = vs.from_jsonld(company_updated_response.frame.model_dump(by_alias=True))
-                pretty_print_frame_with_slots(company_frame, [], "Company Info Frame After Update")
+                print("   No frame found in company response")
         
         # ============================================================================
         # STEP 7: Update Address (Office Relocation)
@@ -771,13 +742,12 @@ async def main():
         )
         
         if hasattr(address_response, 'success') and address_response.success:
-            if not address_response.complete_graph:
-                print("   ⚠️  Address frame retrieved but complete_graph is None")
+            if not address_response.frame_graph:
+                print("   ⚠️  Address frame retrieved but frame_graph is None")
                 
-        if hasattr(address_response, 'complete_graph') and address_response.complete_graph:
-            # Convert to GraphObjects
-            vs = VitalSigns()
-            address_objects = vs.from_jsonld_list(address_response.complete_graph.model_dump(by_alias=True))
+        if address_response.is_success and address_response.frame_graph:
+            # GraphObjects are already deserialized in the response
+            address_objects = address_response.frame_graph.objects
             
             # Find street and zip slots by slot type
             street_slot = None
@@ -791,23 +761,16 @@ async def main():
                     elif slot_type == 'http://vital.ai/ontology/haley-ai-kg#ZipCodeSlot':
                         zip_slot = obj
             
-            # Update street
+            # Update street - pass GraphObject directly
             if street_slot:
                 print(f"   Updating street from '{street_slot.textSlotValue}' to '456 Innovation Blvd'...")
                 street_slot.textSlotValue = "456 Innovation Blvd"
                 
-                # For single object, use to_jsonld() which returns proper JsonLdObject format
-                slot_jsonld = street_slot.to_jsonld()
-                # Remove @graph wrapper if present
-                if '@graph' in slot_jsonld and isinstance(slot_jsonld['@graph'], list) and len(slot_jsonld['@graph']) == 1:
-                    slot_jsonld = slot_jsonld['@graph'][0]
-                
-                from vitalgraph.model.jsonld_model import JsonLdObject
                 update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=address_frame_uri,
-                    data=JsonLdObject(**slot_jsonld)
+                    objects=[street_slot]
                 )
                 
                 if hasattr(update_response, 'success'):
@@ -820,23 +783,16 @@ async def main():
             else:
                 print("   ❌ Street slot not found!")
             
-            # Update zip code
+            # Update zip code - pass GraphObject directly
             if zip_slot:
                 print(f"   Updating zip code from '{zip_slot.textSlotValue}' to '94105'...")
                 zip_slot.textSlotValue = "94105"
                 
-                # For single object, use to_jsonld() which returns proper JsonLdObject format
-                slot_jsonld = zip_slot.to_jsonld()
-                # Remove @graph wrapper if present
-                if '@graph' in slot_jsonld and isinstance(slot_jsonld['@graph'], list) and len(slot_jsonld['@graph']) == 1:
-                    slot_jsonld = slot_jsonld['@graph'][0]
-                
-                from vitalgraph.model.jsonld_model import JsonLdObject
                 update_response = await client.kgframes.update_frame_slots(
                     space_id=space_id,
                     graph_id=graph_id,
                     frame_uri=address_frame_uri,
-                    data=JsonLdObject(**slot_jsonld)
+                    objects=[zip_slot]
                 )
                 
                 if hasattr(update_response, 'success'):
@@ -849,7 +805,7 @@ async def main():
             else:
                 print("   ❌ Zip code slot not found!")
         else:
-            print("   ❌ Failed to retrieve address frame or frame has no complete_graph")
+            print("   ❌ Failed to retrieve address frame or frame has no frame_graph")
         
         # View updated address frame
         print_subsection("Updated Address Frame")
@@ -860,16 +816,14 @@ async def main():
             include_frame_graph=True
         )
         
-        if hasattr(address_updated_response, 'success') and address_updated_response.success:
-            vs = VitalSigns()
-            if address_updated_response.complete_graph:
-                address_objects = vs.from_jsonld_list(address_updated_response.complete_graph.model_dump(by_alias=True))
-                address_frame = [obj for obj in address_objects if isinstance(obj, KGFrame)][0]
-                address_slots = [obj for obj in address_objects if hasattr(obj, 'kGSlotType')]
-                pretty_print_frame_with_slots(address_frame, address_slots, "Address Frame After Update")
+        if address_updated_response.is_success and address_updated_response.frame_graph:
+            address_objects = address_updated_response.frame_graph.objects
+            address_frames = [obj for obj in address_objects if isinstance(obj, KGFrame)]
+            address_slots = [obj for obj in address_objects if hasattr(obj, 'kGSlotType')]
+            if address_frames:
+                pretty_print_frame_with_slots(address_frames[0], address_slots, "Address Frame After Update")
             else:
-                address_frame = vs.from_jsonld(address_updated_response.frame.model_dump(by_alias=True))
-                pretty_print_frame_with_slots(address_frame, [], "Address Frame After Update")
+                print("   No frame found in address response")
         
         # ============================================================================
         # STEP 8: Final Entity Graph Display
@@ -995,7 +949,6 @@ async def main():
                 try:
                     # Create VitalSigns FileNode object
                     from vital_ai_domain.model.FileNode import FileNode
-                    from vitalgraph.model.jsonld_model import JsonLdObject
                     
                     file_node = FileNode()
                     file_node.URI = file_uri

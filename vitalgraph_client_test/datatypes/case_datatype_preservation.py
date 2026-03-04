@@ -839,26 +839,23 @@ class DatatypePreservationTester:
         try:
             logger.info("\n--- Test 18: Add triples with typed values ---")
 
-            # Build a simple entity as JSON-LD and add via triples endpoint
+            # Build a simple entity and convert to quads for the triples endpoint
             entity = KGEntity()
             entity.URI = TRIPLES_ENTITY_URI
             entity.name = "Triples Test Entity"
             entity.kGEntityType = "http://vital.ai/test/kgtype/DtTestEntity"
 
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject
-            jsonld_dict = GraphObject.to_jsonld_list([entity])
-
-            # Single object — use JsonLdObject
-            obj = JsonLdObject(**jsonld_dict['@graph'][0])
-            obj.jsonld_type = 'object'
+            from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
+            from vitalgraph.model.quad_model import QuadRequest
+            quads = graphobjects_to_quad_list([entity], graph_uri=graph_id)
+            quad_request = QuadRequest(quads=quads)
 
             resp = await self.client.triples.add_triples(
-                space_id=space_id, graph_id=graph_id, document=obj,
+                space_id=space_id, graph_id=graph_id, quad_request=quad_request,
             )
 
             if resp.success:
-                logger.info(f"   ✅ PASS: Triples added")
+                logger.info(f"   ✅ PASS: Triples added via quads")
                 results["tests_passed"] += 1
             else:
                 logger.error(f"   ❌ FAIL: Add failed: {resp.message}")
@@ -880,13 +877,14 @@ class DatatypePreservationTester:
                 subject=TRIPLES_ENTITY_URI, page_size=50,
             )
 
-            # TripleListResponse uses .total_count from BaseJsonLdResponse
             count = getattr(resp, 'total_count', 0) or 0
-            # Also check if data has @graph entries
+            # Also check results list for quad-based responses
+            if count == 0 and hasattr(resp, 'results') and resp.results:
+                count = len(resp.results)
             if count == 0 and hasattr(resp, 'data'):
                 data = resp.data
-                if hasattr(data, 'graph') and data.graph:
-                    count = len(data.graph)
+                if hasattr(data, 'results') and data.results:
+                    count = len(data.results)
 
             if count > 0:
                 logger.info(f"   Found {count} triples for subject")
@@ -902,55 +900,25 @@ class DatatypePreservationTester:
             results["errors"].append(f"Test 19: Exception: {e}")
 
     async def _test_delete_triples(self, results, space_id, graph_id):
-        """Test 20: Delete triples via JSON-LD body (exercises _handle_delete_jsonld fix)."""
+        """Test 20: Delete triples by subject pattern via client (typed literal matching)."""
         results["tests_run"] += 1
         try:
-            logger.info("\n--- Test 20: Delete triples via JSON-LD (typed literal matching) ---")
+            logger.info("\n--- Test 20: Delete triples by subject (typed literal matching) ---")
             logger.info(f"   Deleting triples for: {TRIPLES_ENTITY_URI}")
 
-            # Build the same entity JSON-LD to send as delete body
-            entity = KGEntity()
-            entity.URI = TRIPLES_ENTITY_URI
-            entity.name = "Triples Test Entity"
-            entity.kGEntityType = "http://vital.ai/test/kgtype/DtTestEntity"
+            # Use the client's pattern-based delete with subject filter
+            resp = await self.client.triples.delete_triples(
+                space_id=space_id, graph_id=graph_id,
+                subject=TRIPLES_ENTITY_URI,
+            )
 
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from vitalgraph.model.jsonld_model import JsonLdObject
-            jsonld_dict = GraphObject.to_jsonld_list([entity])
-
-            obj = JsonLdObject(**jsonld_dict['@graph'][0])
-            obj.jsonld_type = 'object'
-
-            # Send DELETE with JSON-LD body directly via httpx
-            # (The client's delete_triples uses pattern params, but the server
-            #  DELETE endpoint accepts a JSON-LD body — that's the path we fixed)
-            import httpx
-            url = f"{self.client.config.get_server_url()}/api/graphs/triples"
-            params = {"space_id": space_id, "graph_id": graph_id}
-            headers = {}
-            if hasattr(self.client, 'access_token') and self.client.access_token:
-                headers["Authorization"] = f"Bearer {self.client.access_token}"
-
-            async with httpx.AsyncClient() as http_client:
-                response = await http_client.request(
-                    "DELETE", url, params=params,
-                    json=obj.model_dump(by_alias=True),
-                    headers=headers,
-                )
-
-            if response.status_code == 200:
-                resp_data = response.json()
-                if resp_data.get('success', False):
-                    logger.info(f"   ✅ PASS: Triples deleted via JSON-LD body")
-                    results["tests_passed"] += 1
-                else:
-                    logger.error(f"   ❌ FAIL: Delete returned success=false: {resp_data}")
-                    results["tests_failed"] += 1
-                    results["errors"].append(f"Test 20: Delete success=false")
+            if resp.success:
+                logger.info(f"   ✅ PASS: Triples deleted via client subject pattern")
+                results["tests_passed"] += 1
             else:
-                logger.error(f"   ❌ FAIL: Delete HTTP {response.status_code}: {response.text}")
+                logger.error(f"   ❌ FAIL: Delete failed: {resp.message}")
                 results["tests_failed"] += 1
-                results["errors"].append(f"Test 20: HTTP {response.status_code}")
+                results["errors"].append(f"Test 20: Delete failed: {resp.message}")
         except Exception as e:
             logger.error(f"   ❌ FAIL: Exception: {e}")
             results["tests_failed"] += 1
@@ -968,10 +936,13 @@ class DatatypePreservationTester:
             )
 
             count = getattr(resp, 'total_count', 0) or 0
+            # Also check results list for quad-based responses
+            if count == 0 and hasattr(resp, 'results') and resp.results:
+                count = len(resp.results)
             if count == 0 and hasattr(resp, 'data'):
                 data = resp.data
-                if hasattr(data, 'graph') and data.graph:
-                    count = len(data.graph)
+                if hasattr(data, 'results') and data.results:
+                    count = len(data.results)
 
             if count == 0:
                 logger.info(f"   No triples found for subject — fully deleted")

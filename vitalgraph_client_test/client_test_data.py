@@ -1058,14 +1058,11 @@ class ClientTestDataCreator:
         
         return kgtypes
     
-    def kgtypes_to_jsonld(self, kgtypes: List[KGType]) -> Dict[str, Any]:
-        """Convert KGType objects to JSON-LD format for endpoint input."""
-        try:
-            # Use VitalSigns to convert to JSON-LD
-            jsonld_data = GraphObject.to_jsonld_list(kgtypes)
-            return jsonld_data
-        except Exception as e:
-            raise Exception(f"Error converting KGTypes to JSON-LD: {e}")
+    def kgtypes_to_object_list(self, kgtypes: List[KGType]) -> List[GraphObject]:
+        """Return KGType objects as a list of GraphObjects for endpoint input.
+        Client endpoints now accept List[GraphObject] directly and handle
+        serialization to quads internally."""
+        return list(kgtypes)
     
     # ============================================================================
     # Reference ID Test Data Methods

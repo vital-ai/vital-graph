@@ -25,7 +25,7 @@ from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
 from vitalgraph.model.spaces_model import Space, SpaceCreateResponse
 from vitalgraph.model.sparql_model import SPARQLGraphResponse
 from vitalgraph.model.kgtypes_model import KGTypeListResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse
 
 # VitalSigns imports
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
@@ -280,14 +280,8 @@ class TestMockClientKGTypes:
             # Create test KGTypes using VitalSigns
             test_types = self._create_test_kgtypes()
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list(test_types)
-            
-            # Create JsonLdDocument
-            kgtypes_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.create_kgtypes(self.test_space_id, self.test_graph_id, kgtypes_document)
+            # Pass GraphObjects directly to create method
+            response = self.client.create_kgtypes(self.test_space_id, self.test_graph_id, test_types)
             
             success = (
                 isinstance(response, KGTypeCreateResponse) and
@@ -326,41 +320,27 @@ class TestMockClientKGTypes:
         try:
             response = self.client.get_kgtype(self.test_space_id, self.test_graph_id, kgtype_uri)
             
-            # Handle both KGTypeListResponse and JsonLdDocument return types
+            # Handle response types
             success = False
             kgtype_name = None
             types_count = 0
             
-            if isinstance(response, KGTypeListResponse):
-                # Standard KGTypeListResponse format
-                success = (
-                    hasattr(response, 'types') and
-                    hasattr(response.types, 'graph') and
-                    response.types.graph and
-                    len(response.types.graph) > 0
-                )
-                if success and response.types.graph:
-                    # Find the KGType in the response
-                    for item in response.types.graph:
-                        if item.get('@id') == kgtype_uri:
-                            kgtype_name = item.get('vital-core:hasName', 'Unknown')
+            if isinstance(response, QuadResponse):
+                # QuadResponse format
+                success = response.success and response.total_count > 0
+                types_count = response.total_count
+                if success and hasattr(response, 'results') and response.results:
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    graph_objects = quad_list_to_graphobjects(response.results)
+                    for obj in graph_objects:
+                        if str(getattr(obj, 'URI', '')) == kgtype_uri:
+                            kgtype_name = getattr(obj, 'name', 'Unknown')
                             break
-                    types_count = len(response.types.graph)
-            elif hasattr(response, 'graph') and response.graph:
-                # Direct JsonLdDocument format
-                success = len(response.graph) > 0
-                if success:
-                    # Find the KGType in the response
-                    for item in response.graph:
-                        if item.get('@id') == kgtype_uri:
-                            kgtype_name = item.get('vital-core:hasName', 'Unknown')
-                            break
-                    types_count = len(response.graph)
-            elif hasattr(response, 'id') and response.id == kgtype_uri:
-                # Single object JsonLdDocument format
-                success = True
-                kgtype_name = getattr(response, 'http://vital.ai/ontology/vital-core#hasName', {}).get('@value', 'Unknown')
-                types_count = 1
+                    types_count = len(graph_objects)
+            elif isinstance(response, KGTypeListResponse):
+                # Legacy KGTypeListResponse format
+                success = hasattr(response, 'types') and response.types is not None
+                types_count = 1 if success else 0
             
             self.log_test_result(
                 "Get KGType",
@@ -463,20 +443,8 @@ class TestMockClientKGTypes:
             updated_type.kGTypeVersion = "2.0.0"
             updated_type.kGModelVersion = "2.0.0"
             
-            # Convert to JSON-LD using VitalSigns
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            jsonld_data = GraphObject.to_jsonld_list([updated_type])
-            
-            # Ensure the JSON-LD has a graph array format
-            if 'graph' not in jsonld_data or jsonld_data['graph'] is None:
-                # Convert single object format to graph array format
-                single_obj = {k: v for k, v in jsonld_data.items() if k not in ['@context']}
-                jsonld_data['graph'] = [single_obj]
-            
-            # Create JsonLdDocument
-            update_document = JsonLdDocument(**jsonld_data)
-            
-            response = self.client.update_kgtypes(self.test_space_id, self.test_graph_id, update_document)
+            # Pass GraphObjects directly to update method
+            response = self.client.update_kgtypes(self.test_space_id, self.test_graph_id, [updated_type])
             
             success = (
                 isinstance(response, KGTypeUpdateResponse) and

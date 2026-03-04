@@ -1,7 +1,7 @@
 """
 KG Queries REST API endpoint for VitalGraph.
 
-This module provides REST API endpoints for entity-to-entity connection queries using JSON-LD 1.1 format.
+This module provides REST API endpoints for entity-to-entity connection queries.
 KG queries support two distinct query types:
 1. Relation-based queries: Find entities connected via Edge_hasKGRelation
 2. Frame-based queries: Find entities connected via shared KGFrames

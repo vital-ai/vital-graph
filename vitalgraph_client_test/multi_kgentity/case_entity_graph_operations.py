@@ -136,12 +136,12 @@ class EntityGraphOperationsTester:
                 
                 # Check if response is empty or has no data
                 if get_deleted_response:
-                    entity_dict = get_deleted_response.model_dump(by_alias=True) if hasattr(get_deleted_response, 'model_dump') else get_deleted_response
-                    objects_in_graph = entity_dict.get('@graph', [])
-                    if not objects_in_graph or len(objects_in_graph) == 0:
-                        logger.info(f"   ✅ Get deleted entity returned empty graph (as expected)")
+                    from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                    entity_objects = quad_list_to_graphobjects(get_deleted_response.results) if hasattr(get_deleted_response, 'results') and get_deleted_response.results else []
+                    if not entity_objects or len(entity_objects) == 0:
+                        logger.info(f"   ✅ Get deleted entity returned empty results (as expected)")
                     else:
-                        logger.error(f"   ❌ Deleted entity still exists with {len(objects_in_graph)} objects")
+                        logger.error(f"   ❌ Deleted entity still exists with {len(entity_objects)} objects")
                         results["tests_failed"] += 1
                         results["errors"].append("Deleted entity still returned by get operation")
                 else:

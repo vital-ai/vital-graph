@@ -1,0 +1,585 @@
+======================================================================
+SPARQL-to-SQL Data Inspection
+======================================================================
+
+PostgreSQL: PostgreSQL 17.5 (Homebrew) on aarch64-apple-darwin23.6.0, compiled by Apple clang version 16.0.0 (clang-1600.0.26.6), 64-bit
+
+--- Discovering Spaces ---
+
+  Found 46 spaces:
+    lead_test                                            674,334 quads
+    space_lead_dataset_test                              264,619 quads
+    cardiff_kg_test_fresh                                 12,222 quads
+    kg_load_test                                           7,595 quads
+    space_multi_org_crud_test                              6,075 quads
+    kg_test_space_new_client                               5,990 quads
+    space_lead_entity_graph_test                           5,670 quads
+    space_kgquery_test                                     4,875 quads
+    update_quads_test_1e630017                               958 quads
+    update_quads_test_363b6a87                               958 quads
+    update_quads_test_5c9eda90                               958 quads
+    update_quads_test_04cdc562                               641 quads
+    update_quads_test_070e2d25                               641 quads
+    update_quads_test_0b7aa270                               641 quads
+    update_quads_test_0f68feab                               641 quads
+    update_quads_test_1a411806                               641 quads
+    update_quads_test_1e48d84b                               641 quads
+    update_quads_test_1f24d6ec                               641 quads
+    update_quads_test_1f5589fb                               641 quads
+    update_quads_test_2574220a                               641 quads
+    update_quads_test_2bc9ec24                               641 quads
+    update_quads_test_35748ed4                               641 quads
+    update_quads_test_42c1d778                               641 quads
+    update_quads_test_473b4f1b                               641 quads
+    update_quads_test_61ffe4ae                               641 quads
+    update_quads_test_68011d54                               641 quads
+    update_quads_test_6bad7945                               641 quads
+    update_quads_test_a6c0d6e1                               641 quads
+    update_quads_test_ab7daa0f                               641 quads
+    update_quads_test_b68460bc                               641 quads
+    update_quads_test_ba80dc42                               641 quads
+    update_quads_test_edc42f12                               641 quads
+    update_quads_test_ef56d001                               641 quads
+    update_quads_test_f55573c0                               641 quads
+    update_quads_test_fd1f82bc                               641 quads
+    space_client_kgentities_test                             522 quads
+    space_realistic_org_test                                 358 quads
+    cardiff_kg_endpoint_test                                 255 quads
+    file_test_space                                          186 quads
+    dt_test                                                  159 quads
+    lead_test_debug                                          117 quads
+    space_falsey_test                                         59 quads
+    space_test_crud                                            5 quads
+    update_quads_test_43553a4c                                 2 quads
+    atomic_frame_update_test_8fa5f0eb                          0 quads
+    test_files_space_02a63933                                  0 quads
+
+  Inspecting top 5 non-empty space(s)...
+
+======================================================================
+Space: lead_test  (674,334 quads)
+  Tables: lead_test_term, lead_test_rdf_quad
+======================================================================
+
+--- Term Table (lead_test_term) ---
+  Total terms: 107,597
+    URI (U): 96,752
+    Literal (L): 10,845
+  Sample URIs:
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue
+    urn:lead_test
+    http://vital.ai/cardiff/kgentity/slot/b1423b3d-c92a-43ab-93d9-46328dc2ae40
+    http://vital.ai/ontology/vital-core#hasName
+    http://vital.ai/cardiff/kgentity/edge/5a859871-7442-48aa-9201-8abc5f190bd0
+    http://vital.ai/ontology/vital-core#hasEdgeSource
+    http://vital.ai/cardiff/kgentity/frame/e95f8d43-52de-43dc-a74c-8ba40ce381a2
+    http://vital.ai/ontology/vital-core#vitaltype
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot
+  Sample Literals:
+    "100000"
+    "Cell Phone"
+    "Doe (TEST)"
+    "Email"
+    "Amount Requested"
+    "50000"
+    "Monthly Revenue"
+    "urn:cardiff_status_new"
+    "Financial Info"
+    "Created Date"
+
+--- Quad Table (lead_test_rdf_quad) ---
+  Total quads: 674,334
+  Sample quads (resolved):
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/vital-core#hasName  Monthly Sales  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  100000  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/vital-core#URIProp  http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  http://vital.ai/cardiff/kgentity/lead/331a40c7-9a76-46db-aaca-6927099ec4cf  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  http://vital.ai/cardiff/kgentity/frame/0afa5ca1-ca95-4510-9541-f266c0d98583  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  urn:cardiff_monthly_sales  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/4427719f-abf1-49c6-b91c-affe62068a93  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/b1423b3d-c92a-43ab-93d9-46328dc2ae40  http://vital.ai/ontology/vital-core#hasName  Cell Phone  [urn:lead_test]
+    http://vital.ai/cardiff/kgentity/slot/b1423b3d-c92a-43ab-93d9-46328dc2ae40  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGTextSlot  [urn:lead_test]
+
+--- Predicates ---
+  Distinct predicates: 22
+    http://vital.ai/ontology/vital-core#vitaltype  (98,099 quads)
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type  (98,098 quads)
+    http://vital.ai/ontology/vital-core#URIProp  (97,968 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  (97,967 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  (85,028 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeDestination  (48,849 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeSource  (48,849 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  (36,182 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  (14,079 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue  (13,791 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameType  (12,664 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameSequence  (12,479 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  (3,086 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDoubleSlotValue  (1,627 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasCurrencySlotValue  (1,424 quads)
+    http://vital.ai/ontology/vital-core#hasName  (1,239 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  (1,201 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasChoiceSlotValue  (532 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasMultiChoiceSlotValues  (395 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityType  (272 quads)
+    http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier  (268 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasJsonSlotValue  (237 quads)
+
+--- rdf:type Values ---
+  Distinct rdf:type values: 14
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot  (36,241 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot  (14,104 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot  (13,791 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrame  (12,667 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame  (9,628 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  (3,085 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame  (3,042 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot  (1,627 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGCurrencySlot  (1,424 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  (1,211 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGChoiceSlot  (532 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntity  (272 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGJSONSlot  (237 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGMultiChoiceSlot  (237 instances)
+
+--- Named Graphs ---
+  Named graphs: 1
+    urn:lead_test  (674,334 quads)
+
+--- Literal Statistics ---
+  Language tags: none
+  Datatype IDs: none
+
+--- Namespaces (lead_test_namespace) ---
+  Namespaces: table not found or error: relation "lead_test_namespace" does not exist
+LINE 1: SELECT prefix, namespace_uri FROM lead_test_namespace ORDER ...
+                                          ^
+
+--- Datatypes (lead_test_datatype) ---
+  Datatypes: table not found or error: relation "lead_test_datatype" does not exist
+LINE 1: ...ECT datatype_id, datatype_uri, datatype_name FROM lead_test_...
+                                                             ^
+
+======================================================================
+Space: space_lead_dataset_test  (264,619 quads)
+  Tables: space_lead_dataset_test_term, space_lead_dataset_test_rdf_quad
+======================================================================
+
+--- Term Table (space_lead_dataset_test_term) ---
+  Total terms: 42,681
+    URI (U): 38,825
+    Literal (L): 3,856
+  Sample URIs:
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:personalguarantorcontactframe:0:edge:to_slot_guarantoremail
+    http://vital.ai/ontology/vital-core#hasEdgeSource
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:personalguarantorcontactframe:0
+    urn:lead_entity_graph_dataset
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingdeviceframe:0:edge:to_slot_ipaddress
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingdeviceframe:0
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:personalguarantorpersonalinfoframe:0:slot:guarantorlastname
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot
+    http://vital.ai/ontology/vital-core#vitaltype
+  Sample Literals:
+    "0"
+    "false"
+    "true"
+    "signatures/00QUg00000Xzjy8MAB-1768946675.png"
+    "IwY2xjawPc2LlleHRuA2FlbQEwAGFkaWQBqxQF8-ATfGJyaWQRMW1ydkRwN1UxUFQyeWtVd2tzcnRjBmFwcF9pZBAyMjIwMzkxNzg4MjAwODkyAAEeO2nx3gEpDlyIcSsXJnuBZqQJkh6Q8jZZZjassppEAEs-QwpVnQwnEz0_ECY_aem_up_yv2oZoWjqsWTB8McE2g"
+    "2026-01-21T07:53:01+00:00"
+    "2026-01-20T22:24:18+00:00"
+    "15.34"
+    "Social Media"
+    "1"
+
+--- Quad Table (space_lead_dataset_test_rdf_quad) ---
+  Total quads: 264,619
+  Sample quads (resolved):
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:pers...  http://vital.ai/ontology/vital-core#hasEdgeSource  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:pers...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingdev...  http://vital.ai/ontology/vital-core#hasEdgeSource  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingdev...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:pers...  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGTextSlot  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingdev...  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGFrame  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:leadstatusframe:0:frame:leadstatusc...  http://vital.ai/ontology/vital-core#hasEdgeDestination  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:leadstatusframe:0:frame:leadstatusc...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:companyframe:0:frame:companyaddress...  http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  urn:cardiff:lead:00QUg00000Xzjy8MAB  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:plaidbankingframe:0:frame:plaidconn...  http://vital.ai/ontology/vital-core#URIProp  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:plaidbankingframe:0:frame:plaidconn...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:pers...  http://vital.ai/ontology/vital-core#hasEdgeSource  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:personalguarantorframe:0:frame:pers...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingsub...  http://vital.ai/ontology/vital-core#URIProp  urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:marketingframe:0:frame:marketingsub...  [urn:lead_entity_graph_dataset]
+    urn:cardiff:lead:00QUg00000Xzjy8MAB:frame:leadstatusframe:0:frame:leadstatusc...  http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  urn:cardiff:lead:00QUg00000Xzjy8MAB  [urn:lead_entity_graph_dataset]
+
+--- Predicates ---
+  Distinct predicates: 21
+    http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  (38,550 quads)
+    http://vital.ai/ontology/vital-core#URIProp  (38,550 quads)
+    http://vital.ai/ontology/vital-core#vitaltype  (38,550 quads)
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type  (38,550 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  (33,259 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeDestination  (19,225 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeSource  (19,225 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  (14,034 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue  (5,819 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameSequence  (5,191 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameType  (5,191 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  (5,191 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  (1,041 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDoubleSlotValue  (577 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasCurrencySlotValue  (552 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  (428 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasChoiceSlotValue  (226 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasMultiChoiceSlotValues  (160 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasJsonSlotValue  (100 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityType  (100 quads)
+    http://vital.ai/ontology/vital-core#hasName  (100 quads)
+
+--- rdf:type Values ---
+  Distinct rdf:type values: 14
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot  (14,034 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot  (5,819 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrame  (5,191 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot  (5,191 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame  (3,991 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame  (1,200 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  (1,041 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot  (577 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGCurrencySlot  (552 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  (428 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGChoiceSlot  (226 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntity  (100 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGJSONSlot  (100 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGMultiChoiceSlot  (100 instances)
+
+--- Named Graphs ---
+  Named graphs: 1
+    urn:lead_entity_graph_dataset  (264,619 quads)
+
+--- Literal Statistics ---
+  Language tags: none
+  Datatype IDs: none
+
+--- Namespaces (space_lead_dataset_test_namespace) ---
+  Namespaces: table not found or error: relation "space_lead_dataset_test_namespace" does not exist
+LINE 1: SELECT prefix, namespace_uri FROM space_lead_dataset_test_na...
+                                          ^
+
+--- Datatypes (space_lead_dataset_test_datatype) ---
+  Datatypes: table not found or error: relation "space_lead_dataset_test_datatype" does not exist
+LINE 1: ...ECT datatype_id, datatype_uri, datatype_name FROM space_lead...
+                                                             ^
+
+======================================================================
+Space: cardiff_kg_test_fresh  (12,222 quads)
+  Tables: cardiff_kg_test_fresh_term, cardiff_kg_test_fresh_rdf_quad
+======================================================================
+
+--- Term Table (cardiff_kg_test_fresh_term) ---
+  Total terms: 1,332
+    URI (U): 695
+    Literal (L): 637
+  Sample URIs:
+    haley:file_9dc767136307
+    http://vital.ai/ontology/vital#FileNode
+    urn:cardiff_test_graph_fresh
+    http://vital.ai/ontology/vital-core#vitaltype
+    http://vital.ai/ontology/vital-core#URIProp
+    http://vital.ai/ontology/vital-core#hasName
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+    http://vital.ai/ontology/vital#hasFileURL
+    http://vital.ai/ontology/vital#hasFileType
+    haley:file_b9f8e1549dcf
+  Sample Literals:
+    "http://vital.ai/test/kgtype/Person_5b731bbf"
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+    "http://vital.ai/ontology/haley-ai-kg#KGType"
+    "urn:cardiff_test_graph_fresh"
+    "http://vital.ai/ontology/vital-core#vitaltype"
+    "http://vital.ai/ontology/vital-core#URIProp"
+    "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription"
+    "Represents a person entity in the knowledge graph"
+    "http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion"
+    "2024.1"
+
+--- Quad Table (cardiff_kg_test_fresh_rdf_quad) ---
+  Total quads: 12,222
+  Sample quads (resolved):
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGType  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGType  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/vital-core#URIProp  http://vital.ai/test/kgtype/Person_5b731bbf  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription  Represents a person entity in the knowledge graph  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion  2024.1  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/haley-ai-kg#hasKGTypeVersion  1.0  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Person_5b731bbf  http://vital.ai/ontology/vital-core#hasName  Person  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Organization_39eac616  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGType  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Organization_39eac616  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGType  [urn:cardiff_test_graph_fresh]
+    http://vital.ai/test/kgtype/Organization_39eac616  http://vital.ai/ontology/vital-core#URIProp  http://vital.ai/test/kgtype/Organization_39eac616  [urn:cardiff_test_graph_fresh]
+
+--- Predicates ---
+  Distinct predicates: 28
+    http://vital.ai/ontology/vital-core#URIProp  (1,734 quads)
+    http://vital.ai/ontology/vital-core#vitaltype  (1,734 quads)
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type  (1,725 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  (1,680 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  (1,421 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeDestination  (833 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeSource  (833 quads)
+    http://vital.ai/ontology/vital-core#hasName  (640 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  (622 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  (423 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameType  (213 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  (127 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  (62 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityType  (28 quads)
+    http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier  (22 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion  (20 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGTypeVersion  (20 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription  (20 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGRelationType  (16 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue  (10 quads)
+    http://vital.ai/ontology/vital#hasFileType  (9 quads)
+    http://vital.ai/ontology/vital#hasFileURL  (9 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityTypeExternIdentifier  (5 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeExternIdentifier  (4 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeExternIdentifier  (3 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeLabel  (3 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotTypeName  (3 quads)
+    http://vital.ai/ontology/haley-ai-kg#isKGRelationTypeSymmetric  (3 quads)
+
+--- rdf:type Values ---
+  Distinct rdf:type values: 16
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot  (604 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot  (423 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrame  (213 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame  (153 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  (127 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  (62 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame  (60 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntity  (28 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGRelation  (16 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntitySlot  (10 instances)
+    http://vital.ai/ontology/vital#FileNode  (9 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntityType  (5 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGType  (5 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrameType  (4 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGRelationType  (3 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGSlotType  (3 instances)
+
+--- Named Graphs ---
+  Named graphs: 2
+    urn:cardiff_test_graph_write  (7,130 quads)
+    urn:cardiff_test_graph_fresh  (5,092 quads)
+
+--- Literal Statistics ---
+  Language tags: none
+  Datatype IDs: none
+
+--- Namespaces (cardiff_kg_test_fresh_namespace) ---
+  Namespaces: table not found or error: relation "cardiff_kg_test_fresh_namespace" does not exist
+LINE 1: SELECT prefix, namespace_uri FROM cardiff_kg_test_fresh_name...
+                                          ^
+
+--- Datatypes (cardiff_kg_test_fresh_datatype) ---
+  Datatypes: table not found or error: relation "cardiff_kg_test_fresh_datatype" does not exist
+LINE 1: ...ECT datatype_id, datatype_uri, datatype_name FROM cardiff_kg...
+                                                             ^
+
+======================================================================
+Space: kg_load_test  (7,595 quads)
+  Tables: kg_load_test_term, kg_load_test_rdf_quad
+======================================================================
+
+--- Term Table (kg_load_test_term) ---
+  Total terms: 2,941
+    Literal (L): 2,008
+    URI (U): 933
+  Sample URIs:
+    http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_name
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue
+    urn:kg_load_test_graph
+    http://vital.ai/test/kgentity/edge/techcorp_industries_ceo_start
+    http://vital.ai/ontology/vital-core#hasEdgeDestination
+    http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_start
+    http://vital.ai/test/kgentity/edge/techcorp_industries_address_zipcode
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI
+    http://vital.ai/test/kgentity/frame/techcorp_industries_address
+    http://vital.ai/test/kgentity/edge/techcorp_industries_company_employees
+  Sample Literals:
+    "John Smith"
+    "2018-01-15T00:00:00"
+    "2019-03-01T00:00:00"
+    "TechCorp Industries City"
+    "94105"
+    "Chief Technology Officer"
+    "TechCorp Industries State"
+    "Chief Executive Officer"
+    "TechCorp Industries CEO"
+    "TechCorp Industries CTO Start Date"
+
+--- Quad Table (kg_load_test_rdf_quad) ---
+  Total quads: 7,595
+  Sample quads (resolved):
+    http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_name  http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  John Smith  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/edge/techcorp_industries_ceo_start  http://vital.ai/ontology/vital-core#hasEdgeDestination  http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_start  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/edge/techcorp_industries_address_zipcode  http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  http://vital.ai/test/kgentity/frame/techcorp_industries_address  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/edge/techcorp_industries_company_employees  http://vital.ai/ontology/vital-core#hasEdgeSource  http://vital.ai/test/kgentity/frame/techcorp_industries_company  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_name  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGTextSlot  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/frame/techcorp_industries_cfo  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGFrame  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/slot/techcorp_industries_ceo_name  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGTextSlot  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/edge/techcorp_industries_cfo_start  http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  http://vital.ai/test/kgentity/organization/techcorp_industries  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/edge/techcorp_industries_address_zipcode  http://vital.ai/ontology/vital-core#hasEdgeSource  http://vital.ai/test/kgentity/frame/techcorp_industries_address  [urn:kg_load_test_graph]
+    http://vital.ai/test/kgentity/slot/techcorp_industries_employees  http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  http://vital.ai/test/kgentity/frame/techcorp_industries_company  [urn:kg_load_test_graph]
+
+--- Predicates ---
+  Distinct predicates: 15
+    http://vital.ai/ontology/vital-core#URIProp  (1,051 quads)
+    http://vital.ai/ontology/vital-core#vitaltype  (1,051 quads)
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type  (1,048 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  (1,044 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  (911 quads)
+    http://vital.ai/ontology/vital-core#hasName  (546 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeDestination  (505 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeSource  (502 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  (383 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  (246 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameType  (140 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  (99 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  (39 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityType  (20 quads)
+    http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier  (10 quads)
+
+--- rdf:type Values ---
+  Distinct rdf:type values: 8
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot  (385 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot  (246 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrame  (140 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  (99 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame  (60 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame  (60 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  (38 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntity  (20 instances)
+
+--- Named Graphs ---
+  Named graphs: 1
+    urn:kg_load_test_graph  (7,595 quads)
+
+--- Literal Statistics ---
+  Language tags: none
+  Datatype IDs: none
+
+--- Namespaces (kg_load_test_namespace) ---
+  Namespaces: table not found or error: relation "kg_load_test_namespace" does not exist
+LINE 1: SELECT prefix, namespace_uri FROM kg_load_test_namespace ORD...
+                                          ^
+
+--- Datatypes (kg_load_test_datatype) ---
+  Datatypes: table not found or error: relation "kg_load_test_datatype" does not exist
+LINE 1: ...ECT datatype_id, datatype_uri, datatype_name FROM kg_load_te...
+                                                             ^
+
+======================================================================
+Space: space_multi_org_crud_test  (6,075 quads)
+  Tables: space_multi_org_crud_test_term, space_multi_org_crud_test_rdf_quad
+======================================================================
+
+--- Term Table (space_multi_org_crud_test_term) ---
+  Total terms: 1,412
+    URI (U): 714
+    Literal (L): 698
+  Sample URIs:
+    haley:file_7b9a5f18c9a4
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+    http://vital.ai/ontology/vital#FileNode
+    urn:multi_org_crud_graph
+    http://vital.ai/ontology/vital-core#vitaltype
+    http://vital.ai/ontology/vital-core#URIProp
+    http://vital.ai/ontology/vital-core#hasName
+    haley:file_bbc774c8fe2c
+    haley:file_321c727f992b
+    haley:file_269f6cbbb370
+  Sample Literals:
+    "http://vital.ai/test/kgtype/OrganizationEntity_11955527"
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+    "http://vital.ai/ontology/haley-ai-kg#KGEntityType"
+    "urn:multi_org_crud_graph"
+    "http://vital.ai/ontology/vital-core#vitaltype"
+    "http://vital.ai/ontology/vital-core#URIProp"
+    "http://vital.ai/ontology/haley-ai-kg#hasKGTypeVersion"
+    "1.0"
+    "http://vital.ai/ontology/vital-core#hasName"
+    "OrganizationEntity"
+
+--- Quad Table (space_multi_org_crud_test_rdf_quad) ---
+  Total quads: 6,075
+  Sample quads (resolved):
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/vital-core#hasName  Education Systems Ltd CTO Start Date  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/vital-core#vitaltype  http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  2019-03-01T00:00:00  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/vital-core#URIProp  http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  http://vital.ai/test/kgentity/organization/education_systems_ltd  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  http://vital.ai/test/kgentity/frame/education_systems_ltd_cto  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  http://vital.ai/ontology/haley-ai-kg#OfficerStartDateSlot  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgentity/slot/education_systems_ltd_cto_start  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgtype/ContactFrame_0d718193  http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription  Frame type for contact information  [urn:multi_org_crud_graph]
+    http://vital.ai/test/kgtype/ContactFrame_0d718193  http://www.w3.org/1999/02/22-rdf-syntax-ns#type  http://vital.ai/ontology/haley-ai-kg#KGFrameType  [urn:multi_org_crud_graph]
+
+--- Predicates ---
+  Distinct predicates: 21
+    http://vital.ai/ontology/vital-core#URIProp  (950 quads)
+    http://vital.ai/ontology/vital-core#vitaltype  (950 quads)
+    http://www.w3.org/1999/02/22-rdf-syntax-ns#type  (772 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI  (736 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI  (701 quads)
+    http://vital.ai/ontology/vital-core#hasName  (435 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeDestination  (408 quads)
+    http://vital.ai/ontology/vital-core#hasEdgeSource  (356 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGSlotType  (268 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasTextSlotValue  (178 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGFrameType  (105 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue  (58 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGEntityType  (23 quads)
+    http://vital.ai/ontology/vital-aimp#hasReferenceIdentifier  (22 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription  (20 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasUriSlotValue  (19 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasIntegerSlotValue  (18 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGRelationType  (16 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGModelVersion  (15 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasKGTypeVersion  (15 quads)
+    http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue  (10 quads)
+
+--- rdf:type Values ---
+  Distinct rdf:type values: 15
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot  (250 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGTextSlot  (177 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrame  (105 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame  (60 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot  (50 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame  (30 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntity  (23 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot  (16 instances)
+    http://vital.ai/ontology/haley-ai-kg#Edge_hasKGRelation  (16 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGURISlot  (15 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntitySlot  (10 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGFrameType  (7 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGSlotType  (6 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGType  (5 instances)
+    http://vital.ai/ontology/haley-ai-kg#KGEntityType  (2 instances)
+
+--- Named Graphs ---
+  Named graphs: 1
+    urn:multi_org_crud_graph  (6,075 quads)
+
+--- Literal Statistics ---
+  Language tags: none
+  Datatype IDs: none
+
+--- Namespaces (space_multi_org_crud_test_namespace) ---
+  Namespaces: table not found or error: relation "space_multi_org_crud_test_namespace" does not exist
+LINE 1: SELECT prefix, namespace_uri FROM space_multi_org_crud_test_...
+                                          ^
+
+--- Datatypes (space_multi_org_crud_test_datatype) ---
+  Datatypes: table not found or error: relation "space_multi_org_crud_test_datatype" does not exist
+LINE 1: ...ECT datatype_id, datatype_uri, datatype_name FROM space_mult...
+                                                             ^
+
+======================================================================
+Inspection complete.

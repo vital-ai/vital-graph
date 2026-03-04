@@ -20,11 +20,8 @@ from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
 
-# VitalSigns utilities for JSON-LD conversion
+# VitalSigns utilities
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
-
-# Import test utilities
-from .test_utils import convert_to_jsonld_request
 
 
 async def test_frame_creation_basic(client: VitalGraphClient, space_id: str, graph_id: str, entity_uri: Optional[str], logger: logging.Logger) -> bool:
@@ -41,19 +38,16 @@ async def test_frame_creation_basic(client: VitalGraphClient, space_id: str, gra
         # Extract just the frames from the complete entity structure
         frames = [obj for obj in person_objects if isinstance(obj, KGFrame)]
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frames)
-        
-        # Test frame creation
-        response = client.kgframes.create_kgframes(
+        # Test frame creation - pass GraphObjects directly
+        response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=frames,
             entity_uri=entity_uri
         )
         
-        if response.success and response.frames_created > 0:
-            logger.info(f"✅ Basic frame creation successful: {response.frames_created} frames created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Basic frame creation successful: {response.created_count} frames created")
             logger.info(f"   Created frames: {[str(frame.name) for frame in frames]}")
             return True
         else:
@@ -79,19 +73,16 @@ async def test_frame_creation_with_entity_uri(client: VitalGraphClient, space_id
         frame.name = "Test Frame with Entity"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#EntityFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test frame creation with entity URI
-        response = client.kgframes.create_kgframes(
+        # Test frame creation with entity URI - pass GraphObject directly
+        response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             entity_uri=entity_uri
         )
         
-        if response.success and response.frames_created > 0:
-            logger.info(f"✅ Frame creation with entity URI successful: {response.frames_created} frames created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Frame creation with entity URI successful: {response.created_count} frames created")
             return True
         else:
             logger.error(f"❌ Frame creation with entity URI failed: {response.message}")
@@ -116,19 +107,16 @@ async def test_frame_creation_with_parent_uri(client: VitalGraphClient, space_id
         frame.name = "Test Child Frame"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ChildFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test frame creation with parent URI
-        response = client.kgframes.create_kgframes(
+        # Test frame creation with parent URI - pass GraphObject directly
+        response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             parent_uri=parent_uri
         )
         
-        if response.success and response.frames_created > 0:
-            logger.info(f"✅ Frame creation with parent URI successful: {response.frames_created} frames created")
+        if response.is_success and response.created_count > 0:
+            logger.info(f"✅ Frame creation with parent URI successful: {response.created_count} frames created")
             return True
         else:
             logger.error(f"❌ Frame creation with parent URI failed: {response.message}")
@@ -153,47 +141,44 @@ async def test_frame_creation_with_operation_modes(client: VitalGraphClient, spa
         frame.name = "Test Frame with Mode"
         frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ModeFrame"
         
-        # Convert VitalSigns objects to JSON-LD using helper function
-        document = convert_to_jsonld_request(frame)
-        
-        # Test CREATE mode
+        # Test CREATE mode - pass GraphObject directly
         logger.info(f"   Testing operation mode: create")
-        create_response = client.kgframes.create_kgframes(
+        create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             entity_uri=entity_uri,
             operation_mode="create"
         )
         
-        if not create_response.success:
+        if not create_response.is_success:
             logger.error(f"❌ Frame creation with mode create failed: {create_response.message}")
             return False
         
         # Test UPDATE mode
         logger.info(f"   Testing operation mode: update")
-        update_response = client.kgframes.update_kgframes(
+        update_response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             entity_uri=entity_uri
         )
         
-        if not update_response.success:
+        if not update_response.is_success:
             logger.error(f"❌ Frame creation with mode update failed: {update_response.message}")
             return False
         
         # Test UPSERT mode
         logger.info(f"   Testing operation mode: upsert")
-        upsert_response = client.kgframes.create_kgframes(
+        upsert_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            data=document,
+            objects=[frame],
             entity_uri=entity_uri,
             operation_mode="upsert"
         )
         
-        if not upsert_response.success:
+        if not upsert_response.is_success:
             logger.error(f"❌ Frame creation with mode upsert failed: {upsert_response.message}")
             return False
         

@@ -21,7 +21,7 @@ sys.path.insert(0, str(project_root))
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 from vitalgraph.model.spaces_model import Space, SpacesListResponse
-from vitalgraph.model.kgtypes_model import KGTypeListResponse, KGTypeGetResponse
+from vitalgraph.model.kgtypes_model import KGTypeResponse
 
 # Import test data creator
 from vitalgraph_client_test.client_test_data import ClientTestDataCreator
@@ -233,7 +233,7 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
             cleanup_count = 0
             for kgtype in remaining_kgtypes:
                 try:
-                    kgtype_uri = kgtype.get('@id') or kgtype.get('URI')
+                    kgtype_uri = str(kgtype.URI)
                     if kgtype_uri:
                         await client.delete_kgtype(test_space_id, test_graph_id, kgtype_uri)
                         cleanup_count += 1
@@ -328,20 +328,8 @@ async def main():
     
     print("Starting VitalGraph KGTypes Endpoint Test...")
     
-    # Determine config file path (required for JWT client)
-    config_dir = Path(__file__).parent.parent / "vitalgraphclient_config"
-    config_file = config_dir / "vitalgraphclient-config.yaml"
-    
-    if config_file.exists():
-        config_path = str(config_file)
-        print(f"✓ Found config file: {config_path}")
-    else:
-        print(f"❌ Config file not found: {config_file}")
-        print("   JWT client requires a configuration file.")
-        print("   Please ensure vitalgraphclient-config.yaml exists in the vitalgraphclient_config directory.")
-        return 1
-    
-    # Run KGTypes endpoint tests
+    # Run KGTypes endpoint tests (client uses environment variables for config)
+    config_path = None
     success = await test_kgtypes_endpoint(config_path)
     
     if success:

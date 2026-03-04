@@ -233,34 +233,16 @@ class PostgreSQLSpaceDBObjects:
             if not quads:
                 return None
             
-            # Convert quads to JSON-LD, then to VitalSigns object
+            # Convert quads to N-Triples, then to VitalSigns object
             from rdflib import Graph
             g = Graph()
             for s, p, o, graph_ctx in quads:
                 g.add((s, p, o))
             
-            # Convert to JSON-LD
-            jsonld_str = g.serialize(format='json-ld')
-            import json
-            jsonld_doc = json.loads(jsonld_str)
-            
-            # Ensure proper JSON-LD structure for jsonld_to_graphobjects
-            if isinstance(jsonld_doc, list):
-                # Convert list to proper JSON-LD document structure
-                jsonld_document = {
-                    "@context": {
-                        "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                        "vital": "http://vital.ai/ontology/vital-core#",
-                        "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                    },
-                    "@graph": jsonld_doc
-                }
-            else:
-                jsonld_document = jsonld_doc
-            
-            # Convert to VitalSigns objects
-            from vitalgraph.utils.data_format_utils import jsonld_to_graphobjects
-            objects = await jsonld_to_graphobjects(jsonld_document)
+            # Serialize as N-Triples and convert via VitalSigns
+            nt_str = g.serialize(format='nt')
+            vitalsigns = VitalSigns()
+            objects = vitalsigns.from_rdf_list(nt_str)
             
             # Return the first object (should be the only one for a single URI)
             if objects:
@@ -721,34 +703,16 @@ class PostgreSQLSpaceDBObjects:
                         quads = await self.get_objects_by_uris_batch(space_id, subject_uris, graph_id)
                         self.logger.debug(f"Retrieved {len(quads)} quads for objects")
                         
-                        # Convert quads to JSON-LD, then to VitalSigns objects
+                        # Convert quads to N-Triples, then to VitalSigns objects
                         from rdflib import Graph
                         g = Graph()
                         for s, p, o, graph_ctx in quads:
                             g.add((s, p, o))
                         
-                        # Convert to JSON-LD
-                        jsonld_str = g.serialize(format='json-ld')
-                        import json
-                        jsonld_doc = json.loads(jsonld_str)
-                        
-                        # Ensure proper JSON-LD structure for jsonld_to_graphobjects
-                        if isinstance(jsonld_doc, list):
-                            # Convert list to proper JSON-LD document structure
-                            jsonld_document = {
-                                "@context": {
-                                    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-                                    "vital": "http://vital.ai/ontology/vital-core#",
-                                    "haley": "http://vital.ai/ontology/haley-ai-kg#"
-                                },
-                                "@graph": jsonld_doc
-                            }
-                        else:
-                            jsonld_document = jsonld_doc
-                        
-                        # Convert to VitalSigns objects
-                        from vitalgraph.utils.data_format_utils import jsonld_to_graphobjects
-                        objects = await jsonld_to_graphobjects(jsonld_document)
+                        # Serialize as N-Triples and convert via VitalSigns
+                        nt_str = g.serialize(format='nt')
+                        vitalsigns = VitalSigns()
+                        objects = vitalsigns.from_rdf_list(nt_str)
                     except Exception as conversion_error:
                         self.logger.error(f"Error converting objects: {conversion_error}")
                         # Fallback to basic object info

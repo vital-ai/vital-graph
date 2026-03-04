@@ -87,7 +87,7 @@ class KGEntityUpdateTester:
             # Set the URI to match the existing entity
             updated_person_objects[0].URI = update_uri
             
-            # Convert to JSON-LD for client
+            # Convert to quads for client
             # Modern client API expects GraphObjects directly
             update_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
@@ -123,7 +123,7 @@ class KGEntityUpdateTester:
                 # Set the URI to match the existing entity
                 updated_org_objects[0].URI = update_uri
                 
-                # Convert to JSON-LD for client
+                # Convert to quads for client
                 # Modern client API expects GraphObjects directly
                 parent_update_response = await self.client.kgentities.update_kgentities(
                     space_id=space_id,
@@ -175,7 +175,7 @@ class KGEntityUpdateTester:
                 all_objects[0].URI = entity1_uri
                 all_objects[1].URI = entity2_uri
             
-            # Convert to JSON-LD for client
+            # Convert to quads for client
             # Modern client API expects GraphObjects directly
             multi_update_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
@@ -209,7 +209,7 @@ class KGEntityUpdateTester:
             # Set the URI to a fake one
             fake_project_objects[0].URI = fake_uri
             
-            # Convert to JSON-LD for client
+            # Convert to quads for client
             # Modern client API expects GraphObjects directly
             nonexistent_response = await self.client.kgentities.update_kgentities(
                 space_id=space_id,
@@ -245,7 +245,7 @@ class KGEntityUpdateTester:
                 # Set the URI to match the existing entity
                 property_person_objects[0].URI = update_uri
                 
-                # Convert to JSON-LD for client
+                # Convert to quads for client
                 # Modern client API expects GraphObjects directly
                 property_response = await self.client.kgentities.update_kgentities(
                     space_id=space_id,

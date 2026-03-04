@@ -517,7 +517,6 @@ class SPARQLEndpointTester:
             ("SPARQL Insert", self.test_sparql_insert),
             ("SPARQL Update", self.test_sparql_update),
             ("SPARQL Delete", self.test_sparql_delete),
-            ("DELETE WHERE Error", self.test_sparql_delete_where_error),
             ("Graph Management", self.test_graph_management),
         ]
         

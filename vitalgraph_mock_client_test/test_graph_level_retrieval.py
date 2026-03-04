@@ -37,7 +37,6 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 # Import VitalGraph components
 from vitalgraph.client.client_factory import create_vitalgraph_client
 from vitalgraph.client.config.client_config_loader import VitalGraphClientConfig
-from vitalgraph.model.jsonld_model import JsonLdDocument
 from vitalgraph.model.spaces_model import Space
 
 
@@ -160,14 +159,12 @@ class TestGraphLevelRetrieval:
             
             # Step 1: Create test entity with complete graph
             test_objects = self.create_test_entity_with_complete_graph()
-            create_document = GraphObject.to_jsonld_list(test_objects)
-            document = JsonLdDocument(**create_document)
             
-            # Create the entity graph
+            # Create the entity graph - pass GraphObjects directly
             create_response = self.mock_client.kgentities.update_kgentities(
                 space_id=self.test_space_id,
                 graph_id=self.test_graph_id,
-                document=document,
+                objects=test_objects,
                 operation_mode="create"
             )
             
@@ -189,11 +186,12 @@ class TestGraphLevelRetrieval:
                 logger.info("✅ Single entity retrieval successful")
                 
                 # Check that it's just the entity (not complete graph)
-                entity_data = single_entity_response.entity.model_dump()
-                if '@graph' in entity_data and len(entity_data['@graph']) <= 2:  # Entity + maybe context
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                entity_objects = quad_list_to_graphobjects(single_entity_response.results) if single_entity_response.results else []
+                if len(entity_objects) <= 2:  # Entity + maybe related
                     logger.info("✅ Single entity retrieval returned minimal data as expected")
                 else:
-                    logger.warning(f"Single entity retrieval returned more data than expected: {len(entity_data.get('@graph', []))} objects")
+                    logger.warning(f"Single entity retrieval returned more data than expected: {len(entity_objects)} objects")
             else:
                 logger.error("❌ Single entity retrieval failed")
                 return False
@@ -210,8 +208,8 @@ class TestGraphLevelRetrieval:
                 logger.info("✅ Complete entity graph retrieval successful")
                 
                 # Check that it includes the complete graph
-                complete_data = complete_graph_response.complete_graph.model_dump()
-                graph_objects = complete_data.get('@graph', [])
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                graph_objects = quad_list_to_graphobjects(complete_graph_response.complete_graph.results) if complete_graph_response.complete_graph.results else []
                 
                 if len(graph_objects) >= 5:  # Entity + Frame + 2 Slots + Edges
                     logger.info(f"✅ Complete entity graph contains {len(graph_objects)} objects as expected")
@@ -248,13 +246,13 @@ class TestGraphLevelRetrieval:
                 logger.info("✅ Single frame retrieval successful")
                 
                 # Check that it's just the frame (not complete graph)
-                frame_data = single_frame_response.model_dump()
-                graph_objects = frame_data.get('@graph', [])
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                frame_objects = quad_list_to_graphobjects(single_frame_response.results) if single_frame_response.results else []
                 
-                if len(graph_objects) <= 2:  # Frame + maybe context
+                if len(frame_objects) <= 2:  # Frame + maybe related
                     logger.info("✅ Single frame retrieval returned minimal data as expected")
                 else:
-                    logger.warning(f"Single frame retrieval returned more data than expected: {len(graph_objects)} objects")
+                    logger.warning(f"Single frame retrieval returned more data than expected: {len(frame_objects)} objects")
             else:
                 logger.error("❌ Single frame retrieval failed")
                 return False
@@ -271,13 +269,13 @@ class TestGraphLevelRetrieval:
                 logger.info("✅ Complete frame graph retrieval successful")
                 
                 # Check that it includes the complete frame graph
-                complete_data = complete_frame_response.model_dump()
-                graph_objects = complete_data.get('@graph', [])
+                from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects
+                complete_frame_objects = quad_list_to_graphobjects(complete_frame_response.results) if complete_frame_response.results else []
                 
-                if len(graph_objects) >= 3:  # Frame + 2 Slots + Edges
-                    logger.info(f"✅ Complete frame graph contains {len(graph_objects)} objects as expected")
+                if len(complete_frame_objects) >= 3:  # Frame + 2 Slots + Edges
+                    logger.info(f"✅ Complete frame graph contains {len(complete_frame_objects)} objects as expected")
                 else:
-                    logger.warning(f"Complete frame graph contains fewer objects than expected: {len(graph_objects)}")
+                    logger.warning(f"Complete frame graph contains fewer objects than expected: {len(complete_frame_objects)}")
             else:
                 logger.error("❌ Complete frame graph retrieval failed")
                 return False

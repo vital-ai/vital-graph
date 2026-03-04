@@ -173,7 +173,7 @@ async def main():
         logger.info("  STEP 3: Loading Relation Data")
         logger.info("=" * 80)
         
-        relation_type_uris, product_uris, relation_uris = create_all_relation_data(
+        relation_type_uris, product_uris, relation_uris = await create_all_relation_data(
             client, space_id, graph_id, 
             {name: uri for name, uri in zip(
                 ["TechCorp Industries", "Global Finance Group", "Healthcare Solutions Inc", 

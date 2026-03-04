@@ -211,7 +211,12 @@ class KGRelationsCreateProcessor:
         """Delete a relation from the graph."""
         try:
             delete_query = f"""
-            DELETE WHERE {{
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    <{relation_uri}> ?p ?o .
+                }}
+            }}
+            WHERE {{
                 GRAPH <{graph_id}> {{
                     <{relation_uri}> ?p ?o .
                 }}

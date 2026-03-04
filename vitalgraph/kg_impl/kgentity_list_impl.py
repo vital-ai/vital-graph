@@ -32,7 +32,7 @@ class KGEntityListProcessor:
     Processor for KGEntity list operations with backend integration.
     
     Handles entity listing with filtering, pagination, and search capabilities
-    while working exclusively with GraphObjects (no JsonLD handling).
+    while working exclusively with GraphObjects.
     """
     
     def __init__(self, logger: Optional[logging.Logger] = None):

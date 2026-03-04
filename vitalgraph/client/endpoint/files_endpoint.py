@@ -2,7 +2,7 @@
 VitalGraph Client Files Endpoint
 
 Client-side implementation for Files operations.
-Hides JSON-LD complexity and returns VitalSigns GraphObjects directly.
+Hides wire format complexity and returns VitalSigns GraphObjects directly.
 """
 
 import httpx
@@ -33,8 +33,12 @@ from ..response.client_response import (
     FileDeleteResponse,
     FileUploadResponse,
 )
+from ..utils.format_helpers import (
+    ClientWireFormat,
+    serialize_graphobjects_for_request,
+    deserialize_response_to_graphobjects,
+)
 from ..response.response_builder import (
-    jsonld_to_graph_objects,
     build_success_response,
     build_error_response,
 )
@@ -45,7 +49,7 @@ class FilesEndpoint(BaseEndpoint):
     
     def __init__(self, client):
         super().__init__(client)
-        # Initialize VitalSigns for JSON-LD conversion
+        # Initialize VitalSigns for deserialization
         self.vs = VitalSigns()
     
     async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 
@@ -82,9 +86,7 @@ class FilesEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
-            # Convert JSON-LD to GraphObjects internally
-            files_jsonld = response_data.get('files', {})
-            objects = jsonld_to_graph_objects(files_jsonld, self.vs) if files_jsonld else []
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
             
             return build_success_response(
                 FilesListResponse,
@@ -139,8 +141,7 @@ class FilesEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
-            # Convert JSON-LD to GraphObjects internally
-            objects = jsonld_to_graph_objects(response_data, self.vs)
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
             
             # Find primary FileNode
             file_node = None
@@ -200,8 +201,7 @@ class FilesEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
-            # Convert JSON-LD to GraphObjects internally
-            objects = jsonld_to_graph_objects(response_data, self.vs)
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
             
             return build_success_response(
                 FilesListResponse,
@@ -245,32 +245,15 @@ class FilesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, objects=objects)
         
         try:
-            # Convert GraphObjects to JSON-LD internally
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from ...model.jsonld_model import JsonLdDocument, JsonLdObject
-            
-            jsonld_dict = GraphObject.to_jsonld_list(objects)
-            
-            # Determine if single object or document
-            if len(objects) == 1:
-                data = JsonLdObject(**jsonld_dict['@graph'][0] if '@graph' in jsonld_dict else jsonld_dict)
-            else:
-                data = JsonLdDocument(**jsonld_dict)
-            
             url = f"{self._get_server_url().rstrip('/')}/api/files"
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id
             )
             
-            # Set discriminator automatically based on type (match original behavior)
-            payload = data.model_dump(by_alias=True)
-            if isinstance(data, JsonLdObject):
-                payload['jsonld_type'] = 'object'
-            else:
-                payload['jsonld_type'] = 'document'
-            
-            response = await self._make_authenticated_request('POST', url, params=params, json=payload)
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_authenticated_request('POST', url, params=params, json=body,
+                                                              headers={'Content-Type': content_type})
             response_data = response.json()
             
             return build_success_response(
@@ -312,32 +295,15 @@ class FilesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, objects=objects)
         
         try:
-            # Convert GraphObjects to JSON-LD internally
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            from ...model.jsonld_model import JsonLdDocument, JsonLdObject
-            
-            jsonld_dict = GraphObject.to_jsonld_list(objects)
-            
-            # Determine if single object or document
-            if len(objects) == 1:
-                data = JsonLdObject(**jsonld_dict['@graph'][0] if '@graph' in jsonld_dict else jsonld_dict)
-            else:
-                data = JsonLdDocument(**jsonld_dict)
-            
             url = f"{self._get_server_url().rstrip('/')}/api/files"
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id
             )
             
-            # Set discriminator automatically based on type (match original behavior)
-            payload = data.model_dump(by_alias=True)
-            if isinstance(data, JsonLdObject):
-                payload['jsonld_type'] = 'object'
-            else:
-                payload['jsonld_type'] = 'document'
-            
-            response = await self._make_authenticated_request('PUT', url, params=params, json=payload)
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_authenticated_request('PUT', url, params=params, json=body,
+                                                              headers={'Content-Type': content_type})
             response_data = response.json()
             
             return build_success_response(

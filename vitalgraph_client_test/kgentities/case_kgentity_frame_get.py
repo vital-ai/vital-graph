@@ -390,7 +390,7 @@ class KGEntityFrameGetTester:
                     
             except VitalGraphClientError as e:
                 # Client-side validation is acceptable
-                logger.info(f"✅ Client-side validation caught non-existent entity in JsonLd retrieval: {e}")
+                logger.info(f"✅ Client-side validation caught non-existent entity retrieval: {e}")
             
             logger.info("✅ Non-existent entity frame retrieval test completed successfully")
             return True

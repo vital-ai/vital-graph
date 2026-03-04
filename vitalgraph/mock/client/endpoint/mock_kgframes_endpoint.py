@@ -1,5 +1,5 @@
 """
-Mock implementation of KGFramesEndpoint for testing with VitalSigns native JSON-LD functionality.
+Mock implementation of KGFramesEndpoint for testing with VitalSigns native functionality.
 
 This implementation uses:
 - VitalSigns native object creation and conversion
@@ -16,11 +16,12 @@ from typing import Dict, Any, Optional, List
 import traceback
 from .mock_base_endpoint import MockBaseEndpoint
 from vitalgraph.model.kgframes_model import (
-    FramesResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse,
+    FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse,
     SlotCreateResponse, SlotUpdateResponse, SlotDeleteResponse,
     FrameQueryRequest, FrameQueryResponse
 )
-from vitalgraph.model.jsonld_model import JsonLdDocument
+from vitalgraph.model.quad_model import QuadResponse, QuadResultsResponse
+from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list
 from vitalgraph.sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from vitalgraph.sparql.graph_validation import FrameGraphValidator
 from ai_haley_kg_domain.model.KGFrame import KGFrame
@@ -45,7 +46,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         self.frame_validator = FrameGraphValidator()
         self.haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
     
-    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> FramesResponse:
+    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
         """
         List KGFrames with pagination and optional search using pyoxigraph SPARQL queries.
         
@@ -57,12 +58,12 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
             search: Optional search term
             
         Returns:
-            FramesResponse with VitalSigns native JSON-LD document
+            QuadResponse with VitalSigns native objects
         """
         from vitalgraph.kg.kgframe_list_endpoint_impl import list_kgframes_impl
         return list_kgframes_impl(self, space_id, graph_id, page_size, offset, search)
     
-    def get_kgframe(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> JsonLdDocument:
+    def get_kgframe(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool = False) -> QuadResponse:
         """
         Get a specific KGFrame by URI with optional complete graph using pyoxigraph SPARQL query.
         
@@ -73,10 +74,15 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
             include_frame_graph: If True, include complete frame graph (frames + slots + frame-to-frame edges)
             
         Returns:
-            JsonLdDocument with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results
         """
         from vitalgraph.kg.kgframe_get_endpoint_impl import get_kgframe_impl
-        return get_kgframe_impl(self, space_id, graph_id, uri, include_frame_graph)
+        objects = get_kgframe_impl(self, space_id, graph_id, uri, include_frame_graph)
+        quads = graphobjects_to_quad_list(objects, graph_id) if objects else []
+        return QuadResponse(
+            results=quads, total_count=len(objects) if objects else 0,
+            page_size=max(len(objects), 1) if objects else 1, offset=0
+        )
     
     def query_frames(self, space_id: str, graph_id: str, query_request: FrameQueryRequest) -> FrameQueryResponse:
         """
@@ -93,12 +99,12 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         from vitalgraph.kg.kgframe_query_endpoint_impl import query_frames_impl
         return query_frames_impl(self, space_id, graph_id, query_request)
     
-    def create_kgframes(self, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameCreateResponse:
-        """Create KGFrames from JSON-LD document with VitalSigns integration and grouping URI enforcement."""
+    def create_kgframes(self, space_id: str, graph_id: str, objects: List) -> FrameCreateResponse:
+        """Create KGFrames from GraphObjects with VitalSigns integration and grouping URI enforcement."""
         from vitalgraph.kg.kgframe_create_endpoint_impl import create_kgframes_impl
-        return create_kgframes_impl(self, space_id, graph_id, document)
+        return create_kgframes_impl(self, space_id, graph_id, objects)
     
-    def update_kgframes(self, space_id: str, graph_id: str, document: JsonLdDocument, 
+    def update_kgframes(self, space_id: str, graph_id: str, objects: List, 
                        operation_mode: str = "update", parent_uri: str = None, entity_uri: str = None) -> FrameUpdateResponse:
         """
         Update KGFrames with proper frame lifecycle management.
@@ -113,7 +119,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         Args:
             space_id: Space identifier
             graph_id: Graph identifier  
-            document: JsonLdDocument containing complete frame structure
+            objects: List of GraphObjects containing complete frame structure
             operation_mode: "create", "update", or "upsert"
             parent_uri: Optional parent object URI (entity or parent frame)
             
@@ -123,7 +129,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         from vitalgraph.kg.kgframe_update_endpoint_impl import update_kgframes_impl
         # Use entity_uri as parent_uri if provided, otherwise use parent_uri
         effective_parent_uri = entity_uri if entity_uri else parent_uri
-        return update_kgframes_impl(self, space_id, graph_id, document, operation_mode, effective_parent_uri)
+        return update_kgframes_impl(self, space_id, graph_id, objects, operation_mode, effective_parent_uri)
     
     def _validate_parent_object(self, space, parent_uri: str, graph_id: str) -> bool:
         """Validate that parent object exists (entity or parent frame)."""
@@ -225,7 +231,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         from vitalgraph.kg.kgframe_delete_endpoint_impl import delete_kgframes_batch_impl
         return delete_kgframes_batch_impl(self, space_id, graph_id, uri_list)
     
-    def get_kgframe_with_slots(self, space_id: str, graph_id: str, uri: str) -> JsonLdDocument:
+    def get_kgframe_with_slots(self, space_id: str, graph_id: str, uri: str) -> QuadResponse:
         """
         Get a specific KGFrame with its associated slots using pyoxigraph SPARQL queries.
         
@@ -235,34 +241,39 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
             uri: Frame URI
             
         Returns:
-            JsonLdDocument containing frame and its slots with VitalSigns native JSON-LD conversion
+            QuadResponse with quad results (frame and its slots)
         """
         from vitalgraph.kg.kgframe_get_endpoint_impl import get_kgframe_with_slots_impl
-        return get_kgframe_with_slots_impl(self, space_id, graph_id, uri)
+        objects = get_kgframe_with_slots_impl(self, space_id, graph_id, uri)
+        quads = graphobjects_to_quad_list(objects, graph_id) if objects else []
+        return QuadResponse(
+            results=quads, total_count=len(objects) if objects else 0,
+            page_size=max(len(objects), 1) if objects else 1, offset=0
+        )
     
-    def create_kgframes_with_slots(self, space_id: str, graph_id: str, document: JsonLdDocument) -> FrameCreateResponse:
+    def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> FrameCreateResponse:
         """
-        Create KGFrames with their associated slots from JSON-LD document using VitalSigns native functionality.
+        Create KGFrames with their associated slots using VitalSigns native functionality.
         
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
-            document: JsonLdDocument containing KGFrame and KGSlot data
+            objects: List of GraphObjects containing KGFrame and KGSlot data
             
         Returns:
             FrameCreateResponse with created URIs and count
         """
         from vitalgraph.kg.kgframe_create_endpoint_impl import create_kgframes_with_slots_impl
-        return create_kgframes_with_slots_impl(self, space_id, graph_id, document)
+        return create_kgframes_with_slots_impl(self, space_id, graph_id, objects)
     
     # Frame-Slot Sub-Endpoint Operations
     
-    def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, document: JsonLdDocument, operation_mode: str = "create") -> SlotCreateResponse:
+    def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List, operation_mode: str = "create") -> SlotCreateResponse:
         """Create slots for a specific frame using Edge_hasKGSlot relationships."""
         from vitalgraph.kg.kgframe_create_endpoint_impl import create_frame_slots_impl
-        return create_frame_slots_impl(self, space_id, graph_id, frame_uri, document, operation_mode)
+        return create_frame_slots_impl(self, space_id, graph_id, frame_uri, objects, operation_mode)
     
-    def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, document: JsonLdDocument) -> SlotUpdateResponse:
+    def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List) -> SlotUpdateResponse:
         """
         Update slots for a specific frame using Edge_hasKGSlot relationships.
         
@@ -270,32 +281,37 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             frame_uri: Frame URI to update slots for
-            document: JsonLdDocument containing updated KGSlots
+            objects: List of GraphObjects containing updated KGSlots
             
         Returns:
             SlotUpdateResponse containing operation result
         """
         from vitalgraph.kg.kgframe_update_endpoint_impl import update_frame_slots_impl
-        return update_frame_slots_impl(self, space_id, graph_id, frame_uri, document)
+        return update_frame_slots_impl(self, space_id, graph_id, frame_uri, objects)
     
     def delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: List[str]) -> SlotDeleteResponse:
         """Delete specific slots from a frame using Edge_hasKGSlot relationships."""
         from vitalgraph.kg.kgframe_delete_endpoint_impl import delete_frame_slots_impl
         return delete_frame_slots_impl(self, space_id, graph_id, frame_uri, slot_uris)
     
-    def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, kGSlotType: Optional[str] = None) -> JsonLdDocument:
+    def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, kGSlotType: Optional[str] = None) -> QuadResponse:
         """Get slots for a specific frame using Edge_hasKGSlot relationships."""
         from vitalgraph.kg.kgframe_get_endpoint_impl import get_frame_slots_complex_impl
-        return get_frame_slots_complex_impl(self, space_id, graph_id, frame_uri, kGSlotType)
+        objects = get_frame_slots_complex_impl(self, space_id, graph_id, frame_uri, kGSlotType)
+        quads = graphobjects_to_quad_list(objects, graph_id) if objects else []
+        return QuadResponse(
+            results=quads, total_count=len(objects) if objects else 0,
+            page_size=max(len(objects), 1) if objects else 1, offset=0
+        )
 
     # Helper methods for frame graph retrieval
     
-    def _get_single_frame(self, space, graph_id: str, frame_uri: str) -> JsonLdDocument:
+    def _get_single_frame(self, space, graph_id: str, frame_uri: str) -> List:
         """Get just the frame itself (standard retrieval)."""
         from vitalgraph.kg.kgframe_get_endpoint_impl import get_single_frame_impl
         return get_single_frame_impl(self, space, graph_id, frame_uri)
     
-    def _get_frame_with_complete_graph(self, space, graph_id: str, frame_uri: str) -> JsonLdDocument:
+    def _get_frame_with_complete_graph(self, space, graph_id: str, frame_uri: str) -> List:
         """Get frame with complete graph using hasFrameGraphURI."""
         from vitalgraph.kg.kgframe_get_endpoint_impl import get_frame_with_complete_graph_impl
         return get_frame_with_complete_graph_impl(self, space, graph_id, frame_uri)
@@ -373,7 +389,7 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
     
     # Helper methods for VitalSigns integration patterns (from MockKGEntitiesEndpoint)
     
-    def _strip_grouping_uris(self, document: JsonLdDocument) -> JsonLdDocument:
+    def _strip_grouping_uris(self, document: List) -> List:
         """Strip any existing hasKGGraphURI and hasFrameGraphURI values from client document."""
         from vitalgraph.utils.vitalsigns_helpers import strip_grouping_uris_from_document
         return strip_grouping_uris_from_document(document)
@@ -383,19 +399,9 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         from vitalgraph.utils.graph_operations import set_frame_grouping_uris
         set_frame_grouping_uris(objects, frame_uri, self.logger)
     
-    def _create_vitalsigns_objects_from_jsonld(self, jsonld_document: Dict[str, Any]) -> List[Any]:
-        """
-        Create VitalSigns objects from JSON-LD document using VitalSigns native methods.
-        
-        This method uses isinstance() type checking and Property object handling patterns.
-        """
-        from vitalgraph.utils.vitalsigns_conversion_utils import create_vitalsigns_objects_from_jsonld_impl
-        return create_vitalsigns_objects_from_jsonld_impl(self, jsonld_document)
-    
-    def _object_to_triples(self, obj, graph_id: str) -> List[tuple]:
-        """Convert a single VitalSigns object to RDF triples."""
-        from vitalgraph.utils.vitalsigns_conversion_utils import object_to_triples_impl
-        return object_to_triples_impl(self, obj, graph_id)
+    def _create_vitalsigns_objects_from_graphobjects(self, graph_objects: List[Any]) -> List[Any]:
+        """Accept graph objects directly (no conversion needed)."""
+        return graph_objects if isinstance(graph_objects, list) else [graph_objects]
     
     def _store_triples(self, space, triples: List[tuple]) -> bool:
         """Store RDF triples/quads in the pyoxigraph store."""
