@@ -26,6 +26,8 @@ from vitalgraph.agent_registry.agent_models import (
     AgentCreate,
     AgentEndpointCreate,
     AgentEndpointUpdate,
+    AgentFunctionCreate,
+    AgentFunctionUpdate,
     AgentProtocol,
     AgentStatusChange,
     AgentTypeCreate,
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 AGENT_TYPE_KEY = "urn:vital-ai:agent-type:test-bot"
 AGENT_URI = "urn:vital-ai:agent:test-crud-bot-001"
 ENDPOINT_URI = "urn:vital-ai:endpoint:test-crud-ws"
+FUNCTION_URI = "urn:generate_test_report"
 
 
 class AgentRegistryCrudTester:
@@ -250,7 +253,133 @@ class AgentRegistryCrudTester:
         except Exception as e:
             self._fail(results, "Verify endpoint soft-deleted", e)
 
-        # --- 13. Change agent status ---
+        # --- 13. Create function ---
+        function_id = None
+        results["tests_run"] += 1
+        try:
+            fn = await ar.create_function(agent_id, AgentFunctionCreate(
+                function_uri=FUNCTION_URI,
+                function_name="Generate Test Report",
+                description="Generates a test report for automated testing",
+                parameters={
+                    "business_name": {
+                        "description": "Name of the business",
+                        "type": "string",
+                        "required": True,
+                    },
+                    "report_focus": {
+                        "description": "Focus area of the report",
+                        "type": "string",
+                        "required": False,
+                    },
+                },
+                notes="Test function",
+            ))
+            function_id = fn.function_id
+            if fn.function_uri == FUNCTION_URI and fn.parameters.get("business_name"):
+                self._pass(results, f"Create function — function_id={function_id}")
+            else:
+                raise Exception(f"Unexpected function: uri={fn.function_uri}")
+        except Exception as e:
+            self._fail(results, "Create function", e)
+
+        # --- 14. List functions ---
+        results["tests_run"] += 1
+        try:
+            fns = await ar.list_functions(agent_id)
+            if len(fns) >= 1 and any(f.function_id == function_id for f in fns):
+                self._pass(results, f"List functions — count={len(fns)}")
+            else:
+                raise Exception(f"Function not found in list, count={len(fns)}")
+        except Exception as e:
+            self._fail(results, "List functions", e)
+
+        # --- 15. Get function by ID ---
+        results["tests_run"] += 1
+        try:
+            if function_id:
+                fn = await ar.get_function(function_id)
+                if fn.function_uri == FUNCTION_URI:
+                    self._pass(results, f"Get function — name={fn.function_name}")
+                else:
+                    raise Exception(f"Function URI mismatch: {fn.function_uri}")
+            else:
+                raise Exception("No function_id to get")
+        except Exception as e:
+            self._fail(results, "Get function by ID", e)
+
+        # --- 16. Update function ---
+        results["tests_run"] += 1
+        try:
+            if function_id:
+                updated_fn = await ar.update_function(function_id, AgentFunctionUpdate(
+                    description="Updated description from CRUD test",
+                    parameters={
+                        "business_name": {
+                            "description": "Name of the business",
+                            "type": "string",
+                            "required": True,
+                        },
+                        "report_focus": {
+                            "description": "Focus area of the report",
+                            "type": "string",
+                            "required": False,
+                        },
+                        "market_segments": {
+                            "description": "Market segments to analyze",
+                            "type": "array",
+                            "required": False,
+                        },
+                    },
+                ))
+                if updated_fn.parameters.get("market_segments"):
+                    self._pass(results, f"Update function — added market_segments param")
+                else:
+                    raise Exception(f"Update did not apply")
+            else:
+                raise Exception("No function_id to update")
+        except Exception as e:
+            self._fail(results, "Update function", e)
+
+        # --- 17. Discover agents by function URI ---
+        results["tests_run"] += 1
+        try:
+            disc = await ar.discover_by_function(FUNCTION_URI)
+            agents_found = disc.get("agents", [])
+            if len(agents_found) >= 1:
+                self._pass(results, f"Discover by function — {len(agents_found)} agent(s) found")
+            else:
+                raise Exception(f"No agents found for function {FUNCTION_URI}")
+        except Exception as e:
+            self._fail(results, "Discover by function URI", e)
+
+        # --- 18. Delete function (soft) ---
+        results["tests_run"] += 1
+        try:
+            if function_id:
+                resp = await ar.delete_function(function_id)
+                if resp.get("success"):
+                    self._pass(results, f"Delete function — function_id={function_id}")
+                else:
+                    raise Exception(f"Delete did not succeed: {resp}")
+            else:
+                raise Exception("No function_id to delete")
+        except Exception as e:
+            self._fail(results, "Delete function", e)
+
+        # --- 19. Verify function soft-deleted ---
+        results["tests_run"] += 1
+        try:
+            fns_after = await ar.list_functions(agent_id)
+            active_ids = [f.function_id for f in fns_after]
+            if function_id not in active_ids:
+                self._pass(results, "Verify function soft-deleted (not in active list)")
+            else:
+                raise Exception(f"Function {function_id} still in active list")
+        except Exception as e:
+            self._fail(results, "Verify function soft-deleted", e)
+
+        # --- 20. Change agent status ---
         results["tests_run"] += 1
         try:
             resp = await ar.change_agent_status(agent_id, AgentStatusChange(status="inactive"))

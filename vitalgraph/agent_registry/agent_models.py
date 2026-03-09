@@ -156,6 +156,40 @@ class AgentEndpointResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Agent Function models
+# ---------------------------------------------------------------------------
+
+class AgentFunctionCreate(BaseModel):
+    function_uri: str
+    function_name: str
+    description: Optional[str] = None
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+
+
+class AgentFunctionUpdate(BaseModel):
+    """All fields optional — only provided fields are updated."""
+    function_name: Optional[str] = None
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AgentFunctionResponse(BaseModel):
+    function_id: int
+    agent_id: str
+    function_uri: str
+    function_name: str
+    description: Optional[str] = None
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "active"
+    created_time: Optional[datetime] = None
+    updated_time: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Status change model
 # ---------------------------------------------------------------------------
 

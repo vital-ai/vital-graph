@@ -319,17 +319,17 @@ class SparqlSQLDbImpl(DbImplInterface):
             FROM information_schema.tables
             WHERE table_schema = 'public'
             AND table_name IN ('install', 'space', 'graph', 'user', 'process',
-                              'agent_type', 'agent', 'agent_endpoint', 'agent_change_log')
+                              'agent_type', 'agent', 'agent_endpoint', 'agent_function', 'agent_change_log')
             """
             result = await self.execute_query(check_query)
             table_count = result[0]['table_count'] if result else 0
 
-            if table_count == 9:
-                logger.debug("sparql_sql admin tables verified (9/9)")
+            if table_count == 10:
+                logger.debug("sparql_sql admin tables verified (10/10)")
                 return True
             else:
                 logger.error(
-                    "sparql_sql admin tables missing (%d/9 found)", table_count
+                    "sparql_sql admin tables missing (%d/10 found)", table_count
                 )
                 return False
 

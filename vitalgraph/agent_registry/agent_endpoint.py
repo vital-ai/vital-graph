@@ -15,6 +15,9 @@ from .agent_models import (
     AgentEndpointCreate,
     AgentEndpointResponse,
     AgentEndpointUpdate,
+    AgentFunctionCreate,
+    AgentFunctionResponse,
+    AgentFunctionUpdate,
     AgentListResponse,
     AgentResponse,
     AgentStatusChange,
@@ -371,6 +374,115 @@ class AgentRegistryEndpoint:
                     detail=f"Endpoint not found: {endpoint_id}",
                 )
             return {"success": True, "endpoint_id": endpoint_id}
+
+        # ============================================================
+        # Agent Functions
+        # ============================================================
+
+        @self.router.get("/agent/functions", response_model=List[AgentFunctionResponse],
+                         tags=["Agent Registry"])
+        async def list_functions_route(
+            agent_id: str = Query(..., description="Agent ID"),
+            current_user: Dict = Depends(auth),
+        ):
+            fns = await self.registry.list_functions(agent_id)
+            return [AgentFunctionResponse(**fn) for fn in fns]
+
+        @self.router.post("/agent/functions", response_model=AgentFunctionResponse,
+                          tags=["Agent Registry"])
+        async def create_function_route(
+            request: AgentFunctionCreate,
+            agent_id: str = Query(..., description="Agent ID"),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                fn = await self.registry.create_function(
+                    agent_id=agent_id,
+                    function_uri=request.function_uri,
+                    function_name=request.function_name,
+                    description=request.description,
+                    parameters=request.parameters,
+                    notes=request.notes,
+                    created_by=current_user.get('username'),
+                )
+                return AgentFunctionResponse(**fn)
+            except Exception as e:
+                if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Function URI already exists for this agent: {request.function_uri}",
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e),
+                )
+
+        @self.router.get("/agent/function", response_model=AgentFunctionResponse,
+                         tags=["Agent Registry"])
+        async def get_function_route(
+            function_id: int = Query(..., description="Function ID"),
+            current_user: Dict = Depends(auth),
+        ):
+            fn = await self.registry.get_function(function_id)
+            if fn is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Function not found: {function_id}",
+                )
+            return AgentFunctionResponse(**fn)
+
+        @self.router.put("/agent/functions", response_model=AgentFunctionResponse,
+                         tags=["Agent Registry"])
+        async def update_function_route(
+            request: AgentFunctionUpdate,
+            function_id: int = Query(..., description="Function ID"),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                fn = await self.registry.update_function(
+                    function_id=function_id,
+                    function_name=request.function_name,
+                    description=request.description,
+                    parameters=request.parameters,
+                    status=request.status,
+                    notes=request.notes,
+                    updated_by=current_user.get('username'),
+                )
+                if fn is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Function not found: {function_id}",
+                    )
+                return AgentFunctionResponse(**fn)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                )
+
+        @self.router.delete("/agent/functions", tags=["Agent Registry"])
+        async def delete_function_route(
+            function_id: int = Query(..., description="Function ID"),
+            current_user: Dict = Depends(auth),
+        ):
+            deleted = await self.registry.delete_function(
+                function_id, deleted_by=current_user.get('username'),
+            )
+            if not deleted:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Function not found: {function_id}",
+                )
+            return {"success": True, "function_id": function_id}
+
+        @self.router.get("/agent/function/discover", tags=["Agent Registry"])
+        async def discover_by_function_route(
+            function_uri: str = Query(..., description="Function URI to search for"),
+            agent_status: str = Query('active', description="Filter agents by status"),
+            current_user: Dict = Depends(auth),
+        ):
+            results = await self.registry.discover_by_function(
+                function_uri=function_uri, agent_status=agent_status,
+            )
+            return {"function_uri": function_uri, "agents": results}
 
         # ============================================================
         # Change Log

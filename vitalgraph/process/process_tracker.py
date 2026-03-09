@@ -10,6 +10,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from vitalgraph.utils.db_retry import with_db_retry
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ class ProcessTracker:
     # Create
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def create_process(
         self,
         process_type: str,
@@ -69,6 +72,7 @@ class ProcessTracker:
     # Read
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def get_process(self, process_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single process record by ID."""
         async with self._pool.acquire() as conn:
@@ -78,6 +82,7 @@ class ProcessTracker:
             )
         return dict(row) if row else None
 
+    @with_db_retry()
     async def list_processes(
         self,
         process_type: Optional[str] = None,
@@ -129,6 +134,7 @@ class ProcessTracker:
     # Update
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def mark_running(
         self,
         process_id: str,
@@ -147,6 +153,7 @@ class ProcessTracker:
                 instance_id,
             )
 
+    @with_db_retry()
     async def mark_completed(
         self,
         process_id: str,
@@ -170,6 +177,7 @@ class ProcessTracker:
                 json.dumps(result_details) if result_details else None,
             )
 
+    @with_db_retry()
     async def mark_failed(
         self,
         process_id: str,
@@ -192,6 +200,7 @@ class ProcessTracker:
                 json.dumps(result_details) if result_details else None,
             )
 
+    @with_db_retry()
     async def update_progress(
         self,
         process_id: str,
@@ -216,6 +225,7 @@ class ProcessTracker:
     # Delete / cleanup
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def cleanup_old_processes(self, retention_days: int = 30) -> int:
         """Delete process records older than retention_days.
 

@@ -6,7 +6,7 @@ trigger maintenance operations manually.
 
 Routes:
     GET  /api/processes              — list recent processes
-    GET  /api/processes/{process_id} — get process details
+    GET  /api/processes/detail?process_id=... — get process details
     POST /api/processes/trigger      — manually trigger a maintenance job
     GET  /api/processes/scheduler    — get scheduler status
 """
@@ -129,11 +129,14 @@ class ProcessEndpoint:
             return SchedulerStatusResponse(**info)
 
         @self.router.get(
-            "/processes/{process_id}",
+            "/processes/detail",
             response_model=ProcessResponse,
             summary="Get process details",
         )
-        async def get_process(process_id: str, current_user: Dict = Depends(auth)):
+        async def get_process(
+            process_id: str = Query(..., description="Process ID"),
+            current_user: Dict = Depends(auth),
+        ):
             tracker = self._get_tracker()
             if tracker is None:
                 raise HTTPException(status_code=503, detail="Process tracking not available")

@@ -13,6 +13,9 @@ from ...agent_registry.agent_models import (
     AgentEndpointCreate,
     AgentEndpointResponse,
     AgentEndpointUpdate,
+    AgentFunctionCreate,
+    AgentFunctionResponse,
+    AgentFunctionUpdate,
     AgentListResponse,
     AgentResponse,
     AgentStatusChange,
@@ -180,6 +183,64 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
         response = await self._make_authenticated_request(
             "DELETE", self._url("/agent/endpoints"),
             params={"endpoint_id": endpoint_id},
+        )
+        return response.json()
+
+    # ------------------------------------------------------------------
+    # Agent Functions
+    # ------------------------------------------------------------------
+
+    async def list_functions(self, agent_id: str) -> List[AgentFunctionResponse]:
+        """List all functions for an agent."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "GET", self._url("/agent/functions"),
+            params={"agent_id": agent_id},
+        )
+        data = response.json()
+        return [AgentFunctionResponse.model_validate(fn) for fn in data]
+
+    async def create_function(self, agent_id: str, request: AgentFunctionCreate) -> AgentFunctionResponse:
+        """Create a function for an agent."""
+        self._check_connection()
+        return await self._make_typed_request(
+            "POST", self._url("/agent/functions"), AgentFunctionResponse,
+            params={"agent_id": agent_id},
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def get_function(self, function_id: int) -> AgentFunctionResponse:
+        """Get a function by ID."""
+        self._check_connection()
+        return await self._make_typed_request(
+            "GET", self._url("/agent/function"), AgentFunctionResponse,
+            params={"function_id": function_id},
+        )
+
+    async def update_function(self, function_id: int, request: AgentFunctionUpdate) -> AgentFunctionResponse:
+        """Update a function."""
+        self._check_connection()
+        return await self._make_typed_request(
+            "PUT", self._url("/agent/functions"), AgentFunctionResponse,
+            params={"function_id": function_id},
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def delete_function(self, function_id: int) -> Dict[str, Any]:
+        """Soft-delete a function."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "DELETE", self._url("/agent/functions"),
+            params={"function_id": function_id},
+        )
+        return response.json()
+
+    async def discover_by_function(self, function_uri: str, agent_status: str = 'active') -> Dict[str, Any]:
+        """Find agents that provide a specific function URI."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "GET", self._url("/agent/function/discover"),
+            params={"function_uri": function_uri, "agent_status": agent_status},
         )
         return response.json()
 

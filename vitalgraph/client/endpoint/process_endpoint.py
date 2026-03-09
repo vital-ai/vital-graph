@@ -56,7 +56,8 @@ class ProcessClientEndpoint(BaseEndpoint):
         """Get a single process record by ID."""
         self._check_connection()
         return await self._make_typed_request(
-            "GET", self._url(f"/{process_id}"), ProcessResponse,
+            "GET", self._url("/detail"), ProcessResponse,
+            params={"process_id": process_id},
         )
 
     # ------------------------------------------------------------------

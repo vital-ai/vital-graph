@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from vitalgraph.utils.db_retry import with_db_retry
+
 from .entity_alias_ops import AliasMixin
 from .entity_category_ops import CategoryMixin
 from .entity_changelog_ops import ChangeLogMixin
@@ -80,6 +82,7 @@ class EntityRegistryImpl(
     # Schema initialization
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def ensure_tables(self) -> bool:
         """Verify that entity registry tables exist. Does NOT create or modify schema.
 
@@ -122,6 +125,7 @@ class EntityRegistryImpl(
     # Entity Type operations
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def list_entity_types(self) -> List[Dict[str, Any]]:
         """List all entity types."""
         async with self.pool.acquire() as conn:
@@ -131,6 +135,7 @@ class EntityRegistryImpl(
             )
             return [dict(r) for r in rows]
 
+    @with_db_retry()
     async def create_entity_type(self, type_key: str, type_label: str,
                                  type_description: Optional[str] = None) -> Dict[str, Any]:
         """Create a new entity type."""
@@ -155,6 +160,7 @@ class EntityRegistryImpl(
     # Entity CRUD
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def create_entity(
         self,
         type_key: str,
@@ -257,6 +263,7 @@ class EntityRegistryImpl(
 
                 return entity
 
+    @with_db_retry()
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:
         """
         Get entity by ID, including type info, identifiers, aliases,
@@ -338,11 +345,13 @@ class EntityRegistryImpl(
 
             return entity
 
+    @with_db_retry()
     async def get_entity_by_uri(self, uri: str) -> Optional[Dict[str, Any]]:
         """Get entity by URN (urn:entity:<id>)."""
         entity_id = uri_to_entity_id(uri)
         return await self.get_entity(entity_id)
 
+    @with_db_retry()
     async def update_entity(
         self,
         entity_id: str,
@@ -443,6 +452,7 @@ class EntityRegistryImpl(
 
         return updated
 
+    @with_db_retry()
     async def delete_entity(self, entity_id: str, deleted_by: Optional[str] = None,
                             comment: Optional[str] = None) -> bool:
         """
@@ -477,6 +487,7 @@ class EntityRegistryImpl(
     # Search
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def search_entities(
         self,
         query: Optional[str] = None,
@@ -564,6 +575,7 @@ class EntityRegistryImpl(
 
             return entities, total
 
+    @with_db_retry()
     async def list_entities(
         self,
         type_key: Optional[str] = None,

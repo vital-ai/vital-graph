@@ -182,6 +182,9 @@ class VitalGraphAppImpl:
                     success = await self.vital_graph_impl.connect_database()
                     self.logger.info(f"Connected to database successfully: {success}")
                     
+                    # Refresh db_impl reference (sparql_sql backend sets it during connect)
+                    self.db_impl = self.vital_graph_impl.get_db_impl()
+                    
                     # Update space_manager reference after database connection
                     self.space_manager = self.vital_graph_impl.get_space_manager()
                     self.logger.debug(f"🔍 STARTUP: Updated space_manager after DB connection: {self.space_manager}")

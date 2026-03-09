@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
 
+from vitalgraph.utils.db_retry import with_db_retry
+
 logger = logging.getLogger(__name__)
 
 # Agent ID generation
@@ -43,6 +45,7 @@ class AgentRegistryImpl:
     # Schema verification
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def ensure_tables(self) -> bool:
         """Verify that agent registry tables exist. Does NOT create or modify schema.
 
@@ -94,6 +97,7 @@ class AgentRegistryImpl:
     # Agent Type operations
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def list_agent_types(self) -> List[Dict[str, Any]]:
         """List all agent types."""
         async with self.pool.acquire() as conn:
@@ -103,6 +107,7 @@ class AgentRegistryImpl:
             )
             return [dict(r) for r in rows]
 
+    @with_db_retry()
     async def create_agent_type(
         self,
         type_key: str,
@@ -131,6 +136,7 @@ class AgentRegistryImpl:
     # Agent CRUD
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def create_agent(
         self,
         agent_type_key: str,
@@ -209,6 +215,7 @@ class AgentRegistryImpl:
 
                 return agent
 
+    @with_db_retry()
     async def get_agent(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """
         Get agent by ID, including type info and endpoints.
@@ -236,6 +243,7 @@ class AgentRegistryImpl:
 
             return agent
 
+    @with_db_retry()
     async def get_agent_by_uri(self, agent_uri: str) -> Optional[Dict[str, Any]]:
         """Get agent by agent_uri."""
         async with self.pool.acquire() as conn:
@@ -246,6 +254,7 @@ class AgentRegistryImpl:
                 return None
         return await self.get_agent(agent_id)
 
+    @with_db_retry()
     async def update_agent(
         self,
         agent_id: str,
@@ -335,6 +344,7 @@ class AgentRegistryImpl:
 
         return await self.get_agent(agent_id)
 
+    @with_db_retry()
     async def delete_agent(
         self,
         agent_id: str,
@@ -367,6 +377,7 @@ class AgentRegistryImpl:
     # Search / List
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def search_agents(
         self,
         query: Optional[str] = None,
@@ -459,6 +470,7 @@ class AgentRegistryImpl:
 
             return agents, total
 
+    @with_db_retry()
     async def list_agents(
         self,
         type_key: Optional[str] = None,
@@ -492,6 +504,7 @@ class AgentRegistryImpl:
         )
         return dict(row)
 
+    @with_db_retry()
     async def create_endpoint(
         self,
         agent_id: str,
@@ -515,6 +528,7 @@ class AgentRegistryImpl:
                 }, changed_by=created_by)
                 return dict(row)
 
+    @with_db_retry()
     async def list_endpoints(self, agent_id: str) -> List[Dict[str, Any]]:
         """List active endpoints for an agent."""
         async with self.pool.acquire() as conn:
@@ -526,6 +540,7 @@ class AgentRegistryImpl:
             )
             return [dict(r) for r in rows]
 
+    @with_db_retry()
     async def update_endpoint(
         self,
         endpoint_id: int,
@@ -588,6 +603,7 @@ class AgentRegistryImpl:
                 )
                 return dict(row) if row else None
 
+    @with_db_retry()
     async def delete_endpoint(
         self,
         endpoint_id: int,
@@ -618,9 +634,195 @@ class AgentRegistryImpl:
                 return True
 
     # ------------------------------------------------------------------
+    # Agent Function CRUD
+    # ------------------------------------------------------------------
+
+    @with_db_retry()
+    async def create_function(
+        self,
+        agent_id: str,
+        function_uri: str,
+        function_name: str,
+        description: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None,
+        notes: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a function for an agent."""
+        params_json = json.dumps(parameters) if parameters else '{}'
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "INSERT INTO agent_function "
+                    "(agent_id, function_uri, function_name, description, parameters, notes) "
+                    "VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING *",
+                    agent_id, function_uri, function_name, description, params_json, notes,
+                )
+                await self._log_change(conn, agent_id, 'function_created', {
+                    'function_uri': function_uri, 'function_name': function_name,
+                }, changed_by=created_by)
+                result = dict(row)
+                _ensure_function_json_fields(result)
+                return result
+
+    @with_db_retry()
+    async def list_functions(self, agent_id: str) -> List[Dict[str, Any]]:
+        """List active functions for an agent."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM agent_function "
+                "WHERE agent_id = $1 AND status != 'deleted' "
+                "ORDER BY function_id",
+                agent_id,
+            )
+            results = [dict(r) for r in rows]
+            for r in results:
+                _ensure_function_json_fields(r)
+            return results
+
+    @with_db_retry()
+    async def get_function(self, function_id: int) -> Optional[Dict[str, Any]]:
+        """Get a function by ID."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM agent_function WHERE function_id = $1", function_id
+            )
+            if row is None:
+                return None
+            result = dict(row)
+            _ensure_function_json_fields(result)
+            return result
+
+    @with_db_retry()
+    async def update_function(
+        self,
+        function_id: int,
+        function_name: Optional[str] = None,
+        description: Optional[str] = None,
+        parameters: Optional[Dict[str, Any]] = None,
+        status: Optional[str] = None,
+        notes: Optional[str] = None,
+        updated_by: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Update a function. Only provided fields are updated."""
+        fields: Dict[str, Any] = {}
+        if function_name is not None:
+            fields['function_name'] = function_name
+        if description is not None:
+            fields['description'] = description
+        if parameters is not None:
+            fields['parameters'] = json.dumps(parameters)
+        if status is not None:
+            valid = ('active', 'deprecated', 'deleted')
+            if status not in valid:
+                raise ValueError(f"Invalid function status: {status}. Must be one of {valid}")
+            fields['status'] = status
+        if notes is not None:
+            fields['notes'] = notes
+
+        if not fields:
+            return await self.get_function(function_id)
+
+        fields['updated_time'] = datetime.now(timezone.utc)
+
+        set_parts = []
+        values = []
+        for i, (col, val) in enumerate(fields.items(), 1):
+            cast = '::jsonb' if col == 'parameters' else ''
+            set_parts.append(f"{col} = ${i}{cast}")
+            values.append(val)
+
+        values.append(function_id)
+        param_idx = len(values)
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                result = await conn.execute(
+                    f"UPDATE agent_function SET {', '.join(set_parts)} "
+                    f"WHERE function_id = ${param_idx}",
+                    *values,
+                )
+                if result == 'UPDATE 0':
+                    return None
+
+                agent_id = await conn.fetchval(
+                    "SELECT agent_id FROM agent_function WHERE function_id = $1",
+                    function_id,
+                )
+                await self._log_change(conn, agent_id, 'function_updated', {
+                    'function_id': function_id, 'fields': list(fields.keys()),
+                }, changed_by=updated_by)
+
+                row = await conn.fetchrow(
+                    "SELECT * FROM agent_function WHERE function_id = $1", function_id
+                )
+                if row is None:
+                    return None
+                r = dict(row)
+                _ensure_function_json_fields(r)
+                return r
+
+    @with_db_retry()
+    async def delete_function(
+        self,
+        function_id: int,
+        deleted_by: Optional[str] = None,
+    ) -> bool:
+        """Soft-delete a function."""
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                agent_id = await conn.fetchval(
+                    "SELECT agent_id FROM agent_function WHERE function_id = $1",
+                    function_id,
+                )
+                if agent_id is None:
+                    return False
+
+                result = await conn.execute(
+                    "UPDATE agent_function SET status = 'deleted', updated_time = $1 "
+                    "WHERE function_id = $2 AND status != 'deleted'",
+                    datetime.now(timezone.utc), function_id,
+                )
+                if result == 'UPDATE 0':
+                    return False
+
+                await self._log_change(conn, agent_id, 'function_deleted', {
+                    'function_id': function_id,
+                }, changed_by=deleted_by)
+                return True
+
+    @with_db_retry()
+    async def discover_by_function(
+        self,
+        function_uri: str,
+        agent_status: str = 'active',
+    ) -> List[Dict[str, Any]]:
+        """Find agents that provide a specific function URI.
+
+        Returns list of dicts with agent + function info.
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT af.*, a.agent_id, a.agent_name, a.agent_uri, "
+                "a.status AS agent_status, at.type_key AS agent_type_key "
+                "FROM agent_function af "
+                "JOIN agent a ON af.agent_id = a.agent_id "
+                "JOIN agent_type at ON a.agent_type_id = at.type_id "
+                "WHERE af.function_uri = $1 AND af.status = 'active' "
+                "AND a.status = $2 "
+                "ORDER BY a.agent_name",
+                function_uri, agent_status,
+            )
+            results = [dict(r) for r in rows]
+            for r in results:
+                _ensure_function_json_fields(r)
+            return results
+
+    # ------------------------------------------------------------------
     # Change log query
     # ------------------------------------------------------------------
 
+    @with_db_retry()
     async def get_change_log(
         self,
         agent_id: str,
@@ -654,3 +856,12 @@ def _ensure_json_fields(agent: Dict[str, Any]):
         agent['capabilities'] = json.loads(val)
     elif val is None:
         agent['capabilities'] = []
+
+
+def _ensure_function_json_fields(fn: Dict[str, Any]):
+    """Ensure JSONB fields on agent_function rows are dicts, not strings."""
+    val = fn.get('parameters')
+    if isinstance(val, str):
+        fn['parameters'] = json.loads(val)
+    elif val is None:
+        fn['parameters'] = {}

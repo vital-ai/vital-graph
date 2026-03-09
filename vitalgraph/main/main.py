@@ -25,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import JSONResponse
+from vitalgraph.utils.db_retry import DatabaseUnavailableError
 import uvicorn
 from vitalgraph.impl.vitalgraphapp_impl import VitalGraphAppImpl
 from vitalgraph.config.config_loader import get_config, ConfigurationError
@@ -58,6 +60,19 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=422,
             content={"detail": exc.errors()}
+        )
+    
+    # Convert transient DB failures to 503 so clients know to retry
+    @app.exception_handler(DatabaseUnavailableError)
+    async def db_unavailable_handler(request: Request, exc: DatabaseUnavailableError):
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            "503 Database unavailable for %s %s: %s",
+            request.method, request.url.path, exc,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database temporarily unavailable, please retry"},
         )
     
     vital_graph = VitalGraphAppImpl(app=app, config=config)

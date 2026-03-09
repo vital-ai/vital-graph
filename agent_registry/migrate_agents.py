@@ -59,7 +59,7 @@ TABLES = [
             agent_type_id INTEGER NOT NULL REFERENCES agent_type(type_id),
             entity_id VARCHAR(50),
             agent_name VARCHAR(500) NOT NULL,
-            agent_uri VARCHAR(500) UNIQUE NOT NULL,
+            agent_uri VARCHAR(500) NOT NULL,
             description TEXT,
             version VARCHAR(50),
             status VARCHAR(20) NOT NULL DEFAULT 'active',
@@ -84,8 +84,21 @@ TABLES = [
             status VARCHAR(20) NOT NULL DEFAULT 'active',
             created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            notes TEXT,
-            UNIQUE (agent_id, endpoint_uri)
+            notes TEXT
+        )
+    '''),
+    ('agent_function', '''
+        CREATE TABLE IF NOT EXISTS agent_function (
+            function_id SERIAL PRIMARY KEY,
+            agent_id VARCHAR(50) NOT NULL REFERENCES agent(agent_id) ON DELETE CASCADE,
+            function_uri VARCHAR(500) NOT NULL,
+            function_name VARCHAR(255) NOT NULL,
+            description TEXT,
+            parameters JSONB DEFAULT '{}',
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+            created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            notes TEXT
         )
     '''),
     ('agent_change_log', '''
@@ -122,6 +135,17 @@ INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_uri ON agent_endpoint(agent_id, endpoint_uri)',
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_protocol ON agent_endpoint(protocol)',
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_status ON agent_endpoint(status)',
+    # agent_function table
+    'CREATE INDEX IF NOT EXISTS idx_agent_fn_agent ON agent_function(agent_id)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_fn_key ON agent_function(agent_id, function_uri)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_fn_uri ON agent_function(function_uri)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_fn_status ON agent_function(status)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_fn_params ON agent_function USING GIN(parameters)',
+    # Partial unique indexes — only enforce uniqueness on non-deleted rows
+    # so that soft-deleted agents/endpoints/functions don't block re-creation.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_uri_active ON agent(agent_uri) WHERE status != 'deleted'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_ep_active ON agent_endpoint(agent_id, endpoint_uri) WHERE status != 'deleted'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_fn_active ON agent_function(agent_id, function_uri) WHERE status != 'deleted'",
     # agent_change_log table
     'CREATE INDEX IF NOT EXISTS idx_agent_log_agent ON agent_change_log(agent_id)',
     'CREATE INDEX IF NOT EXISTS idx_agent_log_type ON agent_change_log(change_type)',
@@ -141,13 +165,20 @@ SEED_AGENT_TYPES = [
 # ---------------------------------------------------------------------------
 
 VIEWS = [
-    '''
+    ('agent_active_view', '''
     CREATE OR REPLACE VIEW agent_active_view AS
         SELECT a.*, at.type_key, at.type_label
         FROM agent a
         JOIN agent_type at ON a.agent_type_id = at.type_id
         WHERE a.status = 'active'
-    ''',
+    '''),
+    ('agent_function_view', '''
+    CREATE OR REPLACE VIEW agent_function_view AS
+        SELECT af.*, a.agent_name, a.agent_uri, a.status AS agent_status
+        FROM agent_function af
+        JOIN agent a ON af.agent_id = a.agent_id
+        WHERE af.status = 'active' AND a.status = 'active'
+    '''),
 ]
 
 # ---------------------------------------------------------------------------
@@ -209,12 +240,12 @@ async def run_create(pool: asyncpg.Pool, dry_run: bool):
             print(f"  ✅ seed: {type_key}")
 
     # Views
-    for view_sql in VIEWS:
+    for view_name, view_sql in VIEWS:
         if dry_run:
-            print(f"  [DRY RUN] view: agent_active_view")
+            print(f"  [DRY RUN] view: {view_name}")
         else:
             await pool.execute(view_sql)
-            print(f"  ✅ view: agent_active_view")
+            print(f"  ✅ view: {view_name}")
 
     total = len(TABLES) + len(INDEXES) + len(SEED_AGENT_TYPES) + len(VIEWS)
     if dry_run:
@@ -227,7 +258,7 @@ async def run_create(pool: asyncpg.Pool, dry_run: bool):
 # Status
 # ---------------------------------------------------------------------------
 
-AGENT_TABLES = ['agent_type', 'agent', 'agent_endpoint', 'agent_change_log']
+AGENT_TABLES = ['agent_type', 'agent', 'agent_endpoint', 'agent_function', 'agent_change_log']
 
 async def check_status(pool: asyncpg.Pool):
     """Show current agent registry schema status."""
@@ -255,7 +286,7 @@ async def check_status(pool: asyncpg.Pool):
     # Check indexes
     print()
     idx_rows = await pool.fetch(
-        "SELECT indexname FROM pg_indexes WHERE tablename IN ('agent', 'agent_type', 'agent_endpoint', 'agent_change_log') ORDER BY indexname"
+        "SELECT indexname FROM pg_indexes WHERE tablename IN ('agent', 'agent_type', 'agent_endpoint', 'agent_function', 'agent_change_log') ORDER BY indexname"
     )
     if idx_rows:
         print(f"  Indexes ({len(idx_rows)}):")
