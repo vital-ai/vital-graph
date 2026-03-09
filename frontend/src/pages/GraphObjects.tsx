@@ -20,8 +20,15 @@ import {
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
 import { HiSearch } from 'react-icons/hi';
-import { type Space, type Graph } from '../mock';
-import { type RDFObject } from '../mock/objects';
+
+interface RDFObject {
+  id: number;
+  object_uri: string;
+  object_type: string;
+  rdf_type: string;
+  properties_count: number;
+  last_modified: string;
+}
 
 const GraphObjects: React.FC = () => {
   const navigate = useNavigate();
@@ -29,9 +36,7 @@ const GraphObjects: React.FC = () => {
   // Get shared state from parent ObjectsLayout
   const context = useOutletContext<{
     selectedSpace: string;
-    selectedGraph: number | '';
-    spaces: Space[];
-    graphs: Graph[];
+    selectedGraph: string;
     spacesLoading: boolean;
     graphsLoading: boolean;
     error: string | null;
@@ -41,8 +46,7 @@ const GraphObjects: React.FC = () => {
   const {
     selectedSpace = '',
     selectedGraph = '',
-    graphs = [],
-    spacesLoading = true
+    spacesLoading = true,
   } = context || {};
 
   // Local state management
@@ -55,6 +59,7 @@ const GraphObjects: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
   const [objectToDelete, setObjectToDelete] = useState<RDFObject | null>(null);
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   // No longer need navigation logic - handled by parent ObjectsLayout
 
@@ -62,15 +67,13 @@ const GraphObjects: React.FC = () => {
 
   // Fetch objects for selected space and graph
   const fetchObjects = useCallback(async () => {
-    if (!selectedSpace || selectedGraph === '') return;
+    if (!selectedSpace || !selectedGraph) return;
     
     try {
       setLoading(true);
       setError('');
       
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-      const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
+      const graphUri = selectedGraph;
       
       console.log('Fetching objects for space:', selectedSpace, 'graph:', graphUri);
       
@@ -87,43 +90,47 @@ const GraphObjects: React.FC = () => {
       const data = response.data;
       console.log('Objects API response:', data);
       
-      // Transform the JSON-LD objects to our RDFObject interface
-      const transformedObjects: RDFObject[] = [];
+      // API returns QuadResponse: { results: [{s, p, o, g}, ...], total_count, page_size, offset }
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
       
-      if (data.objects && data.objects['@graph'] && Array.isArray(data.objects['@graph'])) {
-        data.objects['@graph'].forEach((obj: any, index: number) => {
-          const objectUri = obj['@id'] || obj.URI || `unknown-${index}`;
-          const rdfType = obj['@type'] || obj.vitaltype || 'Unknown';
-          
-          transformedObjects.push({
-            id: index,
-            space_id: selectedSpace,
-            graph_id: typeof selectedGraph === 'number' ? selectedGraph : 0,
-            object_uri: objectUri,
-            object_type: obj['@type']?.includes('Edge') ? 'Edge' : 'Node', // Detect Edge types
-            rdf_type: rdfType,
-            subject: objectUri, // Use object URI as subject for now
-            predicate: obj.predicate || 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-            object: rdfType,
-            context: String(graphUri),
-            created_time: obj.created_time || obj.createdTime || new Date().toISOString(),
-            last_modified: obj.last_modified || obj.lastModified || obj.updated_time || new Date().toISOString(),
-            properties_count: Object.keys(obj).length - 2, // Subtract @id and @type from count
-            properties: [] // We could populate this from the JSON-LD object properties
-          });
+      // Group quads by subject to form objects
+      const subjectMap = new Map<string, { predicates: Map<string, string[]> }>();
+      for (const quad of quads) {
+        const subj = quad.s.replace(/^<|>$/g, ''); // strip angle brackets
+        if (!subjectMap.has(subj)) {
+          subjectMap.set(subj, { predicates: new Map() });
+        }
+        const entry = subjectMap.get(subj)!;
+        const pred = quad.p.replace(/^<|>$/g, '');
+        if (!entry.predicates.has(pred)) {
+          entry.predicates.set(pred, []);
+        }
+        entry.predicates.get(pred)!.push(quad.o);
+      }
+      
+      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+      const transformedObjects: RDFObject[] = [];
+      let idx = 0;
+      for (const [subjectUri, { predicates }] of subjectMap) {
+        const typeValues = predicates.get(RDF_TYPE) || [];
+        const rdfType = typeValues.length > 0
+          ? typeValues[0].replace(/^<|>$/g, '')
+          : 'Unknown';
+        
+        transformedObjects.push({
+          id: idx++,
+          object_uri: subjectUri,
+          object_type: rdfType.toLowerCase().includes('edge') ? 'Edge' : 'Node',
+          rdf_type: rdfType,
+          last_modified: new Date().toISOString(),
+          properties_count: predicates.size,
         });
-      } else {
-        console.log('No objects found in API response or unexpected data structure:', data);
       }
       
       setObjects(transformedObjects);
       setError(null);
-      
-      // Update pagination info if available
-      if (data.total_count !== undefined) {
-        // We can use this for more accurate pagination in the future
-        console.log(`Total objects: ${data.total_count}, showing ${transformedObjects.length}`);
-      }
+      setTotalCount(data.total_count ?? transformedObjects.length);
+      console.log(`Total objects: ${data.total_count}, showing ${transformedObjects.length}`);
       
     } catch (err) {
       console.error('Error fetching objects:', err);
@@ -132,7 +139,7 @@ const GraphObjects: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, graphs, itemsPerPage, currentPage]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage]);
 
   // Filter objects based on search term
   useEffect(() => {
@@ -151,11 +158,14 @@ const GraphObjects: React.FC = () => {
     setCurrentPage(1);
   }, [fetchObjects]);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredObjects.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const currentObjects = filteredObjects.slice(startIndex, endIndex);
+  // Pagination — server-side when not filtering, client-side when searching
+  const isSearching = searchTerm.length > 0;
+  const totalPages = isSearching
+    ? Math.ceil(filteredObjects.length / itemsPerPage)
+    : Math.ceil(totalCount / itemsPerPage);
+  const currentObjects = isSearching
+    ? filteredObjects.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+    : filteredObjects;
 
   // Utility functions
   const extractLocalName = (uri: string): string => {
@@ -179,13 +189,11 @@ const GraphObjects: React.FC = () => {
     <>
 
       {/* Add Object Button */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <Button 
             onClick={() => {
-              const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-              const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/objects/new?mode=create`);
+              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/new?mode=create`);
             }} 
             color="blue"
           >
@@ -196,7 +204,7 @@ const GraphObjects: React.FC = () => {
       )}
 
       {/* Search and Filter */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1">
@@ -241,7 +249,7 @@ const GraphObjects: React.FC = () => {
         </div>
       )}
       
-      {selectedSpace && selectedGraph === '' && graphs.length > 0 && (
+      {selectedSpace && !selectedGraph && (
         <div className="text-center py-12">
           <div className="text-gray-500 dark:text-gray-400">
             <p className="text-lg mb-2">Select a graph to view graph objects</p>
@@ -251,7 +259,7 @@ const GraphObjects: React.FC = () => {
       )}
 
       {/* Loading Spinner */}
-      {selectedSpace && selectedGraph !== '' && loading && (
+      {selectedSpace && selectedGraph && loading && (
         <div className="mt-8 flex justify-center">
           <Spinner size="lg" />
           <span className="ml-2 text-gray-600 dark:text-gray-400">Loading graph objects...</span>
@@ -265,14 +273,14 @@ const GraphObjects: React.FC = () => {
       )}
 
       {/* Objects Table */}
-      {selectedSpace && selectedGraph !== '' && !loading && filteredObjects.length === 0 && !error ? (
+      {selectedSpace && selectedGraph && !loading && filteredObjects.length === 0 && !error ? (
         <Alert color="info">
           {searchTerm ? 
             `No graph objects found matching "${searchTerm}". Try a different search term.` :
             'No graph objects found in this graph. Add your first object to get started.'
           }
         </Alert>
-      ) : selectedSpace && selectedGraph !== '' && !loading && currentObjects.length > 0 && (
+      ) : selectedSpace && selectedGraph && !loading && currentObjects.length > 0 && (
         <>
           <div className="overflow-x-auto">
             <Table>
@@ -319,9 +327,7 @@ const GraphObjects: React.FC = () => {
                           size="xs"
                           color="blue"
                           onClick={() => {
-                            const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-                            const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/objects/${encodeURIComponent(obj.object_uri)}`);
+                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/${encodeURIComponent(obj.object_uri)}`);
                           }}
                         >
                           <HiEye className="h-3 w-3" />

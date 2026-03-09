@@ -9,10 +9,10 @@ from __future__ import annotations
 from functools import singledispatch
 from typing import Optional, List
 
-from .jena_types import (
+from .jena_sparql.jena_types import (
     VarNode, URINode, LiteralNode, BNodeNode,
     ExprVar, ExprValue, ExprFunction, ExprAggregator, Expr,
-    SortCondition,
+    SortCondition, GroupVar,
     OpBGP, OpJoin, OpLeftJoin, OpUnion, OpFilter,
     OpProject, OpSlice, OpDistinct, OpReduced, OpOrder,
     OpGroup, OpExtend, OpTable, OpMinus, OpGraph,
@@ -245,20 +245,41 @@ def _map_agg_expr(raw) -> Optional[Expr]:
 def _collect_group(op: OpGroup, space_id: str, aliases: AliasGenerator,
                     graph_uri: str = None) -> RelationPlan:
     inner = collect(op.sub_op, space_id, aliases, graph_uri)
-    inner.group_by = list(op.group_vars)
+
+    # Extract variable names and optional defining expressions from GroupVar objects
+    var_names = []
+    expr_map = {}
+    for gv in op.group_vars:
+        if isinstance(gv, GroupVar):
+            var_names.append(gv.var)
+            if gv.expr is not None:
+                expr_map[gv.var] = gv.expr
+        else:
+            # Backward compat: plain string (shouldn't happen with new mapper)
+            var_names.append(gv)
+    inner.group_by = var_names
+    if expr_map:
+        inner.group_by_exprs = expr_map
+
     if op.aggregators:
         aggs = {}
         for a in op.aggregators:
             var = a.get('var')
             agg_dict = a.get('aggregator', {})
             if var and agg_dict:
-                # Build an ExprAggregator from the raw dict
-                agg_expr_raw = agg_dict.get('expr')
-                agg_inner = _map_agg_expr(agg_expr_raw) if agg_expr_raw else None
+                # Aggregator inner expressions are now pre-mapped by the AST mapper.
+                # They arrive as Expr objects (or None), not raw dicts.
+                agg_expr = agg_dict.get('expr')
+                if agg_expr is not None and not isinstance(
+                    agg_expr, (ExprVar, ExprValue, ExprFunction, ExprAggregator)
+                ):
+                    # Fallback: try the legacy _map_agg_expr for unmapped dicts
+                    agg_expr = _map_agg_expr(agg_expr)
                 aggs[var] = ExprAggregator(
                     name=agg_dict.get('name', 'COUNT'),
                     distinct=agg_dict.get('distinct', False),
-                    expr=agg_inner,
+                    expr=agg_expr,
+                    separator=agg_dict.get('separator'),
                 )
         inner.aggregates = aggs
     return inner

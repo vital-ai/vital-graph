@@ -115,6 +115,22 @@ class VitalGraphConfig:
                     'password': self._get_profile_env('KEYCLOAK_PASSWORD', '')
                 }
             },
+            'sparql_sql': {
+                'database': {
+                    'host': self._get_profile_env('DB_HOST', 'localhost'),
+                    'port': int(self._get_profile_env('DB_PORT', '5432')),
+                    'database': self._get_profile_env('DB_NAME', 'sparql_sql_graph'),
+                    'username': self._get_profile_env('DB_USERNAME', 'postgres'),
+                    'password': self._get_profile_env('DB_PASSWORD', ''),
+                    'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                    'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
+                    'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
+                    'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600'))
+                },
+                'sidecar': {
+                    'url': self._get_profile_env('SIDECAR_URL', 'http://localhost:7070'),
+                }
+            },
             'fuseki_postgresql': {
                 'database': {
                     'host': self._get_profile_env('DB_HOST', 'localhost'),
@@ -291,6 +307,16 @@ class VitalGraphConfig:
             Dictionary containing Fuseki configuration
         """
         return self.config_data.get('fuseki', {})
+    
+    def get_sparql_sql_config(self) -> Dict[str, Any]:
+        """
+        Get sparql_sql backend configuration section.
+        
+        Returns:
+            Dictionary containing sparql_sql configuration
+                (database + sidecar sub-dicts)
+        """
+        return self.config_data.get('sparql_sql', {})
     
     def get_fuseki_postgresql_config(self) -> Dict[str, Any]:
         """

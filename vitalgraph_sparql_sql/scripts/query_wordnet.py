@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -313,6 +314,297 @@ QUERIES = [
     },
 
     # ======================================================================
+    # 7. Multi-hop pathway — stress test for deep graph traversals
+    # ======================================================================
+    {
+        "label": "7a. Multi-hop pathway: a→b→c→d→e from 'happy'",
+        "sparql": f"""
+            SELECT ?aName ?rel1 ?bName ?rel2 ?cName ?rel3 ?dName ?rel4 ?eName WHERE {{
+                ?a <{RDF_TYPE}> <{HALEY_KG_ENTITY}> .
+                ?a <{VITAL_NAME}> ?aName .
+                FILTER(CONTAINS(?aName, "happy"))
+
+                ?srcSlot1 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot1 <{HALEY_SLOT_VALUE}> ?a .
+                ?srcEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?srcEdge1 <{VITAL_EDGE_DST}> ?srcSlot1 .
+                ?frame1 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame1 <{HALEY_FRAME_TYPE_DESC}> ?rel1 .
+                ?dstSlot1 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot1 <{HALEY_SLOT_VALUE}> ?b .
+                ?dstEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?dstEdge1 <{VITAL_EDGE_DST}> ?dstSlot1 .
+                ?b <{VITAL_NAME}> ?bName .
+
+                ?srcSlot2 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot2 <{HALEY_SLOT_VALUE}> ?b .
+                ?srcEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?srcEdge2 <{VITAL_EDGE_DST}> ?srcSlot2 .
+                ?frame2 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame2 <{HALEY_FRAME_TYPE_DESC}> ?rel2 .
+                ?dstSlot2 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot2 <{HALEY_SLOT_VALUE}> ?c .
+                ?dstEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?dstEdge2 <{VITAL_EDGE_DST}> ?dstSlot2 .
+                ?c <{VITAL_NAME}> ?cName .
+
+                ?srcSlot3 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot3 <{HALEY_SLOT_VALUE}> ?c .
+                ?srcEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?srcEdge3 <{VITAL_EDGE_DST}> ?srcSlot3 .
+                ?frame3 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame3 <{HALEY_FRAME_TYPE_DESC}> ?rel3 .
+                ?dstSlot3 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot3 <{HALEY_SLOT_VALUE}> ?d .
+                ?dstEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?dstEdge3 <{VITAL_EDGE_DST}> ?dstSlot3 .
+                ?d <{VITAL_NAME}> ?dName .
+
+                ?srcSlot4 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot4 <{HALEY_SLOT_VALUE}> ?d .
+                ?srcEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?srcEdge4 <{VITAL_EDGE_DST}> ?srcSlot4 .
+                ?frame4 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame4 <{HALEY_FRAME_TYPE_DESC}> ?rel4 .
+                ?dstSlot4 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot4 <{HALEY_SLOT_VALUE}> ?e .
+                ?dstEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?dstEdge4 <{VITAL_EDGE_DST}> ?dstSlot4 .
+                ?e <{VITAL_NAME}> ?eName .
+            }}
+        """,
+        "description": "4-hop pathway from 'happy' entities: a→b→c→d→e via 4 KGFrame traversals. "
+                       "~45 triple patterns → 45+ quad JOINs. Stress test for deep graph traversal.",
+    },
+    {
+        "label": "7b. Multi-hop pathway: hop 3 = Hyponym only",
+        "sparql": f"""
+            SELECT ?aName ?rel1 ?bName ?rel2 ?cName ?rel3 ?dName ?rel4 ?eName WHERE {{
+                ?a <{RDF_TYPE}> <{HALEY_KG_ENTITY}> .
+                ?a <{VITAL_NAME}> ?aName .
+                FILTER(CONTAINS(?aName, "happy"))
+
+                ?srcSlot1 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot1 <{HALEY_SLOT_VALUE}> ?a .
+                ?srcEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?srcEdge1 <{VITAL_EDGE_DST}> ?srcSlot1 .
+                ?frame1 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame1 <{HALEY_FRAME_TYPE_DESC}> ?rel1 .
+                ?dstSlot1 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot1 <{HALEY_SLOT_VALUE}> ?b .
+                ?dstEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?dstEdge1 <{VITAL_EDGE_DST}> ?dstSlot1 .
+                ?b <{VITAL_NAME}> ?bName .
+
+                ?srcSlot2 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot2 <{HALEY_SLOT_VALUE}> ?b .
+                ?srcEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?srcEdge2 <{VITAL_EDGE_DST}> ?srcSlot2 .
+                ?frame2 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame2 <{HALEY_FRAME_TYPE_DESC}> ?rel2 .
+                ?dstSlot2 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot2 <{HALEY_SLOT_VALUE}> ?c .
+                ?dstEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?dstEdge2 <{VITAL_EDGE_DST}> ?dstSlot2 .
+                ?c <{VITAL_NAME}> ?cName .
+
+                ?srcSlot3 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot3 <{HALEY_SLOT_VALUE}> ?c .
+                ?srcEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?srcEdge3 <{VITAL_EDGE_DST}> ?srcSlot3 .
+                ?frame3 <{HALEY_FRAME_TYPE}> <urn:Edge_WordnetHyponym> .
+                ?frame3 <{HALEY_FRAME_TYPE_DESC}> ?rel3 .
+                ?dstSlot3 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot3 <{HALEY_SLOT_VALUE}> ?d .
+                ?dstEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?dstEdge3 <{VITAL_EDGE_DST}> ?dstSlot3 .
+                ?d <{VITAL_NAME}> ?dName .
+
+                ?srcSlot4 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot4 <{HALEY_SLOT_VALUE}> ?d .
+                ?srcEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?srcEdge4 <{VITAL_EDGE_DST}> ?srcSlot4 .
+                ?frame4 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame4 <{HALEY_FRAME_TYPE_DESC}> ?rel4 .
+                ?dstSlot4 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot4 <{HALEY_SLOT_VALUE}> ?e .
+                ?dstEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?dstEdge4 <{VITAL_EDGE_DST}> ?dstSlot4 .
+                ?e <{VITAL_NAME}> ?eName .
+            }}
+        """,
+        "description": "4-hop pathway with hop 3 constrained to Hyponym edges. "
+                       "Tests selective edge-type filtering in deep traversals.",
+    },
+    {
+        "label": "7c. Multi-hop: last entity = VerbSynsetNode",
+        "sparql": f"""
+            SELECT ?aName ?rel1 ?bName ?rel2 ?cName ?rel3 ?dName ?rel4 ?eName WHERE {{
+                ?a <{RDF_TYPE}> <{HALEY_KG_ENTITY}> .
+                ?a <{VITAL_NAME}> ?aName .
+                FILTER(CONTAINS(?aName, "happy"))
+                ?e <{HALEY_ENTITY_TYPE}> <urn:VerbSynsetNode> .
+
+                ?srcSlot1 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot1 <{HALEY_SLOT_VALUE}> ?a .
+                ?srcEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?srcEdge1 <{VITAL_EDGE_DST}> ?srcSlot1 .
+                ?frame1 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame1 <{HALEY_FRAME_TYPE_DESC}> ?rel1 .
+                ?dstSlot1 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot1 <{HALEY_SLOT_VALUE}> ?b .
+                ?dstEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?dstEdge1 <{VITAL_EDGE_DST}> ?dstSlot1 .
+                ?b <{VITAL_NAME}> ?bName .
+
+                ?srcSlot2 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot2 <{HALEY_SLOT_VALUE}> ?b .
+                ?srcEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?srcEdge2 <{VITAL_EDGE_DST}> ?srcSlot2 .
+                ?frame2 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame2 <{HALEY_FRAME_TYPE_DESC}> ?rel2 .
+                ?dstSlot2 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot2 <{HALEY_SLOT_VALUE}> ?c .
+                ?dstEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?dstEdge2 <{VITAL_EDGE_DST}> ?dstSlot2 .
+                ?c <{VITAL_NAME}> ?cName .
+
+                ?srcSlot3 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot3 <{HALEY_SLOT_VALUE}> ?c .
+                ?srcEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?srcEdge3 <{VITAL_EDGE_DST}> ?srcSlot3 .
+                ?frame3 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame3 <{HALEY_FRAME_TYPE_DESC}> ?rel3 .
+                ?dstSlot3 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot3 <{HALEY_SLOT_VALUE}> ?d .
+                ?dstEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?dstEdge3 <{VITAL_EDGE_DST}> ?dstSlot3 .
+                ?d <{VITAL_NAME}> ?dName .
+
+                ?srcSlot4 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot4 <{HALEY_SLOT_VALUE}> ?d .
+                ?srcEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?srcEdge4 <{VITAL_EDGE_DST}> ?srcSlot4 .
+                ?frame4 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame4 <{HALEY_FRAME_TYPE_DESC}> ?rel4 .
+                ?dstSlot4 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot4 <{HALEY_SLOT_VALUE}> ?e .
+                ?dstEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?dstEdge4 <{VITAL_EDGE_DST}> ?dstSlot4 .
+                ?e <{VITAL_NAME}> ?eName .
+            }}
+        """,
+        "description": "4-hop pathway with last entity constrained to VerbSynsetNode. "
+                       "Tests entity-type filtering at the endpoint of a deep traversal.",
+    },
+    {
+        "label": "7d. Multi-hop reversed SPARQL order, e = VerbSynset",
+        "sparql": f"""
+            SELECT ?aName ?rel1 ?bName ?rel2 ?cName ?rel3 ?dName ?rel4 ?eName WHERE {{
+                ?e <{HALEY_ENTITY_TYPE}> <urn:VerbSynsetNode> .
+                ?e <{VITAL_NAME}> ?eName .
+
+                ?srcSlot4 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot4 <{HALEY_SLOT_VALUE}> ?d .
+                ?srcEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?srcEdge4 <{VITAL_EDGE_DST}> ?srcSlot4 .
+                ?frame4 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame4 <{HALEY_FRAME_TYPE_DESC}> ?rel4 .
+                ?dstSlot4 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot4 <{HALEY_SLOT_VALUE}> ?e .
+                ?dstEdge4 <{VITAL_EDGE_SRC}> ?frame4 .
+                ?dstEdge4 <{VITAL_EDGE_DST}> ?dstSlot4 .
+                ?d <{VITAL_NAME}> ?dName .
+
+                ?srcSlot3 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot3 <{HALEY_SLOT_VALUE}> ?c .
+                ?srcEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?srcEdge3 <{VITAL_EDGE_DST}> ?srcSlot3 .
+                ?frame3 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame3 <{HALEY_FRAME_TYPE_DESC}> ?rel3 .
+                ?dstSlot3 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot3 <{HALEY_SLOT_VALUE}> ?d .
+                ?dstEdge3 <{VITAL_EDGE_SRC}> ?frame3 .
+                ?dstEdge3 <{VITAL_EDGE_DST}> ?dstSlot3 .
+                ?c <{VITAL_NAME}> ?cName .
+
+                ?srcSlot2 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot2 <{HALEY_SLOT_VALUE}> ?b .
+                ?srcEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?srcEdge2 <{VITAL_EDGE_DST}> ?srcSlot2 .
+                ?frame2 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame2 <{HALEY_FRAME_TYPE_DESC}> ?rel2 .
+                ?dstSlot2 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot2 <{HALEY_SLOT_VALUE}> ?c .
+                ?dstEdge2 <{VITAL_EDGE_SRC}> ?frame2 .
+                ?dstEdge2 <{VITAL_EDGE_DST}> ?dstSlot2 .
+                ?b <{VITAL_NAME}> ?bName .
+
+                ?srcSlot1 <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                ?srcSlot1 <{HALEY_SLOT_VALUE}> ?a .
+                ?srcEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?srcEdge1 <{VITAL_EDGE_DST}> ?srcSlot1 .
+                ?frame1 <{RDF_TYPE}> <{HALEY_KG_FRAME}> .
+                ?frame1 <{HALEY_FRAME_TYPE_DESC}> ?rel1 .
+                ?dstSlot1 <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                ?dstSlot1 <{HALEY_SLOT_VALUE}> ?b .
+                ?dstEdge1 <{VITAL_EDGE_SRC}> ?frame1 .
+                ?dstEdge1 <{VITAL_EDGE_DST}> ?dstSlot1 .
+
+                ?a <{RDF_TYPE}> <{HALEY_KG_ENTITY}> .
+                ?a <{VITAL_NAME}> ?aName .
+                FILTER(CONTAINS(?aName, "happy"))
+            }}
+        """,
+        "description": "Same edges as 7c but SPARQL patterns listed in reverse order "
+                       "(hop 4 first, hop 1 last). Must produce identical row count to 7c.",
+    },
+
+    {
+        "label": "7e. Happy frame query (mirrors happy_frame_query_17.sql)",
+        "sparql": f"""
+            SELECT ?entity ?frame ?srcEntity ?dstEntity WHERE {{
+                {{
+                    ?srcEntity <{HALEY_KG_DESC}> ?srcDesc .
+                    FILTER(REGEX(?srcDesc, "(^|\\\\W)happy(\\\\W|$)", "i"))
+                    FILTER(?srcEntity != ?dstEntity)
+
+                    ?srcSlot <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                    ?srcSlot <{HALEY_SLOT_VALUE}> ?srcEntity .
+                    ?srcEdge <{VITAL_EDGE_SRC}> ?frame .
+                    ?srcEdge <{VITAL_EDGE_DST}> ?srcSlot .
+                    ?dstSlot <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                    ?dstSlot <{HALEY_SLOT_VALUE}> ?dstEntity .
+                    ?dstEdge <{VITAL_EDGE_SRC}> ?frame .
+                    ?dstEdge <{VITAL_EDGE_DST}> ?dstSlot .
+                    BIND(?srcEntity AS ?entity)
+                }}
+                UNION
+                {{
+                    ?dstEntity <{HALEY_KG_DESC}> ?dstDesc .
+                    FILTER(REGEX(?dstDesc, "(^|\\\\W)happy(\\\\W|$)", "i"))
+                    FILTER(?srcEntity != ?dstEntity)
+
+                    ?srcSlot <{HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
+                    ?srcSlot <{HALEY_SLOT_VALUE}> ?srcEntity .
+                    ?srcEdge <{VITAL_EDGE_SRC}> ?frame .
+                    ?srcEdge <{VITAL_EDGE_DST}> ?srcSlot .
+                    ?dstSlot <{HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
+                    ?dstSlot <{HALEY_SLOT_VALUE}> ?dstEntity .
+                    ?dstEdge <{VITAL_EDGE_SRC}> ?frame .
+                    ?dstEdge <{VITAL_EDGE_DST}> ?dstSlot .
+                    BIND(?dstEntity AS ?entity)
+                }}
+            }}
+            ORDER BY ?entity
+            LIMIT 500
+        """,
+        "description": "SPARQL equivalent of happy_frame_query_17.sql: find frames where "
+                       "source OR dest has 'happy' in description, srcEntity != dstEntity. "
+                       "UNION: arm 1 = source is happy, arm 2 = dest is happy.",
+    },
+
+    # ======================================================================
     # 6. ASK / CONSTRUCT
     # ======================================================================
     {
@@ -432,26 +724,24 @@ def _format_rows(result, verbose: bool) -> list:
     return lines
 
 
-def _run_single_variant(space_id, sparql, opt_flag, db_mod):
-    """Run one variant (optimize on or off) with a fresh PG connection."""
+async def _run_single_variant(space_id, sparql, db_mod):
+    """Run a query via the async SparqlOrchestrator."""
     import psycopg
     from psycopg.rows import dict_row
 
-    opt_label = "optimize=ON" if opt_flag else "optimize=OFF"
-
-    with SparqlOrchestrator(space_id=space_id, optimize=opt_flag) as orch:
+    async with SparqlOrchestrator(space_id=space_id) as orch:
         # Get SQL (no execution)
-        sql_result = orch.execute(sparql, sql_only=True)
+        sql_result = await orch.execute(sparql, sql_only=True)
         if not sql_result.ok:
-            return None, opt_label, sql_result.error
+            return None, sql_result.error
 
         # Execute with timing
         t0 = time.monotonic()
-        result = orch.execute(sparql, include_sql=True)
+        result = await orch.execute(sparql, include_sql=True)
         wall_ms = (time.monotonic() - t0) * 1000
 
         if not result.ok:
-            return None, opt_label, result.error
+            return None, result.error
 
         # EXPLAIN ANALYZE on a fresh connection to avoid cache effects
         conn_params = db_mod.get_connection_params()
@@ -474,27 +764,19 @@ def _run_single_variant(space_id, sparql, opt_flag, db_mod):
             "result": result,
             "timing": ti,
             "explain_ms": _extract_explain_ms(explain_lines),
-        }, opt_label, None
+        }, None
 
 
-def run_queries(space_id: str, verbose: bool = False, selected: str = None,
-                optimize_mode: str = "both"):
+async def run_queries(space_id: str, verbose: bool = False, selected: str = None):
     """
-    Execute queries and compare optimizer OFF vs ON.
-
-    optimize_mode:
-      'off'  — run only with optimizer disabled (for cold-cache baseline)
-      'on'   — run only with optimizer enabled  (for cold-cache optimized)
-      'both' — run both back-to-back (warm-cache comparison)
+    Execute queries via the async SparqlOrchestrator and report timings.
     """
     from vitalgraph_sparql_sql import db
 
     passed = 0
     failed = 0
     errors = []
-    # (label, off_exec, on_exec, off_explain, on_explain, rows)
-    comparisons = []
-    single_results = []  # for single-mode summary
+    results_summary = []  # (label, rows, exec_ms, pg_exec_ms, pg_plan_ms, wall_ms)
 
     queries = QUERIES
     if selected:
@@ -505,26 +787,10 @@ def run_queries(space_id: str, verbose: bool = False, selected: str = None,
             print(f"Available: {', '.join(q['label'].split('.')[0] + '.' for q in QUERIES)}")
             return 1
 
-    # Warm the connection pool
-    with db.get_connection() as _:
-        pass
-
-    mode_desc = {"off": "optimize=OFF only", "on": "optimize=ON only", "both": "OFF vs ON comparison"}
     print("=" * 80)
-    print(f"WordNet KGFrames — SPARQL → SQL  [{mode_desc[optimize_mode]}]")
+    print(f"WordNet KGFrames — SPARQL → SQL v2")
     print(f"Space: {space_id}  |  Queries: {len(queries)}")
-    if optimize_mode == "both":
-        print(f"NOTE: Both variants share PG buffer cache. For cold-cache comparison,")
-        print(f"      run --optimize off  and  --optimize on  in separate invocations.")
     print("=" * 80)
-
-    # Determine which variants to run
-    if optimize_mode == "off":
-        variants = [False]
-    elif optimize_mode == "on":
-        variants = [True]
-    else:
-        variants = [False, True]
 
     for q in queries:
         label = q['label']
@@ -543,104 +809,54 @@ def run_queries(space_id: str, verbose: bool = False, selected: str = None,
         for line in sparql_clean.split('\n'):
             print(f"    {line}")
 
-        # Run variant(s)
-        run_data = {}
-        query_failed = False
-
-        for opt_flag in variants:
-            data, opt_label, err = _run_single_variant(space_id, sparql, opt_flag, db)
-            if err:
-                print(f"\n  FAILED ({opt_label}): {err}")
-                failed += 1
-                errors.append((label, err))
-                query_failed = True
-                break
-            run_data[opt_label] = data
-
-        if query_failed:
+        data, err = await _run_single_variant(space_id, sparql, db)
+        if err:
+            print(f"\n  FAILED: {err}")
+            failed += 1
+            errors.append((label, err))
             continue
 
         passed += 1
 
-        # ── Display results per variant ──────────────────────────────
-        for opt_label, d in run_data.items():
-            ti = d["timing"]
-            ex = d["explain_ms"]
-            print(f"\n  {opt_label}:")
-            print(f"    SQL: {len(d['sql'])} chars")
-            print(f"    Execute: {ti['execute_ms']:.0f}ms  (wall: {ti['wall_ms']:.0f}ms, gen: {ti['generate_ms']:.0f}ms, opt: {ti['optimize_ms']:.1f}ms)")
-            print(f"    EXPLAIN:  PG planning={ex['planning_ms']:.1f}ms  PG execution={ex['execution_ms']:.1f}ms")
+        ti = data["timing"]
+        ex = data["explain_ms"]
+        print(f"\n  SQL: {len(data['sql'])} chars")
+        print(f"  Execute: {ti['execute_ms']:.0f}ms  (wall: {ti['wall_ms']:.0f}ms, gen: {ti['generate_ms']:.0f}ms)")
+        print(f"  EXPLAIN:  PG planning={ex['planning_ms']:.1f}ms  PG execution={ex['execution_ms']:.1f}ms")
 
-            if verbose:
-                print(f"    SQL:")
-                for line in format_sql(d["sql"]).split('\n'):
-                    print(f"      {line}")
-                print(f"    Full EXPLAIN:")
-                for line in d["explain"]:
-                    print(f"      {line}")
+        if verbose:
+            print(f"  SQL:")
+            for line in format_sql(data["sql"]).split('\n'):
+                print(f"    {line}")
+            print(f"  Full EXPLAIN:")
+            for line in data["explain"]:
+                print(f"    {line}")
 
-        # Show result rows from last variant
-        last_d = list(run_data.values())[-1]
-        for line in _format_rows(last_d["result"], verbose):
+        for line in _format_rows(data["result"], verbose):
             print(line)
 
-        rows = last_d["result"].row_count
-
-        # Collect for summary
-        if optimize_mode == "both":
-            off = run_data["optimize=OFF"]
-            on = run_data["optimize=ON"]
-            comparisons.append((
-                label, rows,
-                off["timing"]["execute_ms"], on["timing"]["execute_ms"],
-                off["explain_ms"]["execution_ms"], on["explain_ms"]["execution_ms"],
-            ))
-        else:
-            d = list(run_data.values())[0]
-            single_results.append((
-                label, rows,
-                d["timing"]["execute_ms"],
-                d["explain_ms"]["execution_ms"],
-                d["timing"]["wall_ms"],
-            ))
+        rows = data["result"].row_count
+        results_summary.append((
+            label, rows,
+            ti["execute_ms"], ex["execution_ms"], ex["planning_ms"], ti["wall_ms"],
+        ))
 
     # ── Summary table ───────────────────────────────────────────────────
-    if comparisons:
+    if results_summary:
         print(f"\n{'=' * 80}")
-        print("Optimizer Comparison Summary  (warm cache — both variants in same process)")
+        print(f"Timing Summary")
         print(f"{'=' * 80}")
-        print(f"  {'Query':<35} {'Rows':>5} {'Exec OFF':>9} {'Exec ON':>9} {'Spdup':>6} {'PG OFF':>9} {'PG ON':>9} {'Spdup':>6}")
-        print(f"  {'-'*35} {'-'*5} {'-'*9} {'-'*9} {'-'*6} {'-'*9} {'-'*9} {'-'*6}")
-        t_off_e = t_on_e = t_off_p = t_on_p = 0
-        for label, rows, off_e, on_e, off_p, on_p in comparisons:
-            short = label[:35]
-            sp_e = off_e / on_e if on_e > 0 else 0
-            sp_p = off_p / on_p if on_p > 0 else 0
-            print(f"  {short:<35} {rows:>5} {off_e:>8.0f}ms {on_e:>8.0f}ms {sp_e:>5.1f}x {off_p:>8.0f}ms {on_p:>8.0f}ms {sp_p:>5.1f}x")
-            t_off_e += off_e; t_on_e += on_e; t_off_p += off_p; t_on_p += on_p
-        sp_te = t_off_e / t_on_e if t_on_e > 0 else 0
-        sp_tp = t_off_p / t_on_p if t_on_p > 0 else 0
-        print(f"  {'-'*35} {'-'*5} {'-'*9} {'-'*9} {'-'*6} {'-'*9} {'-'*9} {'-'*6}")
-        print(f"  {'TOTAL':<35} {'':>5} {t_off_e:>8.0f}ms {t_on_e:>8.0f}ms {sp_te:>5.1f}x {t_off_p:>8.0f}ms {t_on_p:>8.0f}ms {sp_tp:>5.1f}x")
-        print(f"\n  Exec = Python-measured query time  |  PG = EXPLAIN ANALYZE Execution Time")
-
-    elif single_results:
-        opt_name = "ON" if optimize_mode == "on" else "OFF"
-        print(f"\n{'=' * 80}")
-        print(f"Timing Summary  (optimize={opt_name})")
-        print(f"{'=' * 80}")
-        print(f"  {'Query':<45} {'Rows':>5} {'Exec':>9} {'PG Exec':>9} {'Wall':>9}")
-        print(f"  {'-'*45} {'-'*5} {'-'*9} {'-'*9} {'-'*9}")
-        for label, rows, exec_ms, pg_ms, wall_ms in sorted(single_results, key=lambda t: t[2], reverse=True):
+        print(f"  {'Query':<45} {'Rows':>5} {'Exec':>9} {'PG Plan':>9} {'PG Exec':>9} {'Wall':>9}")
+        print(f"  {'-'*45} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9}")
+        for label, rows, exec_ms, pg_ms, plan_ms, wall_ms in sorted(results_summary, key=lambda t: t[5], reverse=True):
             short = label[:45]
-            print(f"  {short:<45} {rows:>5} {exec_ms:>8.0f}ms {pg_ms:>8.0f}ms {wall_ms:>8.0f}ms")
-        total_e = sum(r[2] for r in single_results)
-        total_p = sum(r[3] for r in single_results)
-        total_w = sum(r[4] for r in single_results)
-        print(f"  {'-'*45} {'-'*5} {'-'*9} {'-'*9} {'-'*9}")
-        print(f"  {'TOTAL':<45} {'':>5} {total_e:>8.0f}ms {total_p:>8.0f}ms {total_w:>8.0f}ms")
-        print(f"\n  Run with --optimize {'on' if optimize_mode == 'off' else 'off'} for the other variant.")
-        print(f"  Restart PostgreSQL between runs for cold-cache comparison.")
+            print(f"  {short:<45} {rows:>5} {exec_ms:>8.0f}ms {plan_ms:>8.1f}ms {pg_ms:>8.0f}ms {wall_ms:>8.0f}ms")
+        total_e = sum(r[2] for r in results_summary)
+        total_p = sum(r[3] for r in results_summary)
+        total_pl = sum(r[4] for r in results_summary)
+        total_w = sum(r[5] for r in results_summary)
+        print(f"  {'-'*45} {'-'*5} {'-'*9} {'-'*9} {'-'*9} {'-'*9}")
+        print(f"  {'TOTAL':<45} {'':>5} {total_e:>8.0f}ms {total_pl:>8.1f}ms {total_p:>8.0f}ms {total_w:>8.0f}ms")
 
     # Summary
     print(f"\n{'=' * 80}")
@@ -667,10 +883,6 @@ def main():
                         help="Show more result rows and full SQL/EXPLAIN")
     parser.add_argument("-q", "--query", default=None,
                         help="Run only queries starting with these prefixes (comma-separated, e.g. '1a,3c')")
-    parser.add_argument("--optimize", default="both",
-                        choices=["on", "off", "both"],
-                        help="Run with optimizer on, off, or both for comparison (default: both). "
-                             "Use 'off' then 'on' in separate runs with PG restart for cold-cache comparison.")
     parser.add_argument("--log-level", default="WARNING",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                         help="Logging level for the SPARQL pipeline internals")
@@ -682,8 +894,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    sys.exit(run_queries(args.space, verbose=args.verbose, selected=args.query,
-                         optimize_mode=args.optimize))
+    sys.exit(asyncio.run(run_queries(args.space, verbose=args.verbose, selected=args.query)))
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ from ..model.kgrelations_model import (
 from ..kg_impl.kgrelations_create_impl import KGRelationsCreateProcessor, OperationMode as CreateOperationMode
 from ..kg_impl.kgrelations_read_impl import KGRelationsReadProcessor
 from ..kg_impl.kgrelations_delete_impl import KGRelationsDeleteProcessor
-from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from ..kg_impl.kg_backend_utils import create_backend_adapter
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -177,7 +177,7 @@ class KGRelationsEndpoint:
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
             
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
             read_processor = KGRelationsReadProcessor(backend)
             
             triples, total_count = await read_processor.list_relations(
@@ -223,7 +223,7 @@ class KGRelationsEndpoint:
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
             
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
             read_processor = KGRelationsReadProcessor(backend)
             
             triples = await read_processor.get_relation_by_uri(space_id, graph_id, relation_uri)
@@ -276,7 +276,7 @@ class KGRelationsEndpoint:
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
 
             # Create processor
             create_processor = KGRelationsCreateProcessor(backend)
@@ -320,7 +320,7 @@ class KGRelationsEndpoint:
                 raise HTTPException(status_code=500, detail="Backend implementation not available")
             
             # Create backend adapter
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
             
             # Create delete processor
             delete_processor = KGRelationsDeleteProcessor(backend)
@@ -503,7 +503,7 @@ class KGRelationsEndpoint:
         if not backend_impl:
             return None
         
-        return FusekiPostgreSQLBackendAdapter(backend_impl)
+        return create_backend_adapter(backend_impl)
     
     async def _store_relations_in_space(self, space_id: str, graph_id: str, relations: List) -> List[str]:
         """Store relations in space and return created URIs."""

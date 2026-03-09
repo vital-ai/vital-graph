@@ -26,6 +26,21 @@ services:
     networks:
       - vitalgraph_network
 
+  sparql-compiler:
+    build:
+      context: ./vitalgraph-jena-sidecar
+      dockerfile: Dockerfile
+    container_name: vitalgraph-sparql-compiler
+    ports:
+      - "7070:7070"
+    environment:
+      - PORT=7070
+      - MAX_INPUT_SIZE=1048576
+      - REQUEST_TIMEOUT_MS=10000
+    restart: unless-stopped
+    networks:
+      - vitalgraph_network
+
   minio:
     image: minio/minio:latest
     container_name: vitalgraph-minio

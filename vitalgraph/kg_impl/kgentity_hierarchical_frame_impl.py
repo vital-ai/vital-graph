@@ -23,7 +23,7 @@ from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
 
 
 @dataclass
@@ -45,7 +45,7 @@ class KGEntityHierarchicalFrameProcessor:
     grouping URI management for hierarchical frame structures.
     """
     
-    def __init__(self, backend: FusekiPostgreSQLBackendAdapter, logger: logging.Logger):
+    def __init__(self, backend: KGBackendInterface, logger: logging.Logger):
         """
         Initialize the hierarchical frame processor.
         

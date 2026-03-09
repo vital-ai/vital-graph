@@ -20,7 +20,12 @@ import {
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
 import { HiSearch } from 'react-icons/hi';
-import { type Space, type Graph, type KGType } from '../mock';
+interface KGFrame {
+  uri: string;
+  rdf_type: string;
+  name: string;
+  properties_count: number;
+}
 
 const KGFrames: React.FC = () => {
   const navigate = useNavigate();
@@ -28,9 +33,7 @@ const KGFrames: React.FC = () => {
   // Get shared state from parent ObjectsLayout
   const context = useOutletContext<{
     selectedSpace: string;
-    selectedGraph: number | '';
-    spaces: Space[];
-    graphs: Graph[];
+    selectedGraph: string;
     spacesLoading: boolean;
     graphsLoading: boolean;
     error: string | null;
@@ -40,79 +43,79 @@ const KGFrames: React.FC = () => {
   const {
     selectedSpace = '',
     selectedGraph = '',
-    graphs = [],
-    spacesLoading = true
+    spacesLoading = true,
   } = context || {};
 
   // Local state management
-  const [frames, setFrames] = useState<KGType[]>([]);
-  const [filteredFrames, setFilteredFrames] = useState<KGType[]>([]);
+  const [frames, setFrames] = useState<KGFrame[]>([]);
+  const [filteredFrames, setFilteredFrames] = useState<KGFrame[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(10);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [frameToDelete, setFrameToDelete] = useState<KGType | null>(null);
+  const [frameToDelete, setFrameToDelete] = useState<KGFrame | null>(null);
 
   // Space and graph selection is now handled by parent ObjectsLayout
 
+  const [totalCount, setTotalCount] = useState<number>(0);
+
+  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
+  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
+
   // Fetch KG frames for selected space and graph
   const fetchFrames = useCallback(async () => {
-    if (!selectedSpace || selectedGraph === '') return;
+    if (!selectedSpace || !selectedGraph) return;
     
     try {
       setLoading(true);
-      setError('');
-      
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
-        setFrames([]);
-        return;
-      }
-      
-      // Make API call to fetch KG frames using axios (handles auth automatically)
-      console.log('Fetching frames for space:', selectedSpace, 'graph:', selectedGraphObj.graph_uri);
+      setError(null);
       
       const response = await axios.get('/api/graphs/kgframes', {
         params: {
           space_id: selectedSpace,
-          graph_id: selectedGraphObj.graph_uri,
+          graph_id: selectedGraph,
           page_size: itemsPerPage,
           offset: (currentPage - 1) * itemsPerPage
         }
       });
       
       const data = response.data;
-      console.log('KG Frames API response:', data);
+      // API returns QuadResponse: { results: [{s,p,o,g}], total_count, page_size, offset }
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
       
-      // Handle the response data structure - frames data is in data.frames
-      if (data.frames && data.frames['@graph'] && Array.isArray(data.frames['@graph'])) {
-        // Transform JSON-LD frames to KGType format
-        const transformedFrames = data.frames['@graph'].map((frame: any, index: number) => ({
-          id: index,
-          type_name: frame['@id'] || frame.URI || `frame-${index}`,
-          type_uri: frame['@id'] || frame.URI || '',
-          uri: frame['@id'] || frame.URI || '',
-          description: frame['http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription'] || 'No description',
-          created_at: frame.created_time || new Date().toISOString(),
-          updated_at: frame.last_modified || new Date().toISOString(),
-          space_id: selectedSpace,
-          graph_id: typeof selectedGraph === 'number' ? selectedGraph : 0,
-          properties: Object.keys(frame).filter(key => 
-            key !== '@context' && key !== '@id' && key !== '@type' && key !== 'URI'
-          )
-        }));
-        setFrames(transformedFrames);
-      } else if (Array.isArray(data.frames)) {
-        setFrames(data.frames);
-      } else if (Array.isArray(data)) {
-        setFrames(data);
-      } else {
-        setFrames([]);
+      // Group quads by subject
+      const subjectMap = new Map<string, Map<string, string[]>>();
+      for (const quad of quads) {
+        const subj = stripBrackets(quad.s);
+        if (!subjectMap.has(subj)) subjectMap.set(subj, new Map());
+        const preds = subjectMap.get(subj)!;
+        const pred = stripBrackets(quad.p);
+        if (!preds.has(pred)) preds.set(pred, []);
+        preds.get(pred)!.push(quad.o);
       }
+      
+      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+      const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
+      
+      const frames: KGFrame[] = [];
+      for (const [uri, preds] of subjectMap) {
+        const typeVals = preds.get(RDF_TYPE) || [];
+        const rdfType = typeVals.length > 0 ? stripBrackets(typeVals[0]) : 'Unknown';
+        const nameVals = preds.get(HAS_NAME) || [];
+        const name = nameVals.length > 0 ? stripLiteral(nameVals[0]) : uri.split(/[/#]/).pop() || uri;
+        
+        frames.push({
+          uri,
+          rdf_type: rdfType,
+          name,
+          properties_count: preds.size,
+        });
+      }
+      
+      setFrames(frames);
+      setTotalCount(data.total_count ?? frames.length);
     } catch (err) {
       console.error('Error fetching KG frames:', err);
       setError('Failed to load KG frames. Please try again later.');
@@ -120,7 +123,7 @@ const KGFrames: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, graphs, itemsPerPage, currentPage]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage]);
 
   // Set frames directly since filtering is done server-side
   useEffect(() => {
@@ -132,27 +135,18 @@ const KGFrames: React.FC = () => {
     // Reset pagination when component mounts or tab becomes active
     setCurrentPage(1);
   }, [fetchFrames]);
-  // For server-side pagination, use the frames directly (no slicing needed)
   const currentFrames = filteredFrames;
-  // TODO: Get total count from API response to calculate totalPages properly
-  const totalPages = Math.ceil(filteredFrames.length / itemsPerPage);
-
-  // Utility functions
-  const formatDateTime = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
-  };
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
 
   return (
     <>
 
       {/* Add Frame Button */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <Button 
             onClick={() => {
-              const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-              const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/frame/new?mode=create`);
+              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/new?mode=create`);
             }} 
             color="blue"
           >
@@ -163,7 +157,7 @@ const KGFrames: React.FC = () => {
       )}
 
       {/* Search and Filter */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1">
@@ -208,7 +202,7 @@ const KGFrames: React.FC = () => {
         </div>
       )}
       
-      {selectedSpace && selectedGraph === '' && graphs.length > 0 && (
+      {selectedSpace && !selectedGraph && (
         <div className="text-center py-12">
           <div className="text-gray-500 dark:text-gray-400">
             <p className="text-lg mb-2">Select a graph to view KG frames</p>
@@ -218,7 +212,7 @@ const KGFrames: React.FC = () => {
       )}
 
       {/* Loading Spinner */}
-      {selectedSpace && selectedGraph !== '' && loading && (
+      {selectedSpace && selectedGraph && loading && (
         <div className="mt-8 flex justify-center">
           <Spinner size="lg" />
           <span className="ml-2 text-gray-600 dark:text-gray-400">Loading KG frames...</span>
@@ -232,14 +226,14 @@ const KGFrames: React.FC = () => {
       )}
 
       {/* Frames Table */}
-      {selectedSpace && selectedGraph !== '' && !loading && filteredFrames.length === 0 && !error ? (
+      {selectedSpace && selectedGraph && !loading && filteredFrames.length === 0 && !error ? (
         <Alert color="info">
           {searchTerm ? 
             `No KG frames found matching "${searchTerm}". Try a different search term.` :
             'No KG frames found in this graph. Add your first frame to get started.'
           }
         </Alert>
-      ) : selectedSpace && selectedGraph !== '' && !loading && currentFrames.length > 0 && (
+      ) : selectedSpace && selectedGraph && !loading && currentFrames.length > 0 && (
         <>
           <div className="overflow-x-auto">
             <Table>
@@ -249,36 +243,32 @@ const KGFrames: React.FC = () => {
                   <TableHeadCell>RDF Type</TableHeadCell>
                   <TableHeadCell>Frame Type</TableHeadCell>
                   <TableHeadCell>Properties</TableHeadCell>
-                  <TableHeadCell>Last Modified</TableHeadCell>
                   <TableHeadCell>Actions</TableHeadCell>
                 </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {currentFrames.map((frame) => (
-                  <TableRow key={frame.id}>
+                  <TableRow key={frame.uri}>
                     <TableCell className="font-medium">
                       <div className="max-w-xs">
-                        <div className="font-mono text-sm text-blue-600 truncate">
-                          {frame.type_name}
+                        <div className="font-mono text-sm text-blue-600 truncate" title={frame.uri}>
+                          {frame.name}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
                           {frame.uri}
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {frame.type_uri}
+                    <TableCell className="font-mono text-sm truncate max-w-xs" title={frame.rdf_type}>
+                      {frame.rdf_type.split(/[/#]/).pop()}
                     </TableCell>
                     <TableCell>
                       <Badge color="purple">KG Frame</Badge>
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-gray-600 dark:text-gray-400">
-                        {frame.properties.length} properties
+                        {frame.properties_count} properties
                       </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-gray-600 dark:text-gray-400">
-                      {formatDateTime(frame.updated_at)}
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
@@ -286,9 +276,7 @@ const KGFrames: React.FC = () => {
                           size="xs"
                           color="blue"
                           onClick={() => {
-                            const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-                            const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/frame/${encodeURIComponent(frame.type_uri || frame.id?.toString() || '')}`);
+                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/${encodeURIComponent(frame.uri)}`);
                           }}
                         >
                           <HiEye className="h-3 w-3" />
@@ -335,7 +323,7 @@ const KGFrames: React.FC = () => {
           {frameToDelete && (
             <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded mb-6">
               <p className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                {frameToDelete.type_name}
+                {frameToDelete.name}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {frameToDelete.uri}
@@ -345,7 +333,7 @@ const KGFrames: React.FC = () => {
           <div className="flex justify-end gap-3">
             <Button 
               onClick={() => {
-                console.log('Deleting frame:', frameToDelete?.id);
+                console.log('Deleting frame:', frameToDelete?.uri);
                 setShowDeleteModal(false);
                 setFrameToDelete(null);
               }} 

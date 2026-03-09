@@ -25,7 +25,7 @@ from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 
 # Common utilities
 from vitalgraph.kg_impl.kg_backend_utils import (
-    FusekiPostgreSQLBackendAdapter,
+    KGBackendInterface,
     BackendOperationResult
 )
 
@@ -60,7 +60,7 @@ class KGFrameHierarchicalProcessor:
     
     async def create_child_frames(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         parent_frame_uri: str,
@@ -164,7 +164,7 @@ class KGFrameHierarchicalProcessor:
     
     async def _get_parent_graph_uri(
         self, 
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         parent_frame_uri: str

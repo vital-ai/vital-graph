@@ -295,3 +295,10 @@ lead_test_data_docs
 
 registry_output
 registry_generated_vectors
+
+# W3C DAWG SPARQL test suite (cloned separately)
+vitalgraph_sparql_sql/dawg_tests/
+
+jena-main-source
+
+

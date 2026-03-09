@@ -343,7 +343,7 @@ async def main():
         # STEP 11: KGQuery Entity Frame Queries
         # ====================================================================
         # Run frame-based entity queries (single and multi-frame)
-        kgquery_tester = KGQueryFrameQueriesTester(client)
+        kgquery_tester = KGQueryFrameQueriesTester(client, query_mode="direct")
         kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, 
                                                     created_entity_uris, created_event_uris, 
                                                     file_uris=file_uris)

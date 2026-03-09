@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Any
 
 from sqlglot import exp as E
 
-from .jena_types import Expr
+from .jena_sparql.jena_types import Expr
 
 PG_DIALECT = "postgres"
 
@@ -34,11 +34,32 @@ class AliasGenerator:
         self.resolved_constants: Dict[str, str] = {}
         # Graph lock: when set, every quad table is constrained to this context_uuid
         self.graph_uri: Optional[str] = None
+        # Predicate cardinality stats: (pred_uuid, obj_uuid) → row_count
+        # Loaded from {space}_rdf_stats materialized view.
+        # Used by _reorder_joins for selectivity-guided ordering.
+        self.quad_stats: Dict[Tuple[str, str], int] = {}
+        # Predicate-only stats: pred_uuid → row_count
+        self.pred_stats: Dict[str, int] = {}
+        # SPARQL→SQL variable name mapping: opaque sql_name → original sparql_name
+        # Built during final projection rename in generate_sql().
+        self.var_map: Dict[str, str] = {}
+        self._var_counter: int = 0
 
     def next(self, prefix: str = "q") -> str:
         n = self._counters.get(prefix, 0)
         self._counters[prefix] = n + 1
         return f"{self._alias_prefix}{prefix}{n}"
+
+    def next_var(self, sparql_name: str) -> str:
+        """Allocate an opaque SQL column name for a SPARQL variable.
+
+        Returns a lowercase name like 'v0', 'v1', ... and records the
+        mapping in ``self.var_map``.
+        """
+        sql_name = f"v{self._var_counter}"
+        self._var_counter += 1
+        self.var_map[sql_name] = sparql_name
+        return sql_name
 
     def register_constant(self, term_text: str, term_type: str) -> str:
         """Register a constant term lookup for CTE batching.
@@ -52,6 +73,14 @@ class AliasGenerator:
             self._const_counter += 1
             self.constants[key] = col
         return self.constants[key]
+
+
+@dataclass
+class SQLGenResult:
+    """Result of generate_sql(): SQL string + SPARQL↔SQL variable mapping."""
+    sql: str
+    var_map: Dict[str, str] = field(default_factory=dict)   # sql_name → sparql_name
+    sparql_vars: List[str] = field(default_factory=list)     # projection order
 
 
 # ===========================================================================
@@ -102,6 +131,7 @@ class RelationPlan:
     offset: int = 0
     order_by: Optional[List[Tuple[Any, str]]] = None  # [(var_or_Expr, "ASC"/"DESC")]
     group_by: Optional[List[str]] = None
+    group_by_exprs: Optional[Dict[str, Expr]] = None  # var → defining expr for GROUP BY (expr AS ?var)
     aggregates: Optional[Dict[str, Expr]] = None  # var → aggregate expr
     filter_exprs: Optional[List[Expr]] = None
     left_join_exprs: Optional[List[Expr]] = None  # OpLeftJoin's own exprs → ON clause

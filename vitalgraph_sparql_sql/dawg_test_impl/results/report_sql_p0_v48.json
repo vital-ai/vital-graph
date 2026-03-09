@@ -1,0 +1,530 @@
+{
+  "timestamp": "2026-03-04T18:04:57.488270",
+  "engine": "sql",
+  "summary": {
+    "total": 156,
+    "passed": 74,
+    "failed": 40,
+    "skipped": 25,
+    "errors": 17,
+    "pass_rate": 56.5
+  },
+  "categories": {
+    "bind": {
+      "total": 10,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "errors": 5,
+      "pass_rate": 50.0,
+      "failures": [
+        {
+          "name": "bind03 - BIND",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 24.0,
+          "error": "Pipeline error: SQL execution error: operator does not exist: text = uuid\nLINE 1: ...1.object_uuid = t5.term_uuid) AS j1 ON j0.z__uuid = j1.z__uu...\n                                                             ^\nHINT:  No operator matches the given name and argument types. You might need to add explicit type casts."
+        },
+        {
+          "name": "bind04 - BIND",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 11.5,
+          "error": "Pipeline error: SQL execution error: column \"nova\" does not exist\nLINE 1: ....datatype AS s__datatype, sub.s__uuid AS s__uuid, nova AS z,...\n                                                             ^"
+        },
+        {
+          "name": "bind07 - BIND",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 10.1,
+          "error": "Pipeline error: SQL execution error: column \"o\" does not exist\nLINE 1: ...z__uuid, z__type FROM (SELECT 1 AS _dummy, (CAST((o) AS DECI...\n                                                             ^\nDETAIL:  There is a column named \"o\" in table \"j0\", but it cannot be referenced from this part of the query.\nHINT:  To reference that column, you must mark this subquery with LATERAL."
+        },
+        {
+          "name": "bind10 - BIND scoping - Variable in filter not in scope",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 15.2,
+          "error": "Pipeline error: SQL execution error: column \"z__text\" does not exist\nLINE 1: ...5033-99b0-f434e4850df8'::uuid AND (t1.term_text = z__text)) ...\n                                                             ^"
+        },
+        {
+          "name": "bind11 - BIND scoping - Variable in filter in scope",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 7.3,
+          "error": "Pipeline error: SQL execution error: operator does not exist: text = integer\nLINE 1: ...-99b0-f434e4850df8'::uuid) AS j1 ON TRUE WHERE (j1.v = j0.z)\n                                                                ^\nHINT:  No operator matches the given name and argument types. You might need to add explicit type casts."
+        }
+      ]
+    },
+    "aggregates": {
+      "total": 47,
+      "passed": 13,
+      "failed": 14,
+      "skipped": 15,
+      "errors": 5,
+      "pass_rate": 40.6,
+      "failures": [
+        {
+          "name": "AVG DISTINCT with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 6.8,
+          "error": "Result set mismatch: Expected row not found in actual: {'avg': ('literal', '1.5', 'http://www.w3.org/2001/XMLSchema#decimal', ''), 's': ('uri', 'http://www.example.org/ints', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "AVG with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 3,
+          "actual_rows": 3,
+          "time_ms": 7.9,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://www.example.org/mixed2', '', ''), 'avg': ('literal', '0.2', 'http://www.w3.org/2001/XMLSchema#double', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "AVG with empty group (value defined to be 0)",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 6.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'avg': ('literal', '0', 'http://www.w3.org/2001/XMLSchema#integer', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "COUNT 8b",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 4.7,
+          "error": "Pipeline error: SQL execution error: column \"o12__text\" does not exist\nLINE 7: ORDER BY O12__text) AS sub\n                 ^"
+        },
+        {
+          "name": "COUNT(DISTINCT *) with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 5.6,
+          "error": "Result set mismatch: Expected row not found in actual: {'count': ('literal', '2', 'http://www.w3.org/2001/XMLSchema#integer', ''), 's': ('uri', 'http://www.example.org/ints', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "COUNT: no match, with group",
+          "status": "FAIL",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 4.8,
+          "error": "Missing variables in actual: {'C'} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "Error in AVG",
+          "status": "FAIL",
+          "expected_rows": 3,
+          "actual_rows": 3,
+          "time_ms": 5.2,
+          "error": "Result set mismatch: Expected row not found in actual: {'g': ('uri', 'http://example.com/data/#y', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "GROUP BY with a built-in function",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 5.7,
+          "error": "Pipeline error: SQL execution error: column \"d\" does not exist\nLINE 4: GROUP BY d) AS sub\n                 ^"
+        },
+        {
+          "name": "GROUP BY with a function",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 9.8,
+          "error": "Pipeline error: SQL execution error: column \"i\" does not exist\nLINE 4: GROUP BY i) AS sub\n                 ^"
+        },
+        {
+          "name": "GROUP_CONCAT 2",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 6.5,
+          "error": "Pipeline error: SQL execution error: missing FROM-clause entry for table \"t1\"\nLINE 3: WHERE (((t1.term_text = 'http://www.example.org/p1') AND ((g...\n                 ^"
+        },
+        {
+          "name": "MAX",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 6.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'max': ('literal', '30000.0', 'http://www.w3.org/2001/XMLSchema#double', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "MAX DISTINCT with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 6.4,
+          "error": "Result set mismatch: Expected row not found in actual: {'max': ('literal', '2', 'http://www.w3.org/2001/XMLSchema#integer', ''), 's': ('uri', 'http://www.example.org/ints', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "MAX with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 5,
+          "actual_rows": 5,
+          "time_ms": 7.0,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://www.example.org/mixed2', '', ''), 'max': ('literal', '2.2', 'http://www.w3.org/2001/XMLSchema#decimal', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "MIN DISTINCT with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 5.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://www.example.org/ints', '', ''), 'min': ('literal', '1', 'http://www.w3.org/2001/XMLSchema#integer', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "MIN with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 5,
+          "actual_rows": 5,
+          "time_ms": 8.6,
+          "error": "Result set mismatch: Expected row not found in actual: {'min': ('literal', '0.2', 'http://www.w3.org/2001/XMLSchema#double', ''), 's': ('uri', 'http://www.example.org/mixed2', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "Protect from error in AVG",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 5.2,
+          "error": "Pipeline error: SQL execution error: syntax error at or near \"*\"\nLINE 2: FROM (SELECT AVG(CAST(* AS NUMERIC)) AS __agg__0, q0.subject...\n                              ^"
+        },
+        {
+          "name": "SUM DISTINCT with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 6.8,
+          "error": "Result set mismatch: Expected row not found in actual: {'sum': ('literal', '3', 'http://www.w3.org/2001/XMLSchema#integer', ''), 's': ('uri', 'http://www.example.org/ints', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "SUM with GROUP BY",
+          "status": "FAIL",
+          "expected_rows": 5,
+          "actual_rows": 5,
+          "time_ms": 6.8,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://www.example.org/mixed2', '', ''), 'sum': ('literal', '0.4', 'http://www.w3.org/2001/XMLSchema#double', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "agg on empty set, explicit grouping",
+          "status": "FAIL",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 8.8,
+          "error": "Missing variables in actual: {'x', 'max'} [our bug: pyoxigraph matches .srx]"
+        }
+      ]
+    },
+    "functions": {
+      "total": 75,
+      "passed": 45,
+      "failed": 20,
+      "skipped": 7,
+      "errors": 3,
+      "pass_rate": 66.2,
+      "failures": [
+        {
+          "name": "BNODE()",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 5.9,
+          "error": "Result set mismatch (with bnode isomorphism check) [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "COALESCE()",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 9.5,
+          "error": "Pipeline error: SQL execution error: column \"z\" does not exist\nLINE 1: ...AS TEXT), CAST(-2 AS TEXT)) AS div, COALESCE(CAST(z AS TEXT)...\n                                                             ^"
+        },
+        {
+          "name": "CONCAT() 2",
+          "status": "FAIL",
+          "expected_rows": 49,
+          "actual_rows": 49,
+          "time_ms": 6.0,
+          "error": "Result set mismatch: Expected row not found in actual: {} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "CONTAINS()",
+          "status": "FAIL",
+          "expected_rows": 2,
+          "actual_rows": 3,
+          "time_ms": 8.7,
+          "error": "Row count mismatch: expected 2, got 3 [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "ENCODE_FOR_URI()",
+          "status": "FAIL",
+          "expected_rows": 7,
+          "actual_rows": 7,
+          "time_ms": 5.0,
+          "error": "Result set mismatch: Expected row not found in actual: {'encoded': ('literal', '%E9%A3%9F%E3%81%B9%E7%89%A9', '', ''), 's': ('uri', 'http://example.org/s4', '', ''), 'str': ('literal', '\u98df\u3079\u7269', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "ENCODE_FOR_URI() on non-BMP unicode strings",
+          "status": "FAIL",
+          "expected_rows": 2,
+          "actual_rows": 2,
+          "time_ms": 6.5,
+          "error": "Result set mismatch: Expected row not found in actual: {'encoded': ('literal', '%F0%9F%91%A8%E2%80%8D%F0%9F%91%A9%E2%80%8D%F0%9F%91%A7%E2%80%8D%F0%9F%91%A6', '', ''), 'str': ('literal', '\ud83d\udc68\\u200d\ud83d\udc69\\u200d\ud83d\udc67\\u200d\ud83d\udc66', '', ''), 's': ('uri', 'http://example.org/s9', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "IF()",
+          "status": "FAIL",
+          "expected_rows": 7,
+          "actual_rows": 7,
+          "time_ms": 6.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'integer': ('literal', 'false', 'http://www.w3.org/2001/XMLSchema#boolean', ''), 'o': ('literal', '7', 'http://www.w3.org/2001/XMLSchema#integer', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "IF() error propogation",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 4.8,
+          "error": "Pipeline error: SQL execution error: argument of CASE/WHEN must be type boolean, not type integer\nLINE 1: SELECT (CASE WHEN (1 / 0) THEN FALSE ELSE TRUE END) AS error\n                           ^"
+        },
+        {
+          "name": "IRI()/URI()",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 6.0,
+          "error": "Result set mismatch: Expected row not found in actual: {'iri': ('uri', 'http://example.org/iri', '', ''), 'uri': ('uri', 'http://example.org/uri', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "REPLACE()",
+          "status": "FAIL",
+          "expected_rows": 9,
+          "actual_rows": 9,
+          "time_ms": 5.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/s7', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "REPLACE() with captured substring",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 7.9,
+          "error": "Result set mismatch: Expected row not found in actual: {'new': ('literal', '[1=ab][2=]cd', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "STRAFTER()",
+          "status": "FAIL",
+          "expected_rows": 7,
+          "actual_rows": 7,
+          "time_ms": 6.6,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/s7', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "STRAFTER() datatyping",
+          "status": "FAIL",
+          "expected_rows": 3,
+          "actual_rows": 3,
+          "time_ms": 9.3,
+          "error": "Result set mismatch: Expected row not found in actual: {'ab': ('literal', 'c', '', ''), 'str': ('literal', 'abc', '', ''), 'abx': ('literal', 'c', '', ''), 's': ('uri', 'http://example.org/s3', '', ''), 'aab': ('literal', 'c', '', ''), 'axyzx': ('literal', '', '', ''), 'a': ('literal', 'abc', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "STRBEFORE()",
+          "status": "FAIL",
+          "expected_rows": 7,
+          "actual_rows": 7,
+          "time_ms": 9.9,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/s7', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "STRBEFORE() datatyping",
+          "status": "FAIL",
+          "expected_rows": 3,
+          "actual_rows": 3,
+          "time_ms": 6.8,
+          "error": "Result set mismatch: Expected row not found in actual: {'bbc': ('literal', 'a', '', ''), 'bbx': ('literal', 'a', '', ''), 'b': ('literal', '', '', ''), 'str': ('literal', 'abc', '', ''), 's': ('uri', 'http://example.org/s3', '', ''), 'bb': ('literal', 'a', '', ''), 'bxyzx': ('literal', '', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "STRDT()",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 7.9,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/s2', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "STRDT() TypeErrors (updated for RDF 1.1)",
+          "status": "FAIL",
+          "expected_rows": 16,
+          "actual_rows": 16,
+          "time_ms": 6.2,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/d4', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "STRLANG()",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 5.7,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/s2', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "STRLANG() TypeErrors (updated for RDF 1.1)",
+          "status": "FAIL",
+          "expected_rows": 16,
+          "actual_rows": 16,
+          "time_ms": 4.8,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/d4', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "STRLANG(STR())",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 1,
+          "time_ms": 5.6,
+          "error": "Result set mismatch: Expected row not found in actual: {'s2': ('literal', 'bar', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#langString', 'en-us'), 's': ('uri', 'http://example.org/s2', '', '')} [pyoxigraph also differs from .srx]"
+        },
+        {
+          "name": "TIMEZONE()",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 6.1,
+          "error": "Result set mismatch: Expected row not found in actual: {'s': ('uri', 'http://example.org/d4', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "TZ()",
+          "status": "FAIL",
+          "expected_rows": 4,
+          "actual_rows": 4,
+          "time_ms": 6.4,
+          "error": "Result set mismatch: Expected row not found in actual: {'x': ('literal', '', '', ''), 's': ('uri', 'http://example.org/d4', '', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "plus-2-corrected",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 8.3,
+          "error": "Pipeline error: SQL execution error: invalid input syntax for type numeric: \"a\""
+        }
+      ]
+    },
+    "negation": {
+      "total": 12,
+      "passed": 7,
+      "failed": 3,
+      "skipped": 0,
+      "errors": 2,
+      "pass_rate": 58.3,
+      "failures": [
+        {
+          "name": "Calculate proper subset",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 30.5,
+          "error": "Pipeline error: SQL execution error: column _left.x does not exist\nLINE 1: ...eft.s2 IS NULL AND NOT _right.s2 IS NULL) OR (NOT _left.x IS...\n                                                             ^"
+        },
+        {
+          "name": "Calculate which sets are subsets of others (exclude A subsetOf A)",
+          "status": "FAIL",
+          "expected_rows": 11,
+          "actual_rows": 30,
+          "time_ms": 59.5,
+          "error": "Row count mismatch: expected 11, got 30 [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "Calculate which sets have the same elements",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 22.5,
+          "error": "Pipeline error: SQL execution error: column _left.x does not exist\nLINE 1: ...eft.s2 IS NULL AND NOT _right.s2 IS NULL) OR (NOT _left.x IS...\n                                                             ^"
+        },
+        {
+          "name": "Positive EXISTS 2",
+          "status": "FAIL",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 5.4,
+          "error": "Missing variables in actual: {'set'} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "outer GRAPH operator does not affect MINUS disjointness",
+          "status": "FAIL",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 27.3,
+          "error": "Missing variables in actual: {'a'} [pyoxigraph also differs from .srx]"
+        }
+      ]
+    },
+    "exists": {
+      "total": 6,
+      "passed": 3,
+      "failed": 2,
+      "skipped": 1,
+      "errors": 0,
+      "pass_rate": 60.0,
+      "failures": [
+        {
+          "name": "GRAPH variable inside of EXISTS is bound to external variable",
+          "status": "FAIL",
+          "expected_rows": 1,
+          "actual_rows": 0,
+          "time_ms": 9.6,
+          "error": "Missing variables in actual: {'s'} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "Nested negative exists in positive exists",
+          "status": "FAIL",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 6.2,
+          "error": "Missing variables in actual: {'s', 'p'} [our bug: pyoxigraph matches .srx]"
+        }
+      ]
+    },
+    "grouping": {
+      "total": 6,
+      "passed": 1,
+      "failed": 1,
+      "skipped": 2,
+      "errors": 2,
+      "pass_rate": 25.0,
+      "failures": [
+        {
+          "name": "Group-3",
+          "status": "FAIL",
+          "expected_rows": 2,
+          "actual_rows": 2,
+          "time_ms": 9.5,
+          "error": "Result set mismatch: Expected row not found in actual: {'S': ('literal', '2', 'http://www.w3.org/2001/XMLSchema#integer', '')} [our bug: pyoxigraph matches .srx]"
+        },
+        {
+          "name": "Group-4",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 9.7,
+          "error": "Pipeline error: SQL execution error: column \"x\" does not exist\nLINE 1: ...82559808'::uuid) AS j1 ON j0.s__uuid = j1.s__uuid GROUP BY X\n                                                                      ^"
+        },
+        {
+          "name": "Group-5",
+          "status": "ERROR",
+          "expected_rows": 0,
+          "actual_rows": 0,
+          "time_ms": 8.6,
+          "error": "Pipeline error: SQL execution error: column reference \"s\" is ambiguous\nLINE 1: ...59808'::uuid) AS j1 ON j0.s__uuid = j1.s__uuid GROUP BY s, w\n                                                                   ^"
+        }
+      ]
+    }
+  }
+}

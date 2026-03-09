@@ -276,7 +276,7 @@ async def main():
         # ====================================================================
         # STEP 4: KGQuery Frame-Based Queries
         # ====================================================================
-        kgquery_tester = KGQueryLeadQueriesTester(client)
+        kgquery_tester = KGQueryLeadQueriesTester(client, query_mode="direct")
         kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, entity_count)
         all_results.append(kgquery_results)
         

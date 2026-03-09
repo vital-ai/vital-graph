@@ -34,14 +34,14 @@ export interface ObjectDetailConfig {
   defaultRdfType: string;
   paramName: string;
   uriFieldName: string;
-  icon: React.ComponentType<any>;
+  icon: React.ComponentType<Record<string, unknown>>;
 }
 
 // Custom hook for shared object detail functionality
 export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   config: ObjectDetailConfig,
   createDefaultObject: () => T,
-  buildApiRequestData: (object: T) => any
+  buildApiRequestData: (object: T) => unknown
 ) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -105,99 +105,81 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     try {
       setLoading(true);
       
-      // Different API call format for KG Types vs Graph Objects
-      const isKGTypesAPI = config.apiEndpoint.includes('kgtypes');
-      let response;
-      
-      if (isKGTypesAPI) {
-        // KG Types API format
-        response = await axios.get(config.apiEndpoint, {
-          params: {
-            space_id: spaceId,
-            graph_id: decodeURIComponent(graphId),
-            uri: decodeURIComponent(objectId),
-            page_size: 1,
-            offset: 0
-          }
-        });
-      } else {
-        // Graph Objects API format
-        response = await axios.get(config.apiEndpoint, {
-          params: {
-            space_id: spaceId,
-            graph_id: decodeURIComponent(graphId),
-            uri: decodeURIComponent(objectId)
-          }
-        });
-      }
-
-      const responseData = response.data;
-      let objectData = null;
-
-      if (isKGTypesAPI) {
-        // Handle KG Types API response format
-        let kgTypesData = [];
-        if (responseData.data && responseData.data['@graph']) {
-          kgTypesData = responseData.data['@graph'];
-        } else if (Array.isArray(responseData)) {
-          kgTypesData = responseData;
+      const response = await axios.get(config.apiEndpoint, {
+        params: {
+          space_id: spaceId,
+          graph_id: decodeURIComponent(graphId),
+          uri: decodeURIComponent(objectId)
         }
-        
-        if (kgTypesData.length > 0) {
-          objectData = kgTypesData[0];
-        }
-      } else {
-        // Handle Graph Objects API response format
-        objectData = responseData && (responseData['@id'] || responseData.URI) ? responseData : null;
-      }
+      });
 
-      if (objectData) {
-        const convertedObject = convertApiResponseToObject(objectData);
-        setObject(convertedObject);
-      } else {
+      // All endpoints return QuadResponse: { results: [{s,p,o,g}], total_count }
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = response.data.results || [];
+      if (quads.length === 0) {
         setError(`${config.objectTypeName} not found`);
+      } else {
+        const convertedObject = convertQuadsToObject(quads);
+        setObject(convertedObject);
       }
-    } catch (err: any) {
-      setError(err.response?.data?.detail || `Failed to load ${config.objectTypeName.toLowerCase()}`);
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.detail || `Failed to load ${config.objectTypeName.toLowerCase()}`);
+      } else {
+        setError(`Failed to load ${config.objectTypeName.toLowerCase()}`);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const convertApiResponseToObject = (data: any): T => {
+  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
+  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
+  const isUriValue = (v: string): boolean => v.startsWith('<') && v.endsWith('>');
+
+  const convertQuadsToObject = (quads: Array<{s: string; p: string; o: string; g?: string}>): T => {
+    const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+    const subjectUri = stripBrackets(quads[0].s);
+
+    // Collect all predicate-object pairs
+    const properties: Array<{predicate: string; object: string; object_type: 'uri' | 'literal'}> = [];
+    let rdfType = 'Unknown';
+
+    for (const quad of quads) {
+      const pred = stripBrackets(quad.p);
+      const objIsUri = isUriValue(quad.o);
+      const objValue = objIsUri ? stripBrackets(quad.o) : stripLiteral(quad.o);
+
+      if (pred === RDF_TYPE) {
+        rdfType = objValue;
+      }
+
+      properties.push({
+        predicate: pred,
+        object: objValue,
+        object_type: objIsUri ? 'uri' : 'literal',
+      });
+    }
+
     const convertedObject: BaseRDFObject = {
       id: 0,
       space_id: spaceId || '',
       graph_id: 0,
-      object_uri: data['@id'] || data.URI || decodeURIComponent(objectId || ''),
-      object_type: data['@type']?.includes('Edge') ? 'Edge' : 'Node',
-      rdf_type: data['@type'] || 'Unknown',
-      subject: data['@id'] || data.URI || decodeURIComponent(objectId || ''),
-      predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-      object: data['@type'] || 'Unknown',
+      object_uri: subjectUri,
+      object_type: rdfType.toLowerCase().includes('edge') ? 'Edge' : 'Node',
+      rdf_type: rdfType,
+      subject: subjectUri,
+      predicate: RDF_TYPE,
+      object: rdfType,
       context: decodeURIComponent(graphId || ''),
-      created_time: data.created_time || new Date().toISOString(),
-      last_modified: data.last_modified || new Date().toISOString(),
-      properties_count: Object.keys(data).length - 1,
-      properties: []
+      created_time: new Date().toISOString(),
+      last_modified: new Date().toISOString(),
+      properties_count: properties.length,
+      properties,
     };
-
-    Object.entries(data).forEach(([key, value]) => {
-      if (key !== '@context' && key !== '@graph' && value !== null && value !== undefined) {
-        // Properties should have exactly one value
-        const propertyValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        
-        const property = {
-          predicate: key,
-          object: propertyValue,
-          object_type: (key.startsWith('http') || key === '@id' || key === '@type' || key === 'URI' ? 'uri' : 'literal') as 'uri' | 'literal'
-        };
-        convertedObject.properties!.push(property);
-      }
-    });
 
     return convertedObject as T;
   };
+
 
   // Property management
   const updateProperty = (index: number, field: 'predicate' | 'object' | 'object_type', value: string | 'uri' | 'literal') => {
@@ -218,7 +200,7 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   const removeProperty = (index: number) => {
     if (!object || !object.properties) return;
     
-    const updatedProperties = object.properties.filter((_: any, i: number) => i !== index);
+    const updatedProperties = object.properties.filter((_, i) => i !== index);
     setObject({
       ...object,
       properties: updatedProperties,
@@ -290,8 +272,12 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
         await fetchObject();
         setSearchParams({ mode: 'view' });
       }
-    } catch (err: any) {
-      setError(err.response?.data?.detail || `Failed to save ${config.objectTypeName.toLowerCase()}`);
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        setError(err.response?.data?.detail || `Failed to save ${config.objectTypeName.toLowerCase()}`);
+      } else {
+        setError(`Failed to save ${config.objectTypeName.toLowerCase()}`);
+      }
     } finally {
       setSaving(false);
     }

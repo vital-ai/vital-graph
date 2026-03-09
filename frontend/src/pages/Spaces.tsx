@@ -9,12 +9,10 @@ import {
 } from 'react-icons/hi';
 
 interface Space {
-  id: number;
-  tenant: string;
   space: string;
   space_name: string;
-  space_description: string;
-  update_time: string;
+  space_description?: string;
+  exists?: boolean;
 }
 
 const Spaces: React.FC = () => {
@@ -23,6 +21,7 @@ const Spaces: React.FC = () => {
   const cursorPositionRef = useRef<number>(0);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const loadingRef = useRef<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
   const [filterLoading, setFilterLoading] = useState<boolean>(false);
@@ -31,6 +30,7 @@ const Spaces: React.FC = () => {
   const fetchSpaces = useCallback(async () => {
     try {
       setLoading(true);
+      loadingRef.current = true;
       const spacesData = await apiService.getSpaces();
       setSpaces(spacesData);
       setError(null);
@@ -40,6 +40,7 @@ const Spaces: React.FC = () => {
       setSpaces([]);
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   }, []);
 
@@ -48,7 +49,7 @@ const Spaces: React.FC = () => {
     if (!nameFilter.trim()) {
       // If filter is empty and not already loading data, fetch all spaces
       // This prevents duplicate API calls on initial page load
-      if (loading) {
+      if (loadingRef.current) {
         // Don't trigger another fetch if we're already loading data
         return;
       }
@@ -100,21 +101,7 @@ const Spaces: React.FC = () => {
   }, [fetchSpaces]);
 
   const handleDetailsClick = (space: Space) => {
-    navigate(`/space/${space.id}`);
-  };
-
-  const formatDate = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return dateString;
-    }
+    navigate(`/space/${space.space}`);
   };
 
   if (loading && !filterLoading) {
@@ -190,35 +177,23 @@ const Spaces: React.FC = () => {
             <Table striped>
               <TableHead>
                 <TableRow>
-                  <TableHeadCell>ID</TableHeadCell>
-                  <TableHeadCell>Name</TableHeadCell>
                   <TableHeadCell>Space ID</TableHeadCell>
-                  <TableHeadCell>Tenant</TableHeadCell>
+                  <TableHeadCell>Name</TableHeadCell>
                   <TableHeadCell>Description</TableHeadCell>
-                  <TableHeadCell>Last Updated</TableHeadCell>
                   <TableHeadCell>Actions</TableHeadCell>
                 </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {spaces.map((space) => (
-                  <TableRow key={space.id} className="bg-white dark:border-gray-700 dark:bg-gray-800">
+                  <TableRow key={space.space} className="bg-white dark:border-gray-700 dark:bg-gray-800">
                     <TableCell className="whitespace-nowrap font-medium text-gray-900 dark:text-white">
-                      {space.id}
+                      {space.space}
                     </TableCell>
                     <TableCell className="font-medium text-gray-900 dark:text-white">
                       {space.space_name}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {space.space}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
-                      {space.tenant}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
                       {space.space_description || 'No description'}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
-                      {formatDate(space.update_time)}
                     </TableCell>
                     <TableCell>
                       <Button
@@ -239,7 +214,7 @@ const Spaces: React.FC = () => {
           {/* Mobile Card View */}
           <div className="md:hidden space-y-4">
             {spaces.map((space) => (
-              <Card key={space.id} className="w-full">
+              <Card key={space.space} className="w-full">
                 <div className="space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
@@ -247,7 +222,7 @@ const Spaces: React.FC = () => {
                         {space.space_name}
                       </h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        ID: {space.id} • Space ID: {space.space}
+                        {space.space}
                       </p>
                     </div>
                     <Button
@@ -262,21 +237,9 @@ const Spaces: React.FC = () => {
                   
                   <div className="grid grid-cols-1 gap-2 text-sm">
                     <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">Tenant:</span>
-                      <span className="ml-2 text-gray-600 dark:text-gray-400">{space.tenant}</span>
-                    </div>
-                    
-                    <div>
                       <span className="font-medium text-gray-700 dark:text-gray-300">Description:</span>
                       <span className="ml-2 text-gray-600 dark:text-gray-400">
                         {space.space_description || 'No description'}
-                      </span>
-                    </div>
-                    
-                    <div>
-                      <span className="font-medium text-gray-700 dark:text-gray-300">Last Updated:</span>
-                      <span className="ml-2 text-gray-600 dark:text-gray-400">
-                        {formatDate(space.update_time)}
                       </span>
                     </div>
                   </div>

@@ -124,11 +124,12 @@ def _resolve_minus(plan: RelationPlan, space_id: str, aliases: AliasGenerator) -
 
     left_vars = set(_plan_vars(left))
     right_vars = set(_plan_vars(right))
-    all_vars = sorted(left_vars | right_vars)
+    # SPARQL MINUS output has same variables as left side only
+    out_vars = sorted(left_vars)
 
     m_alias = aliases.next("m")
     new_slots = {}
-    for v in all_vars:
+    for v in out_vars:
         slot = VarSlot(name=v)
         slot.text_col = f"{m_alias}.{v}"
         slot.uuid_col = f"{m_alias}.{v}"
@@ -139,7 +140,6 @@ def _resolve_minus(plan: RelationPlan, space_id: str, aliases: AliasGenerator) -
     plan.var_slots = new_slots
     plan._minus_meta = {  # type: ignore[attr-defined]
         "m_alias": m_alias,
-        "all_vars": all_vars,
         "left_vars": left_vars,
         "right_vars": right_vars,
     }
@@ -150,4 +150,9 @@ def _plan_vars(plan: RelationPlan) -> List[str]:
     """Get all variable names a plan exposes."""
     if plan.select_vars is not None:
         return list(plan.select_vars)
-    return list(plan.var_slots.keys())
+    vars = list(plan.var_slots.keys())
+    if plan.extend_exprs:
+        for v in plan.extend_exprs:
+            if v not in vars:
+                vars.append(v)
+    return vars

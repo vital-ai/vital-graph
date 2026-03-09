@@ -23,11 +23,32 @@ import {
   HiTrash,
   HiSearch
 } from 'react-icons/hi';
-import { type Space, type Graph, type Triple } from '../mock';
 import { type SpaceInfo, type GraphInfo } from '../types/api';
 import { apiService } from '../services/ApiService';
 import TriplesIcon from '../components/icons/TriplesIcon';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
+
+interface Space {
+  space: string;
+  space_name: string;
+  space_description?: string;
+}
+
+interface Graph {
+  graph_uri: string;
+  graph_name: string;
+  triple_count: number;
+}
+
+interface Triple {
+  id: number;
+  subject: string;
+  predicate: string;
+  object: string;
+  object_type: 'uri' | 'literal';
+  created_time: string;
+  last_modified: string;
+}
 
 // Helper functions for data conversion (similar to Graphs.tsx)
 const extractGraphName = (graphUri: string): string => {
@@ -47,22 +68,6 @@ const extractGraphName = (graphUri: string): string => {
     .replace(/\b\w/g, l => l.toUpperCase());
 };
 
-const inferGraphType = (graphUri: string): string => {
-  if (!graphUri) return 'Graph';
-  
-  const uri = graphUri.toLowerCase();
-  if (uri.includes('global')) return 'Global Graph';
-  if (uri.includes('ontology')) return 'Ontology';
-  if (uri.includes('knowledge')) return 'Knowledge Graph';
-  if (uri.includes('user')) return 'User Graph';
-  if (uri.includes('entity')) return 'Entity Graph';
-  if (uri.includes('process') || uri.includes('workflow')) return 'Process Graph';
-  if (uri.includes('experiment')) return 'Experimental Graph';
-  if (uri.includes('data') || uri.includes('dataset')) return 'Data Graph';
-  if (uri.includes('result') || uri.includes('analysis')) return 'Results Graph';
-  
-  return 'Graph';
-};
 
 const Triples: React.FC = () => {
   const navigate = useNavigate();
@@ -75,7 +80,7 @@ const Triples: React.FC = () => {
 
   // Navigate to hierarchical URL when space/graph selection changes
   useEffect(() => {
-    if (selectedSpace && selectedGraph !== '' && !spaceId && !graphId) {
+    if (selectedSpace && selectedGraph && !spaceId && !graphId) {
       navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/triples`);
     }
   }, [selectedSpace, selectedGraph, navigate, spaceId, graphId]);
@@ -112,28 +117,22 @@ const Triples: React.FC = () => {
 
     try {
       // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.graph_uri === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
+      const graphUri = selectedGraph;
+      if (!graphUri) {
+        setError('No graph selected');
         return;
       }
 
-      // Create JSON-LD document for the triple
-      const jsonldDoc = {
-        "@context": {
-          "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        "@graph": [
-          {
-            "@id": tripleForm.subject,
-            [tripleForm.predicate]: tripleForm.objectType === 'uri' 
-              ? { "@id": tripleForm.object }
-              : tripleForm.object
-          }
-        ]
-      };
+      // Build quad in N-Quads encoding
+      const subjectTerm = `<${tripleForm.subject}>`;
+      const predicateTerm = `<${tripleForm.predicate}>`;
+      const objectTerm = tripleForm.objectType === 'uri'
+        ? `<${tripleForm.object}>`
+        : `"${tripleForm.object}"`;
 
-      await apiService.addTriples(selectedSpace, selectedGraphObj.graph_uri, jsonldDoc);
+      await apiService.addTriples(selectedSpace, graphUri, {
+        quads: [{ s: subjectTerm, p: predicateTerm, o: objectTerm, g: `<${graphUri}>` }]
+      });
       
       // Refresh triples list
       await fetchTriples();
@@ -152,47 +151,31 @@ const Triples: React.FC = () => {
     }
 
     try {
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.graph_uri === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
+      const graphUri = selectedGraph;
+      if (!graphUri) {
+        setError('No graph selected');
         return;
       }
 
-      // For editing, we need to delete the old triple and add the new one
-      // First, delete the old triple
-      const oldJsonldDoc = {
-        "@context": {
-          "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        "@graph": [
-          {
-            "@id": editingTriple.subject,
-            [editingTriple.predicate]: editingTriple.object_type === 'uri' 
-              ? { "@id": editingTriple.object }
-              : editingTriple.object
-          }
-        ]
-      };
+      // Delete old triple
+      const oldS = `<${editingTriple.subject}>`;
+      const oldP = `<${editingTriple.predicate}>`;
+      const oldO = editingTriple.object_type === 'uri'
+        ? `<${editingTriple.object}>`
+        : `"${editingTriple.object}"`;
+      await apiService.deleteTriples(selectedSpace, graphUri, {
+        quads: [{ s: oldS, p: oldP, o: oldO, g: `<${graphUri}>` }]
+      });
 
-      await apiService.deleteTriples(selectedSpace, selectedGraphObj.graph_uri, oldJsonldDoc);
-
-      // Then add the new triple
-      const newJsonldDoc = {
-        "@context": {
-          "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        "@graph": [
-          {
-            "@id": tripleForm.subject,
-            [tripleForm.predicate]: tripleForm.objectType === 'uri' 
-              ? { "@id": tripleForm.object }
-              : tripleForm.object
-          }
-        ]
-      };
-
-      await apiService.addTriples(selectedSpace, selectedGraphObj.graph_uri, newJsonldDoc);
+      // Add new triple
+      const newS = `<${tripleForm.subject}>`;
+      const newP = `<${tripleForm.predicate}>`;
+      const newO = tripleForm.objectType === 'uri'
+        ? `<${tripleForm.object}>`
+        : `"${tripleForm.object}"`;
+      await apiService.addTriples(selectedSpace, graphUri, {
+        quads: [{ s: newS, p: newP, o: newO, g: `<${graphUri}>` }]
+      });
       
       // Refresh triples list
       await fetchTriples();
@@ -226,29 +209,20 @@ const Triples: React.FC = () => {
     if (!deletingTriple) return;
 
     try {
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.graph_uri === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
+      const graphUri = selectedGraph;
+      if (!graphUri) {
+        setError('No graph selected');
         return;
       }
 
-      // Create JSON-LD document for the triple to delete
-      const jsonldDoc = {
-        "@context": {
-          "@vocab": "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        },
-        "@graph": [
-          {
-            "@id": deletingTriple.subject,
-            [deletingTriple.predicate]: deletingTriple.object_type === 'uri' 
-              ? { "@id": deletingTriple.object }
-              : deletingTriple.object
-          }
-        ]
-      };
-
-      await apiService.deleteTriples(selectedSpace, selectedGraphObj.graph_uri, jsonldDoc);
+      const delS = `<${deletingTriple.subject}>`;
+      const delP = `<${deletingTriple.predicate}>`;
+      const delO = deletingTriple.object_type === 'uri'
+        ? `<${deletingTriple.object}>`
+        : `"${deletingTriple.object}"`;
+      await apiService.deleteTriples(selectedSpace, graphUri, {
+        quads: [{ s: delS, p: delP, o: delO, g: `<${graphUri}>` }]
+      });
       
       // Refresh triples list
       await fetchTriples();
@@ -271,13 +245,9 @@ const Triples: React.FC = () => {
       
       // Convert backend format to frontend format
       const convertedSpaces: Space[] = spacesData.map((space: SpaceInfo) => ({
-        id: space.id || 0,
-        tenant: space.tenant || 'default',
         space: space.space,
         space_name: space.space_name,
-        description: space.space_description || '',
-        created_time: space.created_time,
-        last_modified: space.updated_time
+        space_description: space.space_description || '',
       }));
       
       setSpaces(convertedSpaces);
@@ -322,17 +292,10 @@ const Triples: React.FC = () => {
       const graphsData = await apiService.getGraphs(selectedSpace);
       
       // Convert backend format to frontend format
-      const convertedGraphs: Graph[] = graphsData.map((graph: GraphInfo, index: number) => ({
-        id: index,
-        space_id: selectedSpace,
+      const convertedGraphs: Graph[] = graphsData.map((graph: GraphInfo) => ({
         graph_name: extractGraphName(graph.graph_uri),
         graph_uri: graph.graph_uri,
-        graph_type: inferGraphType(graph.graph_uri),
         triple_count: graph.triple_count || 0,
-        created_time: graph.created_time || new Date().toISOString(),
-        last_modified: graph.updated_time || new Date().toISOString(),
-        description: `Graph containing ${graph.triple_count || 0} triples`,
-        status: 'active'
       }));
       
       setGraphs(convertedGraphs);
@@ -356,84 +319,51 @@ const Triples: React.FC = () => {
 
   // Fetch triples for selected space and graph
   const fetchTriples = useCallback(async () => {
-    if (!selectedSpace || selectedGraph === '') return;
+    if (!selectedSpace || !selectedGraph) return;
     
     try {
       setLoading(true);
       setError(null);
       
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.graph_uri === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
-        setLoading(false);
-        return;
-      }
-      
+      const graphUri = selectedGraph;
       const offset = (currentPage - 1) * itemsPerPage;
       
-      // Fetch triples from backend
-      const response = await apiService.getTriples(selectedSpace, selectedGraphObj.graph_uri, {
+      // Fetch triples from backend — returns QuadResponse: {results: [{s,p,o,g}], total_count, page_size, offset}
+      const data = await apiService.getTriples(selectedSpace, graphUri, {
         page_size: itemsPerPage,
         offset: offset,
         object_filter: debouncedSearchTerm || undefined
       });
       
-      // Convert JSON-LD response to Triple format
-      const convertedTriples: Triple[] = [];
-      let tripleId = offset + 1;
-      
-      if (response.data && response.data['@graph']) {
-        for (const item of response.data['@graph']) {
-          const subject = item['@id'];
-          
-          // Extract all properties as triples
-          for (const [predicate, objectValue] of Object.entries(item)) {
-            if (predicate === '@id' || predicate === '@type') continue;
-            
-            let object: string;
-            let objectType: 'uri' | 'literal';
-            
-            if (typeof objectValue === 'object' && objectValue !== null) {
-              if ('@id' in objectValue) {
-                object = String((objectValue as any)['@id']);
-                objectType = 'uri';
-              } else if ('@value' in objectValue) {
-                object = String((objectValue as any)['@value']);
-                objectType = 'literal';
-              } else {
-                object = JSON.stringify(objectValue);
-                objectType = 'literal';
-              }
-            } else {
-              object = String(objectValue);
-              objectType = 'literal';
-            }
-            
-            convertedTriples.push({
-              id: tripleId++,
-              space_id: selectedSpace,
-              graph_id: selectedGraphObj.id,
-              subject: subject,
-              predicate: predicate,
-              object: object,
-              object_type: objectType,
-              created_time: new Date().toISOString(),
-              last_modified: new Date().toISOString()
-            });
-          }
-        }
-      }
+      // Parse quad results into Triple format
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
+      const convertedTriples: Triple[] = quads.map((quad, index) => {
+        const subject = quad.s.replace(/^<|>$/g, '');
+        const predicate = quad.p.replace(/^<|>$/g, '');
+        const obj = quad.o;
+        
+        // Determine object type: URIs are in angle brackets, literals in quotes
+        const isUri = obj.startsWith('<') && obj.endsWith('>');
+        const objectValue = isUri
+          ? obj.replace(/^<|>$/g, '')
+          : obj.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
+        
+        return {
+          id: offset + index + 1,
+          subject,
+          predicate,
+          object: objectValue,
+          object_type: isUri ? 'uri' as const : 'literal' as const,
+          created_time: new Date().toISOString(),
+          last_modified: new Date().toISOString(),
+        };
+      });
       
       setTriples(convertedTriples);
       
-      // Calculate total pages from pagination info
-      if (response.pagination) {
-        const totalPages = response.pagination.pages || 1;
-        setTotalPages(totalPages);
-      } else {
-        setTotalPages(1);
-      }
+      // Calculate total pages from total_count
+      const totalCount = data.total_count || convertedTriples.length;
+      setTotalPages(Math.max(1, Math.ceil(totalCount / itemsPerPage)));
       
     } catch (err) {
       console.error('Error fetching triples:', err);
@@ -443,7 +373,7 @@ const Triples: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, debouncedSearchTerm, currentPage, itemsPerPage, graphs]);
+  }, [selectedSpace, selectedGraph, debouncedSearchTerm, currentPage, itemsPerPage]);
 
   useEffect(() => {
     fetchTriples();
@@ -497,7 +427,7 @@ const Triples: React.FC = () => {
           >
             <option value="">Choose a graph...</option>
             {graphs.map((graph) => (
-              <option key={graph.id} value={graph.graph_uri}>
+              <option key={graph.graph_uri} value={graph.graph_uri}>
                 {graph.graph_name}
               </option>
             ))}
@@ -506,7 +436,7 @@ const Triples: React.FC = () => {
       </div>
 
       {/* Add Triple Button */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <Button onClick={() => setShowAddModal(true)} color="blue">
             <HiPlus className="mr-2 h-4 w-4" />
@@ -516,7 +446,7 @@ const Triples: React.FC = () => {
       )}
 
       {/* Search and Filter */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1">
@@ -573,7 +503,7 @@ const Triples: React.FC = () => {
         </div>
       )}
       
-      {selectedSpace && selectedGraph === '' && !graphsLoading && (
+      {selectedSpace && !selectedGraph && !graphsLoading && (
         <div className="text-center py-12">
           <div className="text-gray-500 dark:text-gray-400">
             <p className="text-lg mb-2">Select a graph to view triples</p>
@@ -583,21 +513,21 @@ const Triples: React.FC = () => {
       )}
 
       {/* Loading Spinner for Triples */}
-      {selectedSpace && selectedGraph !== '' && loading && (
+      {selectedSpace && selectedGraph && loading && (
         <div className="mt-8 flex justify-center">
           <div className="text-gray-600 dark:text-gray-400">Loading triples...</div>
         </div>
       )}
 
       {/* Triples Table */}
-      {selectedSpace && selectedGraph !== '' && !loading && triples.length === 0 && !error ? (
+      {selectedSpace && selectedGraph && !loading && triples.length === 0 && !error ? (
         <Alert color="info">
           {debouncedSearchTerm ? 
             `No triples found matching "${debouncedSearchTerm}". Try a different search term.` :
             'No triples found in this graph. Add your first triple to get started.'
           }
         </Alert>
-      ) : selectedSpace && selectedGraph !== '' && !loading && triples.length > 0 && (
+      ) : selectedSpace && selectedGraph && !loading && triples.length > 0 && (
         <>
           <div className="overflow-x-auto">
             <Table striped>

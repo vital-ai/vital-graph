@@ -10,7 +10,7 @@ from rdflib.graph import Graph, QuotedGraph
 from rdflib.namespace import RDF
 from rdflib.plugins.stores.regexmatching import PYTHON_REGEX, REGEXTerm
 from rdflib.store import CORRUPTED_STORE, VALID_STORE, NodePickler, Store
-from .sparql import VitalSparql
+from .sparql_utils import VitalSparql
 from ..space.space_impl import SpaceImpl
 
 class VitalGraphSQLStore(Store):

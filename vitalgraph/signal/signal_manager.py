@@ -18,6 +18,7 @@ CHANNEL_USER = "vitalgraph_user"
 CHANNEL_SPACE = "vitalgraph_space" 
 CHANNEL_GRAPH = "vitalgraph_graph"
 CHANNEL_ENTITY_DEDUP = "vitalgraph_entity_dedup"
+CHANNEL_PROCESS = "vitalgraph_process"
 
 # Signal types
 SIGNAL_TYPE_CREATED = "created"
@@ -57,6 +58,7 @@ class SignalManager:
             CHANNEL_SPACE: [],
             CHANNEL_GRAPH: [],
             CHANNEL_ENTITY_DEDUP: [],
+            CHANNEL_PROCESS: [],
         }
         
         # Set of channels we're currently listening to

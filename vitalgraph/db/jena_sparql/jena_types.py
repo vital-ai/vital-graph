@@ -147,6 +147,7 @@ class ExprFunction:
     """A function call or operator (=, <, CONTAINS, regex, etc.)."""
     name: str
     args: List[Expr]
+    function_iri: Optional[str] = None  # IRI for XSD casts, custom functions
 
 
 @dataclass
@@ -253,9 +254,20 @@ class OpOrder:
 
 
 @dataclass
+class GroupVar:
+    """A GROUP BY variable, optionally with a defining expression.
+
+    For ``GROUP BY ?x`` → GroupVar(var="x", expr=None)
+    For ``GROUP BY (DATATYPE(?o) AS ?d)`` → GroupVar(var="d", expr=ExprFunction("datatype", [...]))
+    """
+    var: str
+    expr: Optional[Expr] = None
+
+
+@dataclass
 class OpGroup:
     """GROUP BY with optional aggregators."""
-    group_vars: List[str]
+    group_vars: List[GroupVar]
     aggregators: List[Dict[str, Any]]  # raw aggregator defs
     sub_op: Op
 
@@ -340,6 +352,7 @@ class UpdateModify:
     delete_quads: List[QuadPattern] = field(default_factory=list)
     insert_quads: List[QuadPattern] = field(default_factory=list)
     using_graphs: List[str] = field(default_factory=list)
+    using_named_graphs: List[str] = field(default_factory=list)
     where_pattern: Optional[Op] = None
 
 
@@ -420,6 +433,7 @@ class ParsedQueryMeta:
     """Metadata from the parsedQuery phase."""
     sparql_form: str  # "QUERY" or "UPDATE"
     query_type: Optional[str] = None  # "SELECT", "CONSTRUCT", "ASK", "DESCRIBE"
+    base_uri: Optional[str] = None  # BASE <uri> declaration for IRI()/URI() resolution
     project_vars: List[str] = field(default_factory=list)
     distinct: bool = False
     reduced: bool = False

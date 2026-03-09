@@ -7,7 +7,10 @@ KG queries support two distinct query types:
 2. Frame-based queries: Find entities connected via shared KGFrames
 """
 
+import asyncio
 import logging
+import re
+import time as _time
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -42,6 +45,15 @@ class KGQueriesEndpoint:
         
         # Set up routes
         self._setup_routes()
+    
+    @staticmethod
+    def _pretty_sql(sql: str) -> str:
+        """Pretty-print SQL by inserting newlines before major keywords."""
+        kw = r'\b(SELECT|FROM|WHERE|JOIN|INNER JOIN|LEFT JOIN|LEFT OUTER JOIN|CROSS JOIN|ON|AND|OR|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|UNION ALL|UNION|VALUES|WITH|AS)\b'
+        out = re.sub(kw, r'\n\1', sql, flags=re.IGNORECASE)
+        # indent sub-selects
+        out = out.replace('(SELECT', '(\n  SELECT').replace('( SELECT', '(\n  SELECT')
+        return out.strip()
     
     def _setup_routes(self):
         """Set up FastAPI routes for KG Queries operations."""
@@ -120,10 +132,20 @@ class KGQueriesEndpoint:
                 query_request.criteria, graph_id
             )
             
-            self.logger.debug(f"Generated relation SPARQL query: {sparql_query}")
+            self.logger.info(f"Generated relation SPARQL query:\n{sparql_query}")
             
             # Execute SPARQL query via backend interface
+            t0 = _time.monotonic()
             results = await backend.execute_sparql_query(space_id, sparql_query)
+            t_query = _time.monotonic()
+            
+            # Log the final SQL if returned by the backend (fire-and-forget, non-blocking)
+            if results.get('sql') and self.logger.isEnabledFor(logging.DEBUG):
+                _sql = results['sql']
+                _logger = self.logger
+                _pretty = self._pretty_sql
+                asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _logger.debug(f"Final SQL ({len(_sql)} chars):\n{_pretty(_sql)}"))
             
             # Convert results to RelationConnection objects
             connections = []
@@ -143,7 +165,7 @@ class KGQueriesEndpoint:
             end_idx = start_idx + query_request.page_size
             paginated_connections = connections[start_idx:end_idx]
             
-            self.logger.info(f"Found {total_count} relation connections, returning {len(paginated_connections)}")
+            self.logger.info(f"Relation query: {total_count} results, {len(paginated_connections)} returned, {(t_query - t0)*1000:.0f}ms")
             
             return KGQueryResponse(
                 query_type="relation",
@@ -229,11 +251,20 @@ class KGQueriesEndpoint:
                 query_request.offset
             )
             
-            self.logger.info(f"Generated entity SPARQL query:")
-            self.logger.info(sparql_query)
+            self.logger.info(f"Generated frame SPARQL query:\n{sparql_query}")
             
             # Execute SPARQL query via backend interface
+            t0 = _time.monotonic()
             results = await backend.execute_sparql_query(space_id, sparql_query)
+            t_query = _time.monotonic()
+            
+            # Log the final SQL if returned by the backend (fire-and-forget, non-blocking)
+            if results.get('sql') and self.logger.isEnabledFor(logging.DEBUG):
+                _sql = results['sql']
+                _logger = self.logger
+                _pretty = self._pretty_sql
+                asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _logger.debug(f"Final SQL ({len(_sql)} chars):\n{_pretty(_sql)}"))
             
             # Convert results to FrameConnection objects
             # For now, return entities as "connections" where source is the entity
@@ -257,7 +288,7 @@ class KGQueriesEndpoint:
             
             total_count = len(connections)
             
-            self.logger.info(f"Found {total_count} entities matching frame criteria")
+            self.logger.info(f"Frame query: {total_count} results, {(t_query - t0)*1000:.0f}ms")
             
             return KGQueryResponse(
                 query_type="frame",

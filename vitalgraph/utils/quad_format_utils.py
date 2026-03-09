@@ -90,7 +90,7 @@ def nquads_term_to_rdflib(term_str: str) -> Node:
 
     Accepts:
       <http://...>                              → URIRef
-      "value"                                   → Literal (xsd:string)
+      "value"                                   → Literal (plain, no datatype)
       "value"^^<http://...>                     → Literal with datatype
       "value"@lang                              → Literal with language tag
       _:label                                   → BNode

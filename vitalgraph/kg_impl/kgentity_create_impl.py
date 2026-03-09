@@ -127,33 +127,37 @@ class KGEntityCreateProcessor:
     async def _handle_create_mode(self, space_id: str, graph_id: str, 
                                 entities: List[KGEntity], objects: List[GraphObject]) -> EntityCreateResponse:
         """Handle CREATE mode: verify none of the objects already exist."""
+        import time as _time
         try:
-            # Check if any entities already exist
-            self.logger.debug(f"🔍 Checking if {len(entities)} entities already exist...")
-            for entity in entities:
-                entity_uri = str(entity.URI)
-                exists = await self.backend.object_exists(space_id, graph_id, entity_uri)
-                self.logger.debug(f"🔍 Entity {entity_uri} exists check: {exists}")
-                if exists:
-                    self.logger.warning(f"❌ Entity {entity_uri} already exists - returning early")
+            # Batch existence check: all entity + sub-object URIs in one SQL query
+            _t0 = _time.monotonic()
+            entity_uris_set = {str(e.URI) for e in entities}
+            all_uris = list(entity_uris_set)
+            sub_object_uris = [str(obj.URI) for obj in objects
+                               if hasattr(obj, 'URI') and obj.URI and not isinstance(obj, KGEntity)]
+            all_uris.extend(sub_object_uris)
+
+            existing = []
+            if all_uris and hasattr(self.backend, 'batch_check_uris_exist'):
+                existing = await self.backend.batch_check_uris_exist(space_id, graph_id, all_uris)
+
+            _t1 = _time.monotonic()
+            self.logger.info(f"⏱️  CREATE_IMPL batch_exists_check: {_t1 - _t0:.3f}s ({len(all_uris)} URIs, {len(existing)} found)")
+
+            if existing:
+                existing_entities = [u for u in existing if u in entity_uris_set]
+                if existing_entities:
+                    self.logger.warning(f"❌ Entity {existing_entities[0]} already exists - returning early")
                     return EntityCreateResponse(
-                        message=f"Entity {entity_uri} already exists - cannot create in 'create' mode",
+                        message=f"Entity {existing_entities[0]} already exists - cannot create in 'create' mode",
                         created_count=0,
                         created_uris=[]
                     )
-            
-            # Existence check: verify sub-object URIs (frames, slots, edges) don't already exist
-            sub_object_uris = [str(obj.URI) for obj in objects
-                               if hasattr(obj, 'URI') and obj.URI and not isinstance(obj, KGEntity)]
-            if sub_object_uris:
-                existence_validator = KGOwnershipValidator(self.backend, self.logger)
-                existence_result = await existence_validator.check_uris_exist(
-                    space_id, graph_id, sub_object_uris
-                )
-                if not existence_result.valid:
-                    self.logger.warning(f"❌ Sub-object conflict: {existence_result.message}")
+                existing_subs = [u for u in existing if u not in entity_uris_set]
+                if existing_subs:
+                    self.logger.warning(f"❌ Sub-object conflict: {len(existing_subs)} URIs already exist")
                     return EntityCreateResponse(
-                        message=f"Cannot create entity graph: {existence_result.message}",
+                        message=f"Cannot create entity graph: {len(existing_subs)} sub-object URIs already exist",
                         created_count=0,
                         created_uris=[]
                     )
@@ -161,6 +165,9 @@ class KGEntityCreateProcessor:
             # Store all objects
             self.logger.debug(f"🔥 CALLING BACKEND.STORE_OBJECTS with {len(objects)} objects")
             result = await self.backend.store_objects(space_id, graph_id, objects)
+            _t2 = _time.monotonic()
+            self.logger.info(f"⏱️  CREATE_IMPL store_objects: {_t2 - _t1:.3f}s ({len(objects)} objects)")
+            self.logger.info(f"⏱️  CREATE_IMPL total: {_t2 - _t0:.3f}s")
             self.logger.debug(f"🔥 BACKEND.STORE_OBJECTS RESULT: {result.success if result else 'None'}")
             
             if result.success:

@@ -17,10 +17,7 @@ from typing import Dict, List, Any
 import concurrent.futures
 import json
 
-# Add the parent directory to the path so we can import vitalgraph_client
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from vitalgraph_client.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
+from vitalgraph.client.vitalgraph_client import VitalGraphClient, VitalGraphClientError
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

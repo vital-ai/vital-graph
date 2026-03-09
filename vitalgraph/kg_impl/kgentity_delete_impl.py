@@ -98,8 +98,8 @@ class KGEntityDeleteProcessor:
         """
         Delete an entity graph (entity plus all related objects) from the backend.
         
-        This method finds all objects that share the same kgGraphURI as the target entity
-        and deletes them all as a group.
+        Uses direct SQL bulk delete when available (SparqlSQLBackendAdapter),
+        falling back to the SPARQL-based approach for other backends.
         
         Args:
             backend: Backend adapter instance
@@ -115,18 +115,20 @@ class KGEntityDeleteProcessor:
             start_time = time.time()
             self.logger.info(f"🔥 DELETE ENTITY GRAPH START: {entity_uri} from graph: {graph_id}")
             
-            # Use the proper graph URI for backend operations
+            # Fast path: direct SQL bulk delete (SparqlSQLBackendAdapter)
+            if hasattr(backend, 'delete_entity_graph_direct'):
+                deleted_quads = await backend.delete_entity_graph_direct(space_id, graph_id, entity_uri)
+                elapsed = time.time() - start_time
+                self.logger.info(f"🔥 DELETE ENTITY GRAPH DONE (bulk SQL): {deleted_quads} quads in {elapsed:.3f}s")
+                # Return non-zero to indicate success (caller checks > 0)
+                return 1 if deleted_quads > 0 else 0
+
+            # Slow path: SPARQL-based delete (fuseki_postgresql and other backends)
             full_graph_uri = graph_id
-            
-            # Use entity_uri as the kgGraphURI (they should be the same for entity graphs)
             kg_graph_uri = entity_uri
             
-            self.logger.info(f"🔥 STEP 1: Finding all objects with kGGraphURI: {kg_graph_uri}")
-            
-            # First, find all subjects with this kGGraphURI
             find_subjects_query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-            
             SELECT DISTINCT ?s WHERE {{
                 GRAPH <{full_graph_uri}> {{
                     ?s haley:hasKGGraphURI <{kg_graph_uri}> .
@@ -134,13 +136,8 @@ class KGEntityDeleteProcessor:
             }}
             """
             
-            step1_start = time.time()
-            self.logger.info(f"🔥 STEP 1: Executing SPARQL query to find subjects...")
             subjects_result = await backend.execute_sparql_query(space_id, find_subjects_query)
-            step1_time = time.time() - step1_start
-            self.logger.info(f"🔥 STEP 1: Query completed in {step1_time:.3f}s")
             
-            # Extract subject URIs
             subject_uris = []
             if isinstance(subjects_result, dict) and 'results' in subjects_result:
                 bindings = subjects_result['results'].get('bindings', [])
@@ -154,12 +151,7 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No objects found with kGGraphURI: {kg_graph_uri}")
                 return 0
             
-            self.logger.info(f"🔥 STEP 1: Found {len(subject_uris)} objects with kGGraphURI")
-            
-            # Query to get all triples for all subjects in a single query
-            self.logger.info(f"🔥 STEP 2: Building FILTER IN query for {len(subject_uris)} subjects...")
             subject_filter = ', '.join([f'<{str(uri).strip()}>' for uri in subject_uris])
-            
             triples_query = f"""
             SELECT ?s ?p ?o WHERE {{
                 GRAPH <{full_graph_uri}> {{
@@ -169,14 +161,8 @@ class KGEntityDeleteProcessor:
             }}
             """
             
-            step2_start = time.time()
-            self.logger.info(f"🔥 STEP 2: Executing SPARQL query to get all triples...")
             triples_result = await backend.execute_sparql_query(space_id, triples_query)
-            step2_time = time.time() - step2_start
-            self.logger.info(f"🔥 STEP 2: Query completed in {step2_time:.3f}s")
             
-            # Extract quads with proper RDFLib objects to preserve datatype/language
-            self.logger.info(f"🔥 STEP 2: Extracting triples from results...")
             quads = []
             if isinstance(triples_result, dict) and 'results' in triples_result:
                 bindings = triples_result['results'].get('bindings', [])
@@ -184,9 +170,7 @@ class KGEntityDeleteProcessor:
                     if 's' in binding and 'p' in binding and 'o' in binding:
                         s_value = binding['s'].get('value', '') if isinstance(binding['s'], dict) else str(binding['s'])
                         p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                        # Reconstruct RDFLib object from full binding to preserve datatype/language
                         o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                        
                         if s_value and p_value and o_rdflib is not None:
                             quads.append((s_value, p_value, o_rdflib, full_graph_uri))
             
@@ -194,21 +178,11 @@ class KGEntityDeleteProcessor:
                 self.logger.warning(f"No triples found for entity graph objects")
                 return 0
             
-            self.logger.info(f"🔥 STEP 2: Found {len(quads)} quads to delete")
-            
-            # Execute direct quad deletion (bypasses SPARQL parsing!)
-            step4_start = time.time()
-            self.logger.info(f"🔥 STEP 4: Executing direct quad deletion via backend.remove_rdf_quads_batch()...")
             deleted_count = await backend.remove_rdf_quads_batch(space_id, quads)
-            step4_time = time.time() - step4_start
-            self.logger.info(f"🔥 STEP 4: Direct quad deletion completed in {step4_time:.3f}s (deleted {deleted_count} quads)")
+            elapsed = time.time() - start_time
+            self.logger.info(f"🔥 DELETE ENTITY GRAPH DONE (SPARQL): {deleted_count} quads in {elapsed:.3f}s")
             
-            if deleted_count == 0:
-                self.logger.error(f"Failed to delete quads for entity graph")
-                return 0
-            
-            self.logger.debug(f"Successfully deleted entity graph with kGGraphURI: {kg_graph_uri}")
-            return len(subject_uris)
+            return len(subject_uris) if deleted_count > 0 else 0
             
         except Exception as e:
             self.logger.error(f"Error deleting entity graph for {entity_uri}: {e}")

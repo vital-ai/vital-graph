@@ -6,7 +6,18 @@ import { Select, Label } from 'flowbite-react';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
 import ObjectIcon from '../components/icons/ObjectIcon';
 import FrameIcon from '../components/icons/FrameIcon';
-import { type Space, type Graph } from '../mock';
+
+interface Space {
+  space: string;
+  space_name: string;
+  space_description?: string;
+}
+
+interface Graph {
+  graph_uri: string;
+  graph_name: string;
+  triple_count: number;
+}
 
 const ObjectsLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -17,7 +28,7 @@ const ObjectsLayout: React.FC = () => {
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [graphs, setGraphs] = useState<Graph[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
-  const [selectedGraph, setSelectedGraph] = useState<number | ''>('');
+  const [selectedGraph, setSelectedGraph] = useState<string>('');
   const [spacesLoading, setSpacesLoading] = useState<boolean>(true);
   const [graphsLoading, setGraphsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,35 +73,13 @@ const ObjectsLayout: React.FC = () => {
       const response = await axios.get(`/api/graphs/sparql/${space}/graphs`);
       const graphsData = Array.isArray(response.data) ? response.data : [];
       
-      // Transform GraphInfo objects to match our Graph interface
-      const transformedGraphs = graphsData.map((graphInfo: any, index: number) => ({
-        id: index,
-        space_id: space,
-        graph_name: graphInfo.graph_uri ? (graphInfo.graph_uri.split('/').pop() || graphInfo.graph_uri) : `Graph ${index}`,
-        graph_uri: graphInfo.graph_uri || `http://example.org/graph${index}`,
-        graph_type: 'Graph',
-        triple_count: graphInfo.triple_count || 0,
-        created_time: graphInfo.created_time || new Date().toISOString(),
-        last_modified: graphInfo.updated_time || new Date().toISOString(),
-        description: `Graph: ${graphInfo.graph_uri || 'Unknown'}`,
-        status: 'active'
+      const transformedGraphs: Graph[] = graphsData.map((graphInfo: Record<string, unknown>) => ({
+        graph_uri: (graphInfo.graph_uri as string) || '',
+        graph_name: graphInfo.graph_uri
+          ? ((graphInfo.graph_uri as string).split('/').pop() || (graphInfo.graph_uri as string))
+          : 'Unknown',
+        triple_count: (graphInfo.triple_count as number) || 0,
       }));
-      
-      // If no graphs exist, add a default graph option
-      if (transformedGraphs.length === 0) {
-        transformedGraphs.push({
-          id: 0,
-          space_id: space,
-          graph_name: 'Default Graph',
-          graph_uri: 'http://vital.ai/haley.ai/graph/default',
-          graph_type: 'Default',
-          triple_count: 0,
-          created_time: new Date().toISOString(),
-          last_modified: new Date().toISOString(),
-          description: 'Default graph for this space',
-          status: 'active'
-        });
-      }
       
       setGraphs(transformedGraphs);
       setError(null);
@@ -115,12 +104,9 @@ const ObjectsLayout: React.FC = () => {
   };
 
   // Handle graph selection
-  const handleGraphChange = (graph: number | '') => {
-    setSelectedGraph(graph);
-    // Navigate to the new URL when graph is selected
-    if (selectedSpace && graph !== '') {
-      const selectedGraphObj = graphs.find(g => g.id === graph);
-      const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : graph;
+  const handleGraphChange = (graphUri: string) => {
+    setSelectedGraph(graphUri);
+    if (selectedSpace && graphUri) {
       const currentTab = getActiveTab();
       navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/objects/${currentTab}`);
     }
@@ -137,27 +123,13 @@ const ObjectsLayout: React.FC = () => {
     }
   }, [selectedSpace, fetchGraphs]);
 
-  // Handle URL with graph URI - find matching graph after graphs are loaded
-  // Only auto-select graph if we're on a URL that actually includes a graph
+  // Sync selectedGraph from URL param
   useEffect(() => {
-    if (graphId && spaceId && graphs.length > 0 && selectedGraph === '') {
-      console.log('Looking for graph with URI:', decodeURIComponent(graphId));
-      
-      // Try to find graph by URI (if graphId is a URI)
-      const graphByUri = graphs.find(g => g.graph_uri === decodeURIComponent(graphId));
-      if (graphByUri) {
-        console.log('Found matching graph:', graphByUri);
-        setSelectedGraph(graphByUri.id);
-      } else {
-        console.log('No matching graph found, trying as index');
-        // Try as index if it's a number
-        const graphIndex = parseInt(graphId);
-        if (!isNaN(graphIndex) && graphs[graphIndex]) {
-          setSelectedGraph(graphIndex);
-        }
-      }
+    if (graphId && spaceId && !selectedGraph) {
+      const decodedUri = decodeURIComponent(graphId);
+      setSelectedGraph(decodedUri);
     }
-  }, [graphId, spaceId, graphs, selectedGraph]);
+  }, [graphId, spaceId, selectedGraph]);
 
   const activeTab = getActiveTab();
 
@@ -199,7 +171,7 @@ const ObjectsLayout: React.FC = () => {
             <option value="">Choose a space...</option>
             {spaces.map((space) => (
               <option key={space.space} value={space.space}>
-                {space.space_name}
+                {space.space_name || space.space}
               </option>
             ))}
           </Select>
@@ -210,13 +182,13 @@ const ObjectsLayout: React.FC = () => {
           <Select
             id="graph-select"
             value={selectedGraph}
-            onChange={(e) => handleGraphChange(e.target.value ? parseInt(e.target.value) : '')}
+            onChange={(e) => handleGraphChange(e.target.value)}
             disabled={!selectedSpace || graphsLoading}
           >
             <option value="">Choose a graph...</option>
             {graphs.map((graph) => (
-              <option key={graph.id} value={graph.id}>
-                {graph.graph_name}
+              <option key={graph.graph_uri} value={graph.graph_uri}>
+                {graph.graph_name} ({graph.triple_count} triples)
               </option>
             ))}
           </Select>

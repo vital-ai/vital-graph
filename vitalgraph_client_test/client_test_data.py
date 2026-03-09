@@ -743,9 +743,12 @@ class ClientTestDataCreator:
         if event_name is None:
             event_name = f"{event_type} Event"
         
+        # Unique suffix for all child objects in this event graph
+        uid = uuid.uuid4().hex[:8]
+        
         # Create the business event entity
         event = KGEntity()
-        event.URI = self.generate_test_uri("business_event", f"{event_type.lower()}_{uuid.uuid4().hex[:8]}")
+        event.URI = self.generate_test_uri("business_event", f"{event_type.lower()}_{uid}")
         event.name = event_name
         event.kGEntityType = "http://vital.ai/ontology/haley-ai-kg#BusinessEventEntity"
         if reference_id:
@@ -754,14 +757,14 @@ class ClientTestDataCreator:
         
         # ========== Event Details Frame ==========
         event_details_frame = KGFrame()
-        event_details_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_details")
+        event_details_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_details_{uid}")
         event_details_frame.name = f"{event_name} Details"
         event_details_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#EventDetailsFrame"
         objects.append(event_details_frame)
         
         # Event type slot
         event_type_slot = KGTextSlot()
-        event_type_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_type")
+        event_type_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_type_{uid}")
         event_type_slot.name = f"{event_name} Type"
         event_type_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#EventTypeSlot"
         event_type_slot.textSlotValue = event_type
@@ -769,7 +772,7 @@ class ClientTestDataCreator:
         
         # Event timestamp slot
         event_timestamp_slot = KGDateTimeSlot()
-        event_timestamp_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_timestamp")
+        event_timestamp_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_timestamp_{uid}")
         event_timestamp_slot.name = f"{event_name} Timestamp"
         event_timestamp_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#EventTimestampSlot"
         event_timestamp_slot.dateTimeSlotValue = datetime.now()
@@ -777,7 +780,7 @@ class ClientTestDataCreator:
         
         # Event status slot
         event_status_slot = KGTextSlot()
-        event_status_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_status")
+        event_status_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_status_{uid}")
         event_status_slot.name = f"{event_name} Status"
         event_status_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#EventStatusSlot"
         event_status_slot.textSlotValue = "Active"
@@ -785,39 +788,39 @@ class ClientTestDataCreator:
         
         # Event details frame edges
         entity_details_edge = Edge_hasEntityKGFrame()
-        entity_details_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_details")
+        entity_details_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_details_{uid}")
         entity_details_edge.edgeSource = event.URI
         entity_details_edge.edgeDestination = event_details_frame.URI
         objects.append(entity_details_edge)
         
         details_type_edge = Edge_hasKGSlot()
-        details_type_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_type")
+        details_type_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_type_{uid}")
         details_type_edge.edgeSource = event_details_frame.URI
         details_type_edge.edgeDestination = event_type_slot.URI
         objects.append(details_type_edge)
         
         details_timestamp_edge = Edge_hasKGSlot()
-        details_timestamp_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_timestamp")
+        details_timestamp_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_timestamp_{uid}")
         details_timestamp_edge.edgeSource = event_details_frame.URI
         details_timestamp_edge.edgeDestination = event_timestamp_slot.URI
         objects.append(details_timestamp_edge)
         
         details_status_edge = Edge_hasKGSlot()
-        details_status_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_status")
+        details_status_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_details_status_{uid}")
         details_status_edge.edgeSource = event_details_frame.URI
         details_status_edge.edgeDestination = event_status_slot.URI
         objects.append(details_status_edge)
         
         # ========== Source Business Frame (References Organization) ==========
         source_business_frame = KGFrame()
-        source_business_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_source_business")
+        source_business_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_source_business_{uid}")
         source_business_frame.name = f"{event_name} Source Business"
         source_business_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#SourceBusinessFrame"
         objects.append(source_business_frame)
         
         # Source business entity slot (references the organization entity)
         source_business_entity_slot = KGEntitySlot()
-        source_business_entity_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_source_business_entity")
+        source_business_entity_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_source_business_entity_{uid}")
         source_business_entity_slot.name = f"{event_name} Source Business Entity"
         source_business_entity_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#BusinessEntitySlot"
         source_business_entity_slot.entitySlotValue = source_business_uri
@@ -825,13 +828,13 @@ class ClientTestDataCreator:
         
         # Source business frame edges
         entity_source_edge = Edge_hasEntityKGFrame()
-        entity_source_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_source")
+        entity_source_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_source_{uid}")
         entity_source_edge.edgeSource = event.URI
         entity_source_edge.edgeDestination = source_business_frame.URI
         objects.append(entity_source_edge)
         
         source_entity_edge = Edge_hasKGSlot()
-        source_entity_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_source_entity")
+        source_entity_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_source_entity_{uid}")
         source_entity_edge.edgeSource = source_business_frame.URI
         source_entity_edge.edgeDestination = source_business_entity_slot.URI
         objects.append(source_entity_edge)
@@ -839,7 +842,7 @@ class ClientTestDataCreator:
         # ========== Event-Specific Data Frame ==========
         # This frame contains data specific to the event type
         event_data_frame = KGFrame()
-        event_data_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_data")
+        event_data_frame.URI = self.generate_test_uri("frame", f"{event_type.lower()}_data_{uid}")
         event_data_frame.name = f"{event_name} Data"
         event_data_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#EventDataFrame"
         objects.append(event_data_frame)
@@ -848,7 +851,7 @@ class ClientTestDataCreator:
         if event_type == "NewCustomer":
             # Customer name slot
             customer_name_slot = KGTextSlot()
-            customer_name_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer_name")
+            customer_name_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer_name_{uid}")
             customer_name_slot.name = f"{event_name} Customer Name"
             customer_name_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#CustomerNameSlot"
             customer_name_slot.textSlotValue = "New Customer Inc"
@@ -856,7 +859,7 @@ class ClientTestDataCreator:
             
             # Customer value slot
             customer_value_slot = KGTextSlot()
-            customer_value_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer_value")
+            customer_value_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer_value_{uid}")
             customer_value_slot.name = f"{event_name} Customer Value"
             customer_value_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#CustomerValueSlot"
             customer_value_slot.textSlotValue = "$50,000"
@@ -864,13 +867,13 @@ class ClientTestDataCreator:
             
             # Connect slots to frame
             data_customer_name_edge = Edge_hasKGSlot()
-            data_customer_name_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer_name")
+            data_customer_name_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer_name_{uid}")
             data_customer_name_edge.edgeSource = event_data_frame.URI
             data_customer_name_edge.edgeDestination = customer_name_slot.URI
             objects.append(data_customer_name_edge)
             
             data_customer_value_edge = Edge_hasKGSlot()
-            data_customer_value_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer_value")
+            data_customer_value_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer_value_{uid}")
             data_customer_value_edge.edgeSource = event_data_frame.URI
             data_customer_value_edge.edgeDestination = customer_value_slot.URI
             objects.append(data_customer_value_edge)
@@ -878,7 +881,7 @@ class ClientTestDataCreator:
         elif event_type == "Transaction":
             # Transaction amount slot
             transaction_amount_slot = KGTextSlot()
-            transaction_amount_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_amount")
+            transaction_amount_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_amount_{uid}")
             transaction_amount_slot.name = f"{event_name} Amount"
             transaction_amount_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#TransactionAmountSlot"
             transaction_amount_slot.textSlotValue = "$25,000"
@@ -886,7 +889,7 @@ class ClientTestDataCreator:
             
             # Transaction ID slot
             transaction_id_slot = KGTextSlot()
-            transaction_id_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_id")
+            transaction_id_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_id_{uid}")
             transaction_id_slot.name = f"{event_name} Transaction ID"
             transaction_id_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#TransactionIDSlot"
             transaction_id_slot.textSlotValue = f"TXN-{uuid.uuid4().hex[:8].upper()}"
@@ -894,13 +897,13 @@ class ClientTestDataCreator:
             
             # Connect slots to frame
             data_amount_edge = Edge_hasKGSlot()
-            data_amount_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_amount")
+            data_amount_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_amount_{uid}")
             data_amount_edge.edgeSource = event_data_frame.URI
             data_amount_edge.edgeDestination = transaction_amount_slot.URI
             objects.append(data_amount_edge)
             
             data_id_edge = Edge_hasKGSlot()
-            data_id_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_id")
+            data_id_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_id_{uid}")
             data_id_edge.edgeSource = event_data_frame.URI
             data_id_edge.edgeDestination = transaction_id_slot.URI
             objects.append(data_id_edge)
@@ -908,7 +911,7 @@ class ClientTestDataCreator:
         elif event_type == "Cancellation":
             # Cancellation reason slot
             cancellation_reason_slot = KGTextSlot()
-            cancellation_reason_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_reason")
+            cancellation_reason_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_reason_{uid}")
             cancellation_reason_slot.name = f"{event_name} Reason"
             cancellation_reason_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#CancellationReasonSlot"
             cancellation_reason_slot.textSlotValue = "Service no longer needed"
@@ -916,7 +919,7 @@ class ClientTestDataCreator:
             
             # Affected customer slot
             affected_customer_slot = KGTextSlot()
-            affected_customer_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer")
+            affected_customer_slot.URI = self.generate_test_uri("slot", f"{event_type.lower()}_customer_{uid}")
             affected_customer_slot.name = f"{event_name} Affected Customer"
             affected_customer_slot.kGSlotType = "http://vital.ai/ontology/haley-ai-kg#AffectedCustomerSlot"
             affected_customer_slot.textSlotValue = "Former Customer Corp"
@@ -924,20 +927,20 @@ class ClientTestDataCreator:
             
             # Connect slots to frame
             data_reason_edge = Edge_hasKGSlot()
-            data_reason_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_reason")
+            data_reason_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_reason_{uid}")
             data_reason_edge.edgeSource = event_data_frame.URI
             data_reason_edge.edgeDestination = cancellation_reason_slot.URI
             objects.append(data_reason_edge)
             
             data_customer_edge = Edge_hasKGSlot()
-            data_customer_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer")
+            data_customer_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_data_customer_{uid}")
             data_customer_edge.edgeSource = event_data_frame.URI
             data_customer_edge.edgeDestination = affected_customer_slot.URI
             objects.append(data_customer_edge)
         
         # Connect event data frame to entity
         entity_data_edge = Edge_hasEntityKGFrame()
-        entity_data_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_data")
+        entity_data_edge.URI = self.generate_test_uri("edge", f"{event_type.lower()}_entity_data_{uid}")
         entity_data_edge.edgeSource = event.URI
         entity_data_edge.edgeDestination = event_data_frame.URI
         objects.append(entity_data_edge)

@@ -18,6 +18,9 @@ public class QueryMetadataExtractor {
 
         meta.put("queryType", queryTypeString(query));
 
+        // Base URI (for IRI()/URI() resolution)
+        meta.put("baseURI", query.getBaseURI());
+
         // Project vars
         List<String> projectVars = new ArrayList<>();
         if (query.isSelectType()) {

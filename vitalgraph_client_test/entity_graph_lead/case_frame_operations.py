@@ -290,11 +290,10 @@ class LeadFrameOperationsTester:
                     slot_type = None
                     old_value = None
                     new_value = None
-                    text_slots_found = 0
                     
+                    import time
                     for obj in frame_objects:
                         obj_type = type(obj).__name__
-                        # Try boolean first (most common in lead data - 58 slots)
                         if obj_type == 'KGBooleanSlot' and hasattr(obj, 'booleanSlotValue'):
                             updateable_slot = obj
                             slot_type = 'boolean'
@@ -302,19 +301,13 @@ class LeadFrameOperationsTester:
                             new_value = not old_value
                             obj.booleanSlotValue = new_value
                             break
-                        # Then text (56 slots) - skip first one to avoid conflict with child frame test
                         elif obj_type == 'KGTextSlot' and hasattr(obj, 'textSlotValue'):
-                            text_slots_found += 1
-                            if text_slots_found > 1:  # Use second text slot, not first
-                                updateable_slot = obj
-                                slot_type = 'text'
-                                old_value = str(obj.textSlotValue) if obj.textSlotValue else ""
-                                # Use a unique timestamp-based value to ensure we can verify the exact change
-                                import time
-                                new_value = f"TEST_UPDATE_{int(time.time() * 1000)}"
-                                obj.textSlotValue = new_value
-                                break
-                        # Then integer (4 slots)
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.textSlotValue) if obj.textSlotValue else ""
+                            new_value = f"TEST_UPDATE_{int(time.time() * 1000)}"
+                            obj.textSlotValue = new_value
+                            break
                         elif obj_type == 'KGIntegerSlot' and hasattr(obj, 'integerSlotValue'):
                             updateable_slot = obj
                             slot_type = 'integer'
@@ -339,9 +332,37 @@ class LeadFrameOperationsTester:
                         elif obj_type == 'KGDateTimeSlot' and hasattr(obj, 'dateTimeSlotValue'):
                             updateable_slot = obj
                             slot_type = 'datetime'
-                            old_value = int(obj.dateTimeSlotValue) if obj.dateTimeSlotValue else 0
-                            new_value = old_value + 86400000  # Add 1 day in ms
+                            old_value = str(obj.dateTimeSlotValue) if obj.dateTimeSlotValue else ""
+                            new_value = f"2099-12-31T23:59:59"
                             obj.dateTimeSlotValue = new_value
+                            break
+                        elif obj_type == 'KGLongTextSlot' and hasattr(obj, 'longTextSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.longTextSlotValue) if obj.longTextSlotValue else ""
+                            new_value = f"TEST_LONGTEXT_{int(time.time() * 1000)}"
+                            obj.longTextSlotValue = new_value
+                            break
+                        elif obj_type == 'KGLongSlot' and hasattr(obj, 'longSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'integer'
+                            old_value = int(obj.longSlotValue) if obj.longSlotValue else 0
+                            new_value = old_value + 1
+                            obj.longSlotValue = new_value
+                            break
+                        elif obj_type == 'KGURISlot' and hasattr(obj, 'uriSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.uriSlotValue) if obj.uriSlotValue else ""
+                            new_value = f"urn:test:update_{int(time.time() * 1000)}"
+                            obj.uriSlotValue = new_value
+                            break
+                        elif obj_type == 'KGChoiceSlot' and hasattr(obj, 'choiceSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.choiceSlotValue) if obj.choiceSlotValue else ""
+                            new_value = f"TEST_CHOICE_{int(time.time() * 1000)}"
+                            obj.choiceSlotValue = new_value
                             break
                     
                     if updateable_slot:
@@ -406,7 +427,7 @@ class LeadFrameOperationsTester:
                                     elif slot_type == 'double':
                                         verified = abs(float(updated_slot.doubleSlotValue) - new_value) < 0.001
                                     elif slot_type == 'datetime':
-                                        verified = int(updated_slot.dateTimeSlotValue) == new_value
+                                        verified = str(updated_slot.dateTimeSlotValue) == new_value
                                     elif slot_type == 'currency':
                                         verified = abs(float(updated_slot.currencySlotValue) - new_value) < 0.01
                                     elif slot_type == 'choice':
@@ -706,15 +727,22 @@ class LeadFrameOperationsTester:
                     updateable_slot = None
                     slot_type = None
                     
+                    import time
                     for obj in frame_objects:
                         obj_type = type(obj).__name__
                         if obj_type == 'KGTextSlot' and hasattr(obj, 'textSlotValue'):
                             updateable_slot = obj
                             slot_type = 'text'
                             old_value = str(obj.textSlotValue) if obj.textSlotValue else ""
-                            import time
                             new_value = f"CHILD_TEST_{int(time.time() * 1000)}"
                             obj.textSlotValue = new_value
+                            break
+                        elif obj_type == 'KGLongTextSlot' and hasattr(obj, 'longTextSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.longTextSlotValue) if obj.longTextSlotValue else ""
+                            new_value = f"CHILD_LONGTEXT_{int(time.time() * 1000)}"
+                            obj.longTextSlotValue = new_value
                             break
                         elif obj_type == 'KGBooleanSlot' and hasattr(obj, 'booleanSlotValue'):
                             updateable_slot = obj
@@ -730,6 +758,13 @@ class LeadFrameOperationsTester:
                             new_value = old_value + 100
                             obj.integerSlotValue = new_value
                             break
+                        elif obj_type == 'KGLongSlot' and hasattr(obj, 'longSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'integer'
+                            old_value = int(obj.longSlotValue) if obj.longSlotValue else 0
+                            new_value = old_value + 100
+                            obj.longSlotValue = new_value
+                            break
                         elif obj_type == 'KGCurrencySlot' and hasattr(obj, 'currencySlotValue'):
                             updateable_slot = obj
                             slot_type = 'currency'
@@ -743,6 +778,27 @@ class LeadFrameOperationsTester:
                             old_value = float(obj.doubleSlotValue) if obj.doubleSlotValue else 0.0
                             new_value = old_value + 10.5
                             obj.doubleSlotValue = new_value
+                            break
+                        elif obj_type == 'KGDateTimeSlot' and hasattr(obj, 'dateTimeSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'datetime'
+                            old_value = str(obj.dateTimeSlotValue) if obj.dateTimeSlotValue else ""
+                            new_value = f"2099-12-31T23:59:59"
+                            obj.dateTimeSlotValue = new_value
+                            break
+                        elif obj_type == 'KGURISlot' and hasattr(obj, 'uriSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.uriSlotValue) if obj.uriSlotValue else ""
+                            new_value = f"urn:test:child_update_{int(time.time() * 1000)}"
+                            obj.uriSlotValue = new_value
+                            break
+                        elif obj_type == 'KGChoiceSlot' and hasattr(obj, 'choiceSlotValue'):
+                            updateable_slot = obj
+                            slot_type = 'text'
+                            old_value = str(obj.choiceSlotValue) if obj.choiceSlotValue else ""
+                            new_value = f"CHILD_CHOICE_{int(time.time() * 1000)}"
+                            obj.choiceSlotValue = new_value
                             break
                     
                     if updateable_slot:

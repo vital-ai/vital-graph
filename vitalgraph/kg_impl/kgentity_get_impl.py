@@ -24,7 +24,7 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ..model.quad_model import QuadResponse
 
 # Import backend utilities
-from .kg_backend_utils import FusekiPostgreSQLBackendAdapter, BackendOperationResult
+from .kg_backend_utils import KGBackendInterface, BackendOperationResult
 
 
 class EntityRetrievalMode(Enum):
@@ -57,7 +57,7 @@ class KGEntityGetProcessor:
         entity_uri: Optional[str] = None,
         reference_id: Optional[str] = None,
         include_entity_graph: bool = False,
-        backend_adapter: Optional[FusekiPostgreSQLBackendAdapter] = None
+        backend_adapter: Optional[KGBackendInterface] = None
     ) -> List[GraphObject]:
         """
         Retrieve a single entity by URI or reference ID.
@@ -115,7 +115,7 @@ class KGEntityGetProcessor:
     
     async def _retrieve_entity_from_backend(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         entity_uri: Optional[str] = None,
@@ -171,7 +171,7 @@ async def get_entity(
     graph_id: str,
     entity_uri: str,
     include_entity_graph: bool = False,
-    backend_adapter: Optional[FusekiPostgreSQLBackendAdapter] = None,
+    backend_adapter: Optional[KGBackendInterface] = None,
     logger: Optional[logging.Logger] = None
 ) -> QuadResponse:
     """

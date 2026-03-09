@@ -90,6 +90,9 @@ class VitalGraphAppImpl:
         # Event loop stall monitor
         self.event_loop_monitor = EventLoopMonitor(threshold_ms=100, check_interval_ms=50)
         
+        # Process scheduler (initialized in startup_event after DB connection)
+        self.process_scheduler = None
+        
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
         self.logger.debug(f"🔍 Retrieved space_manager from VitalGraphImpl: {self.space_manager}")
@@ -253,6 +256,57 @@ class VitalGraphAppImpl:
                         self.logger.warning(f"Entity Registry initialization failed: {e}")
                         self.entity_registry = None
                     
+                    # Initialize Agent Registry (global, uses same asyncpg pool)
+                    try:
+                        pool = getattr(self.db_impl, 'connection_pool', None)
+                        if pool:
+                            from vitalgraph.agent_registry.agent_registry_impl import AgentRegistryImpl
+                            self.agent_registry = AgentRegistryImpl(pool)
+                            self.logger.info("✅ Agent Registry initialized")
+                        else:
+                            self.logger.warning("Agent Registry skipped - no connection pool available")
+                            self.agent_registry = None
+                    except Exception as e:
+                        self.logger.warning(f"Agent Registry initialization failed: {e}")
+                        self.agent_registry = None
+                    
+                    # Initialize Process Scheduler for periodic maintenance
+                    try:
+                        pool = getattr(self.db_impl, 'connection_pool', None)
+                        if pool:
+                            from vitalgraph.process.process_tracker import ProcessTracker
+                            from vitalgraph.process.process_scheduler import ProcessScheduler
+                            from vitalgraph.process.maintenance_job import MaintenanceJob
+                            
+                            # Get PostgreSQL config for lock manager connection
+                            backend_type = self.config.get_backend_type()
+                            if backend_type == 'sparql_sql':
+                                pg_config = self.config.get_sparql_sql_config().get('database', {})
+                            else:
+                                pg_config = self.config.get_fuseki_postgresql_config().get('database', {})
+                            
+                            tracker = ProcessTracker(pool)
+                            maintenance_job = MaintenanceJob(pool, process_tracker=tracker)
+                            
+                            # Get maintenance config
+                            maintenance_config = self.config.config_data.get('maintenance', {})
+                            interval = maintenance_config.get('interval_seconds', 300)
+                            enabled = maintenance_config.get('enabled', True)
+                            
+                            self.process_scheduler = ProcessScheduler(pool, pg_config, enabled=enabled)
+                            self.process_scheduler.register_job(
+                                name="db_maintenance",
+                                interval_seconds=interval,
+                                handler=maintenance_job,
+                                process_type="maintenance",
+                            )
+                            await self.process_scheduler.start()
+                            self.logger.info(f"✅ Process scheduler started (interval={interval}s, enabled={enabled})")
+                        else:
+                            self.logger.warning("Process scheduler skipped - no connection pool available")
+                    except Exception as e:
+                        self.logger.warning(f"Process scheduler initialization failed: {e}")
+                    
                     # Endpoints are already initialized in __init__
                     # SpaceManager is now fully initialized and connected
                     self.logger.info("SpaceManager ready for endpoint operations")
@@ -307,6 +361,14 @@ class VitalGraphAppImpl:
             self.logger.info("🛑 Shutting down VitalGraph server...")
             
             try:
+                # Stop process scheduler
+                if self.process_scheduler:
+                    try:
+                        await self.process_scheduler.stop()
+                        self.logger.info("✅ Process scheduler stopped")
+                    except Exception as e:
+                        self.logger.warning(f"Error stopping process scheduler: {e}")
+                
                 # Stop event loop monitor
                 try:
                     await self.event_loop_monitor.stop()
@@ -372,6 +434,12 @@ class VitalGraphAppImpl:
         self._init_data_routers()
         self.logger.info("Initializing entity registry routes...")
         self._init_entity_registry_routes()
+        self.logger.info("Initializing agent registry routes...")
+        self._init_agent_registry_routes()
+        self.logger.info("Initializing process routes...")
+        self._init_process_routes()
+        self.logger.info("Initializing admin routes...")
+        self._init_admin_routes()
         self.logger.info("Initializing frontend routes...")
         self._init_frontend_routes()
         self.logger.info("All endpoints initialized successfully!")
@@ -518,6 +586,27 @@ class VitalGraphAppImpl:
         
         entity_registry_router = create_entity_registry_router(self, self.get_current_user)
         self.app.include_router(entity_registry_router, prefix="/api/registry")
+    
+    def _init_agent_registry_routes(self):
+        """Initialize Agent Registry endpoint routes."""
+        from vitalgraph.agent_registry.agent_endpoint import create_agent_registry_router
+        
+        agent_registry_router = create_agent_registry_router(self, self.get_current_user)
+        self.app.include_router(agent_registry_router, prefix="/api/agents")
+    
+    def _init_process_routes(self):
+        """Initialize Process tracking endpoint routes."""
+        from vitalgraph.endpoint.process_endpoint import create_process_router
+        
+        process_router = create_process_router(self, self.get_current_user)
+        self.app.include_router(process_router, prefix="/api", tags=["Processes"])
+    
+    def _init_admin_routes(self):
+        """Initialize admin endpoint routes (resync, etc.)."""
+        from vitalgraph.endpoint.admin_endpoint import create_admin_router
+        
+        admin_router = create_admin_router(self.space_manager, self.get_current_user)
+        self.app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
     
     def _init_frontend_routes(self):
         """Initialize frontend serving routes."""

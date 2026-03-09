@@ -425,7 +425,11 @@ class KGEntitiesEndpoint:
         current_user: Dict,
     ) -> Union[EntityCreateResponse, EntityUpdateResponse]:
         """Create or update entities from quads."""
+        import time as _time
+        _t_endpoint_start = _time.monotonic()
         vitalsigns_objects = quad_list_to_graphobjects(quads)
+        _t_deserialize = _time.monotonic()
+        self.logger.info(f"⏱️  ENDPOINT quad_list_to_graphobjects: {_t_deserialize - _t_endpoint_start:.3f}s ({len(quads)} quads → {len(vitalsigns_objects)} objects)")
         _lock_ctxs = []
         try:
             if not graph_id:
@@ -485,13 +489,16 @@ class KGEntitiesEndpoint:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
 
             processor = KGEntityCreateProcessor(backend_adapter)
-            return await processor.create_or_update_entities(
+            _result = await processor.create_or_update_entities(
                 space_id=space_id,
                 graph_id=graph_id,
                 vitalsigns_objects=vitalsigns_objects,
                 operation_mode=impl_operation_mode,
                 parent_uri=parent_uri,
             )
+            _t_endpoint_end = _time.monotonic()
+            self.logger.info(f"⏱️  ENDPOINT total: {_t_endpoint_end - _t_endpoint_start:.3f}s")
+            return _result
 
         except Exception as e:
             self.logger.error(f"Error processing entities (new format): {e}")
@@ -1474,9 +1481,17 @@ class KGEntitiesEndpoint:
             self.logger.info(f"⏱️ UPDATE_ENDPOINT discover_frames: {_u3-_u2:.3f}s ({len(existing_frames)} frames)")
             
             # Group incoming objects by frame for atomic operations (including connecting edges)
-            frame_groups = {}
-            connecting_edges = []  # Entity-to-frame and frame-to-frame edges
+            # Two-pass approach: first collect frames, then assign other objects
+            from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+            from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
+            from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
+            from ai_haley_kg_domain.model.KGSlot import KGSlot
+            from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
             
+            frame_groups = {}
+            connecting_edges = []
+            
+            # Pass 1: collect all KGFrame objects and initialize groups
             for graph_obj in graph_objects:
                 if isinstance(graph_obj, KGFrame):
                     frame_uri = str(graph_obj.URI)
@@ -1487,68 +1502,63 @@ class KGEntitiesEndpoint:
                             updated_uri="",
                             updated_count=0
                         )
-                    
-                    # Set grouping URI properties for the frame
                     graph_obj.frameGraphURI = frame_uri
                     graph_obj.kGGraphURI = entity_uri
-                    
-                    # Initialize frame group for atomic operation
                     if frame_uri not in frame_groups:
                         frame_groups[frame_uri] = {
-                            'frame_objects': [],  # Objects with frameGraphURI
-                            'connecting_edges': []  # Edges without frameGraphURI but part of atomic operation
+                            'frame_objects': [],
+                            'connecting_edges': []
                         }
                     frame_groups[frame_uri]['frame_objects'].append(graph_obj)
-                    
-                else:
-                    # Handle other objects (slots, edges, etc.)
-                    if hasattr(graph_obj, 'URI') and graph_obj.URI:
-                        graph_obj.kGGraphURI = entity_uri
-                        
-                        # Check if this is a connecting edge (Edge_hasEntityKGFrame or frame-to-frame)
-                        from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
-                        from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
-                        from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
-                        is_entity_frame_edge = isinstance(graph_obj, (Edge_hasEntityKGFrame, Edge_hasKGFrame))
-                        is_slot_edge = isinstance(graph_obj, Edge_hasKGSlot)
-                        
-                        if is_entity_frame_edge:
-                            # Entity-to-frame edges don't have frameGraphURI but are part of atomic operations
-                            connecting_edges.append(graph_obj)
-                        elif is_slot_edge:
-                            # Slot edges connect frame to slot - they need frameGraphURI set to the frame URI
-                            # The edgeSource should be the frame URI
-                            if hasattr(graph_obj, 'edgeSource') and graph_obj.edgeSource:
-                                frame_uri_for_edge = str(graph_obj.edgeSource)
-                                graph_obj.frameGraphURI = frame_uri_for_edge
-                                if frame_uri_for_edge not in frame_groups:
-                                    frame_groups[frame_uri_for_edge] = {
-                                        'frame_objects': [],
-                                        'connecting_edges': []
-                                    }
-                                frame_groups[frame_uri_for_edge]['frame_objects'].append(graph_obj)
-                            else:
-                                self.logger.warning(f"Edge_hasKGSlot missing edgeSource: {graph_obj.URI}")
-                        else:
-                            # Internal frame objects (slots, etc.) - assign to appropriate frame
-                            target_frame_uri = None
-                            if hasattr(graph_obj, 'frameGraphURI') and graph_obj.frameGraphURI:
-                                target_frame_uri = str(graph_obj.frameGraphURI)
-                            else:
-                                # Determine frame association for objects without explicit frameGraphURI
-                                # This could be based on relationships or other logic
-                                frame_keys = list(frame_groups.keys())
-                                if frame_keys:
-                                    target_frame_uri = frame_keys[0]  # Assign to first frame
-                                    graph_obj.frameGraphURI = target_frame_uri
-                            
-                            if target_frame_uri:
-                                if target_frame_uri not in frame_groups:
-                                    frame_groups[target_frame_uri] = {
-                                        'frame_objects': [],
-                                        'connecting_edges': []
-                                    }
-                                frame_groups[target_frame_uri]['frame_objects'].append(graph_obj)
+            
+            # Pass 2: assign slots and edges to their frame groups
+            for graph_obj in graph_objects:
+                if isinstance(graph_obj, KGFrame):
+                    continue  # already handled
+                
+                graph_obj.kGGraphURI = entity_uri
+                
+                if isinstance(graph_obj, Edge_hasEntityKGFrame):
+                    connecting_edges.append(graph_obj)
+                elif isinstance(graph_obj, Edge_hasKGSlot):
+                    edge_source = str(graph_obj.edgeSource) if graph_obj.edgeSource else None
+                    if edge_source and edge_source in frame_groups:
+                        graph_obj.frameGraphURI = edge_source
+                        frame_groups[edge_source]['frame_objects'].append(graph_obj)
+                    elif edge_source:
+                        frame_groups[edge_source] = {'frame_objects': [graph_obj], 'connecting_edges': []}
+                        graph_obj.frameGraphURI = edge_source
+                    else:
+                        self.logger.warning(f"Edge_hasKGSlot missing edgeSource: {graph_obj.URI}")
+                elif isinstance(graph_obj, KGSlot):
+                    # Find frame via Edge_hasKGSlot edgeDestination, or fall back to frameGraphURI / first frame
+                    target_frame_uri = None
+                    if graph_obj.frameGraphURI:
+                        target_frame_uri = str(graph_obj.frameGraphURI)
+                    else:
+                        # Look for an Edge_hasKGSlot pointing to this slot
+                        slot_uri = str(graph_obj.URI)
+                        for other in graph_objects:
+                            if isinstance(other, Edge_hasKGSlot) and str(other.edgeDestination) == slot_uri:
+                                target_frame_uri = str(other.edgeSource)
+                                break
+                        if not target_frame_uri:
+                            frame_keys = list(frame_groups.keys())
+                            if frame_keys:
+                                target_frame_uri = frame_keys[0]
+                    if target_frame_uri:
+                        graph_obj.frameGraphURI = target_frame_uri
+                        if target_frame_uri not in frame_groups:
+                            frame_groups[target_frame_uri] = {'frame_objects': [], 'connecting_edges': []}
+                        frame_groups[target_frame_uri]['frame_objects'].append(graph_obj)
+                elif isinstance(graph_obj, VITAL_Edge):
+                    # Other edge types (Edge_hasKGFrame etc.) — assign to frame group
+                    edge_source = str(graph_obj.edgeSource) if graph_obj.edgeSource else None
+                    if edge_source and edge_source in frame_groups:
+                        graph_obj.frameGraphURI = edge_source
+                        frame_groups[edge_source]['frame_objects'].append(graph_obj)
+                    else:
+                        connecting_edges.append(graph_obj)
             
             # Validate parent-child relationships if parent_frame_uri is provided
             if parent_frame_uri and frame_groups:

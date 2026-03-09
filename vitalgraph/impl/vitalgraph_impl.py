@@ -49,6 +49,23 @@ class VitalGraphImpl:
                     self.space_backend = BackendFactory.create_space_backend(backend_config_obj)
                     logger.info(f"✅ Initialized Fuseki backend successfully: {fuseki_config.get('server_url')}")
                     
+                elif backend_type == 'sparql_sql':
+                    logger.debug("Initializing sparql_sql backend...")
+                    sparql_sql_config = self.config.get_sparql_sql_config()
+
+                    backend_config_obj = BackendConfig(
+                        backend_type=BackendType.SPARQL_SQL,
+                        connection_params=sparql_sql_config
+                    )
+
+                    self.space_backend = BackendFactory.create_space_backend(backend_config_obj)
+
+                    # SparqlSQLSpaceImpl owns a SparqlSQLDbImpl (created on connect)
+                    if hasattr(self.space_backend, 'db_impl'):
+                        self.db_impl = self.space_backend.db_impl
+                    logger.info("Initialized sparql_sql backend (sidecar=%s)",
+                                sparql_sql_config.get('sidecar', {}).get('url', 'http://localhost:7070'))
+
                 elif backend_type == 'fuseki_postgresql':
                     logger.debug(f"🔍 Initializing fuseki_postgresql hybrid backend...")
                     # Create Fuseki-PostgreSQL hybrid backend configuration
@@ -97,13 +114,23 @@ class VitalGraphImpl:
                 self.space_backend = None
         
         # Initialize SpaceManager with the appropriate backend
+        # Note: sparql_sql backend has db_impl=None until connect() is called
         logger.debug(f"🔍 About to create SpaceManager")
         logger.debug(f"🔍 self.db_impl = {self.db_impl}")
         logger.debug(f"🔍 self.space_backend = {getattr(self, 'space_backend', None)}")
         
-        if self.db_impl is None:
-            logger.error(f"❌ Cannot create SpaceManager - db_impl is None")
+        if self.db_impl is None and not getattr(self, 'space_backend', None):
+            logger.error(f"❌ Cannot create SpaceManager - no db_impl or space_backend")
             self.space_manager = None
+        elif self.db_impl is None and getattr(self, 'space_backend', None):
+            # sparql_sql backend: create SpaceManager now so endpoints get a real reference;
+            # db_impl will be set after connect()
+            try:
+                self.space_manager = SpaceManager(db_impl=None, space_backend=self.space_backend)
+                logger.info("SpaceManager created eagerly (sparql_sql, db_impl pending connect)")
+            except Exception as e:
+                logger.error(f"❌ Failed to create SpaceManager: {e}")
+                self.space_manager = None
         else:
             try:
                 backend = getattr(self, 'space_backend', None) or self.db_impl
@@ -146,28 +173,33 @@ class VitalGraphImpl:
     async def connect_database(self):
         """Connect to database and automatically initialize SpaceManager."""
         logger.debug("VitalGraphImpl.connect_database() called")
-        if not self.db_impl:
-            logger.warning("⚠️ No database implementation available")
-            return False
             
         # Connect to database and space backend
         logger.debug(f"🔍 Starting database connection in VitalGraphImpl.connect_database()")
         
-        # For hybrid backends, connect the space_backend which handles both systems
+        # For backends with space_backend (hybrid, sparql_sql), connect it first
         if hasattr(self, 'space_backend') and self.space_backend:
-            logger.debug(f"🔍 Connecting hybrid space backend: {type(self.space_backend)}")
+            logger.debug(f"🔍 Connecting space backend: {type(self.space_backend)}")
             connected = await self.space_backend.connect()
             if not connected:
-                logger.error("❌ Failed to connect to hybrid space backend")
+                logger.error("❌ Failed to connect to space backend")
                 return False
-            logger.debug(f"✅ Hybrid space backend connected successfully")
-        else:
+            logger.debug(f"✅ Space backend connected successfully")
+            
+            # For sparql_sql backend, db_impl is created during connect()
+            if self.db_impl is None and hasattr(self.space_backend, 'db_impl'):
+                self.db_impl = self.space_backend.db_impl
+                logger.debug(f"🔍 Picked up db_impl from space_backend: {type(self.db_impl)}")
+        elif self.db_impl:
             # For non-hybrid backends, connect db_impl directly
             connected = await self.db_impl.connect()
             if not connected:
                 logger.error("❌ Failed to connect to database")
                 return False
             logger.debug(f"✅ Database connected successfully")
+        else:
+            logger.warning("⚠️ No database implementation or space backend available")
+            return False
             
         try:
             logger.debug(f"🔍 Creating SignalManager in VitalGraphImpl")
@@ -183,8 +215,26 @@ class VitalGraphImpl:
             import traceback
             logger.debug(traceback.format_exc())
 
-        await self.space_manager.initialize_from_database()
-        logger.info(f"✅ SpaceManager automatically initialized from database with {len(self.space_manager)} spaces")
+        # Update SpaceManager's db_impl if it was created eagerly without one (sparql_sql)
+        if self.space_manager is not None and self.space_manager.db_impl is None and self.db_impl:
+            self.space_manager.db_impl = self.db_impl
+            logger.info("Updated SpaceManager with db_impl after connect")
+        elif self.space_manager is None and self.db_impl:
+            try:
+                self.space_manager = SpaceManager(
+                    db_impl=self.db_impl,
+                    space_backend=getattr(self, 'space_backend', None)
+                )
+                logger.info("SpaceManager created after connect (was deferred)")
+            except Exception as e:
+                logger.error(f"❌ Failed to create SpaceManager after connect: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                return False
+
+        if self.space_manager:
+            await self.space_manager.initialize_from_database()
+            logger.info(f"✅ SpaceManager initialized from database with {len(self.space_manager)} spaces")
                 
         return True
     

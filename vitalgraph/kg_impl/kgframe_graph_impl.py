@@ -25,7 +25,7 @@ from ai_haley_kg_domain.model.KGSlot import KGSlot
 
 # Common utilities
 from vitalgraph.kg_impl.kg_backend_utils import (
-    FusekiPostgreSQLBackendAdapter,
+    KGBackendInterface,
     BackendOperationResult
 )
 
@@ -56,7 +56,7 @@ class KGFrameGraphProcessor:
     
     async def get_frame_graph(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         frame_uri: str
@@ -129,8 +129,8 @@ class KGFrameGraphProcessor:
             
             # Phase 3: Fetch all objects by their URIs as VitalSigns objects
             
-            # Use backend's database objects layer to get objects by URIs
-            graph_objects = await backend_adapter.backend.db_objects.get_objects_by_uris(space_id, subject_uris, graph_id)
+            # Use adapter's get_objects_by_uris (routed through KGBackendInterface)
+            graph_objects = await backend_adapter.get_objects_by_uris(space_id, subject_uris, graph_id)
             
             if not graph_objects:
                 self.logger.warning(f"No objects returned for frame graph")
@@ -160,7 +160,7 @@ class KGFrameGraphProcessor:
     
     async def delete_frame_graph(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         frame_uri: str

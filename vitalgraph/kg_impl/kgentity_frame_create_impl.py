@@ -19,11 +19,14 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 # RDFLib imports for proper quad building with type preservation
 from rdflib import URIRef, Literal, BNode
 
-# Domain model imports for edge creation
+# Domain model imports for edge creation and type categorization
 from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+from ai_haley_kg_domain.model.KGFrame import KGFrame
+from ai_haley_kg_domain.model.KGSlot import KGSlot
+from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
 
 
 def _sparql_binding_to_rdflib(binding) -> Any:
@@ -104,7 +107,7 @@ class KGEntityFrameCreateProcessor:
     
     async def create_entity_frame(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         entity_uri: str,
@@ -225,7 +228,7 @@ class KGEntityFrameCreateProcessor:
                 fuseki_success=False
             )
     
-    async def validate_entity_exists(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str, 
+    async def validate_entity_exists(self, backend_adapter: KGBackendInterface, space_id: str, 
                                    graph_id: str, entity_uri: str) -> bool:
         """
         Validate target entity exists before frame creation.
@@ -269,15 +272,12 @@ class KGEntityFrameCreateProcessor:
         
         # First pass: categorize objects by type (extracted from lines 980-993)
         for obj in graph_objects:
-            # Categorize objects by type
-            if hasattr(obj, '__class__'):
-                class_name = obj.__class__.__name__
-                if 'KGFrame' in class_name:
-                    frame_objects.append(obj)
-                elif 'KGSlot' in class_name or 'Slot' in class_name:
-                    slot_objects.append(obj)
-                elif 'Edge_' in class_name:
-                    edge_objects.append(obj)
+            if isinstance(obj, VITAL_Edge):
+                edge_objects.append(obj)
+            elif isinstance(obj, KGFrame):
+                frame_objects.append(obj)
+            elif isinstance(obj, KGSlot):
+                slot_objects.append(obj)
         
         self.logger.debug(f"📦 Categorized objects: {len(frame_objects)} frames, {len(slot_objects)} slots, {len(edge_objects)} edges")
         
@@ -315,45 +315,33 @@ class KGEntityFrameCreateProcessor:
             except Exception as e:
                 self.logger.warning(f"⚠️ Could not serialize object to JSON: {e}")
             
-            # Set entity-level grouping URI for ALL objects (using short property name)
-            # This is CRITICAL for hierarchical frames - all frames must have kGGraphURI set to the entity
-            if hasattr(obj, 'kGGraphURI'):
-                obj.kGGraphURI = entity_uri
-                self.logger.debug(f"🔧 Set kGGraphURI={entity_uri} for {obj.__class__.__name__}")
-            else:
-                self.logger.warning(f"⚠️ Object {obj.__class__.__name__} does not have kGGraphURI property")
+            # Set entity-level grouping URI for ALL objects
+            # All KG nodes (KGFrame, KGSlot) and KG edges have kGGraphURI
+            obj.kGGraphURI = entity_uri
+            self.logger.debug(f"🔧 Set kGGraphURI={entity_uri} for {obj.__class__.__name__}")
             
             # Set frame-level grouping URI based on object type
-            if hasattr(obj, '__class__'):
-                class_name = obj.__class__.__name__
-                
-                # For frame objects, set frameGraphURI to their own URI
-                if 'KGFrame' in class_name:
-                    obj.frameGraphURI = obj.URI
-                    self.logger.debug(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
-                    
-                # For slots, set frameGraphURI to the frame they belong to
-                elif 'Slot' in class_name:
-                    # Find the frame this slot should belong to
-                    frame_candidates = [o for o in frame_objects if hasattr(o, '__class__') and 'KGFrame' in o.__class__.__name__]
-                    if frame_candidates:
-                        target_frame = frame_candidates[0]  # Use first frame (simplified)
-                        obj.frameGraphURI = target_frame.URI
-                        self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
-                    else:
-                        self.logger.warning(f"⚠️ No frame candidates found for slot {obj.URI}")
-                
-                # For edges within frames, also set frameGraphURI
-                elif 'Edge_hasKGSlot' in class_name:
-                    # Frame-to-slot edges should have frameGraphURI set to the frame URI
-                    frame_candidates = [o for o in frame_objects if hasattr(o, '__class__') and 'KGFrame' in o.__class__.__name__]
-                    if frame_candidates:
-                        target_frame = frame_candidates[0]  # Use first frame (simplified)
-                        
-                        obj.frameGraphURI = target_frame.URI
-                        self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
-                    else:
-                        self.logger.warning(f"⚠️ No frame candidates found for edge {obj.URI}")
+            # Entity-to-frame edges (Edge_hasEntityKGFrame) are NOT part of the frame — skip
+            if isinstance(obj, Edge_hasEntityKGFrame):
+                pass
+            elif isinstance(obj, KGFrame):
+                obj.frameGraphURI = obj.URI
+                self.logger.debug(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
+            elif isinstance(obj, KGSlot):
+                frame_candidates = [o for o in frame_objects if isinstance(o, KGFrame)]
+                if frame_candidates:
+                    target_frame = frame_candidates[0]
+                    obj.frameGraphURI = target_frame.URI
+                    self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
+                else:
+                    self.logger.warning(f"⚠️ No frame candidates found for slot {obj.URI}")
+            elif isinstance(obj, VITAL_Edge):
+                # Slot edges (Edge_hasKGSlot, Edge_hasKGFrame) belong to the frame
+                frame_candidates = [o for o in frame_objects if isinstance(o, KGFrame)]
+                if frame_candidates:
+                    target_frame = frame_candidates[0]
+                    obj.frameGraphURI = target_frame.URI
+                    self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
             
             # Log object properties after modification
             try:
@@ -409,7 +397,7 @@ class KGEntityFrameCreateProcessor:
         
         return entity_frame_edges
     
-    async def execute_atomic_frame_update(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str,
+    async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
                                         operation_mode: str) -> tuple:
         """
@@ -475,7 +463,7 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error in atomic frame {operation_mode}: {e}")
             return (False, False)
     
-    async def build_delete_quads_for_frames(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str,
+    async def build_delete_quads_for_frames(self, backend_adapter: KGBackendInterface, space_id: str,
                                           graph_id: str, frame_objects: List[GraphObject]) -> List[tuple]:
         """
         Build delete quads for existing frame data that needs to be replaced.
@@ -630,7 +618,7 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error building insert quads: {e}")
             return []
 
-    async def handle_frame_update_deletion(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str, 
+    async def handle_frame_update_deletion(self, backend_adapter: KGBackendInterface, space_id: str, 
                                          graph_id: str, frame_objects: List[GraphObject]) -> bool:
         """
         Handle UPDATE/UPSERT operations by deleting existing frame members.
@@ -726,7 +714,7 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error handling frame update deletion: {e}")
             return False
     
-    async def _build_delete_quads_for_subjects(self, backend_adapter: FusekiPostgreSQLBackendAdapter,
+    async def _build_delete_quads_for_subjects(self, backend_adapter: KGBackendInterface,
                                                space_id: str, graph_id: str,
                                                all_objects: List[GraphObject]) -> List[tuple]:
         """
@@ -790,7 +778,7 @@ class KGEntityFrameCreateProcessor:
             self.logger.error(f"Error building delete quads for subjects: {e}")
             return []
 
-    async def execute_frame_creation(self, backend_adapter: FusekiPostgreSQLBackendAdapter, space_id: str, 
+    async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str, 
                                    graph_id: str, all_objects: List[GraphObject]) -> bool:
         """
         Execute atomic frame creation via backend using update_quads.

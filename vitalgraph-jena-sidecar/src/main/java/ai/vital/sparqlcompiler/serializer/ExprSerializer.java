@@ -1,6 +1,8 @@
 package ai.vital.sparqlcompiler.serializer;
 
 import org.apache.jena.sparql.expr.*;
+import org.apache.jena.sparql.expr.aggregate.AggGroupConcat;
+import org.apache.jena.sparql.expr.aggregate.AggGroupConcatDistinct;
 import org.apache.jena.sparql.expr.aggregate.Aggregator;
 
 import java.util.ArrayList;
@@ -29,22 +31,34 @@ public class ExprSerializer {
             result.put("type", "ExprAggregator");
             Aggregator agg = exprAgg.getAggregator();
             result.put("name", agg.getName());
-            result.put("distinct", agg.toString().contains("DISTINCT"));
+            result.put("distinct", agg.toString().toLowerCase().contains("distinct"));
             ExprList aggExprs = agg.getExprList();
             if (aggExprs != null && !aggExprs.isEmpty()) {
                 result.put("expr", serialize(aggExprs.get(0)));
             } else {
                 result.put("expr", null);
             }
+            // Serialize GROUP_CONCAT separator
+            if (agg instanceof AggGroupConcat gc) {
+                result.put("separator", gc.getSeparator());
+            } else if (agg instanceof AggGroupConcatDistinct gcd) {
+                result.put("separator", gcd.getSeparator());
+            }
 
         } else if (expr instanceof ExprFunction1 f1) {
             result.put("type", "ExprFunction1");
             result.put("name", f1.getFunctionSymbol().getSymbol());
+            if (f1.getFunctionIRI() != null) {
+                result.put("functionIRI", f1.getFunctionIRI());
+            }
             result.put("arg", serialize(f1.getArg()));
 
         } else if (expr instanceof ExprFunction2 f2) {
             result.put("type", "ExprFunction2");
             result.put("name", f2.getFunctionSymbol().getSymbol());
+            if (f2.getFunctionIRI() != null) {
+                result.put("functionIRI", f2.getFunctionIRI());
+            }
             List<Map<String, Object>> args = new ArrayList<>();
             args.add(serialize(f2.getArg1()));
             args.add(serialize(f2.getArg2()));
@@ -53,6 +67,9 @@ public class ExprSerializer {
         } else if (expr instanceof ExprFunction3 f3) {
             result.put("type", "ExprFunction3");
             result.put("name", f3.getFunctionSymbol().getSymbol());
+            if (f3.getFunctionIRI() != null) {
+                result.put("functionIRI", f3.getFunctionIRI());
+            }
             List<Map<String, Object>> args = new ArrayList<>();
             args.add(serialize(f3.getArg1()));
             args.add(serialize(f3.getArg2()));
@@ -62,6 +79,9 @@ public class ExprSerializer {
         } else if (expr instanceof ExprFunctionN fn) {
             result.put("type", "ExprFunctionN");
             result.put("name", fn.getFunctionSymbol().getSymbol());
+            if (fn.getFunctionIRI() != null) {
+                result.put("functionIRI", fn.getFunctionIRI());
+            }
             List<Map<String, Object>> args = new ArrayList<>();
             for (Expr arg : fn.getArgs()) {
                 args.add(serialize(arg));

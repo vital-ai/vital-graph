@@ -85,6 +85,12 @@ class KGBackendInterface(ABC):
         """
         pass
 
+    @abstractmethod
+    async def get_objects_by_uris(self, space_id: str, uris: List[str],
+                                  graph_id: Optional[str] = None) -> List[GraphObject]:
+        """Retrieve multiple objects by URI list as VitalSigns GraphObjects."""
+        pass
+
 
 class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     """Adapter for Fuseki+PostgreSQL hybrid backend."""
@@ -607,6 +613,11 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
     
     
     
+    async def get_objects_by_uris(self, space_id: str, uris: List[str],
+                                  graph_id: Optional[str] = None) -> List[GraphObject]:
+        """Retrieve multiple objects by URI list as VitalSigns GraphObjects."""
+        return await self.backend.db_objects.get_objects_by_uris(space_id, uris, graph_id)
+
     def _build_insert_query(self, space_id: str, graph_id: str, triples: List[tuple]) -> str:
         """Build SPARQL INSERT query from triples."""
         # Get the proper space-specific graph URI
@@ -667,12 +678,299 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
         return query
 
 
+class SparqlSQLBackendAdapter(KGBackendInterface):
+    """Adapter for the pure-PostgreSQL sparql_sql backend.
+
+    Wraps ``SparqlSQLSpaceImpl`` and exposes the ``KGBackendInterface``
+    consumed by kg_impl processors (KGEntityCreateProcessor, etc.).
+    """
+
+    def __init__(self, backend_impl):
+        self.backend = backend_impl
+        self.logger = logging.getLogger(f"{__name__}.SparqlSQLBackendAdapter")
+        self.retriever = GraphObjectRetriever(backend_impl)
+
+    # ------------------------------------------------------------------
+    # store_objects
+    # ------------------------------------------------------------------
+
+    async def store_objects(self, space_id: str, graph_id: str,
+                            objects: List[GraphObject]) -> BackendOperationResult:
+        try:
+            import time as _time
+            from rdflib import URIRef
+
+            _t0 = _time.monotonic()
+            graph_uri = URIRef(graph_id)
+            quads = []
+            for obj in objects:
+                try:
+                    for s, p, o in obj.to_triples():
+                        quads.append((s, p, o, graph_uri))
+                except Exception as e:
+                    self.logger.warning("Failed to convert object to triples: %s", e)
+                    continue
+
+            _t1 = _time.monotonic()
+            self.logger.info("⏱️  BACKEND to_triples: %.3fs (%d objects → %d quads)",
+                             _t1 - _t0, len(objects), len(quads))
+
+            inserted = await self.backend.add_rdf_quads_batch_bulk(space_id, quads)
+            _t2 = _time.monotonic()
+            self.logger.info("⏱️  BACKEND add_rdf_quads_batch_bulk: %.3fs (%d inserted)",
+                             _t2 - _t1, inserted)
+
+            # ANALYZE so the query planner has accurate statistics for the
+            # freshly-loaded data.  Without this, complex multi-join queries
+            # (e.g. KGQuery relation queries with frame/slot filters) choose
+            # catastrophically bad join orders — up to 9× slower.
+            try:
+                from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+                t = SparqlSQLSchema.get_table_names(space_id)
+                async with self.backend.db_impl.connection_pool.acquire() as conn:
+                    for tbl in (t['rdf_quad'], t['term']):
+                        await conn.execute(f"ANALYZE {tbl}")
+                _t2a = _time.monotonic()
+                self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
+            except Exception as ae:
+                self.logger.warning("ANALYZE after bulk insert failed (non-fatal): %s", ae)
+
+            self.logger.info("⏱️  BACKEND store_objects total: %.3fs", _time.monotonic() - _t0)
+
+            return BackendOperationResult(
+                success=True,
+                message=f"Successfully stored {len(objects)} objects ({inserted} quads)",
+                data={"stored_count": len(objects), "quad_count": inserted},
+            )
+        except Exception as e:
+            self.logger.error("store_objects failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e))
+
+    # ------------------------------------------------------------------
+    # object_exists
+    # ------------------------------------------------------------------
+
+    async def object_exists(self, space_id: str, graph_id: str, uri: str) -> bool:
+        try:
+            query = f"""
+                SELECT ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{ <{uri}> ?p ?o . }}
+                }} LIMIT 1
+            """
+            result = await self.backend.execute_sparql_query(space_id, query)
+            bindings = result.get('results', {}).get('bindings', [])
+            return len(bindings) > 0
+        except Exception as e:
+            self.logger.error("object_exists failed: %s", e)
+            return False
+
+    async def batch_check_uris_exist(self, space_id: str, graph_id: str,
+                                      uris: List[str]) -> List[str]:
+        """Return URIs that already exist as subjects in the graph (direct SQL)."""
+        try:
+            return await self.backend.check_subjects_exist(space_id, graph_id, uris)
+        except Exception as e:
+            self.logger.error("batch_check_uris_exist failed: %s", e)
+            return []
+
+    # ------------------------------------------------------------------
+    # get_object / get_entity / get_entity_graph
+    # ------------------------------------------------------------------
+
+    async def get_object(self, space_id: str, graph_id: str,
+                         object_uri: str) -> BackendOperationResult:
+        try:
+            triples = await self.retriever.get_object_triples(
+                space_id, graph_id, object_uri, include_materialized_edges=False
+            )
+            if not triples:
+                return BackendOperationResult(success=True, message="Object not found", objects=[])
+            objects = await self._triples_to_vitalsigns(triples)
+            return BackendOperationResult(success=True, message="OK", objects=objects)
+        except Exception as e:
+            self.logger.error("get_object failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e), objects=[])
+
+    async def get_entity(self, space_id: str, graph_id: str,
+                         entity_uri: str) -> BackendOperationResult:
+        return await self.get_object(space_id, graph_id, entity_uri)
+
+    async def get_entity_graph(self, space_id: str, graph_id: str,
+                               entity_uri: str) -> BackendOperationResult:
+        try:
+            triples = await self.retriever.get_entity_graph(
+                space_id, graph_id, entity_uri, include_materialized_edges=False
+            )
+            if not triples:
+                return BackendOperationResult(
+                    success=False, message=f"Entity graph not found: {entity_uri}", objects=[])
+            objects = await self._triples_to_vitalsigns(triples)
+            return BackendOperationResult(success=True, message="OK", objects=objects)
+        except Exception as e:
+            self.logger.error("get_entity_graph failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e), objects=[])
+
+    async def get_entity_by_reference_id(self, space_id: str, graph_id: str,
+                                         reference_id: str) -> BackendOperationResult:
+        try:
+            triples = await self.retriever.get_entity_by_reference_id(
+                space_id, graph_id, reference_id, include_materialized_edges=False
+            )
+            if not triples:
+                return BackendOperationResult(success=True, message="Not found", objects=[])
+            objects = await self._triples_to_vitalsigns(triples)
+            return BackendOperationResult(success=True, message="OK", objects=objects)
+        except Exception as e:
+            self.logger.error("get_entity_by_reference_id failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e), objects=[])
+
+    async def get_entity_graph_by_reference_id(self, space_id: str, graph_id: str,
+                                               reference_id: str) -> BackendOperationResult:
+        try:
+            triples = await self.retriever.get_entity_graph_by_reference_id(
+                space_id, graph_id, reference_id, include_materialized_edges=False
+            )
+            if not triples:
+                return BackendOperationResult(
+                    success=False, message=f"Not found: {reference_id}", objects=[])
+            objects = await self._triples_to_vitalsigns(triples)
+            return BackendOperationResult(success=True, message="OK", objects=objects)
+        except Exception as e:
+            self.logger.error("get_entity_graph_by_reference_id failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e), objects=[])
+
+    # ------------------------------------------------------------------
+    # delete_object
+    # ------------------------------------------------------------------
+
+    async def delete_object(self, space_id: str, graph_id: str,
+                            uri: str) -> BackendOperationResult:
+        try:
+            delete_query = f"""
+                DELETE {{
+                    GRAPH <{graph_id}> {{ <{uri}> ?p ?o . }}
+                }}
+                WHERE {{
+                    GRAPH <{graph_id}> {{ <{uri}> ?p ?o . }}
+                }}
+            """
+            await self.backend.execute_sparql_update(space_id, delete_query)
+            return BackendOperationResult(success=True, message=f"Deleted {uri}")
+        except Exception as e:
+            self.logger.error("delete_object failed: %s", e)
+            return BackendOperationResult(success=False, message=str(e), error=str(e))
+
+    # ------------------------------------------------------------------
+    # SPARQL execution
+    # ------------------------------------------------------------------
+
+    async def execute_sparql_query(self, space_id: str, query: str) -> Dict[str, Any]:
+        return await self.backend.execute_sparql_query(space_id, query)
+
+    async def execute_sparql_update(self, space_id: str, update_query: str):
+        try:
+            return await self.backend.execute_sparql_update(space_id, update_query)
+        except Exception as e:
+            self.logger.error("execute_sparql_update failed: %s", e)
+            return False
+
+    # ------------------------------------------------------------------
+    # validate_parent_connection
+    # ------------------------------------------------------------------
+
+    async def validate_parent_connection(self, space_id: str, graph_id: str,
+                                         parent_uri: str, child_uri: str) -> bool:
+        try:
+            query = f"""
+                SELECT ?edge WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge <http://vital.ai/ontology/vital-core#edgeSource> <{parent_uri}> .
+                        ?edge <http://vital.ai/ontology/vital-core#edgeDestination> <{child_uri}> .
+                    }}
+                }} LIMIT 1
+            """
+            result = await self.backend.execute_sparql_query(space_id, query)
+            bindings = result.get('results', {}).get('bindings', [])
+            return len(bindings) > 0
+        except Exception as e:
+            self.logger.error("validate_parent_connection failed: %s", e)
+            return False
+
+    # ------------------------------------------------------------------
+    # update_quads
+    # ------------------------------------------------------------------
+
+    async def update_quads(self, space_id: str, graph_id: str,
+                           delete_quads: List[tuple],
+                           insert_quads: List[tuple]) -> bool:
+        try:
+            async with self.backend.db_impl.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    if delete_quads:
+                        await self.backend.remove_rdf_quads_batch_bulk(
+                            space_id, delete_quads, connection=conn)
+                    if insert_quads:
+                        await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, insert_quads, connection=conn)
+            return True
+        except Exception as e:
+            self.logger.error("update_quads failed: %s", e)
+            return False
+
+    async def delete_entity_graph_direct(self, space_id: str, graph_id: str,
+                                          entity_uri: str) -> int:
+        """Delete entire entity graph via direct SQL (no SPARQL pipeline)."""
+        try:
+            return await self.backend.delete_entity_graph_bulk(
+                space_id, graph_id, entity_uri)
+        except Exception as e:
+            self.logger.error("delete_entity_graph_direct failed: %s", e)
+            return 0
+
+    # ------------------------------------------------------------------
+    # remove_rdf_quads_batch
+    # ------------------------------------------------------------------
+
+    async def remove_rdf_quads_batch(self, space_id: str, quads: List[tuple]) -> int:
+        try:
+            return await self.backend.remove_rdf_quads_batch(space_id, quads)
+        except Exception as e:
+            self.logger.error("remove_rdf_quads_batch failed: %s", e)
+            return 0
+
+    # ------------------------------------------------------------------
+    # get_objects_by_uris
+    # ------------------------------------------------------------------
+
+    async def get_objects_by_uris(self, space_id: str, uris: List[str],
+                                  graph_id: Optional[str] = None) -> List[GraphObject]:
+        """Retrieve multiple objects by URI list as VitalSigns GraphObjects."""
+        return await self.backend.db_objects.get_objects_by_uris(space_id, uris, graph_id)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _triples_to_vitalsigns(self, triples: List[tuple]) -> List[GraphObject]:
+        try:
+            from vital_ai_vitalsigns.vitalsigns import VitalSigns
+            if not triples:
+                return []
+            vs = VitalSigns()
+            objects = await asyncio.to_thread(vs.from_triples_list, triples)
+            return objects
+        except Exception as e:
+            self.logger.error("_triples_to_vitalsigns failed: %s", e)
+            return []
+
+
 def create_backend_adapter(backend_impl) -> KGBackendInterface:
     """Factory function to create appropriate backend adapter."""
-    # Determine backend type and create appropriate adapter
     backend_type = type(backend_impl).__name__
-    
-    if 'FusekiPostgreSQL' in backend_type:
+
+    if 'SparqlSQL' in backend_type:
+        return SparqlSQLBackendAdapter(backend_impl)
+    elif 'FusekiPostgreSQL' in backend_type:
         return FusekiPostgreSQLBackendAdapter(backend_impl)
     else:
         # Default to Fuseki+PostgreSQL adapter

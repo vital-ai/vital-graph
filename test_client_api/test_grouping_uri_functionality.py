@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from vitalgraph.client.endpoint.kgentities_endpoint import KGEntitiesEndpoint
 from vitalgraph.client.endpoint.kgframes_endpoint import KGFramesEndpoint
-from vitalgraph.model.jsonld_model import JsonLdDocument
 
 
 def test_kgentities_method_signatures():
@@ -155,10 +154,10 @@ def test_method_call_functionality():
         
         # Test KGFrames method calls
         frames_endpoint = KGFramesEndpoint(client=None)
-        test_doc = JsonLdDocument(context={}, graph=[])
+        test_objects = []
         
         try:
-            frames_endpoint.create_kgframes("space1", "graph1", test_doc, entity_uri="http://example.org/entity1")
+            frames_endpoint.create_kgframes("space1", "graph1", test_objects, entity_uri="http://example.org/entity1")
         except Exception as e:
             if any(term in str(e).lower() for term in ["connection", "client", "nonetype", "is_connected"]):
                 print("✅ create_kgframes accepts correct parameters (fails at connection)")
@@ -167,7 +166,7 @@ def test_method_call_functionality():
                 return False
         
         try:
-            frames_endpoint.update_kgframes("space1", "graph1", test_doc, 
+            frames_endpoint.update_kgframes("space1", "graph1", test_objects, 
                                           entity_uri="http://example.org/entity1",
                                           frame_graph_uri="http://example.org/frame1")
         except Exception as e:

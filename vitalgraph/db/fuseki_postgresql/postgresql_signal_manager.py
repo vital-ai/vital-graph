@@ -342,6 +342,7 @@ class PostgreSQLSignalManager(SignalManagerInterface):
             await self.connection.add_listener('space_created', notification_handler)
             await self.connection.add_listener('space_updated', notification_handler)
             await self.connection.add_listener('space_deleted', notification_handler)
+            await self.connection.add_listener('vitalgraph_process', notification_handler)
             
             logger.info("PostgreSQL notification listeners set up successfully")
             
@@ -360,6 +361,7 @@ class PostgreSQLSignalManager(SignalManagerInterface):
                     await self.connection.remove_listener('space_created', notification_handler)
                     await self.connection.remove_listener('space_updated', notification_handler)
                     await self.connection.remove_listener('space_deleted', notification_handler)
+                    await self.connection.remove_listener('vitalgraph_process', notification_handler)
                 except Exception as e:
                     logger.warning(f"Error removing listeners: {e}")
     

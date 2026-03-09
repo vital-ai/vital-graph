@@ -135,7 +135,7 @@ class SPARQLQueryEndpoint:
             
             if query_upper.startswith('ASK'):
                 # ASK query - return boolean result
-                boolean_result = len(bindings) > 0 and bindings[0].get('ask', False)
+                boolean_result = len(bindings) > 0
                 return SPARQLQueryResponse(
                     boolean=boolean_result,
                     query_time=query_time

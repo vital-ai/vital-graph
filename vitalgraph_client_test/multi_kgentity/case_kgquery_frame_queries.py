@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 class KGQueryFrameQueriesTester:
     """Test case for KGQuery frame-based entity queries."""
     
-    def __init__(self, client):
+    def __init__(self, client, query_mode: str = "edge"):
         self.client = client
+        self.query_mode = query_mode
         
     async def run_tests(self, space_id: str, graph_id: str, organization_uris: List[str], 
                   event_uris: List[str], file_uris: Dict[str, str] = None) -> Dict[str, Any]:
@@ -144,7 +145,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties (vg-direct:hasEntityFrame)
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -238,7 +239,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -312,7 +313,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 exclude_self_connections=True
             )
@@ -376,7 +377,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties
+                query_mode=self.query_mode,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
             )
@@ -454,7 +455,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -541,7 +542,7 @@ class KGQueryFrameQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
-                query_mode="direct",  # Use materialized properties
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True

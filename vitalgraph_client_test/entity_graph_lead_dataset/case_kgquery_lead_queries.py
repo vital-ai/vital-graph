@@ -26,20 +26,22 @@ logger = logging.getLogger(__name__)
 class KGQueryLeadQueriesTester:
     """Test case for KGQuery frame-based queries on lead entities."""
     
-    def __init__(self, client):
+    def __init__(self, client, query_mode: str = "edge"):
         """
         Initialize the KGQuery lead queries tester.
         
         Args:
             client: VitalGraphClient instance
+            query_mode: "edge" (use Edge_hasEntityKGFrame) or "direct" (use vg-direct:hasEntityFrame)
         """
         self.client = client
+        self.query_mode = query_mode
         self.tests_run = 0
         self.tests_passed = 0
         self.errors = []
         self.query_times = []  # Track query execution times
     
-    def _record_test(self, test_name: str, passed: bool, error: str = None, query_time: float = None):
+    def _record_test(self, test_name: str, passed: bool, error: str = None, query_time: float = None, result_count: int = None):
         """Record test result."""
         self.tests_run += 1
         if passed:
@@ -59,7 +61,8 @@ class KGQueryLeadQueriesTester:
             self.query_times.append({
                 "test_name": test_name,
                 "query_time": query_time,
-                "passed": passed
+                "passed": passed,
+                "result_count": result_count
             })
     
     async def run_tests(self, space_id: str, graph_id: str, expected_entity_count: int) -> dict:
@@ -105,7 +108,9 @@ class KGQueryLeadQueriesTester:
             print(f"\n  Individual query times:")
             for qt in self.query_times:
                 status = "✅" if qt["passed"] else "❌"
-                print(f"    {status} {qt['test_name']}: {qt['query_time']:.3f}s")
+                rc = qt.get('result_count')
+                count_str = f" [{rc} results]" if rc is not None else ""
+                print(f"    {status} {qt['test_name']}: {qt['query_time']:.3f}s{count_str}")
             print()
         
         return {
@@ -152,6 +157,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -171,10 +177,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} MQL leads")
-                self._record_test("Find MQL leads", True, query_time=query_time)
+                self._record_test("Find MQL leads", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 MQL leads")
-                self._record_test("Find MQL leads", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 MQL leads")
+                self._record_test("Find MQL leads", False, "Expected >0 MQL leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find MQL leads", False, "Query failed or wrong query type", query_time=query_time)
@@ -218,6 +224,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -237,10 +244,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads with hierarchical frame structure")
-                self._record_test("Hierarchical frame query", True, query_time=query_time)
+                self._record_test("Hierarchical frame query", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads with hierarchical structure")
-                self._record_test("Hierarchical frame query", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads with hierarchical structure")
+                self._record_test("Hierarchical frame query", False, "Expected >0 leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Hierarchical frame query", False, "Query failed or wrong query type", query_time=query_time)
@@ -282,6 +289,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -301,10 +309,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads in California")
-                self._record_test("Find leads in California", True, query_time=query_time)
+                self._record_test("Find leads in California", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads in California")
-                self._record_test("Find leads in California", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads in California")
+                self._record_test("Find leads in California", False, "Expected >0 leads in CA, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find leads in California", False, "Query failed or wrong query type", query_time=query_time)
@@ -346,6 +354,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -365,10 +374,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads in Los Angeles")
-                self._record_test("Find leads in Los Angeles", True, query_time=query_time)
+                self._record_test("Find leads in Los Angeles", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads in Los Angeles")
-                self._record_test("Find leads in Los Angeles", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads in Los Angeles")
+                self._record_test("Find leads in Los Angeles", False, "Expected >0 leads in LA, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find leads in Los Angeles", False, "Query failed or wrong query type", query_time=query_time)
@@ -410,6 +419,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -429,10 +439,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} high-rated leads")
-                self._record_test("Find high-rated leads", True, query_time=query_time)
+                self._record_test("Find high-rated leads", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 high-rated leads")
-                self._record_test("Find high-rated leads", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 high-rated leads")
+                self._record_test("Find high-rated leads", False, "Expected >0 high-rated leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find high-rated leads", False, "Query failed or wrong query type", query_time=query_time)
@@ -474,6 +484,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -493,10 +504,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads with business accounts")
-                self._record_test("Find leads with business accounts", True, query_time=query_time)
+                self._record_test("Find leads with business accounts", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads with business accounts")
-                self._record_test("Find leads with business accounts", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads with business accounts")
+                self._record_test("Find leads with business accounts", False, "Expected >0 leads with biz accounts, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find leads with business accounts", False, "Query failed or wrong query type", query_time=query_time)
@@ -538,6 +549,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -557,10 +569,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} converted leads")
-                self._record_test("Find converted leads", True, query_time=query_time)
+                self._record_test("Find converted leads", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 converted leads")
-                self._record_test("Find converted leads", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 converted leads")
+                self._record_test("Find converted leads", False, "Expected >0 converted leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find converted leads", False, "Query failed or wrong query type", query_time=query_time)
@@ -602,6 +614,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -621,10 +634,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} abandoned leads")
-                self._record_test("Find abandoned leads", True, query_time=query_time)
+                self._record_test("Find abandoned leads", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 abandoned leads")
-                self._record_test("Find abandoned leads", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 abandoned leads")
+                self._record_test("Find abandoned leads", False, "Expected >0 abandoned leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Find abandoned leads", False, "Query failed or wrong query type", query_time=query_time)
@@ -688,6 +701,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -707,10 +721,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads matching all criteria")
-                self._record_test("Multi-criteria query", True, query_time=query_time)
+                self._record_test("Multi-criteria query", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads matching all criteria")
-                self._record_test("Multi-criteria query", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads matching all criteria")
+                self._record_test("Multi-criteria query", False, "Expected >0 multi-criteria leads, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Multi-criteria query", False, "Query failed or wrong query type", query_time=query_time)
@@ -760,6 +774,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -779,10 +794,10 @@ class KGQueryLeadQueriesTester:
             if response.query_type == "frame" and response.frame_connections:
                 found_count = len(response.frame_connections)
                 print(f"     ✅ Found {found_count} leads with MQLRating in range [50, 80]")
-                self._record_test("Range query with multiple FILTERs", True, query_time=query_time)
+                self._record_test("Range query with multiple FILTERs", True, query_time=query_time, result_count=found_count)
             elif response.query_type == "frame":
-                print(f"     ✅ Query succeeded but found 0 leads in range")
-                self._record_test("Range query with multiple FILTERs", True, query_time=query_time)
+                print(f"     ❌ Query succeeded but found 0 leads in range")
+                self._record_test("Range query with multiple FILTERs", False, "Expected >0 leads in range, got 0", query_time=query_time, result_count=0)
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Range query with multiple FILTERs", False, "Query failed or wrong query type", query_time=query_time)
@@ -824,6 +839,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -867,7 +883,7 @@ class KGQueryLeadQueriesTester:
             page2_count = len(response2.frame_connections) if response2.frame_connections else 0
             
             print(f"     ✅ Page 1: {page1_count} results, Page 2: {page2_count} results")
-            self._record_test("Pagination", True, query_time=query_time)
+            self._record_test("Pagination", True, query_time=query_time, result_count=page1_count + page2_count)
                 
         except Exception as e:
             print(f"     ❌ Exception: {e}")
@@ -901,6 +917,7 @@ class KGQueryLeadQueriesTester:
             
             criteria = KGQueryCriteria(
                 query_type="frame",
+                query_mode=self.query_mode,
                 source_entity_criteria=source_criteria,
                 frame_criteria=frame_criteria_list,
                 exclude_self_connections=True
@@ -921,10 +938,10 @@ class KGQueryLeadQueriesTester:
                 found_count = len(response.frame_connections) if response.frame_connections else 0
                 if found_count == 0:
                     print(f"     ✅ Correctly returned 0 results for non-existent criteria")
-                    self._record_test("Empty results", True, query_time=query_time)
+                    self._record_test("Empty results", True, query_time=query_time, result_count=0)
                 else:
                     print(f"     ⚠️  Expected 0 results but found {found_count}")
-                    self._record_test("Empty results", True, query_time=query_time)  # Still pass, just unexpected
+                    self._record_test("Empty results", True, query_time=query_time, result_count=found_count)  # Still pass, just unexpected
             else:
                 print(f"     ❌ Query failed or wrong query type")
                 self._record_test("Empty results", False, "Query failed or wrong query type")

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from ..utils.graph_utils import DAGStructure, DAGNode, compare_dag_structures
 
 # Backend adapter import
-from .kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from .kg_backend_utils import KGBackendInterface
 
 
 @dataclass
@@ -56,7 +56,7 @@ class KGEntityGraphValidator:
     and consistency between edge-based and grouping URI-based discovery.
     """
     
-    def __init__(self, backend_adapter: FusekiPostgreSQLBackendAdapter, logger: logging.Logger):
+    def __init__(self, backend_adapter: KGBackendInterface, logger: logging.Logger):
         """
         Initialize the entity graph validator.
         

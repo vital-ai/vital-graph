@@ -18,7 +18,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 # Backend adapter import
-from vitalgraph.kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from vitalgraph.kg_impl.kg_backend_utils import KGBackendInterface
 
 
 @dataclass
@@ -69,7 +69,7 @@ class KGEntityFrameUpdateProcessor:
         """Remove cached ownership for a deleted frame."""
         cls._ownership_cache.pop((space_id, frame_uri), None)
     
-    def __init__(self, backend: FusekiPostgreSQLBackendAdapter, logger: logging.Logger):
+    def __init__(self, backend: KGBackendInterface, logger: logging.Logger):
         """
         Initialize the frame update processor.
         

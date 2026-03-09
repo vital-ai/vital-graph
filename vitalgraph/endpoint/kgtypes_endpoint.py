@@ -447,7 +447,12 @@ class KGTypesEndpoint:
                     if isinstance(uri_list, str):
                         uris = [u.strip() for u in uri_list.split(',') if u.strip()]
                     elif isinstance(uri_list, list):
-                        uris = [str(u).strip() for u in uri_list if str(u).strip()]
+                        uris = []
+                        for u in uri_list:
+                            for part in str(u).split(','):
+                                part = part.strip()
+                                if part:
+                                    uris.append(part)
                     else:
                         raise HTTPException(
                             status_code=400,

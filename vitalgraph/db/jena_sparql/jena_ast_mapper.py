@@ -23,7 +23,7 @@ from .jena_types import (
     # Ops
     OpBGP, OpJoin, OpLeftJoin, OpUnion, OpFilter,
     OpProject, OpSlice, OpDistinct, OpReduced, OpOrder,
-    OpGroup, OpExtend, OpTable, OpMinus, OpGraph,
+    GroupVar, OpGroup, OpExtend, OpTable, OpMinus, OpGraph,
     OpSequence, OpNull, OpPath, Op,
     # Updates
     UpdateDataInsert, UpdateDataDelete, UpdateModify,
@@ -116,6 +116,7 @@ def _map_parsed_query_meta(pq: Dict[str, Any]) -> ParsedQueryMeta:
     return ParsedQueryMeta(
         sparql_form=pq.get("sparqlForm", "QUERY"),
         query_type=pq.get("queryType"),
+        base_uri=pq.get("baseURI"),
         project_vars=pq.get("projectVars", []),
         distinct=pq.get("distinct", False),
         reduced=pq.get("reduced", False),
@@ -168,13 +169,14 @@ def map_expr(e: Dict[str, Any]) -> Expr:
     elif etype == "NodeValue":
         return ExprValue(node=map_node(e["node"]))
 
-    elif etype in ("ExprFunction1", "ExprFunction2", "ExprFunctionN"):
+    elif etype in ("ExprFunction1", "ExprFunction2", "ExprFunction3", "ExprFunctionN"):
         # Jena uses "arg" (singular) for ExprFunction1, "args" (plural) for 2/N
         raw_args = e.get("args", [])
         if not raw_args and "arg" in e:
             raw_args = [e["arg"]]
         args = [map_expr(a) for a in raw_args]
-        return ExprFunction(name=e.get("name", ""), args=args)
+        return ExprFunction(name=e.get("name", ""), args=args,
+                            function_iri=e.get("functionIRI"))
 
     elif etype == "ExprAggregator":
         agg = e.get("aggregator", {})
@@ -196,6 +198,9 @@ def map_expr(e: Dict[str, Any]) -> Expr:
 
     elif etype == "E_Now":
         return ExprFunction(name="now", args=[])
+
+    elif etype == "E_Random":
+        return ExprFunction(name="rand", args=[])
 
     elif etype == "E_StrUUID":
         return ExprFunction(name="struuid", args=[])
@@ -325,8 +330,40 @@ def _map_order(o: Dict) -> OpOrder:
 
 @_register_op("OpGroup")
 def _map_group(o: Dict) -> OpGroup:
-    group_vars = o.get("groupVars", [])
-    aggregators = o.get("aggregators", [])
+    raw_gvars = o.get("groupVars", [])
+    group_vars: List[Any] = []
+    for gv in raw_gvars:
+        if isinstance(gv, dict):
+            # New structured format: {"var": "d", "expr": {...} or null}
+            var_name = gv["var"]
+            raw_expr = gv.get("expr")
+            expr = map_expr(raw_expr) if raw_expr is not None else None
+            group_vars.append(GroupVar(var=var_name, expr=expr))
+        else:
+            # Old format (plain string) — backward compat with old sidecar
+            group_vars.append(GroupVar(var=gv, expr=None))
+
+    # Deep-map aggregator inner expressions at AST mapping time
+    # so _collect_group doesn't need to re-parse raw dicts.
+    raw_aggs = o.get("aggregators", [])
+    aggregators = []
+    for a in raw_aggs:
+        agg_dict = a.get("aggregator", {})
+        inner_expr = None
+        raw_inner = agg_dict.get("expr")
+        if raw_inner is not None:
+            inner_expr = map_expr(raw_inner)
+        mapped_agg = {
+            "var": a.get("var"),
+            "aggregator": {
+                "name": agg_dict.get("name", ""),
+                "distinct": agg_dict.get("distinct", False),
+                "expr": inner_expr,
+                "separator": agg_dict.get("separator"),
+            },
+        }
+        aggregators.append(mapped_agg)
+
     return OpGroup(
         group_vars=group_vars,
         aggregators=aggregators,
@@ -365,7 +402,10 @@ def _map_table(o: Dict) -> OpTable:
     for row in o.get("rows", []):
         mapped_row = {}
         for var_name, node_data in row.items():
-            mapped_row[var_name] = map_node(node_data)
+            if node_data is None:
+                mapped_row[var_name] = None  # UNDEF
+            else:
+                mapped_row[var_name] = map_node(node_data)
         rows.append(mapped_row)
     return OpTable(vars=vars_, rows=rows)
 
@@ -456,28 +496,39 @@ def _parse_unary(s: str) -> tuple:
         sub, rest = _parse_unary(s[1:])
         return PathInverse(sub=sub), rest
 
-    # Negated property set: !uri or !(uri|uri)
+    # Negated property set: !uri or !^uri or !(uri|uri)
     if s.startswith("!"):
         inner = s[1:].lstrip()
         if inner.startswith("("):
-            # Parse !(uri|uri|...)
+            # Parse !(uri|^uri|...)
             uris = []
-            pos = 1  # skip '('
-            inner = inner[pos:]
+            inner = inner[1:]  # skip '('
             while True:
                 inner = inner.lstrip()
-                if inner.startswith(")"):
-                    inner = inner[1:]
+                if not inner or inner.startswith(")"):
+                    if inner:
+                        inner = inner[1:]
                     break
                 if inner.startswith("|"):
                     inner = inner[1:].lstrip()
+                    continue
+                if inner.startswith("^"):
+                    # Inverse inside negated set: ^<uri>
+                    sub, inner = _parse_primary(inner[1:])
+                    if isinstance(sub, PathLink):
+                        uris.append("^" + sub.uri)
+                    continue
                 p, inner = _parse_primary(inner)
                 if isinstance(p, PathLink):
                     uris.append(p.uri)
-                elif isinstance(p, PathInverse) and isinstance(p.sub, PathLink):
-                    uris.append("^" + p.sub.uri)
             return PathNegPropSet(uris=uris), inner
         else:
+            # !^<uri> or !<uri>
+            if inner.startswith("^"):
+                sub, rest = _parse_primary(inner[1:])
+                if isinstance(sub, PathLink):
+                    return PathNegPropSet(uris=["^" + sub.uri]), rest
+                return PathNegPropSet(uris=[]), rest
             p, rest = _parse_primary(inner)
             if isinstance(p, PathLink):
                 return PathNegPropSet(uris=[p.uri]), rest
@@ -492,7 +543,56 @@ def _parse_unary(s: str) -> tuple:
         return PathZeroOrMore(sub=primary), rest[1:]
     if rest.startswith("?"):
         return PathZeroOrOne(sub=primary), rest[1:]
+    # Counted repetitions: {n}, {n,m}, {,m}, {n,}
+    if rest.startswith("{"):
+        brace_end = rest.index("}") if "}" in rest else -1
+        if brace_end > 0:
+            spec = rest[1:brace_end].strip()
+            after = rest[brace_end + 1:]
+            return _expand_counted(primary, spec), after
     return primary, rest
+
+
+def _expand_counted(primary: PathExpr, spec: str) -> PathExpr:
+    """Expand counted repetition {n}, {n,m}, {,m}, {n,} into path combinators.
+
+    {n}   → sequence of n copies
+    {n,m} → sequence of n copies + (m-n) optional copies
+    {,m}  → sequence of m optional copies (= {0,m})
+    {n,}  → sequence of n copies + OneOrMore
+    """
+    if "," in spec:
+        parts = spec.split(",", 1)
+        lo = int(parts[0]) if parts[0].strip() else 0
+        hi_str = parts[1].strip()
+        if hi_str:
+            hi = int(hi_str)
+        else:
+            # {n,} = n fixed + one-or-more
+            result = primary
+            for _ in range(lo - 1):
+                result = PathSeq(left=result, right=primary)
+            if lo == 0:
+                return PathZeroOrMore(sub=primary)
+            return PathSeq(left=result, right=PathZeroOrMore(sub=primary))
+
+        # {lo,hi} = lo fixed + (hi-lo) optional
+        if lo == 0 and hi == 0:
+            return PathLink(uri="")  # degenerate
+        result = None
+        for i in range(hi):
+            step = primary if i < lo else PathZeroOrOne(sub=primary)
+            result = PathSeq(left=result, right=step) if result else step
+        return result
+    else:
+        # {n} = sequence of exactly n copies
+        n = int(spec)
+        if n <= 0:
+            return PathLink(uri="")  # degenerate
+        result = primary
+        for _ in range(n - 1):
+            result = PathSeq(left=result, right=primary)
+        return result
 
 
 def _parse_primary(s: str) -> tuple:
@@ -512,6 +612,10 @@ def _parse_primary(s: str) -> tuple:
         end = s.index(">", 1)
         uri = s[1:end]
         return PathLink(uri=uri), s[end + 1:]
+
+    # Empty input guard — prevents infinite loops in callers
+    if not s:
+        return PathLink(uri=""), ""
 
     # Fallback: consume as bare token (shouldn't happen with well-formed input)
     logger.warning("Unexpected path token: %r", s[:20])
@@ -554,11 +658,22 @@ def map_update_op(u: Dict[str, Any]) -> UpdateOp:
                 where_pattern = map_element_to_op(wp)
             else:
                 where_pattern = map_op(wp)
+        # withGraph may be a dict {"type":"uri","value":"..."} or a string
+        raw_wg = u.get("withGraph")
+        if isinstance(raw_wg, dict):
+            raw_wg = raw_wg.get("value", raw_wg)
+        # usingGraphs may be a list of dicts or strings
+        raw_ug = u.get("usingGraphs", [])
+        using = [g.get("value", g) if isinstance(g, dict) else g for g in raw_ug]
+        # usingNamedGraphs may also be a list of dicts or strings
+        raw_ung = u.get("usingNamedGraphs", [])
+        using_named = [g.get("value", g) if isinstance(g, dict) else g for g in raw_ung]
         return UpdateModify(
-            with_graph=u.get("withGraph"),
+            with_graph=raw_wg,
             delete_quads=[_map_quad(q) for q in u.get("deleteQuads", [])],
             insert_quads=[_map_quad(q) for q in u.get("insertQuads", [])],
-            using_graphs=u.get("usingGraphs", []),
+            using_graphs=using,
+            using_named_graphs=using_named,
             where_pattern=where_pattern,
         )
 
@@ -694,6 +809,9 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
             if isinstance(op, OpFilter):
                 # Wrap the accumulated result with the filter
                 result = OpFilter(exprs=op.exprs, sub_op=result)
+            elif isinstance(op, OpExtend) and isinstance(op.sub_op, OpBGP) and not op.sub_op.triples:
+                # BIND → wrap accumulated result (not join with empty BGP)
+                result = OpExtend(var=op.var, expr=op.expr, sub_op=result)
             else:
                 result = OpJoin(left=result, right=op)
         return result
@@ -702,6 +820,17 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
         expr_data = elem.get("expr")
         if expr_data:
             return OpFilter(exprs=[map_expr(expr_data)], sub_op=OpBGP(triples=[]))
+        return OpBGP(triples=[])
+
+    if etype == "ElementBind":
+        var_name = elem.get("var", "")
+        expr_data = elem.get("expr")
+        if var_name and expr_data:
+            return OpExtend(
+                var=var_name,
+                expr=map_expr(expr_data),
+                sub_op=OpBGP(triples=[]),
+            )
         return OpBGP(triples=[])
 
     if etype == "ElementOptional":
@@ -735,6 +864,97 @@ def map_element_to_op(elem: Dict[str, Any]) -> Op:
                 g_node = URINode(raw_graph)
         inner_op = map_element_to_op(inner) if inner else OpBGP(triples=[])
         return OpGraph(graph_node=g_node, sub_op=inner_op)
+
+    if etype == "ElementSubQuery":
+        sq = elem.get("query", {})
+        # Inner WHERE pattern
+        inner_wp = sq.get("wherePattern")
+        inner_op = map_element_to_op(inner_wp) if inner_wp else OpBGP(triples=[])
+
+        result_op: Op = inner_op
+
+        # GROUP BY + aggregators → OpGroup
+        aggregators_raw = sq.get("aggregators", [])
+        group_by_raw = sq.get("groupBy", [])
+        if aggregators_raw or group_by_raw:
+            group_vars = []
+            for gv in group_by_raw:
+                var_name = gv.get("var", "")
+                g_expr = map_expr(gv["expr"]) if gv.get("expr") else None
+                group_vars.append(GroupVar(var=var_name, expr=g_expr))
+            agg_list = []
+            for ag in aggregators_raw:
+                agg_list.append({
+                    "var": ag.get("var", ""),
+                    "aggregator": ag.get("aggregator", {}),
+                })
+            result_op = OpGroup(
+                group_vars=group_vars,
+                aggregators=agg_list,
+                sub_op=result_op,
+            )
+
+        # Project expressions (SELECT (expr AS ?var)) → OpExtend
+        # For aggregate expressions, reference the aggregator's internal
+        # variable (e.g. ".0") instead of re-emitting the aggregate.
+        # Build agg lookup: match aggregator name+distinct to internal var.
+        agg_internal_vars = {}
+        for ag in aggregators_raw:
+            agg_data = ag.get("aggregator", {})
+            agg_key = (agg_data.get("name", ""), agg_data.get("distinct", False))
+            agg_internal_vars[agg_key] = ag.get("var", "")
+
+        for pe in sq.get("projectExprs", []):
+            var_name = pe.get("var", "")
+            expr_data = pe.get("expr")
+            if expr_data:
+                # Check if this projectExpr matches an aggregator
+                pe_key = (expr_data.get("name", ""), expr_data.get("distinct", False))
+                internal_var = agg_internal_vars.get(pe_key)
+                if internal_var and expr_data.get("type") == "ExprAggregator":
+                    # Reference the aggregator's internal variable
+                    result_op = OpExtend(
+                        var=var_name,
+                        expr=ExprVar(var=internal_var),
+                        sub_op=result_op,
+                    )
+                else:
+                    result_op = OpExtend(
+                        var=var_name,
+                        expr=map_expr(expr_data),
+                        sub_op=result_op,
+                    )
+
+        # PROJECT
+        proj_vars = sq.get("projectVars", [])
+        if proj_vars:
+            result_op = OpProject(vars=proj_vars, sub_op=result_op)
+
+        # DISTINCT
+        if sq.get("distinct"):
+            result_op = OpDistinct(sub_op=result_op)
+
+        # ORDER BY
+        order_by = sq.get("orderBy", [])
+        if order_by:
+            conditions = []
+            for ob in order_by:
+                direction = -1 if ob.get("direction") == "DESC" else 1
+                expr = map_expr(ob["expr"]) if ob.get("expr") else None
+                conditions.append(SortCondition(direction=direction, expr=expr))
+            result_op = OpOrder(conditions=conditions, sub_op=result_op)
+
+        # LIMIT / OFFSET
+        limit_val = sq.get("limit")
+        offset_val = sq.get("offset")
+        if limit_val is not None or offset_val is not None:
+            result_op = OpSlice(
+                start=offset_val or 0,
+                length=limit_val if limit_val is not None else -1,
+                sub_op=result_op,
+            )
+
+        return result_op
 
     logger.warning("Unknown element type: %s — returning empty BGP", etype)
     return OpBGP(triples=[])

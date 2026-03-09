@@ -27,6 +27,9 @@ from .endpoint.triples_endpoint import TriplesEndpoint
 from .endpoint.import_endpoint import ImportEndpoint
 from .endpoint.export_endpoint import ExportEndpoint
 from .endpoint.entity_registry_endpoint import EntityRegistryClientEndpoint
+from .endpoint.agent_registry_endpoint import AgentRegistryClientEndpoint
+from .endpoint.process_endpoint import ProcessClientEndpoint
+from .endpoint.admin_endpoint import AdminClientEndpoint
 from .utils.client_utils import VitalGraphClientError
 from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
@@ -121,6 +124,9 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.imports = ImportEndpoint(self)
         self.exports = ExportEndpoint(self)
         self.entity_registry = EntityRegistryClientEndpoint(self)
+        self.agent_registry = AgentRegistryClientEndpoint(self)
+        self.processes = ProcessClientEndpoint(self)
+        self.admin = AdminClientEndpoint(self)
     
     async def open(self) -> None:
         """

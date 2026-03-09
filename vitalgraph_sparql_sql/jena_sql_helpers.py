@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from .jena_types import (
+from .jena_sparql.jena_types import (
     URINode, LiteralNode, BNodeNode, VarNode, RDFNode,
     ExprVar, ExprFunction, ExprAggregator, ExprExists,
 )

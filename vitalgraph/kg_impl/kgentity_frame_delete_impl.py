@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from ..kg_impl.kg_backend_utils import KGBackendInterface
 
 
 @dataclass
@@ -32,7 +32,7 @@ class KGEntityFrameDeleteProcessor:
     validates frame ownership, and manages entity-frame relationship cleanup.
     """
     
-    def __init__(self, backend: FusekiPostgreSQLBackendAdapter, logger: logging.Logger):
+    def __init__(self, backend: KGBackendInterface, logger: logging.Logger):
         """
         Initialize the frame delete processor.
         

@@ -134,9 +134,89 @@ public class ElementSerializer {
     private static Map<String, Object> serializeSubQuery(org.apache.jena.query.Query query) {
         Map<String, Object> q = new LinkedHashMap<>();
         q.put("queryType", query.queryType().toString());
+
+        // Project vars (names only, for backward compat)
         List<String> vars = new ArrayList<>();
         query.getProjectVars().forEach(v -> vars.add(v.getVarName()));
         q.put("projectVars", vars);
+
+        // Project expressions — maps var name to its expression (e.g. COUNT(*))
+        // This captures SELECT (expr AS ?var) bindings that projectVars alone misses.
+        org.apache.jena.sparql.core.VarExprList project = query.getProject();
+        List<Map<String, Object>> projectExprs = new ArrayList<>();
+        for (org.apache.jena.sparql.core.Var v : project.getVars()) {
+            org.apache.jena.sparql.expr.Expr expr = project.getExpr(v);
+            if (expr != null) {
+                Map<String, Object> pe = new LinkedHashMap<>();
+                pe.put("var", v.getVarName());
+                pe.put("expr", ExprSerializer.serialize(expr));
+                projectExprs.add(pe);
+            }
+        }
+        if (!projectExprs.isEmpty()) {
+            q.put("projectExprs", projectExprs);
+        }
+
+        // GROUP BY
+        if (query.hasGroupBy()) {
+            org.apache.jena.sparql.core.VarExprList groupBy = query.getGroupBy();
+            List<Map<String, Object>> groupVars = new ArrayList<>();
+            for (org.apache.jena.sparql.core.Var v : groupBy.getVars()) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("var", v.getVarName());
+                org.apache.jena.sparql.expr.Expr gExpr = groupBy.getExpr(v);
+                entry.put("expr", gExpr != null ? ExprSerializer.serialize(gExpr) : null);
+                groupVars.add(entry);
+            }
+            q.put("groupBy", groupVars);
+        }
+
+        // Aggregators
+        if (query.getAggregators() != null && !query.getAggregators().isEmpty()) {
+            List<Map<String, Object>> aggregators = new ArrayList<>();
+            for (org.apache.jena.sparql.expr.ExprAggregator ea : query.getAggregators()) {
+                Map<String, Object> agg = new LinkedHashMap<>();
+                agg.put("var", ea.getVar().getVarName());
+                agg.put("aggregator", ExprSerializer.serialize(ea));
+                aggregators.add(agg);
+            }
+            q.put("aggregators", aggregators);
+        }
+
+        // HAVING
+        if (query.hasHaving()) {
+            List<Map<String, Object>> having = new ArrayList<>();
+            for (org.apache.jena.sparql.expr.Expr expr : query.getHavingExprs()) {
+                having.add(ExprSerializer.serialize(expr));
+            }
+            q.put("having", having);
+        }
+
+        // DISTINCT / REDUCED
+        if (query.isDistinct()) {
+            q.put("distinct", true);
+        }
+
+        // ORDER BY
+        if (query.hasOrderBy()) {
+            List<Map<String, Object>> orderBy = new ArrayList<>();
+            for (org.apache.jena.query.SortCondition sc : query.getOrderBy()) {
+                Map<String, Object> cond = new LinkedHashMap<>();
+                cond.put("direction", sc.getDirection() == -1 ? "DESC" : "ASC");
+                cond.put("expr", ExprSerializer.serialize(sc.getExpression()));
+                orderBy.add(cond);
+            }
+            q.put("orderBy", orderBy);
+        }
+
+        // LIMIT / OFFSET
+        if (query.hasLimit()) {
+            q.put("limit", query.getLimit());
+        }
+        if (query.hasOffset()) {
+            q.put("offset", query.getOffset());
+        }
+
         q.put("wherePattern", serialize(query.getQueryPattern()));
         return q;
     }

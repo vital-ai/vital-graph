@@ -22,6 +22,7 @@ class BackendType(Enum):
     POSTGRESQL = "postgresql"
     FUSEKI = "fuseki"
     FUSEKI_POSTGRESQL = "fuseki_postgresql"
+    SPARQL_SQL = "sparql_sql"
     OXIGRAPH = "oxigraph"
     MOCK = "mock"
 
@@ -78,6 +79,18 @@ class BackendFactory:
                 return FusekiPostgreSQLSpaceImpl(fuseki_config=fuseki_config, postgresql_config=postgresql_config)
             except ImportError as e:
                 raise ImportError(f"Fuseki PostgreSQL hybrid backend dependencies not available: {e}")
+                
+        elif config.backend_type == BackendType.SPARQL_SQL:
+            try:
+                from .sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+                postgresql_config = config.connection_params.get('database', {})
+                sidecar_config = config.connection_params.get('sidecar', {})
+                return SparqlSQLSpaceImpl(
+                    postgresql_config=postgresql_config,
+                    sidecar_config=sidecar_config,
+                )
+            except ImportError as e:
+                raise ImportError(f"SPARQL SQL backend dependencies not available: {e}")
                 
         elif config.backend_type == BackendType.OXIGRAPH:
             try:
@@ -147,6 +160,19 @@ class BackendFactory:
             except ImportError as e:
                 raise ImportError(f"Fuseki PostgreSQL hybrid SPARQL backend dependencies not available: {e}")
                 
+        elif config.backend_type == BackendType.SPARQL_SQL:
+            try:
+                from .sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+                postgresql_config = config.connection_params.get('database', {})
+                sidecar_config = config.connection_params.get('sidecar', {})
+                space_impl = SparqlSQLSpaceImpl(
+                    postgresql_config=postgresql_config,
+                    sidecar_config=sidecar_config,
+                )
+                return space_impl
+            except ImportError as e:
+                raise ImportError(f"SPARQL SQL SPARQL backend dependencies not available: {e}")
+                
         elif config.backend_type == BackendType.MOCK:
             try:
                 from .mock.mock_sparql_impl import MockSparqlImpl
@@ -196,6 +222,13 @@ class BackendFactory:
                 return PostgreSQLSignalManager(**signal_config)
             except ImportError as e:
                 raise ImportError(f"Fuseki PostgreSQL hybrid signal manager dependencies not available: {e}")
+                
+        elif config.backend_type == BackendType.SPARQL_SQL:
+            try:
+                from .fuseki_postgresql.postgresql_signal_manager import PostgreSQLSignalManager
+                return PostgreSQLSignalManager(**signal_config)
+            except ImportError as e:
+                raise ImportError(f"SPARQL SQL signal manager dependencies not available: {e}")
                 
         elif config.backend_type == BackendType.MOCK:
             try:

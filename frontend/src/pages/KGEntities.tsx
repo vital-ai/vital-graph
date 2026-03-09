@@ -20,7 +20,12 @@ import {
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
 import { HiSearch } from 'react-icons/hi';
-import { type Space, type Graph, type KGType } from '../mock';
+interface KGEntity {
+  uri: string;
+  rdf_type: string;
+  name: string;
+  properties_count: number;
+}
 
 const KGEntities: React.FC = () => {
   const navigate = useNavigate();
@@ -28,9 +33,7 @@ const KGEntities: React.FC = () => {
   // Get shared state from parent ObjectsLayout
   const context = useOutletContext<{
     selectedSpace: string;
-    selectedGraph: number | '';
-    spaces: Space[];
-    graphs: Graph[];
+    selectedGraph: string;
     spacesLoading: boolean;
     graphsLoading: boolean;
     error: string | null;
@@ -40,79 +43,79 @@ const KGEntities: React.FC = () => {
   const {
     selectedSpace = '',
     selectedGraph = '',
-    graphs = [],
-    spacesLoading = true
+    spacesLoading = true,
   } = context || {};
 
   // Local state management
-  const [entities, setEntities] = useState<KGType[]>([]);
-  const [filteredEntities, setFilteredEntities] = useState<KGType[]>([]);
+  const [entities, setEntities] = useState<KGEntity[]>([]);
+  const [filteredEntities, setFilteredEntities] = useState<KGEntity[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(10);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [entityToDelete, setEntityToDelete] = useState<KGType | null>(null);
+  const [entityToDelete, setEntityToDelete] = useState<KGEntity | null>(null);
 
   // Space and graph selection is now handled by parent ObjectsLayout
 
+  const [totalCount, setTotalCount] = useState<number>(0);
+
+  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
+  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
+
   // Fetch entities for selected space and graph
   const fetchEntities = useCallback(async () => {
-    if (!selectedSpace || selectedGraph === '') return;
+    if (!selectedSpace || !selectedGraph) return;
     
     try {
       setLoading(true);
-      setError('');
-      
-      // Find the selected graph to get its URI
-      const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-      if (!selectedGraphObj) {
-        setError('Selected graph not found');
-        setEntities([]);
-        return;
-      }
-      
-      // Make API call to fetch KG entities using axios (handles auth automatically)
-      console.log('Fetching entities for space:', selectedSpace, 'graph:', selectedGraphObj.graph_uri);
+      setError(null);
       
       const response = await axios.get('/api/graphs/kgentities', {
         params: {
           space_id: selectedSpace,
-          graph_id: selectedGraphObj.graph_uri,
+          graph_id: selectedGraph,
           page_size: itemsPerPage,
           offset: (currentPage - 1) * itemsPerPage
         }
       });
       
       const data = response.data;
-      console.log('KG Entities API response:', data);
+      // API returns QuadResponse: { results: [{s,p,o,g}], total_count, page_size, offset }
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
       
-      // Handle the response data structure - entities data is in data.entities
-      if (data.entities && data.entities['@graph'] && Array.isArray(data.entities['@graph'])) {
-        // Transform JSON-LD entities to KGType format
-        const transformedEntities = data.entities['@graph'].map((entity: any, index: number) => ({
-          id: index,
-          type_name: entity['@id'] || entity.URI || `entity-${index}`,
-          type_uri: entity['@id'] || entity.URI || '',
-          uri: entity['@id'] || entity.URI || '',
-          description: entity['http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription'] || 'No description',
-          created_at: entity.created_time || new Date().toISOString(),
-          updated_at: entity.last_modified || new Date().toISOString(),
-          space_id: selectedSpace,
-          graph_id: typeof selectedGraph === 'number' ? selectedGraph : 0,
-          properties: Object.keys(entity).filter(key => 
-            key !== '@context' && key !== '@id' && key !== '@type' && key !== 'URI'
-          )
-        }));
-        setEntities(transformedEntities);
-      } else if (Array.isArray(data.entities)) {
-        setEntities(data.entities);
-      } else if (Array.isArray(data)) {
-        setEntities(data);
-      } else {
-        setEntities([]);
+      // Group quads by subject
+      const subjectMap = new Map<string, Map<string, string[]>>();
+      for (const quad of quads) {
+        const subj = stripBrackets(quad.s);
+        if (!subjectMap.has(subj)) subjectMap.set(subj, new Map());
+        const preds = subjectMap.get(subj)!;
+        const pred = stripBrackets(quad.p);
+        if (!preds.has(pred)) preds.set(pred, []);
+        preds.get(pred)!.push(quad.o);
       }
+      
+      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+      const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
+      
+      const entities: KGEntity[] = [];
+      for (const [uri, preds] of subjectMap) {
+        const typeVals = preds.get(RDF_TYPE) || [];
+        const rdfType = typeVals.length > 0 ? stripBrackets(typeVals[0]) : 'Unknown';
+        const nameVals = preds.get(HAS_NAME) || [];
+        const name = nameVals.length > 0 ? stripLiteral(nameVals[0]) : uri.split(/[/#]/).pop() || uri;
+        
+        entities.push({
+          uri,
+          rdf_type: rdfType,
+          name,
+          properties_count: preds.size,
+        });
+      }
+      
+      setEntities(entities);
+      setTotalCount(data.total_count ?? entities.length);
     } catch (err) {
       console.error('Error fetching KG entities:', err);
       setError('Failed to load KG entities. Please try again later.');
@@ -135,27 +138,19 @@ const KGEntities: React.FC = () => {
     setCurrentPage(1);
   }, [fetchEntities]);
 
-  // For server-side pagination, use the entities directly (no slicing needed)
   const currentEntities = filteredEntities;
-  // TODO: Get total count from API response to calculate totalPages properly
-  const totalPages = Math.ceil(filteredEntities.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
 
-  // Utility functions
-  const formatDateTime = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
-  };
 
   return (
     <>
 
       {/* Add Entity Button */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <Button 
             onClick={() => {
-              const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-              const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/entity/new?mode=create`);
+              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/new?mode=create`);
             }} 
             color="blue"
           >
@@ -166,7 +161,7 @@ const KGEntities: React.FC = () => {
       )}
 
       {/* Search and Filter */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="mb-6">
           <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
             <div className="flex-1">
@@ -211,7 +206,7 @@ const KGEntities: React.FC = () => {
         </div>
       )}
       
-      {selectedSpace && selectedGraph === '' && graphs.length > 0 && (
+      {selectedSpace && !selectedGraph && (
         <div className="text-center py-12">
           <div className="text-gray-500 dark:text-gray-400">
             <p className="text-lg mb-2">Select a graph to view KG entities</p>
@@ -221,7 +216,7 @@ const KGEntities: React.FC = () => {
       )}
 
       {/* Loading Spinner */}
-      {selectedSpace && selectedGraph !== '' && loading && (
+      {selectedSpace && selectedGraph && loading && (
         <div className="mt-8 flex justify-center">
           <Spinner size="lg" />
           <span className="ml-2 text-gray-600 dark:text-gray-400">Loading KG entities...</span>
@@ -235,14 +230,14 @@ const KGEntities: React.FC = () => {
       )}
 
       {/* Entities Table */}
-      {selectedSpace && selectedGraph !== '' && !loading && filteredEntities.length === 0 && !error ? (
+      {selectedSpace && selectedGraph && !loading && filteredEntities.length === 0 && !error ? (
         <Alert color="info">
           {searchTerm ? 
             `No KG entities found matching "${searchTerm}". Try a different search term.` :
             'No KG entities found in this graph. Add your first entity to get started.'
           }
         </Alert>
-      ) : selectedSpace && selectedGraph !== '' && !loading && currentEntities.length > 0 && (
+      ) : selectedSpace && selectedGraph && !loading && currentEntities.length > 0 && (
         <>
           <div className="overflow-x-auto">
             <Table>
@@ -252,36 +247,32 @@ const KGEntities: React.FC = () => {
                   <TableHeadCell>RDF Type</TableHeadCell>
                   <TableHeadCell>Entity Type</TableHeadCell>
                   <TableHeadCell>Properties</TableHeadCell>
-                  <TableHeadCell>Last Modified</TableHeadCell>
                   <TableHeadCell>Actions</TableHeadCell>
                 </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {currentEntities.map((entity) => (
-                  <TableRow key={entity.id}>
+                  <TableRow key={entity.uri}>
                     <TableCell className="font-medium">
                       <div className="max-w-xs">
-                        <div className="font-mono text-sm text-blue-600 truncate">
-                          {entity.type_name}
+                        <div className="font-mono text-sm text-blue-600 truncate" title={entity.uri}>
+                          {entity.name}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
                           {entity.uri}
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {entity.type_uri}
+                    <TableCell className="font-mono text-sm truncate max-w-xs" title={entity.rdf_type}>
+                      {entity.rdf_type.split(/[/#]/).pop()}
                     </TableCell>
                     <TableCell>
                       <Badge color="blue">KG Entity</Badge>
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-gray-600 dark:text-gray-400">
-                        {entity.properties.length} properties
+                        {entity.properties_count} properties
                       </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-gray-600 dark:text-gray-400">
-                      {formatDateTime(entity.updated_at)}
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
@@ -289,9 +280,7 @@ const KGEntities: React.FC = () => {
                           size="xs"
                           color="blue"
                           onClick={() => {
-                            const selectedGraphObj = graphs.find(g => g.id === selectedGraph);
-                            const graphUri = selectedGraphObj ? selectedGraphObj.graph_uri : selectedGraph;
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(graphUri)}/entity/${encodeURIComponent(entity.type_uri || entity.id?.toString() || '')}`);
+                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/${encodeURIComponent(entity.uri)}`);
                           }}
                         >
                           <HiEye className="h-3 w-3" />
@@ -338,7 +327,7 @@ const KGEntities: React.FC = () => {
           {entityToDelete && (
             <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded mb-6">
               <p className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                {entityToDelete.type_name}
+                {entityToDelete.name}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {entityToDelete.uri}
@@ -348,7 +337,7 @@ const KGEntities: React.FC = () => {
           <div className="flex justify-end gap-3">
             <Button 
               onClick={() => {
-                console.log('Deleting entity:', entityToDelete?.id);
+                console.log('Deleting entity:', entityToDelete?.uri);
                 setShowDeleteModal(false);
                 setEntityToDelete(null);
               }} 

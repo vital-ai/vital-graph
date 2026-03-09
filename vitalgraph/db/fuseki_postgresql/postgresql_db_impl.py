@@ -320,14 +320,14 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
             SELECT COUNT(*) as table_count
             FROM information_schema.tables 
             WHERE table_schema = 'public' 
-            AND table_name IN ('install', 'space', 'graph', 'user')
+            AND table_name IN ('install', 'space', 'graph', 'user', 'process')
             """
             
             result = await self.execute_query(check_query)
             table_count = result[0]['table_count'] if result else 0
             
-            # All 4 admin tables should exist
-            return table_count == 4
+            # All 5 admin tables should exist
+            return table_count == 5
             
         except Exception as e:
             logger.error(f"Error verifying admin tables existence: {e}")

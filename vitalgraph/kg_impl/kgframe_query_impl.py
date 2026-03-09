@@ -22,7 +22,7 @@ from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 # Common utilities
 from vitalgraph.kg_impl.kg_backend_utils import (
-    FusekiPostgreSQLBackendAdapter,
+    KGBackendInterface,
     BackendOperationResult
 )
 
@@ -55,7 +55,7 @@ class KGFrameQueryProcessor:
     
     async def query_frames(
         self,
-        backend_adapter: FusekiPostgreSQLBackendAdapter,
+        backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         query_criteria: Dict[str, Any]

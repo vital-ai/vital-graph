@@ -25,13 +25,14 @@ from typing import Dict, List, Optional
 
 import sqlglot
 
-from .jena_types import CompileResult, VarNode, URINode
+from .jena_sparql.jena_types import CompileResult, VarNode, URINode
 from .jena_sql_helpers import _esc
 
 # --- IR re-exports (used by tests and orchestrator) ---
 from .jena_sql_ir import (
     PG_DIALECT,
     AliasGenerator,
+    SQLGenResult,
     TableRef,
     VarSlot,
     RelationPlan,
@@ -66,13 +67,128 @@ logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
+# Predicate cardinality stats for join ordering
+# ===========================================================================
+
+# Module-level cache: {space_id: (quad_stats, pred_stats)}
+_stats_cache: Dict[str, tuple] = {}
+
+
+def _load_quad_stats(aliases: AliasGenerator, space_id: str,
+                     conn_params=None, conn=None):
+    """Load predicate cardinality stats from materialized views.
+
+    Populates aliases.quad_stats and aliases.pred_stats for use by
+    the join reorder heuristic.  Stats are cached per space_id.
+    Falls back silently if the MVs don't exist yet.
+    """
+    if space_id in _stats_cache:
+        aliases.quad_stats, aliases.pred_stats = _stats_cache[space_id]
+        return
+
+    from . import db
+
+    try:
+        # Predicate-only stats (small: ~14 rows for WordNet)
+        pred_rows = db.execute_query(
+            f"SELECT predicate_uuid::text, row_count "
+            f"FROM {space_id}_rdf_pred_stats",
+            conn_params=conn_params, conn=conn,
+        )
+        pred_stats = {r["predicate_uuid"]: r["row_count"] for r in pred_rows}
+
+        # (pred, obj) pair stats — only load pairs where obj has few values
+        # (high-selectivity pairs).  Skip predicates where every object is
+        # unique (e.g. hasName) since those have cardinality = 1 anyway.
+        quad_rows = db.execute_query(
+            f"SELECT predicate_uuid::text, object_uuid::text, row_count "
+            f"FROM {space_id}_rdf_stats "
+            f"WHERE row_count <= 200000",
+            conn_params=conn_params, conn=conn,
+        )
+        quad_stats = {
+            (r["predicate_uuid"], r["object_uuid"]): r["row_count"]
+            for r in quad_rows
+        }
+
+        aliases.quad_stats = quad_stats
+        aliases.pred_stats = pred_stats
+        _stats_cache[space_id] = (quad_stats, pred_stats)
+        logger.debug("Loaded %d pred stats, %d quad stats for %s",
+                     len(pred_stats), len(quad_stats), space_id)
+
+    except Exception as e:
+        logger.debug("No quad stats for %s (MV may not exist): %s", space_id, e)
+        _stats_cache[space_id] = ({}, {})
+
+
+# ===========================================================================
+# SPARQL→SQL variable name mapping (Pass 6)
+# ===========================================================================
+
+_COMPANION_SUFFIXES = ("__type", "__uuid", "__lang", "__datatype", "__num")
+
+
+def _apply_var_map(
+    sql_str: str,
+    sparql_vars: List[str],
+    aliases: AliasGenerator,
+) -> tuple:
+    """Rename outermost SELECT column aliases to opaque v{N} names.
+
+    Args:
+        sql_str: The emitted SQL (no CTE prefix).
+        sparql_vars: Projected SPARQL variable names in order.
+        aliases: AliasGenerator to allocate opaque names.
+
+    Returns:
+        (renamed_sql, var_map) where var_map maps sql_name → sparql_name.
+    """
+    try:
+        parsed = sqlglot.parse_one(sql_str, dialect=PG_DIALECT)
+    except Exception:
+        logger.warning("var_map: sqlglot parse failed, skipping rename")
+        return sql_str, {}
+
+    # Collect all column aliases from the outermost SELECT
+    alias_set = set()
+    for expr in parsed.expressions:
+        if hasattr(expr, "alias") and expr.alias:
+            alias_set.add(expr.alias)
+
+    # Build rename mapping: sparql_name → opaque, companion → opaque companion
+    rename_map: Dict[str, str] = {}
+    var_map: Dict[str, str] = {}
+    for sparql_name in sparql_vars:
+        opaque = aliases.next_var(sparql_name)
+        var_map[opaque] = sparql_name
+        rename_map[sparql_name] = opaque
+        for suffix in _COMPANION_SUFFIXES:
+            old = sparql_name + suffix
+            if old in alias_set:
+                rename_map[old] = opaque + suffix
+
+    # Apply renames to the outermost SELECT aliases
+    for expr in parsed.expressions:
+        if hasattr(expr, "alias") and expr.alias in rename_map:
+            new_name = rename_map[expr.alias]
+            expr.set("alias", sqlglot.exp.to_identifier(new_name))
+
+    return parsed.sql(dialect=PG_DIALECT), var_map
+
+
+# ===========================================================================
 # Public API
 # ===========================================================================
 
 def generate_sql(result: CompileResult, space_id: str,
                  conn_params=None, conn=None, graph_uri: str = None,
-                 optimize: bool = False) -> str:
-    """Top-level entry point: CompileResult → PostgreSQL SQL string.
+                 optimize: bool = False) -> SQLGenResult:
+    """Top-level entry point: CompileResult → SQLGenResult.
+
+    Returns a ``SQLGenResult`` containing the SQL string, a var_map
+    (opaque SQL column name → original SPARQL variable name), and the
+    ordered list of projected SPARQL variable names.
 
     Args:
         result: Compiled SPARQL algebra from the sidecar.
@@ -94,14 +210,14 @@ def generate_sql(result: CompileResult, space_id: str,
         parts = []
         for uop in result.update_ops:
             parts.append(update_to_sql(uop, space_id))
-        return ";".join(parts)
+        return SQLGenResult(sql=";".join(parts))
 
     query_type = getattr(result.meta, 'query_type', None) if result.meta else None
 
     # DESCRIBE without algebra or with OpNull: generate direct triple lookup SQL
-    from .jena_types import OpNull as _OpNull
+    from .jena_sparql.jena_types import OpNull as _OpNull
     if query_type == "DESCRIBE" and (result.algebra is None or isinstance(result.algebra, _OpNull)):
-        return _generate_describe_sql(result, space_id)
+        return SQLGenResult(sql=_generate_describe_sql(result, space_id))
 
     if result.algebra is None:
         raise ValueError("CompileResult has no algebra and no update_ops")
@@ -128,11 +244,41 @@ def generate_sql(result: CompileResult, space_id: str,
             logger.warning("Constants materialize failed, will use CTE fallback: %s", e)
     _t_materialize = _time.monotonic()
 
+    # Pass 1.6: load predicate cardinality stats for join ordering
+    _load_quad_stats(aliases, space_id, conn_params=conn_params, conn=conn)
+
+    # Pass 1.7: edge MV rewrite — replace hasEdgeSource/hasEdgeDestination
+    # quad pairs with single edge_mv table lookups
+    from .jena_sql_edge_mv import rewrite_edge_mv as _rewrite_edge_mv
+    from .jena_sql_edge_mv import ensure_edge_mv as _ensure_edge_mv
+    if _ensure_edge_mv(space_id, conn=conn, conn_params=conn_params):
+        plan = _rewrite_edge_mv(plan, aliases, space_id)
+
+    # Pass 1.8: frame-entity MV rewrite — collapse slot+edge patterns into
+    # a single pre-computed frame→entity lookup (5 fewer JOINs per hop)
+    from .jena_sql_frame_entity_mv import rewrite_frame_entity_mv as _rewrite_femv
+    from .jena_sql_frame_entity_mv import ensure_frame_entity_mv as _ensure_femv
+    if _ensure_femv(space_id, conn=conn, conn_params=conn_params):
+        plan = _rewrite_femv(plan, aliases, space_id)
+
     # Pass 2: resolve
     resolved = _resolve(plan, space_id, aliases)
     _t_resolve = _time.monotonic()
 
-    # Pass 3: emit
+    # Pass 2.5: load datatype cache (datatype_id → URI mapping)
+    from .jena_sql_emit import set_datatype_cache as _set_dt_cache
+    try:
+        dt_rows = db.execute_query(
+            f"SELECT datatype_id, datatype_uri FROM {space_id}_datatype",
+            conn=conn, conn_params=conn_params,
+        )
+        _set_dt_cache({r["datatype_id"]: r["datatype_uri"] for r in dt_rows})
+    except Exception:
+        _set_dt_cache({})
+
+    # Pass 3: emit — set stats before emitting so join reorder can use them
+    from .jena_sql_emit import set_quad_stats as _set_stats
+    _set_stats(aliases.quad_stats, aliases.pred_stats)
     sql_str = _emit(resolved, space_id)
     _t_emit = _time.monotonic()
 
@@ -158,15 +304,25 @@ def generate_sql(result: CompileResult, space_id: str,
     # Prepend constants CTE only if some constants were NOT resolved
     cte_prefix = build_constants_cte(aliases, term_table)
 
-    # ASK: wrap as boolean EXISTS check
+    # ASK: wrap as boolean EXISTS check — no user-facing columns
     if query_type == "ASK":
-        return f"{cte_prefix}SELECT EXISTS({sql_str}) AS result"
+        return SQLGenResult(sql=f"{cte_prefix}SELECT EXISTS({sql_str}) AS result")
 
     # DESCRIBE with WHERE clause: find all triples about matched resources
     if query_type == "DESCRIBE":
-        return cte_prefix + _wrap_describe_sql(result, space_id, sql_str)
+        return SQLGenResult(
+            sql=cte_prefix + _wrap_describe_sql(result, space_id, sql_str))
 
-    return cte_prefix + sql_str
+    # Pass 6: apply SPARQL→SQL variable name mapping
+    # Rename outermost SELECT column aliases from SPARQL names to opaque v{N}
+    sparql_vars = _all_vars(resolved)
+    sql_str, var_map = _apply_var_map(sql_str, sparql_vars, aliases)
+
+    return SQLGenResult(
+        sql=cte_prefix + sql_str,
+        var_map=var_map,
+        sparql_vars=sparql_vars,
+    )
 
 
 def op_to_sql(op, ctx: SQLContext) -> SQLFragment:
@@ -188,10 +344,15 @@ def op_to_sql(op, ctx: SQLContext) -> SQLFragment:
 
 
 def _all_vars(plan: RelationPlan) -> List[str]:
-    """Collect all variable names from a plan."""
+    """Collect all variable names from a plan, including EXTEND (BIND) vars."""
     if plan.select_vars is not None:
         return list(plan.select_vars)
-    return list(plan.var_slots.keys())
+    vars = list(plan.var_slots.keys())
+    if plan.extend_exprs:
+        for v in plan.extend_exprs:
+            if v not in vars:
+                vars.append(v)
+    return vars
 
 
 # ===========================================================================

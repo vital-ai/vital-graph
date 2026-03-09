@@ -92,6 +92,9 @@ class TriplesEndpoint(BaseEndpoint):
         """
         Delete triples from a graph by pattern.
         
+        Resolves the pattern to concrete quads via list_triples, then sends
+        them as a QuadRequest body to the server DELETE endpoint.
+        
         Args:
             space_id: Space identifier
             graph_id: Graph identifier
@@ -112,13 +115,29 @@ class TriplesEndpoint(BaseEndpoint):
         if not any([subject, predicate, object]):
             raise VitalGraphClientError("At least one pattern filter (subject/predicate/object) must be provided for deletion")
         
+        # Resolve pattern to concrete quads by listing matching triples
+        matching = await self.list_triples(
+            space_id, graph_id, page_size=100,
+            subject=subject, predicate=predicate, object=object
+        )
+        
+        if not matching.success or not matching.results:
+            return TripleOperationResponse(
+                success=True,
+                message="No matching triples found to delete",
+                affected_count=0
+            )
+        
+        # Build QuadRequest from the matched quads
+        quad_request = QuadRequest(quads=matching.results)
+        
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/triples"
         params = build_query_params(
             space_id=space_id,
-            graph_id=graph_id,
-            subject=subject,
-            predicate=predicate,
-            object=object
+            graph_id=graph_id
         )
         
-        return await self._make_typed_request('DELETE', url, TripleOperationResponse, params=params)
+        response = await self._make_authenticated_request(
+            'DELETE', url, params=params, json=quad_request.model_dump()
+        )
+        return TripleOperationResponse.model_validate(response.json())

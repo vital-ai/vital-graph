@@ -1,42 +1,29 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import axios from 'axios';
 import { Alert, Button, Card, Spinner, Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow, TextInput, Select, Label } from 'flowbite-react';
 import { HiPlus, HiEye } from 'react-icons/hi2';
 import { HiSearch, HiDocumentDuplicate } from 'react-icons/hi';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
 
-interface File {
-  id: number;
-  space_id: string;
-  graph_id: number;
+interface FileEntry {
+  uri: string;
+  rdf_type: string;
   filename: string;
-  file_path: string;
-  file_size: number;
   file_type: string;
-  upload_time: string;
-  last_modified: string;
+  file_size: number;
+  properties_count: number;
 }
 
 interface Space {
-  id: number;
-  tenant: string;
   space: string;
   space_name: string;
-  space_description: string;
-  update_time: string;
 }
 
 interface Graph {
-  id: number;
-  space_id: string;
-  graph_name: string;
   graph_uri: string;
-  graph_type: string;
+  graph_name: string;
   triple_count: number;
-  created_time: string;
-  last_modified: string;
-  description: string;
-  status: 'active' | 'inactive' | 'processing';
 }
 
 const Files: React.FC = () => {
@@ -44,56 +31,39 @@ const Files: React.FC = () => {
   const { spaceId, graphId } = useParams<{ spaceId?: string; graphId?: string }>();
   const filterInputRef = useRef<HTMLInputElement>(null);
   const cursorPositionRef = useRef<number>(0);
-  const [files, setFiles] = useState<File[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [filterText, setFilterText] = useState<string>('');
-  const [filterLoading, setFilterLoading] = useState<boolean>(false);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
   const [spacesLoading, setSpacesLoading] = useState<boolean>(true);
   const [graphs, setGraphs] = useState<Graph[]>([]);
-  const [selectedGraph, setSelectedGraph] = useState<number | ''>(graphId ? parseInt(graphId) : '');
+  const [selectedGraph, setSelectedGraph] = useState<string>(graphId ? decodeURIComponent(graphId) : '');
+  const [graphsLoading, setGraphsLoading] = useState<boolean>(false);
 
   // Navigate to hierarchical URL when space/graph selection changes
   useEffect(() => {
-    if (selectedSpace && selectedGraph !== '' && !spaceId && !graphId) {
-      navigate(`/space/${selectedSpace}/graph/${selectedGraph}/files`);
+    if (selectedSpace && selectedGraph && !spaceId && !graphId) {
+      navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/files`);
     }
   }, [selectedSpace, selectedGraph, navigate, spaceId, graphId]);
-  const [graphsLoading, setGraphsLoading] = useState<boolean>(false);
 
   // Fetch available spaces
   const fetchSpaces = useCallback(async () => {
-    // Mock spaces data - replace with API call when backend is ready
-    const mockSpaces = [
-      { 
-        id: 1, 
-        tenant: 'default', 
-        space: 'space1', 
-        space_name: 'Default Space', 
-        space_description: 'Default workspace for general files',
-        update_time: '2024-01-15T10:00:00Z'
-      },
-      { 
-        id: 2, 
-        tenant: 'default', 
-        space: 'space2', 
-        space_name: 'Project Alpha', 
-        space_description: 'Files related to Project Alpha',
-        update_time: '2024-01-14T15:30:00Z'
-      },
-      { 
-        id: 3, 
-        tenant: 'default', 
-        space: 'space3', 
-        space_name: 'Research Data', 
-        space_description: 'Research datasets and documentation',
-        update_time: '2024-01-13T09:20:00Z'
-      }
-    ];
-    setSpaces(mockSpaces);
-    setSpacesLoading(false);
+    try {
+      setSpacesLoading(true);
+      const response = await axios.get('/api/spaces');
+      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
+      setSpaces(spacesData);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching spaces:', err);
+      setError('Failed to load spaces.');
+      setSpaces([]);
+    } finally {
+      setSpacesLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -107,26 +77,24 @@ const Files: React.FC = () => {
       return;
     }
 
-    setGraphsLoading(true);
-    // Mock graphs data - same as used in Objects screen
-    const mockGraphs: Graph[] = [
-      // Space1 graphs
-      { id: 0, space_id: 'space1', graph_name: 'Global', graph_uri: 'http://vital.ai/graph/global', graph_type: 'Global Graph', triple_count: 0, created_time: '2024-01-01T00:00:00Z', last_modified: '2024-01-01T00:00:00Z', description: 'Global graph for files not assigned to a specific graph', status: 'active' },
-      { id: 1, space_id: 'space1', graph_name: 'knowledge-base', graph_uri: 'http://vital.ai/graph/knowledge-base', graph_type: 'Knowledge Graph', triple_count: 15420, created_time: '2024-01-15T10:30:00Z', last_modified: '2024-01-20T14:15:00Z', description: 'Main knowledge base graph', status: 'active' },
-      { id: 2, space_id: 'space1', graph_name: 'ontology-core', graph_uri: 'http://vital.ai/graph/ontology-core', graph_type: 'Ontology', triple_count: 8750, created_time: '2024-01-14T14:20:00Z', last_modified: '2024-01-19T11:30:00Z', description: 'Core ontology definitions', status: 'active' },
-      // Space2 graphs
-      { id: 0, space_id: 'space2', graph_name: 'Global', graph_uri: 'http://vital.ai/graph/global', graph_type: 'Global Graph', triple_count: 0, created_time: '2024-01-01T00:00:00Z', last_modified: '2024-01-01T00:00:00Z', description: 'Global graph for files not assigned to a specific graph', status: 'active' },
-      { id: 3, space_id: 'space2', graph_name: 'alpha-entities', graph_uri: 'http://vital.ai/graph/alpha-entities', graph_type: 'Entity Graph', triple_count: 25680, created_time: '2024-01-13T16:45:00Z', last_modified: '2024-01-18T09:20:00Z', description: 'Project Alpha entity relationships', status: 'active' },
-      { id: 4, space_id: 'space2', graph_name: 'alpha-workflow', graph_uri: 'http://vital.ai/graph/alpha-workflow', graph_type: 'Process Graph', triple_count: 12340, created_time: '2024-01-12T11:20:00Z', last_modified: '2024-01-17T15:45:00Z', description: 'Alpha project workflow definitions', status: 'processing' },
-      // Space3 graphs
-      { id: 0, space_id: 'space3', graph_name: 'Global', graph_uri: 'http://vital.ai/graph/global', graph_type: 'Global Graph', triple_count: 0, created_time: '2024-01-01T00:00:00Z', last_modified: '2024-01-01T00:00:00Z', description: 'Global graph for files not assigned to a specific graph', status: 'active' },
-      { id: 5, space_id: 'space3', graph_name: 'research-dataset', graph_uri: 'http://vital.ai/graph/research-dataset', graph_type: 'Data Graph', triple_count: 45230, created_time: '2024-01-11T09:15:00Z', last_modified: '2024-01-16T13:25:00Z', description: 'Research data relationships', status: 'active' },
-      { id: 6, space_id: 'space3', graph_name: 'analysis-results', graph_uri: 'http://vital.ai/graph/analysis-results', graph_type: 'Results Graph', triple_count: 18920, created_time: '2024-01-10T13:30:00Z', last_modified: '2024-01-15T10:40:00Z', description: 'Analysis results and conclusions', status: 'inactive' }
-    ];
-
-    const spaceGraphs = mockGraphs.filter(graph => graph.space_id === selectedSpace);
-    setGraphs(spaceGraphs);
-    setGraphsLoading(false);
+    try {
+      setGraphsLoading(true);
+      const response = await axios.get(`/api/graphs/sparql/${selectedSpace}/graphs`);
+      const graphsData = Array.isArray(response.data) ? response.data : [];
+      const converted: Graph[] = graphsData.map((g: Record<string, unknown>) => ({
+        graph_uri: (g.graph_uri as string) || '',
+        graph_name: (g.graph_uri as string)?.split(/[/#]/).pop() || 'Unknown',
+        triple_count: (g.triple_count as number) || 0,
+      }));
+      setGraphs(converted);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching graphs:', err);
+      setError('Failed to load graphs.');
+      setGraphs([]);
+    } finally {
+      setGraphsLoading(false);
+    }
   }, [selectedSpace]);
 
   useEffect(() => {
@@ -137,298 +105,83 @@ const Files: React.FC = () => {
   }, [fetchGraphs, graphId]);
 
 
-  // Fetch all files for selected space
+  // Fetch files for selected space and graph
   const fetchFiles = useCallback(async () => {
-    if (!selectedSpace) return;
+    if (!selectedSpace || !selectedGraph) return;
     
     try {
       setLoading(true);
-      // Mock files data - different files for each space and graph
-      const allMockFiles = [
-        // Space1 files
-        {
-          id: 1,
-          space_id: 'space1',
-          graph_id: 0, // Global
-          filename: 'document1.pdf',
-          file_path: '/uploads/document1.pdf',
-          file_size: 2048576,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-15T10:30:00Z',
-          last_modified: '2024-01-15T10:30:00Z'
-        },
-        {
-          id: 2,
-          space_id: 'space1',
-          graph_id: 1, // knowledge-base
-          filename: 'meeting-notes.docx',
-          file_path: '/uploads/meeting-notes.docx',
-          file_size: 512000,
-          file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          upload_time: '2024-01-14T14:20:00Z',
-          last_modified: '2024-01-16T09:15:00Z'
-        },
-        {
-          id: 7,
-          space_id: 'space1',
-          graph_id: 2, // ontology-core
-          filename: 'ontology-spec.owl',
-          file_path: '/uploads/ontology-spec.owl',
-          file_size: 1024000,
-          file_type: 'application/rdf+xml',
-          upload_time: '2024-01-13T12:00:00Z',
-          last_modified: '2024-01-18T16:30:00Z'
-        },
-        // Space2 files
-        {
-          id: 3,
-          space_id: 'space2',
-          graph_id: 0, // Global
-          filename: 'alpha-requirements.pdf',
-          file_path: '/uploads/alpha-requirements.pdf',
-          file_size: 1536000,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-13T16:45:00Z',
-          last_modified: '2024-01-13T16:45:00Z'
-        },
-        {
-          id: 4,
-          space_id: 'space2',
-          graph_id: 3, // alpha-entities
-          filename: 'alpha-timeline.xlsx',
-          file_path: '/uploads/alpha-timeline.xlsx',
-          file_size: 768000,
-          file_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          upload_time: '2024-01-12T11:20:00Z',
-          last_modified: '2024-01-15T14:30:00Z'
-        },
-        {
-          id: 8,
-          space_id: 'space2',
-          graph_id: 4, // alpha-workflow
-          filename: 'workflow-definition.json',
-          file_path: '/uploads/workflow-definition.json',
-          file_size: 256000,
-          file_type: 'application/json',
-          upload_time: '2024-01-11T14:15:00Z',
-          last_modified: '2024-01-17T10:45:00Z'
-        },
-        // Space3 files
-        {
-          id: 5,
-          space_id: 'space3',
-          graph_id: 0, // Global
-          filename: 'research-data.csv',
-          file_path: '/uploads/research-data.csv',
-          file_size: 3072000,
-          file_type: 'text/csv',
-          upload_time: '2024-01-11T09:15:00Z',
-          last_modified: '2024-01-14T16:45:00Z'
-        },
-        {
-          id: 6,
-          space_id: 'space3',
-          graph_id: 5, // research-dataset
-          filename: 'analysis-report.pdf',
-          file_path: '/uploads/analysis-report.pdf',
-          file_size: 2560000,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-10T13:30:00Z',
-          last_modified: '2024-01-12T10:20:00Z'
-        },
-        {
-          id: 9,
-          space_id: 'space3',
-          graph_id: 6, // analysis-results
-          filename: 'statistical-output.txt',
-          file_path: '/uploads/statistical-output.txt',
-          file_size: 128000,
-          file_type: 'text/plain',
-          upload_time: '2024-01-09T11:00:00Z',
-          last_modified: '2024-01-15T09:20:00Z'
+      setError(null);
+      
+      const response = await axios.get('/api/graphs/files', {
+        params: {
+          space_id: selectedSpace,
+          graph_id: selectedGraph,
+          page_size: 100,
+          offset: 0,
+          file_filter: filterText || undefined,
         }
-      ];
-      
-      // Filter files for the selected space and graph
-      const spaceFiles = allMockFiles.filter(file => file.space_id === selectedSpace);
-      const mockFiles = selectedGraph !== '' ? 
-        spaceFiles.filter(file => file.graph_id === selectedGraph) : 
-        [];
-      
-      console.log('Files Debug:', {
-        selectedSpace,
-        selectedGraph,
-        totalFiles: allMockFiles.length,
-        spaceFiles: spaceFiles.length,
-        filteredFiles: mockFiles.length,
-        mockFiles
       });
       
-      setFiles(mockFiles);
-      setError(null);
+      const data = response.data;
+      // API returns QuadResponse: { results: [{s, p, o, g}], total_count, ... }
+      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
+      
+      // Group quads by subject to form file entries
+      const subjectMap = new Map<string, Map<string, string[]>>();
+      for (const quad of quads) {
+        const subj = quad.s.replace(/^<|>$/g, '');
+        if (!subjectMap.has(subj)) subjectMap.set(subj, new Map());
+        const preds = subjectMap.get(subj)!;
+        const pred = quad.p.replace(/^<|>$/g, '');
+        if (!preds.has(pred)) preds.set(pred, []);
+        preds.get(pred)!.push(quad.o);
+      }
+      
+      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+      const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
+      const HAS_FILE_TYPE = 'http://vital.ai/ontology/vital-core#hasFileType';
+      
+      const fileEntries: FileEntry[] = [];
+      for (const [uri, preds] of subjectMap) {
+        const typeVals = preds.get(RDF_TYPE) || [];
+        const rdfType = typeVals.length > 0 ? typeVals[0].replace(/^<|>$/g, '') : 'Unknown';
+        
+        const stripLiteral = (v: string) => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
+        const nameVals = preds.get(HAS_NAME) || [];
+        const filename = nameVals.length > 0 ? stripLiteral(nameVals[0]) : uri.split(/[/#]/).pop() || uri;
+        const ftVals = preds.get(HAS_FILE_TYPE) || [];
+        const fileType = ftVals.length > 0 ? stripLiteral(ftVals[0]) : '';
+        
+        fileEntries.push({
+          uri,
+          rdf_type: rdfType,
+          filename,
+          file_type: fileType,
+          file_size: 0,
+          properties_count: preds.size,
+        });
+      }
+      
+      setFiles(fileEntries);
+      console.log(`Files: ${fileEntries.length} of ${data.total_count ?? fileEntries.length} total`);
     } catch (err) {
+      console.error('Error fetching files:', err);
       setError('Failed to load files. Please try again later.');
       setFiles([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph]);
+  }, [selectedSpace, selectedGraph, filterText]);
 
-  // Filter files by name
-  const filterFiles = useCallback(async (nameFilter: string) => {
-    if (!selectedSpace || selectedGraph === '') return;
-    
-    if (!nameFilter.trim()) {
-      // If filter is empty and not already loading data, fetch all files
-      if (loading) {
-        return;
-      }
-      await fetchFiles();
-      return;
-    }
-
-    try {
-      setFilterLoading(true);
-      // Use the same mock data as fetchFiles but with graph_id
-      const allMockFiles = [
-        // Space1 files
-        {
-          id: 1,
-          space_id: 'space1',
-          graph_id: 0,
-          filename: 'document1.pdf',
-          file_path: '/uploads/document1.pdf',
-          file_size: 2048576,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-15T10:30:00Z',
-          last_modified: '2024-01-15T10:30:00Z'
-        },
-        {
-          id: 2,
-          space_id: 'space1',
-          graph_id: 1,
-          filename: 'meeting-notes.docx',
-          file_path: '/uploads/meeting-notes.docx',
-          file_size: 512000,
-          file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          upload_time: '2024-01-14T14:20:00Z',
-          last_modified: '2024-01-16T09:15:00Z'
-        },
-        {
-          id: 7,
-          space_id: 'space1',
-          graph_id: 2,
-          filename: 'ontology-spec.owl',
-          file_path: '/uploads/ontology-spec.owl',
-          file_size: 1024000,
-          file_type: 'application/rdf+xml',
-          upload_time: '2024-01-13T12:00:00Z',
-          last_modified: '2024-01-18T16:30:00Z'
-        },
-        // Space2 files
-        {
-          id: 3,
-          space_id: 'space2',
-          graph_id: 0,
-          filename: 'alpha-requirements.pdf',
-          file_path: '/uploads/alpha-requirements.pdf',
-          file_size: 1536000,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-13T16:45:00Z',
-          last_modified: '2024-01-13T16:45:00Z'
-        },
-        {
-          id: 4,
-          space_id: 'space2',
-          graph_id: 3,
-          filename: 'alpha-timeline.xlsx',
-          file_path: '/uploads/alpha-timeline.xlsx',
-          file_size: 768000,
-          file_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          upload_time: '2024-01-12T11:20:00Z',
-          last_modified: '2024-01-15T14:30:00Z'
-        },
-        {
-          id: 8,
-          space_id: 'space2',
-          graph_id: 4,
-          filename: 'workflow-definition.json',
-          file_path: '/uploads/workflow-definition.json',
-          file_size: 256000,
-          file_type: 'application/json',
-          upload_time: '2024-01-11T14:15:00Z',
-          last_modified: '2024-01-17T10:45:00Z'
-        },
-        // Space3 files
-        {
-          id: 5,
-          space_id: 'space3',
-          graph_id: 0,
-          filename: 'research-data.csv',
-          file_path: '/uploads/research-data.csv',
-          file_size: 3072000,
-          file_type: 'text/csv',
-          upload_time: '2024-01-11T09:15:00Z',
-          last_modified: '2024-01-14T16:45:00Z'
-        },
-        {
-          id: 6,
-          space_id: 'space3',
-          graph_id: 5,
-          filename: 'analysis-report.pdf',
-          file_path: '/uploads/analysis-report.pdf',
-          file_size: 2560000,
-          file_type: 'application/pdf',
-          upload_time: '2024-01-10T13:30:00Z',
-          last_modified: '2024-01-12T10:20:00Z'
-        },
-        {
-          id: 9,
-          space_id: 'space3',
-          graph_id: 6,
-          filename: 'statistical-output.txt',
-          file_path: '/uploads/statistical-output.txt',
-          file_size: 128000,
-          file_type: 'text/plain',
-          upload_time: '2024-01-09T11:00:00Z',
-          last_modified: '2024-01-15T09:20:00Z'
-        }
-      ];
-      
-      // Filter files for the selected space, graph, and by filename
-      const spaceFiles = allMockFiles.filter(file => file.space_id === selectedSpace && file.graph_id === selectedGraph);
-      const filteredFiles = spaceFiles.filter(file => 
-        file.filename.toLowerCase().includes(nameFilter.toLowerCase())
-      );
-      
-      setFiles(filteredFiles);
-      setError(null);
-    } catch (err) {
-      console.error('Error filtering files:', err);
-      setError('Failed to filter files. Please try again later.');
-      setFiles([]);
-    } finally {
-      setFilterLoading(false);
-    }
-  }, [selectedSpace, selectedGraph, loading, fetchFiles]);
-
-  // Fetch files when selectedSpace or selectedGraph changes
+  // Fetch files when selectedSpace/selectedGraph/filterText changes (debounced via fetchFiles dependency)
   useEffect(() => {
-    if (selectedSpace && selectedGraph !== '') {
+    if (selectedSpace && selectedGraph) {
       fetchFiles();
     } else {
       setFiles([]);
     }
   }, [selectedSpace, selectedGraph, fetchFiles]);
-
-  // Handle filter input changes with debouncing
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      filterFiles(filterText);
-    }, 300);
-
-    return () => clearTimeout(timeoutId);
-  }, [filterText, filterFiles]);
 
   // Preserve cursor position in filter input
   useLayoutEffect(() => {
@@ -437,29 +190,18 @@ const Files: React.FC = () => {
     }
   }, [filterText]);
 
-  const handleDetailsClick = (file: File) => {
-    // Use hierarchical URL structure
+  const handleDetailsClick = (file: FileEntry) => {
     if (spaceId && graphId) {
-      navigate(`/space/${spaceId}/graph/${graphId}/file/${file.id}`);
-    } else {
-      navigate(`/file/${file.id}`);
+      navigate(`/space/${spaceId}/graph/${graphId}/file/${encodeURIComponent(file.uri)}`);
+    } else if (selectedSpace && selectedGraph) {
+      navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/file/${encodeURIComponent(file.uri)}`);
     }
   };
 
-  const formatDate = (dateString: string): string => {
-    try {
-      return new Date(dateString).toLocaleString();
-    } catch {
-      return 'Invalid date';
-    }
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const extractLocalName = (uri: string): string => {
+    if (!uri) return '';
+    const parts = uri.split(/[#/]/);
+    return parts[parts.length - 1] || uri;
   };
 
   return (
@@ -485,11 +227,11 @@ const Files: React.FC = () => {
             Manage files and documents within your graphs
           </p>
         </div>
-        {selectedSpace && selectedGraph !== '' && (
+        {selectedSpace && selectedGraph && (
           <Button 
             color="blue" 
             className="mt-4 sm:mt-0"
-            onClick={() => navigate(`/space/${selectedSpace}/graph/${selectedGraph}/file/new`)}
+            onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/file/new`)}
           >
             <HiPlus className="mr-2 h-4 w-4" />
             Upload File
@@ -527,7 +269,7 @@ const Files: React.FC = () => {
           <Select
             id="graph-select"
             value={selectedGraph}
-            onChange={(e) => setSelectedGraph(e.target.value === '' ? '' : parseInt(e.target.value))}
+            onChange={(e) => setSelectedGraph(e.target.value)}
             disabled={!selectedSpace || graphsLoading}
           >
             <option value="">Choose a graph...</option>
@@ -537,8 +279,8 @@ const Files: React.FC = () => {
               <option value="" disabled>No graphs available</option>
             ) : (
               graphs.map((graph) => (
-                <option key={graph.id} value={graph.id}>
-                  {graph.graph_name}
+                <option key={graph.graph_uri} value={graph.graph_uri}>
+                  {graph.graph_name} ({graph.triple_count} triples)
                 </option>
               ))
             )}
@@ -547,7 +289,7 @@ const Files: React.FC = () => {
       </div>
 
       {/* Search Filter */}
-      {selectedSpace && selectedGraph !== '' && (
+      {selectedSpace && selectedGraph && (
         <div className="relative">
           <div className="relative">
             <HiSearch className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -567,9 +309,9 @@ const Files: React.FC = () => {
               onClick={(e) => {
                 cursorPositionRef.current = e.currentTarget.selectionStart || 0;
               }}
-              disabled={filterLoading}
+              disabled={loading}
             />
-            {filterLoading && (
+            {loading && (
               <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
                 <Spinner size="sm" />
               </div>
@@ -577,7 +319,7 @@ const Files: React.FC = () => {
           </div>
           {filterText && (
             <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-              {filterLoading ? 'Filtering...' : `Showing results for "${filterText}"`}
+              {loading ? 'Filtering...' : `Showing results for "${filterText}"`}
             </p>
           )}
         </div>
@@ -600,7 +342,7 @@ const Files: React.FC = () => {
         </div>
       )}
       
-      {selectedSpace && selectedGraph === '' && !graphsLoading && (
+      {selectedSpace && !selectedGraph && !graphsLoading && (
         <div className="text-center py-12">
           <div className="text-gray-500 dark:text-gray-400">
             <p className="text-lg mb-2">Select a graph to view files</p>
@@ -610,49 +352,41 @@ const Files: React.FC = () => {
       )}
 
       {/* Files Table */}
-      {selectedSpace && selectedGraph !== '' && files.length === 0 && !loading && !error ? (
+      {selectedSpace && selectedGraph && files.length === 0 && !loading && !error ? (
         <Alert color="info">
           {filterText ? 
             `No files found matching "${filterText}". Try a different search term.` :
             'No files found in this graph. Upload your first file to get started.'
           }
         </Alert>
-      ) : selectedSpace && selectedGraph !== '' && (
+      ) : selectedSpace && selectedGraph && (
         <>
           {/* Desktop Table View */}
           <div className="hidden md:block overflow-x-auto">
             <Table striped>
               <TableHead>
                 <TableRow>
-                  <TableHeadCell>ID</TableHeadCell>
-                  <TableHeadCell>Filename</TableHeadCell>
+                  <TableHeadCell>URI</TableHeadCell>
+                  <TableHeadCell>Name</TableHeadCell>
                   <TableHeadCell>Type</TableHeadCell>
-                  <TableHeadCell>Size</TableHeadCell>
-                  <TableHeadCell>Upload Time</TableHeadCell>
-                  <TableHeadCell>Last Modified</TableHeadCell>
+                  <TableHeadCell>Properties</TableHeadCell>
                   <TableHeadCell>Actions</TableHeadCell>
                 </TableRow>
               </TableHead>
               <TableBody className="divide-y">
                 {files.map((file) => (
-                  <TableRow key={file.id} className="bg-white dark:border-gray-700 dark:bg-gray-800">
-                    <TableCell className="whitespace-nowrap font-medium text-gray-900 dark:text-white">
-                      {file.id}
+                  <TableRow key={file.uri} className="bg-white dark:border-gray-700 dark:bg-gray-800">
+                    <TableCell className="whitespace-nowrap font-medium text-gray-900 dark:text-white max-w-xs truncate" title={file.uri}>
+                      {extractLocalName(file.uri)}
                     </TableCell>
                     <TableCell className="font-medium text-gray-900 dark:text-white">
                       {file.filename}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {file.file_type || 'Unknown'}
+                      {file.file_type || extractLocalName(file.rdf_type)}
                     </TableCell>
                     <TableCell className="text-gray-500 dark:text-gray-400">
-                      {formatFileSize(file.file_size)}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
-                      {formatDate(file.upload_time)}
-                    </TableCell>
-                    <TableCell className="text-gray-500 dark:text-gray-400">
-                      {formatDate(file.last_modified)}
+                      {file.properties_count} properties
                     </TableCell>
                     <TableCell>
                       <Button
@@ -673,15 +407,15 @@ const Files: React.FC = () => {
           {/* Mobile Card View */}
           <div className="md:hidden space-y-4">
             {files.map((file) => (
-              <Card key={file.id} className="w-full">
+              <Card key={file.uri} className="w-full">
                 <div className="space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                         {file.filename}
                       </h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        ID: {file.id}
+                      <p className="text-sm text-gray-500 dark:text-gray-400 truncate max-w-xs" title={file.uri}>
+                        {extractLocalName(file.uri)}
                       </p>
                     </div>
                     <Button
@@ -696,19 +430,11 @@ const Files: React.FC = () => {
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <span className="font-medium text-gray-900 dark:text-white">Type:</span>
-                      <p className="text-gray-500 dark:text-gray-400">{file.file_type || 'Unknown'}</p>
+                      <p className="text-gray-500 dark:text-gray-400">{file.file_type || extractLocalName(file.rdf_type)}</p>
                     </div>
                     <div>
-                      <span className="font-medium text-gray-900 dark:text-white">Size:</span>
-                      <p className="text-gray-500 dark:text-gray-400">{formatFileSize(file.file_size)}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-900 dark:text-white">Uploaded:</span>
-                      <p className="text-gray-500 dark:text-gray-400">{formatDate(file.upload_time)}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-900 dark:text-white">Modified:</span>
-                      <p className="text-gray-500 dark:text-gray-400">{formatDate(file.last_modified)}</p>
+                      <span className="font-medium text-gray-900 dark:text-white">Properties:</span>
+                      <p className="text-gray-500 dark:text-gray-400">{file.properties_count}</p>
                     </div>
                   </div>
                 </div>
@@ -719,7 +445,7 @@ const Files: React.FC = () => {
       )}
 
       {/* Loading Spinner */}
-      {loading && selectedSpace && selectedGraph !== '' && (
+      {loading && selectedSpace && selectedGraph && (
         <div className="flex justify-center py-8">
           <Spinner size="lg" />
         </div>

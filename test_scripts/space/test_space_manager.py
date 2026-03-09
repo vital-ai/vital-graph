@@ -60,7 +60,7 @@ async def cleanup_test_space(impl, space_id: str):
         table_prefix = f"{global_prefix}__{space_id}__"
         
         # Get database connection for manual index cleanup
-        with impl.db_impl.shared_pool.connection() as conn:
+        with impl.db_impl.rdf_pool.connection() as conn:
             cursor = conn.cursor()
             
             # List of index patterns to clean up
@@ -106,8 +106,8 @@ async def cleanup_test_space(impl, space_id: str):
             conn.commit()
         
         # Step 2: Use standard space deletion if space exists
-        space_impl_pg = impl.db_impl.space_impl
-        if space_impl_pg.space_exists(space_id):
+        space_impl_pg = impl.db_impl.get_space_impl()
+        if space_impl_pg and space_impl_pg.space_exists(space_id):
             print(f"📋 Space tables still exist for '{space_id}', using standard deletion...")
             if space_impl_pg.delete_space_tables(space_id):
                 print(f"✅ Successfully deleted remaining tables for space '{space_id}'")
@@ -400,13 +400,17 @@ async def test_space_manager_lifecycle():
         print(f"\n6️⃣ SPACE INFORMATION")
         print("-" * 30)
         
-        space_info = await space_manager.get_space_info(TEST_SPACE_ID)
-        if space_info:
-            print(f"📋 Space Info: {space_info}")
-            test_results.append(("Space Information", True, "Retrieved space information"))
-        else:
-            print("❌ Failed to retrieve space information")
-            test_results.append(("Space Information", False, "No space information available"))
+        try:
+            space_info = space_manager.get_space_info(TEST_SPACE_ID)  # This is not async
+            if space_info:
+                print(f"📋 Space Info: {space_info}")
+                test_results.append(("Space Information", True, "Retrieved space information"))
+            else:
+                print("❌ Failed to retrieve space information")
+                test_results.append(("Space Information", False, "No space information available"))
+        except Exception as e:
+            print(f"❌ Space information retrieval failed: {e}")
+            test_results.append(("Space Information", False, f"Exception: {e}"))
         
         # Test 7: Space deletion with cleanup
         print(f"\n7️⃣ SPACE DELETION WITH CLEANUP")
@@ -449,7 +453,7 @@ async def test_space_manager_lifecycle():
         try:
             if space_manager.has_space(TEST_SPACE_ID):
                 print(f"\n🧹 Final cleanup: removing test space '{TEST_SPACE_ID}'")
-                space_manager.delete_space_with_cleanup(TEST_SPACE_ID)
+                await space_manager.delete_space_with_tables(TEST_SPACE_ID)
         except Exception as cleanup_e:
             print(f"⚠️ Final cleanup warning: {cleanup_e}")
         

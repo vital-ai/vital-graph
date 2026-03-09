@@ -13,10 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .jena_sidecar_client import SidecarClient
-from .jena_ast_mapper import map_compile_response
-from .jena_sql_generator import generate_sql
-from .jena_types import CompileResult, VarNode, URINode, LiteralNode, BNodeNode
+from vitalgraph.db.jena_sparql.jena_ast_mapper import map_compile_response
+from vitalgraph.db.jena_sparql.jena_types import VarNode, URINode, LiteralNode, BNodeNode
 from . import db
 
 logger = logging.getLogger(__name__)
@@ -36,18 +34,24 @@ class QueryResult:
     timing: Optional[Dict[str, float]] = None  # ms for each phase
     boolean: Optional[bool] = None  # ASK result
     triples: List[Dict[str, Any]] = field(default_factory=list)  # CONSTRUCT/DESCRIBE
+    # SPARQL→SQL variable name mapping (opaque sql col → original SPARQL name)
+    var_map: Dict[str, str] = field(default_factory=dict)
+    sparql_vars: List[str] = field(default_factory=list)
 
 
 class SparqlOrchestrator:
     """
-    Orchestrates SPARQL → SQL execution.
+    Async orchestrator: SPARQL string → PostgreSQL execution → results.
+
+    Uses native async throughout: httpx.AsyncClient for the sidecar,
+    asyncpg for PostgreSQL.
 
     Usage:
         orch = SparqlOrchestrator(space_id="lead_test")
-        result = orch.execute("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10")
+        result = await orch.execute("SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10")
         for row in result.rows:
             print(row)
-        orch.close()
+        await orch.close()
     """
 
     def __init__(
@@ -56,31 +60,47 @@ class SparqlOrchestrator:
         sidecar_url: Optional[str] = None,
         db_params: Optional[Dict[str, Any]] = None,
         graph_uri: Optional[str] = None,
-        optimize: bool = False,
     ):
+        from vitalgraph.db.jena_sparql.jena_sidecar_client import AsyncSidecarClient
         self.space_id = space_id
         self.db_params = db_params
         self.graph_uri = graph_uri
-        self.optimize = optimize
-        self.client = SidecarClient(base_url=sidecar_url)
+        self.client = AsyncSidecarClient(base_url=sidecar_url)
+
+        # Ensure the pipeline's db_provider is configured with a DbImplInterface
+        from vitalgraph.db.sparql_sql import db_provider
+        if not db_provider.is_configured():
+            from .db import DevDbImpl
+            self._dev_db_impl = DevDbImpl(db_params)
+            # connect() is async — defer to first execute() call
+            self._dev_db_impl_needs_connect = True
+
         logger.info(
-            "SparqlOrchestrator: space=%s graph=%s optimize=%s sidecar=%s",
-            space_id, graph_uri, optimize, self.client.base_url,
+            "SparqlOrchestrator: space=%s graph=%s sidecar=%s",
+            space_id, graph_uri, self.client.base_url,
         )
 
-    def close(self):
-        self.client.close()
+    async def close(self):
+        await self.client.close()
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *exc):
-        self.close()
+    async def __aexit__(self, *exc):
+        await self.close()
 
-    def execute(self, sparql: str, include_sql: bool = False,
-                sql_only: bool = False) -> QueryResult:
+    async def _ensure_db_provider(self):
+        """Lazily connect and configure db_provider if using DevDbImpl."""
+        if getattr(self, '_dev_db_impl_needs_connect', False):
+            from vitalgraph.db.sparql_sql import db_provider
+            await self._dev_db_impl.connect()
+            db_provider.configure(self._dev_db_impl)
+            self._dev_db_impl_needs_connect = False
+
+    async def execute(self, sparql: str, include_sql: bool = False,
+                      sql_only: bool = False) -> QueryResult:
         """
-        Execute a SPARQL query/update against PostgreSQL.
+        Execute a SPARQL query/update against PostgreSQL asynchronously.
 
         Args:
             sparql: SPARQL query or update string.
@@ -90,18 +110,19 @@ class SparqlOrchestrator:
         Returns:
             QueryResult with rows, columns, timing, etc.
         """
+        await self._ensure_db_provider()
         timing = {}
 
-        # Phase 1: Compile via sidecar
+        # Phase 1: Compile via sidecar (async HTTP)
         try:
             t0 = time.monotonic()
-            raw_json = self.client.compile(sparql)
+            raw_json = await self.client.compile(sparql)
             timing["sidecar_ms"] = (time.monotonic() - t0) * 1000
         except Exception as e:
             logger.error("Sidecar compile failed: %s", e)
             return QueryResult(ok=False, error=f"Sidecar error: {e}", timing=timing)
 
-        # Phase 2: Map JSON → Python types
+        # Phase 2: Map JSON → Python types (pure, no I/O)
         try:
             t0 = time.monotonic()
             compile_result = map_compile_response(raw_json)
@@ -121,38 +142,58 @@ class SparqlOrchestrator:
         sparql_form = compile_result.meta.sparql_form if compile_result.meta else None
         query_type = compile_result.meta.query_type if compile_result.meta else None
 
-        # Open one connection for both generate (materialize) and execute phases
-        with db.get_connection(self.db_params) as conn:
+        # Open one async connection for both generate and execute
+        async with db.get_connection(self.db_params) as conn:
 
-            # Phase 3: Generate SQL
+            # Phase 3: Generate SQL (async for constant materialization)
             try:
+                from vitalgraph.db.sparql_sql.generator import generate_sql as v2_generate_sql
                 t0 = time.monotonic()
-                sql = generate_sql(compile_result, self.space_id,
-                                   conn_params=self.db_params, conn=conn,
-                                   graph_uri=self.graph_uri,
-                                   optimize=self.optimize)
+                gen_result = await v2_generate_sql(
+                    compile_result, self.space_id,
+                    conn_params=self.db_params, conn=conn,
+                    graph_lock_uri=self.graph_uri,
+                )
+                sql = gen_result.sql
+                var_map = gen_result.var_map
+                sparql_vars = gen_result.sparql_vars
                 timing["generate_ms"] = (time.monotonic() - t0) * 1000
-                if hasattr(generate_sql, 'last_timing'):
-                    timing["generate_detail"] = generate_sql.last_timing
             except Exception as e:
-                logger.error("SQL generation failed: %s", e)
+                logger.error("Async SQL generation failed: %s", e)
                 return QueryResult(
                     ok=False, error=f"SQL generation error: {e}",
                     sparql_form=sparql_form, query_type=query_type, timing=timing,
                 )
 
-            # sql_only: return generated SQL without executing
             if sql_only:
                 return QueryResult(
                     ok=True, sql=sql,
                     sparql_form=sparql_form, query_type=query_type, timing=timing,
                 )
 
-            # Phase 4: Execute SQL
+            # Phase 4: Execute SQL (async)
+            # Adaptive planner hints
+            _JOIN_COLLAPSE_DEFAULT = 8
+            _MAX_EXHAUSTIVE = 14
+            quad_table = f"{self.space_id}_rdf_quad"
+            edge_mv_table = f"{self.space_id}_edge_mv"
+            femv_table = f"{self.space_id}_frame_entity_mv"
+            join_count = sql.count(quad_table) + sql.count(edge_mv_table) + sql.count(femv_table)
+            if _JOIN_COLLAPSE_DEFAULT < join_count <= _MAX_EXHAUSTIVE:
+                limit = join_count + 1
+                await conn.execute(f"SET LOCAL join_collapse_limit = {limit}")
+                await conn.execute(f"SET LOCAL geqo_threshold = {limit}")
+                logger.debug("Planner hints: join_collapse_limit=%d geqo_threshold=%d "
+                             "for %d-table query", limit, limit, join_count)
+            elif join_count > _MAX_EXHAUSTIVE:
+                await conn.execute(f"SET LOCAL geqo_threshold = {join_count + 1}")
+                logger.debug("Planner hints: geqo OFF (threshold=%d) "
+                             "for %d-table query", join_count + 1, join_count)
+
             try:
                 t0 = time.monotonic()
                 if sparql_form == "UPDATE":
-                    self._execute_update(sql)
+                    await self._execute_update(sql)
                     timing["execute_ms"] = (time.monotonic() - t0) * 1000
                     return QueryResult(
                         ok=True,
@@ -161,7 +202,8 @@ class SparqlOrchestrator:
                         timing=timing,
                     )
                 else:
-                    rows = db.execute_query(sql, conn_params=self.db_params, conn=conn)
+                    rows = await db.execute_query(
+                        sql, conn_params=self.db_params, conn=conn)
                     timing["execute_ms"] = (time.monotonic() - t0) * 1000
                     columns = list(rows[0].keys()) if rows else []
 
@@ -211,9 +253,10 @@ class SparqlOrchestrator:
                         rows=rows, columns=columns, row_count=len(rows),
                         sparql_form=sparql_form, query_type=query_type,
                         sql=sql if include_sql else None, timing=timing,
+                        var_map=var_map, sparql_vars=sparql_vars,
                     )
             except Exception as e:
-                logger.error("SQL execution failed: %s\nSQL: %s", e, sql[:500])
+                logger.error("Async SQL execution failed: %s\nSQL: %s", e, sql[:500])
                 return QueryResult(
                     ok=False,
                     error=f"SQL execution error: {e}",
@@ -246,11 +289,10 @@ class SparqlOrchestrator:
             return node.label
         return None
 
-    def _execute_update(self, sql: str):
+    async def _execute_update(self, sql: str):
         """Execute one or more SQL update statements in a transaction."""
         statements = [s.strip() for s in sql.split(";") if s.strip()]
-        with db.get_connection(self.db_params) as conn:
-            with conn.cursor() as cur:
+        async with db.get_connection(self.db_params) as conn:
+            async with conn.transaction():
                 for stmt in statements:
-                    cur.execute(stmt)
-            conn.commit()
+                    await conn.execute(stmt)

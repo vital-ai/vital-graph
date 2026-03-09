@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Set, Tuple
 
-from .jena_types import (
+from .jena_sparql.jena_types import (
     QuadPattern, URINode, LiteralNode, BNodeNode, VarNode, RDFNode,
     UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere, UpdateOp,
     UpdateClear, UpdateDrop, UpdateCreate, UpdateCopy, UpdateMove, UpdateAdd,

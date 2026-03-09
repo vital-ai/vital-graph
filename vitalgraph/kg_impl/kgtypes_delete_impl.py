@@ -7,7 +7,7 @@ Implements DELETE and batch DELETE operations with proper validation.
 
 import logging
 from typing import List, Dict, Any, Optional
-from .kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from .kg_backend_utils import KGBackendInterface
 
 
 class KGTypesDeleteProcessor:

@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from ai_haley_kg_domain.model.KGType import KGType
-from .kg_backend_utils import FusekiPostgreSQLBackendAdapter
+from .kg_backend_utils import KGBackendInterface
 from .kg_graph_retrieval_utils import GraphObjectRetriever
 
 

@@ -95,9 +95,14 @@ public class OpSerializer {
 
         } else if (op instanceof OpGroup group) {
             result.put("type", "OpGroup");
-            List<String> groupVars = new ArrayList<>();
-            for (var ve : group.getGroupVars().getVars()) {
-                groupVars.add(ve.getVarName());
+            VarExprList vel = group.getGroupVars();
+            List<Map<String, Object>> groupVars = new ArrayList<>();
+            for (Var v : vel.getVars()) {
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("var", v.getVarName());
+                Expr groupExpr = vel.getExpr(v);
+                entry.put("expr", groupExpr != null ? ExprSerializer.serialize(groupExpr) : null);
+                groupVars.add(entry);
             }
             result.put("groupVars", groupVars);
 

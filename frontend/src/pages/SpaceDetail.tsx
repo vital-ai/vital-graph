@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { 
   Alert, 
   Button, 
@@ -27,12 +27,10 @@ import {
 } from 'react-icons/hi';
 
 interface Space {
-  id: number;
-  tenant: string;
   space: string;
   space_name: string;
-  space_description: string;
-  update_time: string;
+  space_description?: string;
+  exists?: boolean;
 }
 
 interface BannerMessage {
@@ -60,8 +58,7 @@ const SpaceDetail: React.FC = () => {
   const [editForm, setEditForm] = useState({
     space: '',
     space_name: '',
-    space_description: '',
-    tenant: ''
+    space_description: ''
   });
 
   // Track if form has changes
@@ -81,8 +78,7 @@ const SpaceDetail: React.FC = () => {
         setEditForm({
           space: '',
           space_name: '',
-          space_description: '',
-          tenant: ''
+          space_description: ''
         });
         setLoading(false);
         return;
@@ -91,32 +87,34 @@ const SpaceDetail: React.FC = () => {
       try {
         setLoading(true);
         const response = await axios.get(`/api/spaces/${id}`);
-        const spaceData = response.data;
+        // API returns SpaceResponse wrapper: { success, message, space: {...} }
+        const responseData = response.data;
+        const spaceData = responseData.space || responseData;
         setSpace(spaceData);
         
         // Initialize edit form with current values
         setEditForm({
           space: spaceData.space || '',
           space_name: spaceData.space_name || '',
-          space_description: spaceData.space_description || '',
-          tenant: spaceData.tenant || ''
+          space_description: spaceData.space_description || ''
         });
         
         setError(null);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error fetching space:', err);
         
         // Handle different error response formats
         let errorMessage = 'Failed to load space details';
-        if (err.response?.data) {
-          if (typeof err.response.data === 'string') {
-            errorMessage = err.response.data;
-          } else if (err.response.data.detail) {
-            errorMessage = Array.isArray(err.response.data.detail) 
-              ? err.response.data.detail.map((d: any) => d.msg || d).join(', ')
-              : err.response.data.detail;
-          } else if (err.response.data.message) {
-            errorMessage = err.response.data.message;
+        if (err instanceof AxiosError && err.response?.data) {
+          const data = err.response.data as Record<string, unknown>;
+          if (typeof data === 'string') {
+            errorMessage = data;
+          } else if (data.detail) {
+            errorMessage = Array.isArray(data.detail)
+              ? (data.detail as Array<Record<string, string>>).map((d) => d.msg || String(d)).join(', ')
+              : String(data.detail);
+          } else if (data.message) {
+            errorMessage = String(data.message);
           }
         }
         
@@ -142,8 +140,7 @@ const SpaceDetail: React.FC = () => {
       const hasFormChanges = 
         editForm.space !== (space.space || '') ||
         editForm.space_name !== (space.space_name || '') ||
-        editForm.space_description !== (space.space_description || '') ||
-        editForm.tenant !== (space.tenant || '');
+        editForm.space_description !== (space.space_description || '');
       
       setHasChanges(hasFormChanges);
     }
@@ -174,8 +171,7 @@ const SpaceDetail: React.FC = () => {
     setEditForm({
       space: space.space || '',
       space_name: space.space_name || '',
-      space_description: space.space_description || '',
-      tenant: space.tenant || ''
+      space_description: space.space_description || ''
     });
     
     setIsEditing(false);
@@ -189,28 +185,29 @@ const SpaceDetail: React.FC = () => {
       setSaving(true);
       
       if (isCreating) {
-        // Create new space - don't include ID in payload
+        // Create new space
         const createData = {
           ...editForm
         };
 
         const response = await axios.post('/api/spaces', createData);
-        const createdSpace = response.data;
+        const responseData = response.data;
+        // SpaceCreateResponse has space field
+        const createdSpace = responseData.space || responseData;
         
         showBanner('success', 'Space created successfully!');
         
-        // Navigate to the created space's detail page
-        navigate(`/space/${createdSpace.id}`);
+        // Navigate to the created space's detail page using the space identifier
+        navigate(`/space/${createdSpace.space || editForm.space}`);
       } else {
         // Update existing space
         if (!space) return;
         
         const updateData = {
-          id: space.id,
           ...editForm
         };
 
-        const response = await axios.put(`/api/spaces/${space.id}`, updateData);
+        const response = await axios.put(`/api/spaces/${space.space}`, updateData);
         const updatedSpace = response.data;
         
         setSpace(updatedSpace);
@@ -219,10 +216,11 @@ const SpaceDetail: React.FC = () => {
         
         showBanner('success', 'Space updated successfully!');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error saving space:', err);
       const action = isCreating ? 'create' : 'update';
-      showBanner('error', err.response?.data?.detail || `Failed to ${action} space`);
+      const detail = err instanceof AxiosError ? (err.response?.data as Record<string, unknown>)?.detail : undefined;
+      showBanner('error', detail ? String(detail) : `Failed to ${action} space`);
     } finally {
       setSaving(false);
     }
@@ -241,17 +239,17 @@ const SpaceDetail: React.FC = () => {
     
     try {
       setDeleting(true);
-      await axios.delete(`/api/spaces/${space.id}`);
+      await axios.delete(`/api/spaces/${space.space}`);
       
       // Show success message and navigate back to spaces list
       showBanner('success', 'Space deleted successfully');
       setTimeout(() => {
         navigate('/spaces');
       }, 1000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error deleting space:', err);
-      const errorMessage = err.response?.data?.detail || 'Failed to delete space';
-      showBanner('error', errorMessage);
+      const detail = err instanceof AxiosError ? (err.response?.data as Record<string, unknown>)?.detail : undefined;
+      showBanner('error', detail ? String(detail) : 'Failed to delete space');
     } finally {
       setDeleting(false);
       setShowDeleteModal(false);
@@ -260,20 +258,6 @@ const SpaceDetail: React.FC = () => {
 
   const handleDeleteCancel = () => {
     setShowDeleteModal(false);
-  };
-
-  const formatDate = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch {
-      return dateString;
-    }
   };
 
   if (loading) {
@@ -337,7 +321,7 @@ const SpaceDetail: React.FC = () => {
           Spaces
         </BreadcrumbItem>
         <BreadcrumbItem>
-          {isCreating ? 'New Space' : (space?.space_name || space?.space || `Space ${space?.id}`)}
+          {isCreating ? 'New Space' : (space?.space_name || space?.space || 'Space')}
         </BreadcrumbItem>
       </Breadcrumb>
 
@@ -404,20 +388,6 @@ const SpaceDetail: React.FC = () => {
       {/* Space Details Card */}
       <Card>
         <div className="space-y-6">
-          {/* Space ID (Read-only) - Only show for existing spaces */}
-          {!isCreating && (
-            <div>
-              <Label htmlFor="space-id">Space ID</Label>
-              <TextInput
-                id="space-id"
-                type="text"
-                value={space?.id || ''}
-                disabled
-                className="mt-1"
-              />
-            </div>
-          )}
-
           {/* Space Identifier */}
           <div>
             <Label htmlFor="space-identifier">Space Identifier</Label>
@@ -464,29 +434,6 @@ const SpaceDetail: React.FC = () => {
             )}
           </div>
 
-          {/* Tenant */}
-          <div>
-            <Label htmlFor="tenant">Tenant</Label>
-            {isEditing ? (
-              <TextInput
-                id="tenant"
-                type="text"
-                value={editForm.tenant}
-                onChange={(e) => handleInputChange('tenant', e.target.value)}
-                placeholder="Enter tenant"
-                className="mt-1"
-              />
-            ) : (
-              <TextInput
-                id="tenant"
-                type="text"
-                value={space?.tenant || ''}
-                disabled
-                className="mt-1"
-              />
-            )}
-          </div>
-
           {/* Space Description */}
           <div>
             <Label htmlFor="space-description">Description</Label>
@@ -510,19 +457,6 @@ const SpaceDetail: React.FC = () => {
             )}
           </div>
 
-          {/* Last Updated (Read-only) - Only show for existing spaces */}
-          {!isCreating && (
-            <div>
-              <Label htmlFor="last-updated">Last Updated</Label>
-              <TextInput
-                id="last-updated"
-                type="text"
-                value={space?.update_time ? formatDate(space.update_time) : ''}
-                disabled
-                className="mt-1"
-              />
-            </div>
-          )}
         </div>
       </Card>
 
