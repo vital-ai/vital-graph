@@ -129,9 +129,9 @@ class VitalGraphDBAdminREPL:
         elif command == 'init':
             return self._run_async(self.cmd_init(args))
         elif command == 'purge':
-            return self.cmd_purge(args)
+            return self._run_async(self.cmd_purge(args))
         elif command == 'delete':
-            return self.cmd_delete(args)
+            return self._run_async(self.cmd_delete(args))
         elif command == 'info':
             return self.cmd_info(args)
         elif command == 'clear':
@@ -242,538 +242,188 @@ class VitalGraphDBAdminREPL:
         
         return True
     
-    async def cmd_init(self, args: list[str]) -> bool:
-        """Initialize database tables (only if they don't exist)."""
-        if not self.connected:
-            print("❌ Not connected to database. Use 'connect;' first.")
-            return True
-        if not self.db_impl:
-            print("Error: Not connected to database. Use 'connect' command first.")
-            return True
-        
-        # Check if this is a fuseki_postgresql backend
+    def _get_backend_admin(self):
+        """Return the backend-specific admin module for the current backend type."""
         backend_type = self.config.get_backend_config().get('type', 'postgresql')
         
-        if backend_type == 'fuseki_postgresql':
-            return await self._init_fuseki_postgresql_backend()
-        elif backend_type == 'sparql_sql':
-            return await self._init_sparql_sql_backend()
-        
-        # Standard PostgreSQL backend initialization
-        if not hasattr(self.db_impl, 'table_prefix') or not self.db_impl.table_prefix:
-            print("Error: Database implementation missing table_prefix configuration.")
-            return True
-        
-        print(f"Initializing database tables with prefix: {self.db_impl.table_prefix}")
-        
-        # Let the database implementation determine the proper state based on table existence
-        await self.db_impl._load_current_state()
-        print(f"Current database state: {self.db_impl.state}")
-        
-        if self.db_impl.state != "uninitialized":
-            print(f"❌ Cannot initialize - database state is '{self.db_impl.state}', must be 'uninitialized'")
-            print("   Tables may already exist for this prefix")
-            return True
-        
-        try:
-            success = await self.db_impl.init_tables()
-            if success:
-                print("Database tables initialized successfully.")
-            else:
-                print("Failed to initialize database tables.")
-                print("   Check database connection and permissions")
-                
-        except Exception as e:
-            print(f"❌ Error during initialization: {e}")
-            return True
-        
-        return True
+        if backend_type == 'sparql_sql':
+            from vitalgraph.db.sparql_sql.sparql_sql_admin import SparqlSQLAdmin
+            return SparqlSQLAdmin()
+        elif backend_type == 'fuseki_postgresql':
+            from vitalgraph.db.fuseki_postgresql.fuseki_admin import FusekiPostgreSQLAdmin
+            return FusekiPostgreSQLAdmin()
+        else:
+            return None
     
-    async def _init_fuseki_postgresql_backend(self) -> bool:
-        """Initialize fuseki_postgresql backend admin tables."""
-        print("🚀 Initializing Fuseki-PostgreSQL Backend")
+    async def cmd_init(self, args: list[str]) -> bool:
+        """Initialize database tables (only if they don't exist)."""
+        if not self.connected or not self.db_impl:
+            print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+        
+        admin = self._get_backend_admin()
+        if admin is None:
+            print("❌ No admin module available for this backend type.")
+            return True
+        
+        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        print(f"🚀 Initializing {backend_type} Backend")
         print("=" * 50)
         
         try:
-            from vitalgraph.db.fuseki_postgresql.postgresql_schema import FusekiPostgreSQLSchema
+            status = await admin.check_admin_tables(self.db_impl)
             
-            # Create schema instance
-            schema = FusekiPostgreSQLSchema()
-            
-            # Check if admin tables already exist
-            print("\n📋 Checking for existing admin tables...")
-            check_query = """
-            SELECT COUNT(*) as table_count
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name IN ('install', 'space', 'graph', 'user')
-            """
-            
-            result = await self.db_impl.execute_query(check_query)
-            table_count = result[0]['table_count'] if result else 0
-            
-            if table_count == 4:
-                print("✅ Admin tables already exist (install, space, graph, user)")
+            if status['found'] == status['expected']:
+                print(f"✅ All {status['expected']} admin tables already exist")
                 print("   No initialization needed.")
                 return True
-            elif table_count > 0:
-                print(f"⚠️  Warning: Found {table_count} out of 4 admin tables")
-                print("   Some tables may be missing or partially created")
+            elif status['found'] > 0:
+                print(f"⚠️  Warning: Found {status['found']} out of {status['expected']} admin tables")
                 response = input("   Continue with initialization? (yes/no): ").strip().lower()
                 if response not in ['yes', 'y']:
                     print("   Initialization cancelled.")
                     return True
             
-            print(f"\n📦 Creating admin tables...")
-            
-            # Create admin tables
-            admin_table_statements = schema.create_admin_tables_sql()
-            for i, statement in enumerate(admin_table_statements, 1):
-                table_name = list(schema.ADMIN_TABLES.keys())[i-1]
-                print(f"   Creating table: {table_name}")
-                await self.db_impl.execute_update(statement)
-            
-            print(f"\n🔍 Creating admin table indexes...")
-            
-            # Create admin table indexes
-            admin_index_statements = schema.create_admin_indexes_sql()
-            for statement in admin_index_statements:
-                await self.db_impl.execute_update(statement)
-            
-            print(f"\n✅ Fuseki-PostgreSQL admin tables initialized successfully!")
-            print(f"   Created tables: install, space, graph, user")
-            print(f"   Created indexes for: space, graph, user")
-            
-            return True
+            print("\n📦 Creating admin tables...")
+            success = await admin.init_tables(self.db_impl)
+            if success:
+                print(f"\n✅ {backend_type} admin tables initialized successfully!")
+            else:
+                print(f"\n❌ Failed to initialize {backend_type} admin tables")
             
         except Exception as e:
-            print(f"\n❌ Error during Fuseki-PostgreSQL initialization: {e}")
+            print(f"\n❌ Error during initialization: {e}")
             import traceback
             traceback.print_exc()
-            return True
-    
-    async def _init_sparql_sql_backend(self) -> bool:
-        """Initialize sparql_sql backend admin tables and pg_trgm extension."""
-        print("🚀 Initializing SPARQL-SQL Backend")
-        print("=" * 50)
         
-        try:
-            # Check if admin tables already exist
-            print("\n📋 Checking for existing admin tables...")
-            check_query = """
-            SELECT COUNT(*) as table_count
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name IN ('install', 'space', 'graph', 'user', 'process',
-                              'agent_type', 'agent', 'agent_endpoint', 'agent_change_log')
-            """
-            
-            result = await self.db_impl.execute_query(check_query)
-            table_count = result[0]['table_count'] if result else 0
-            
-            if table_count == 9:
-                print("✅ Admin tables already exist (install, space, graph, user, process, agent_type, agent, agent_endpoint, agent_change_log)")
-                print("   No initialization needed.")
-            elif table_count > 0:
-                print(f"⚠️  Warning: Found {table_count} out of 9 admin tables")
-                response = input("   Continue with initialization? (yes/no): ").strip().lower()
-                if response not in ['yes', 'y']:
-                    print("   Initialization cancelled.")
-                    return True
-            
-            if table_count < 9:
-                # Ensure pg_trgm extension
-                print("\n📦 Ensuring pg_trgm extension...")
-                await self.db_impl.execute_update(
-                    "CREATE EXTENSION IF NOT EXISTS pg_trgm"
-                )
-                print("   ✅ pg_trgm extension ready")
-                
-                # Create admin tables
-                print("\n📦 Creating admin tables...")
-                
-                admin_ddl = [
-                    ("install", '''
-                        CREATE TABLE IF NOT EXISTS install (
-                            id SERIAL PRIMARY KEY,
-                            install_datetime TIMESTAMP,
-                            update_datetime TIMESTAMP,
-                            active BOOLEAN
-                        )
-                    '''),
-                    ("space", '''
-                        CREATE TABLE IF NOT EXISTS space (
-                            space_id VARCHAR(255) PRIMARY KEY,
-                            space_name VARCHAR(255),
-                            space_description TEXT,
-                            tenant VARCHAR(255),
-                            update_time TIMESTAMP
-                        )
-                    '''),
-                    ("graph", '''
-                        CREATE TABLE IF NOT EXISTS graph (
-                            graph_id SERIAL PRIMARY KEY,
-                            space_id VARCHAR(255) NOT NULL,
-                            graph_uri VARCHAR(500),
-                            graph_name VARCHAR(255),
-                            created_time TIMESTAMP,
-                            FOREIGN KEY (space_id) REFERENCES space(space_id) ON DELETE CASCADE
-                        )
-                    '''),
-                    ('"user"', '''
-                        CREATE TABLE IF NOT EXISTS "user" (
-                            user_id SERIAL PRIMARY KEY,
-                            username VARCHAR(255) UNIQUE NOT NULL,
-                            password VARCHAR(255),
-                            email VARCHAR(255),
-                            tenant VARCHAR(255),
-                            update_time TIMESTAMP
-                        )
-                    '''),
-                    ('process', '''
-                        CREATE TABLE IF NOT EXISTS process (
-                            process_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                            process_type VARCHAR(64) NOT NULL,
-                            process_subtype VARCHAR(128),
-                            status VARCHAR(32) NOT NULL DEFAULT 'pending',
-                            instance_id VARCHAR(128),
-                            started_at TIMESTAMPTZ,
-                            completed_at TIMESTAMPTZ,
-                            progress_percent REAL DEFAULT 0.0,
-                            progress_message TEXT,
-                            error_message TEXT,
-                            result_details JSONB,
-                            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                        )
-                    '''),
-                    # --- Agent Registry tables ---
-                    ('agent_type', '''
-                        CREATE TABLE IF NOT EXISTS agent_type (
-                            type_id SERIAL PRIMARY KEY,
-                            type_key VARCHAR(500) UNIQUE NOT NULL,
-                            type_label VARCHAR(255) NOT NULL,
-                            type_description TEXT,
-                            created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                            updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-                        )
-                    '''),
-                    ('agent', '''
-                        CREATE TABLE IF NOT EXISTS agent (
-                            agent_id VARCHAR(50) PRIMARY KEY,
-                            agent_type_id INTEGER NOT NULL REFERENCES agent_type(type_id),
-                            entity_id VARCHAR(50),
-                            agent_name VARCHAR(500) NOT NULL,
-                            agent_uri VARCHAR(500) UNIQUE NOT NULL,
-                            description TEXT,
-                            version VARCHAR(50),
-                            status VARCHAR(20) NOT NULL DEFAULT 'active',
-                            protocol_format_uri VARCHAR(500),
-                            auth_service_uri VARCHAR(500),
-                            auth_service_config JSONB DEFAULT '{}',
-                            capabilities JSONB DEFAULT '[]',
-                            metadata JSONB DEFAULT '{}',
-                            created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                            updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                            created_by VARCHAR(255),
-                            notes TEXT
-                        )
-                    '''),
-                    ('agent_endpoint', '''
-                        CREATE TABLE IF NOT EXISTS agent_endpoint (
-                            endpoint_id SERIAL PRIMARY KEY,
-                            agent_id VARCHAR(50) NOT NULL REFERENCES agent(agent_id) ON DELETE CASCADE,
-                            endpoint_uri VARCHAR(500) NOT NULL,
-                            endpoint_url VARCHAR(1000) NOT NULL,
-                            protocol VARCHAR(20) NOT NULL DEFAULT 'websocket',
-                            status VARCHAR(20) NOT NULL DEFAULT 'active',
-                            created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                            updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                            notes TEXT,
-                            UNIQUE (agent_id, endpoint_uri)
-                        )
-                    '''),
-                    ('agent_change_log', '''
-                        CREATE TABLE IF NOT EXISTS agent_change_log (
-                            log_id BIGSERIAL PRIMARY KEY,
-                            agent_id VARCHAR(50) REFERENCES agent(agent_id) ON DELETE SET NULL,
-                            change_type VARCHAR(50) NOT NULL,
-                            change_detail JSONB,
-                            changed_by VARCHAR(255),
-                            comment TEXT,
-                            created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-                        )
-                    '''),
-                ]
-                
-                for table_name, ddl in admin_ddl:
-                    print(f"   Creating table: {table_name}")
-                    await self.db_impl.execute_update(ddl)
-                
-                # Create indexes
-                print("\n🔍 Creating admin table indexes...")
-                admin_indexes = [
-                    'CREATE INDEX IF NOT EXISTS idx_space_tenant ON space(tenant)',
-                    'CREATE INDEX IF NOT EXISTS idx_space_update_time ON space(update_time)',
-                    'CREATE INDEX IF NOT EXISTS idx_graph_space_id ON graph(space_id)',
-                    'CREATE INDEX IF NOT EXISTS idx_graph_uri ON graph(graph_uri)',
-                    'CREATE INDEX IF NOT EXISTS idx_user_tenant ON "user"(tenant)',
-                    'CREATE INDEX IF NOT EXISTS idx_user_username ON "user"(username)',
-                    'CREATE INDEX IF NOT EXISTS idx_process_type_status ON process(process_type, status)',
-                    'CREATE INDEX IF NOT EXISTS idx_process_created ON process(created_at DESC)',
-                    # Agent registry indexes
-                    'CREATE INDEX IF NOT EXISTS idx_agent_type_id ON agent(agent_type_id)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_entity ON agent(entity_id)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_name ON agent(agent_name)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_uri ON agent(agent_uri)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_status ON agent(status)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_protocol ON agent(protocol_format_uri)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_auth_service ON agent(auth_service_uri)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_created ON agent(created_time)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_ep_agent ON agent_endpoint(agent_id)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_ep_uri ON agent_endpoint(agent_id, endpoint_uri)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_ep_protocol ON agent_endpoint(protocol)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_ep_status ON agent_endpoint(status)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_log_agent ON agent_change_log(agent_id)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_log_type ON agent_change_log(change_type)',
-                    'CREATE INDEX IF NOT EXISTS idx_agent_log_time ON agent_change_log(created_time)',
-                ]
-                for stmt in admin_indexes:
-                    await self.db_impl.execute_update(stmt)
-                
-                # Seed install record
-                print("\n📝 Seeding install record...")
-                await self.db_impl.execute_update(
-                    "INSERT INTO install (install_datetime, update_datetime, active) "
-                    "SELECT NOW(), NOW(), true "
-                    "WHERE NOT EXISTS (SELECT 1 FROM install)"
-                )
-                
-                # Seed agent_type with initial type
-                print("\n📝 Seeding agent_type...")
-                await self.db_impl.execute_update(
-                    "INSERT INTO agent_type (type_key, type_label, type_description) "
-                    "SELECT 'urn:vital-ai:agent-type:chat', 'Chat', 'Conversational chat agent' "
-                    "WHERE NOT EXISTS (SELECT 1 FROM agent_type WHERE type_key = 'urn:vital-ai:agent-type:chat')"
-                )
-                
-                print(f"\n✅ SPARQL-SQL admin tables initialized successfully!")
-                print(f"   Created tables: install, space, graph, user, process, agent_type, agent, agent_endpoint, agent_change_log")
-                print(f"   Created indexes for: space, graph, user, process, agent, agent_endpoint, agent_change_log")
-                print(f"   Extension: pg_trgm")
-            
-            return True
-            
-        except Exception as e:
-            print(f"\n❌ Error during SPARQL-SQL initialization: {e}")
-            import traceback
-            traceback.print_exc()
-            return True
-    
-    def cmd_purge(self, args: list[str]) -> bool:
-        """Reset all tables to initial state."""
-        if not self.connected:
-            print("❌ Not connected to database. Use 'connect;' first.")
-            return True
-        
-        print("⚠️  WARNING: This will reset all tables to initial state!")
-        print("Purging VitalGraphDB tables...")
-        # TODO: Implement table purge logic
-        print("✅ Database tables purged and reset to initial state")
         return True
     
-    def cmd_delete(self, args: list[str]) -> bool:
-        """Delete all VitalGraphDB tables."""
-        if not self.connected:
+    async def cmd_purge(self, args: list[str]) -> bool:
+        """Reset all tables to initial state."""
+        if not self.connected or not self.db_impl:
             print("❌ Not connected to database. Use 'connect;' first.")
             return True
         
-        print("⚠️  WARNING: This will permanently delete all VitalGraphDB tables!")
-        print("Deleting VitalGraphDB tables...")
-        # TODO: Implement table deletion logic
-        print("✅ VitalGraphDB tables deleted")
+        admin = self._get_backend_admin()
+        if admin is None:
+            print("❌ No admin module available for this backend type.")
+            return True
+        
+        print("⚠️  WARNING: This will delete ALL data and reset tables to initial state!")
+        response = input("   Type 'yes' to confirm: ").strip().lower()
+        if response != 'yes':
+            print("   Purge cancelled.")
+            return True
+        
+        try:
+            print("Purging VitalGraphDB tables...")
+            success = await admin.purge_tables(self.db_impl)
+            if success:
+                print("✅ Database tables purged and reset to initial state")
+            else:
+                print("❌ Failed to purge database tables")
+        except Exception as e:
+            print(f"❌ Error during purge: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return True
+    
+    async def cmd_delete(self, args: list[str]) -> bool:
+        """Delete all VitalGraphDB tables."""
+        if not self.connected or not self.db_impl:
+            print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+        
+        admin = self._get_backend_admin()
+        if admin is None:
+            print("❌ No admin module available for this backend type.")
+            return True
+        
+        print("⚠️  WARNING: This will permanently DELETE all VitalGraphDB tables!")
+        response = input("   Type 'yes' to confirm: ").strip().lower()
+        if response != 'yes':
+            print("   Delete cancelled.")
+            return True
+        
+        try:
+            print("Deleting VitalGraphDB tables...")
+            success = await admin.delete_tables(self.db_impl)
+            if success:
+                print("✅ VitalGraphDB tables deleted")
+            else:
+                print("❌ Failed to delete database tables")
+        except Exception as e:
+            print(f"❌ Error during delete: {e}")
+            import traceback
+            traceback.print_exc()
+        
         return True
     
     def cmd_info(self, args: list[str]) -> bool:
         """Provide information about the VitalGraphDB installation."""
-        if not self.connected:
+        if not self.connected or not self.db_impl:
             print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+        
+        admin = self._get_backend_admin()
+        if admin is None:
+            print("❌ No admin module available for this backend type.")
             return True
         
         print("VitalGraphDB Installation Information:")
         print("=====================================")
         
-        # Check backend type
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        try:
+            info = self._run_async(admin.get_info(self.db_impl, config=self.config))
+            
+            print(f"Backend: {info.get('backend', 'Unknown')}")
+            print(f"Status: {info.get('status', 'Unknown')}")
+            
+            # Connection details
+            if 'sidecar_url' in info:
+                print(f"Sidecar URL: {info['sidecar_url']}")
+            if 'fuseki_server' in info:
+                print(f"\nFuseki Server: {info['fuseki_server']}")
+                print(f"Fuseki Dataset: {info.get('fuseki_dataset', 'N/A')}")
+                print(f"JWT Authentication: {'Enabled' if info.get('jwt_auth') else 'Disabled'}")
+            if 'pg_host' in info:
+                print(f"\nPostgreSQL Host: {info['pg_host']}")
+                print(f"PostgreSQL Database: {info.get('pg_database', 'N/A')}")
+            
+            # Initialization state
+            init_state = info.get('init_state', 'unknown')
+            if init_state == 'initialized':
+                admin_tables = info.get('admin_tables', {})
+                print(f"\nInitialization State: Initialized")
+                print(f"Admin Tables: ✅ All present ({admin_tables.get('found', '?')}/{admin_tables.get('expected', '?')})")
+                print(f"Spaces: {info.get('space_count', 0)} configured")
+                
+                # Per-space table check (sparql_sql)
+                for sp in info.get('spaces', []):
+                    status_icon = "✅" if sp['tables_ok'] else "⚠️"
+                    print(f"  {sp['space_id']}: {status_icon}")
+                
+                if 'pg_trgm' in info:
+                    print(f"\npg_trgm extension: {'✅' if info['pg_trgm'] else '❌ Missing'}")
+                
+                print(f"Users: {info.get('user_count', 0)} configured")
+            elif init_state == 'partially_initialized':
+                admin_tables = info.get('admin_tables', {})
+                print(f"\nInitialization State: Partially Initialized")
+                print(f"Admin Tables: ⚠️  {admin_tables.get('found', '?')} out of {admin_tables.get('expected', '?')} tables present")
+                print("   Run 'init;' to complete initialization")
+            else:
+                print(f"\nInitialization State: Uninitialized")
+                print("Admin Tables: ❌ Not created")
+                print("   Run 'init;' to initialize")
+            
+            print("\nVersion: 1.0.0")
+            
+        except Exception as e:
+            print(f"❌ Error getting backend info: {e}")
         
-        if backend_type == 'fuseki_postgresql':
-            return self._run_async(self._info_fuseki_postgresql_backend())
-        elif backend_type == 'sparql_sql':
-            return self._run_async(self._info_sparql_sql_backend())
-        
-        # Standard PostgreSQL backend
-        # Load current state to get accurate status
-        self._run_async(self.db_impl._load_current_state())
-        
-        print("Database: PostgreSQL")
-        print("Status: Connected")
-        print(f"Table Prefix: {self.db_impl.table_prefix}")
-        print(f"Initialization State: {self.db_impl.state}")
-        
-        if self.db_impl.state == "initialized":
-            print(f"Install ID: {self.db_impl.current_install.get('id', 'N/A') if self.db_impl.current_install else 'N/A'}")
-            print(f"Spaces: {len(self.db_impl.current_spaces)} configured")
-            print(f"Users: {len(self.db_impl.current_users)} configured")
-        elif self.db_impl.state == "uninitialized":
-            print("Global tables not yet created - run 'init;' to initialize")
-        
-        print("Version: 1.0.0")
         return True
-    
-    async def _info_fuseki_postgresql_backend(self) -> bool:
-        """Show info for fuseki_postgresql backend."""
-        try:
-            print("Backend: Fuseki-PostgreSQL Hybrid")
-            print("Status: Connected")
-            
-            # Check if admin tables exist
-            check_query = """
-            SELECT COUNT(*) as table_count
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name IN ('install', 'space', 'graph', 'user')
-            """
-            
-            result = await self.db_impl.execute_query(check_query)
-            table_count = result[0]['table_count'] if result else 0
-            
-            if table_count == 4:
-                print("Initialization State: Initialized")
-                print("Admin Tables: ✅ All present (install, space, graph, user)")
-                
-                # Get space count
-                space_query = "SELECT COUNT(*) as count FROM space"
-                space_result = await self.db_impl.execute_query(space_query)
-                space_count = space_result[0]['count'] if space_result else 0
-                print(f"Spaces: {space_count} configured")
-                
-                # Get user count
-                user_query = 'SELECT COUNT(*) as count FROM "user"'
-                user_result = await self.db_impl.execute_query(user_query)
-                user_count = user_result[0]['count'] if user_result else 0
-                print(f"Users: {user_count} configured")
-                
-            elif table_count > 0:
-                print("Initialization State: Partially Initialized")
-                print(f"Admin Tables: ⚠️  {table_count} out of 4 tables present")
-                print("   Run 'init;' to complete initialization")
-            else:
-                print("Initialization State: Uninitialized")
-                print("Admin Tables: ❌ Not created")
-                print("   Run 'init;' to initialize")
-            
-            # Show Fuseki connection info
-            fuseki_config = self.config.get_fuseki_postgresql_config().get('fuseki', {})
-            print(f"\nFuseki Server: {fuseki_config.get('server_url', 'N/A')}")
-            print(f"Fuseki Dataset: {fuseki_config.get('dataset_name', 'N/A')}")
-            print(f"JWT Authentication: {'Enabled' if fuseki_config.get('enable_authentication') else 'Disabled'}")
-            
-            # Show PostgreSQL connection info
-            pg_config = self.config.get_fuseki_postgresql_config().get('database', {})
-            print(f"\nPostgreSQL Host: {pg_config.get('host', 'N/A')}")
-            print(f"PostgreSQL Database: {pg_config.get('database', 'N/A')}")
-            
-            print("\nVersion: 1.0.0")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error getting backend info: {e}")
-            return True
-    
-    async def _info_sparql_sql_backend(self) -> bool:
-        """Show info for sparql_sql backend."""
-        try:
-            print("Backend: SPARQL-SQL (Pure PostgreSQL)")
-            print("Status: Connected")
-            
-            # Sidecar info
-            sparql_sql_config = self.config.get_sparql_sql_config()
-            sidecar_url = sparql_sql_config.get('sidecar', {}).get('url', 'N/A')
-            print(f"Sidecar URL: {sidecar_url}")
-            
-            # PostgreSQL connection info
-            pg_config = sparql_sql_config.get('database', {})
-            print(f"\nPostgreSQL Host: {pg_config.get('host', 'N/A')}")
-            print(f"PostgreSQL Database: {pg_config.get('database', 'N/A')}")
-            
-            # Check admin tables
-            check_query = """
-            SELECT COUNT(*) as table_count
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name IN ('install', 'space', 'graph', 'user', 'process')
-            """
-            
-            result = await self.db_impl.execute_query(check_query)
-            table_count = result[0]['table_count'] if result else 0
-            
-            if table_count == 5:
-                print("\nInitialization State: Initialized")
-                print("Admin Tables: ✅ All present (install, space, graph, user, process)")
-                
-                # Get space count
-                space_result = await self.db_impl.execute_query(
-                    "SELECT COUNT(*) as count FROM space")
-                space_count = space_result[0]['count'] if space_result else 0
-                print(f"Spaces: {space_count} configured")
-                
-                # List spaces with per-space table info
-                if space_count > 0:
-                    spaces = await self.db_impl.execute_query(
-                        "SELECT space_id FROM space ORDER BY space_id")
-                    print("\nPer-space tables:")
-                    for sp in spaces:
-                        sid = sp['space_id']
-                        term_tbl = f"{sid}_term"
-                        quad_tbl = f"{sid}_rdf_quad"
-                        tbl_check = await self.db_impl.execute_query(
-                            "SELECT COUNT(*) as c FROM information_schema.tables "
-                            "WHERE table_schema = 'public' AND table_name IN ($1, $2)",
-                            [term_tbl, quad_tbl]
-                        )
-                        tbl_count = tbl_check[0]['c'] if tbl_check else 0
-                        status = "✅" if tbl_count == 2 else f"⚠️  ({tbl_count}/2 tables)"
-                        print(f"  {sid}: {status}")
-                
-                # Check pg_trgm
-                ext_result = await self.db_impl.execute_query(
-                    "SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")
-                pg_trgm = "✅" if ext_result else "❌ Missing"
-                print(f"\npg_trgm extension: {pg_trgm}")
-                
-                # Get user count
-                user_result = await self.db_impl.execute_query(
-                    'SELECT COUNT(*) as count FROM "user"')
-                user_count = user_result[0]['count'] if user_result else 0
-                print(f"Users: {user_count} configured")
-                
-            elif table_count > 0:
-                print("\nInitialization State: Partially Initialized")
-                print(f"Admin Tables: ⚠️  {table_count} out of 4 tables present")
-                print("   Run 'init;' to complete initialization")
-            else:
-                print("\nInitialization State: Uninitialized")
-                print("Admin Tables: ❌ Not created")
-                print("   Run 'init;' to initialize")
-            
-            print("\nVersion: 1.0.0")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error getting backend info: {e}")
-            return True
     
     def cmd_list(self, args: list[str]) -> bool:
         """List various database components."""
@@ -1805,7 +1455,7 @@ class VitalGraphDBAdminREPL:
             # Update specific VitalGraph loggers
             logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(numeric_level)
             logging.getLogger('vitalgraph.ops.graph_import_op').setLevel(numeric_level)
-            logging.getLogger('vitalgraph.db.postgresql.postgresql_db_impl').setLevel(numeric_level)
+            logging.getLogger('vitalgraph.db.sparql_sql').setLevel(numeric_level)
             
             print(f"✅ Logging level set to {value}")
             return True
@@ -2575,7 +2225,7 @@ def setup_logging(log_level: str = "INFO"):
     # Set specific logger levels
     logging.getLogger('vitalgraph.rdf.rdf_utils').setLevel(numeric_level)
     logging.getLogger('vitalgraph.ops.graph_import_op').setLevel(numeric_level)
-    logging.getLogger('vitalgraph.db.postgresql.postgresql_db_impl').setLevel(numeric_level)
+    logging.getLogger('vitalgraph.db.sparql_sql').setLevel(numeric_level)
 
 
 def main():

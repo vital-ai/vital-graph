@@ -417,9 +417,17 @@ class LeadFrameOperationsTester:
                                         verified = actual_value == new_value
                                         logger.info(f"   Verifying boolean: expected={new_value}, actual={actual_value}, verified={verified}")
                                     elif slot_type == 'text':
-                                        actual_value = str(updated_slot.textSlotValue)
+                                        updated_type = type(updated_slot).__name__
+                                        if updated_type == 'KGLongTextSlot':
+                                            actual_value = str(updated_slot.longTextSlotValue)
+                                        elif updated_type == 'KGURISlot':
+                                            actual_value = str(updated_slot.uriSlotValue)
+                                        elif updated_type == 'KGChoiceSlot':
+                                            actual_value = str(updated_slot.choiceSlotValue)
+                                        else:
+                                            actual_value = str(updated_slot.textSlotValue)
                                         verified = actual_value == new_value
-                                        logger.info(f"   Verifying text: expected='{new_value}', actual='{actual_value}', verified={verified}")
+                                        logger.info(f"   Verifying text ({updated_type}): expected='{new_value}', actual='{actual_value}', verified={verified}")
                                     elif slot_type == 'integer':
                                         actual_value = int(updated_slot.integerSlotValue)
                                         verified = actual_value == new_value

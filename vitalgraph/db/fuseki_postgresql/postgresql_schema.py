@@ -47,7 +47,8 @@ class FusekiPostgreSQLSchema:
                 graph_uri VARCHAR(500),
                 graph_name VARCHAR(255),
                 created_time TIMESTAMP,
-                FOREIGN KEY (space_id) REFERENCES space(space_id) ON DELETE CASCADE
+                FOREIGN KEY (space_id) REFERENCES space(space_id) ON DELETE CASCADE,
+                UNIQUE (space_id, graph_uri)
             )
         ''',
         
@@ -149,6 +150,17 @@ class FusekiPostgreSQLSchema:
     # These tables store the authoritative RDF data, with Fuseki providing index/cache layer
     # Fuseki datasets provide fast graph queries while PostgreSQL ensures data persistence
     
+    ADMIN_TABLE_NAMES: List[str] = list(ADMIN_TABLES.keys())
+
+    ADMIN_SEED_STATEMENTS: List[str] = [
+        "INSERT INTO install (install_datetime, update_datetime, active) "
+        "SELECT NOW(), NOW(), true "
+        "WHERE NOT EXISTS (SELECT 1 FROM install)",
+    ]
+
+    # Reverse-dependency order for truncate / drop operations
+    ADMIN_DROP_ORDER: List[str] = ['process', 'graph', '"user"', 'space', 'install']
+
     def create_admin_tables_sql(self) -> List[str]:
         """Get SQL statements to create all admin tables."""
         statements = []
@@ -162,6 +174,18 @@ class FusekiPostgreSQLSchema:
         for index_group in self.get_admin_indexes().values():
             statements.extend(index_group)
         return statements
+
+    def get_admin_seed_sql(self) -> List[str]:
+        """Get SQL statements to seed initial admin data."""
+        return list(self.ADMIN_SEED_STATEMENTS)
+
+    def drop_admin_tables_sql(self) -> List[str]:
+        """Get SQL statements to drop all admin tables (reverse dependency order)."""
+        return [f"DROP TABLE IF EXISTS {t} CASCADE" for t in self.ADMIN_DROP_ORDER]
+
+    def truncate_admin_tables_sql(self) -> List[str]:
+        """Get SQL statements to truncate all admin tables (reverse dependency order)."""
+        return [f"TRUNCATE TABLE {t} CASCADE" for t in self.ADMIN_DROP_ORDER]
     
     def create_space_tables_sql(self, space_id: str) -> List[str]:
         """Get SQL statements to create primary data tables for a specific space."""

@@ -290,14 +290,18 @@ class GraphImportOp(GraphOp):
         return summary
     
     async def _perform_database_import(self) -> OperationResult:
-        """Perform the actual database import using PostgreSQLSpaceDBImport.
+        """Perform the actual database import.
         
         Returns:
             OperationResult indicating import success or failure
         """
         try:
-            # Import here to avoid circular dependencies
-            from ..db.postgresql.space.postgresql_space_db_import import PostgreSQLSpaceDBImport
+            # TODO: Re-implement against the active backend's bulk load interface.
+            # The V1 PostgreSQLSpaceDBImport has been archived (was in db/postgresql/).
+            raise NotImplementedError(
+                "Database import needs to be re-implemented against the active backend "
+                "(sparql_sql or fuseki_postgresql). The V1 PostgreSQLSpaceDBImport has been archived."
+            )
             
             # Determine import method
             actual_method = await self._determine_import_method()

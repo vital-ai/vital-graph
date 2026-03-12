@@ -431,3 +431,79 @@ class SparqlBackendInterface(ABC):
             bool: True if successful, False otherwise
         """
         pass
+
+
+class SignalManagerInterface(ABC):
+    """
+    Abstract interface for backend-specific signal management.
+    
+    This interface abstracts the existing SignalManager in /vitalgraph/signal/
+    to support different backend notification mechanisms:
+    - PostgreSQL: NOTIFY/LISTEN (existing implementation)
+    - Oxigraph: In-memory events (non-operational initially)
+    - Fuseki: HTTP webhooks or polling
+    - Mock: In-memory event simulation
+    
+    Different backends may have different mechanisms for notifying
+    about space events and data changes.
+    """
+    
+    @abstractmethod
+    async def notify_space_created(self, space_id: str) -> None:
+        """
+        Notify that a space was created.
+        
+        Args:
+            space_id: Space identifier
+        """
+        pass
+    
+    @abstractmethod
+    async def notify_space_deleted(self, space_id: str) -> None:
+        """
+        Notify that a space was deleted.
+        
+        Args:
+            space_id: Space identifier
+        """
+        pass
+    
+    @abstractmethod
+    async def notify_space_updated(self, space_id: str, update_type: str, metadata: Dict[str, Any] = None) -> None:
+        """
+        Notify that a space was updated.
+        
+        Args:
+            space_id: Space identifier
+            update_type: Type of update (e.g., 'quad_added', 'namespace_added')
+            metadata: Optional metadata about the update
+        """
+        pass
+    
+    @abstractmethod
+    async def subscribe_to_space_events(self, callback, space_id: Optional[str] = None) -> None:
+        """
+        Subscribe to space events.
+        
+        Args:
+            callback: Function to call when events occur
+            space_id: Optional space ID to filter events, None for all spaces
+        """
+        pass
+    
+    @abstractmethod
+    async def unsubscribe_from_space_events(self, callback) -> None:
+        """
+        Unsubscribe from space events.
+        
+        Args:
+            callback: Function to remove from event notifications
+        """
+        pass
+    
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Close signal manager and clean up resources.
+        """
+        pass

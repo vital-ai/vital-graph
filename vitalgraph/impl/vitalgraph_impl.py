@@ -2,7 +2,6 @@ import asyncio
 import logging
 
 from vitalgraph.config.config_loader import get_config, ConfigurationError
-from vitalgraph.db.postgresql.postgresql_db_impl import PostgreSQLDbImpl
 from vitalgraph.db.backend_config import BackendFactory, BackendConfig, BackendType
 from vitalgraph.space.space_manager import SpaceManager
 from vitalgraph.signal.signal_manager import SignalManager
@@ -92,18 +91,11 @@ class VitalGraphImpl:
                     logger.info(f"✅ Initialized Fuseki-PostgreSQL hybrid backend successfully")
                     
                 else:
-                    # Default to PostgreSQL - create both db_impl and space_backend
-                    db_config = self.config.get_database_config()
-                    tables_config = self.config.get_tables_config()
-                    self.db_impl = PostgreSQLDbImpl(db_config, tables_config, config_loader=self.config)
-                    
-                    # Also create PostgreSQL space backend for consistent interface
-                    postgresql_config = BackendConfig(
-                        backend_type=BackendType.POSTGRESQL,
-                        connection_params=db_config
+                    raise ValueError(
+                        f"Unsupported backend type: '{backend_type}'. "
+                        f"The 'postgresql' (V1) backend has been archived. "
+                        f"Use 'sparql_sql' or 'fuseki_postgresql' instead."
                     )
-                    self.space_backend = BackendFactory.create_space_backend(postgresql_config)
-                    logger.info(f"✅ Initialized PostgreSQL database implementation successfully with RDF connection pool support")
                     
             except Exception as e:
                 logger.error(f"❌ Could not initialize backend: {e}")

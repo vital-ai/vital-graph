@@ -407,6 +407,52 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     # ==================================================================
+    # Graph auto-registration (mirrors fuseki_postgresql DualWriteCoordinator)
+    # ==================================================================
+
+    def _extract_graph_uris_from_quads(
+        self, quads: List[Tuple[Any, ...]],
+    ) -> List[str]:
+        """Extract unique graph URIs from quad tuples, excluding 'default'."""
+        graph_uris: set = set()
+        for quad in quads:
+            if len(quad) >= 4:
+                g = quad[3]
+                g_str = str(g) if g else None
+                if g_str and g_str != 'default':
+                    graph_uris.add(g_str)
+        return list(graph_uris)
+
+    async def _ensure_graphs_registered(
+        self, space_id: str, quads: List[Tuple[Any, ...]],
+    ) -> None:
+        """Auto-register every graph URI found in *quads* that is not yet
+        in the ``graph`` table.  This replicates the side-effect that the
+        fuseki_postgresql backend has: inserting data into a graph URI
+        implicitly creates the graph record."""
+        graph_uris = self._extract_graph_uris_from_quads(quads)
+        if not graph_uris:
+            return
+        try:
+            existing = await self.db_impl.execute_query(
+                "SELECT graph_uri FROM graph WHERE space_id = $1",
+                [space_id],
+            )
+            existing_set = {r['graph_uri'] for r in existing} if existing else set()
+            for uri in graph_uris:
+                if uri not in existing_set:
+                    graph_name = uri.rsplit('/', 1)[-1]
+                    await self.db_impl.execute_query(
+                        """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
+                           VALUES ($1, $2, $3, $4)
+                           ON CONFLICT (space_id, graph_uri) DO NOTHING""",
+                        [space_id, uri, graph_name, datetime.now()],
+                    )
+                    logger.debug("Auto-registered graph %s in space %s", uri, space_id)
+        except Exception as e:
+            logger.warning("_ensure_graphs_registered(%s) failed: %s", space_id, e)
+
+    # ==================================================================
     # Graph management
     # ==================================================================
 
@@ -510,6 +556,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def add_rdf_quad(self, space_id: str, quad: Union[tuple, list]) -> bool:
         try:
+            await self._ensure_graphs_registered(space_id, [quad])
             s, p, o, g = quad
             t = self.schema.get_table_names(space_id)
             async with self.db_impl.connection_pool.acquire() as conn:
@@ -590,6 +637,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                    verify_count: bool = False,
                                    connection=None) -> int:
         try:
+            await self._ensure_graphs_registered(space_id, quads)
             t = self.schema.get_table_names(space_id)
             inserted = 0
 
@@ -633,6 +681,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return 0
 
         try:
+            await self._ensure_graphs_registered(space_id, quads)
+
             import time as _time
             _t0 = _time.monotonic()
 

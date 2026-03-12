@@ -31,8 +31,7 @@ from ai_haley_kg_domain.model.KGSegment import KGSegment
 from vital_ai_vitalsigns.utils.uri_generator import URIGenerator
 
 # Import interfaces
-from ..space_backend_interface import SpaceBackendInterface
-from ..sparql_inf import SparqlBackendInterface
+from ..space_backend_interface import SpaceBackendInterface, SparqlBackendInterface
 from .fuseki_sparql_impl import FusekiSparqlImpl
 from ..backend_config import BackendConfig
 from ...utils.resource_manager import track_session

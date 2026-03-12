@@ -11,8 +11,7 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass
 import logging
 
-from .space_backend_interface import SpaceBackendInterface, SparqlBackendInterface
-from .space_inf import SignalManagerInterface
+from .space_backend_interface import SpaceBackendInterface, SparqlBackendInterface, SignalManagerInterface
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +56,11 @@ class BackendFactory:
         logger.info(f"Creating space backend: {config.backend_type.value}")
         
         if config.backend_type == BackendType.POSTGRESQL:
-            try:
-                from .postgresql.postgresql_space_impl import PostgreSQLSpaceImpl
-                return PostgreSQLSpaceImpl(**config.connection_params)
-            except ImportError as e:
-                raise ImportError(f"PostgreSQL backend dependencies not available: {e}")
+            raise ValueError(
+                "The 'postgresql' (V1) backend has been archived. "
+                "Use BackendType.SPARQL_SQL for pure-PostgreSQL or "
+                "BackendType.FUSEKI_POSTGRESQL for the Fuseki hybrid backend."
+            )
                 
         elif config.backend_type == BackendType.FUSEKI:
             try:
@@ -127,15 +126,11 @@ class BackendFactory:
         logger.info(f"Creating SPARQL backend: {config.backend_type.value}")
         
         if config.backend_type == BackendType.POSTGRESQL:
-            try:
-                from .postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
-                from .postgresql.postgresql_space_impl import PostgreSQLSpaceImpl
-                
-                # PostgreSQL SPARQL implementation requires a space implementation
-                space_impl = PostgreSQLSpaceImpl(**config.connection_params)
-                return PostgreSQLSparqlImpl(space_impl)
-            except ImportError as e:
-                raise ImportError(f"PostgreSQL SPARQL backend dependencies not available: {e}")
+            raise ValueError(
+                "The 'postgresql' (V1) SPARQL backend has been archived. "
+                "Use BackendType.SPARQL_SQL for pure-PostgreSQL or "
+                "BackendType.FUSEKI_POSTGRESQL for the Fuseki hybrid backend."
+            )
                 
         elif config.backend_type == BackendType.FUSEKI:
             try:
@@ -203,8 +198,9 @@ class BackendFactory:
         signal_config = config.signal_manager_config or {}
         
         if config.backend_type == BackendType.POSTGRESQL:
+            # V1 postgresql backend archived — use the shared signal manager
             try:
-                from .postgresql.postgresql_signal_manager import PostgreSQLSignalManager
+                from .fuseki_postgresql.postgresql_signal_manager import PostgreSQLSignalManager
                 return PostgreSQLSignalManager(**signal_config)
             except ImportError as e:
                 raise ImportError(f"PostgreSQL signal manager dependencies not available: {e}")
@@ -248,12 +244,12 @@ class BackendFactory:
         Returns:
             BackendType: Default backend type (PostgreSQL)
         """
-        return BackendType.POSTGRESQL
+        return BackendType.SPARQL_SQL
     
     @staticmethod
     def create_default_config(**connection_params) -> BackendConfig:
         """
-        Create default backend configuration (PostgreSQL).
+        Create default backend configuration (SPARQL_SQL).
         
         Args:
             **connection_params: Connection parameters for the backend
