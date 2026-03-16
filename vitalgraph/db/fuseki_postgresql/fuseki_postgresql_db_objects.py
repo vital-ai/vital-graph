@@ -9,6 +9,7 @@ It provides object-level abstraction using the two-phase query pattern:
 Used by KGTypeImpl, ObjectsImpl, and other endpoint implementations.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -75,7 +76,7 @@ class FusekiPostgreSQLDbObjects:
             # Phase 3: Convert to VitalSigns GraphObjects
             from vital_ai_vitalsigns.vitalsigns import VitalSigns
             vitalsigns = VitalSigns()
-            graph_objects = vitalsigns.from_triples_list(triples)
+            graph_objects = await asyncio.to_thread(vitalsigns.from_triples_list, triples)
             
             self.logger.info(f"Successfully listed {len(graph_objects)} objects (total: {total_count})")
             return graph_objects, total_count
@@ -120,7 +121,7 @@ class FusekiPostgreSQLDbObjects:
             # Convert to VitalSigns GraphObjects
             from vital_ai_vitalsigns.vitalsigns import VitalSigns
             vitalsigns = VitalSigns()
-            graph_objects = vitalsigns.from_triples_list(triples)
+            graph_objects = await asyncio.to_thread(vitalsigns.from_triples_list, triples)
             
             self.logger.debug(f"Successfully retrieved {len(graph_objects)} objects from {len(triples)} triples")
             return graph_objects

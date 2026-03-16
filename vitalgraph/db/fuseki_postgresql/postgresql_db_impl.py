@@ -93,8 +93,8 @@ class FusekiPostgreSQLDbImpl(DbImplInterface):
                 database=self.config.get('database', 'vitalgraph'),
                 user=self.config.get('username', 'vitalgraph_user'),
                 password=self.config.get('password', 'vitalgraph_pass'),
-                min_size=1,
-                max_size=10,
+                min_size=5,
+                max_size=30,
                 command_timeout=60
             )
             

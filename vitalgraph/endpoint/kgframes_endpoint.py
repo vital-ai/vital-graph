@@ -1531,7 +1531,7 @@ class KGFramesEndpoint:
             self.logger.debug(f"📊 Retrieved {len(triples) if triples else 0} triples for subjects")
             
             # Convert triples directly to VitalSigns objects
-            frames = self._convert_triples_to_vitalsigns_frames(triples)
+            frames = await self._convert_triples_to_vitalsigns_frames(triples)
             self.logger.debug(f"🔄 Converted to {len(frames) if frames else 0} VitalSigns frames")
             
             return frames
@@ -1841,7 +1841,7 @@ class KGFramesEndpoint:
                     frame_uris.append(str(obj.URI))
             
             # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = GraphObject.to_triples_list(objects)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
             
             if not insert_quads:
@@ -2019,7 +2019,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Error getting triples for subjects: {e}")
             return []
     
-    def _convert_triples_to_vitalsigns_frames(self, triples: List[Dict[str, str]]) -> List[KGFrame]:
+    async def _convert_triples_to_vitalsigns_frames(self, triples: List[Dict[str, str]]) -> List[KGFrame]:
         """Convert triples directly to VitalSigns frame objects using native conversion."""
         try:
             if not triples:
@@ -2046,7 +2046,7 @@ class KGFramesEndpoint:
                     yield (subject, predicate, obj)
             
             # Use VitalSigns from_triples_list to convert all triples to objects
-            all_objects = vs.from_triples_list(triples_generator())
+            all_objects = await asyncio.to_thread(vs.from_triples_list, list(triples_generator()))
             
             # Filter for KGFrame objects
             frames = []
@@ -2215,7 +2215,7 @@ class KGFramesEndpoint:
             triples = await self._get_all_triples_for_subjects(backend, graph_id, slot_uris)
             
             # Convert triples directly to VitalSigns objects
-            all_objects = self._convert_triples_to_vitalsigns_objects(triples)
+            all_objects = await self._convert_triples_to_vitalsigns_objects(triples)
             
             # Filter for slot objects
             for obj in all_objects:
@@ -2228,7 +2228,7 @@ class KGFramesEndpoint:
             self.logger.error(f"Error converting SPARQL results to slots: {e}")
             return []
     
-    def _convert_triples_to_vitalsigns_objects(self, triples: List[Dict[str, str]]) -> List[GraphObject]:
+    async def _convert_triples_to_vitalsigns_objects(self, triples: List[Dict[str, str]]) -> List[GraphObject]:
         """Convert triples directly to VitalSigns objects using native conversion."""
         try:
             if not triples:
@@ -2255,7 +2255,7 @@ class KGFramesEndpoint:
                     yield (subject, predicate, obj)
             
             # Use VitalSigns from_triples_list to convert all triples to objects
-            all_objects = vs.from_triples_list(triples_generator())
+            all_objects = await asyncio.to_thread(vs.from_triples_list, list(triples_generator()))
             
             return all_objects
             
@@ -2384,7 +2384,7 @@ class KGFramesEndpoint:
                         delete_quads.append((s, p, o, graph_id))
             
             # Step 2: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = GraphObject.to_triples_list(slots)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, slots)
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
             
             # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
@@ -2474,7 +2474,7 @@ class KGFramesEndpoint:
                     slot_uris.append(str(obj.URI))
             
             # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
-            triples = GraphObject.to_triples_list(objects)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
             
             if not insert_quads:

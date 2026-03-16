@@ -6,6 +6,7 @@ Utility functions for SPARQL query processing and result handling.
 Used across KG processors to provide consistent SPARQL operations.
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass
@@ -393,7 +394,7 @@ class KGSparqlUtils:
         return frame_uris
     
     @staticmethod
-    def convert_triples_to_vitalsigns_frames(triples: List[Dict[str, str]]) -> List:
+    async def convert_triples_to_vitalsigns_frames(triples: List[Dict[str, str]]) -> List:
         """
         Convert triples to VitalSigns frame objects using GraphObject.from_triples_list().
         
@@ -427,7 +428,7 @@ class KGSparqlUtils:
             
             # Use GraphObject.from_triples_list() to convert all triples to VitalSigns objects
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            all_objects = GraphObject.from_triples_list(triples_generator())
+            all_objects = await asyncio.to_thread(GraphObject.from_triples_list, list(triples_generator()))
             
             # Filter for KGFrame objects
             frames = []

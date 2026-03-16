@@ -341,6 +341,23 @@ class VitalGraphAppImpl:
                     else:
                         self.logger.warning("WebSocket manager not available, notification bridge skipped")
                     
+                    # Register SpaceManager signal callback for cross-instance sync
+                    try:
+                        signal_manager = self.vital_graph_impl.signal_manager
+                        if signal_manager is None:
+                            signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                        if signal_manager and self.space_manager and hasattr(self.space_manager, '_handle_space_signal'):
+                            from vitalgraph.signal.signal_manager import CHANNEL_SPACE
+                            signal_manager.register_callback(
+                                CHANNEL_SPACE,
+                                self.space_manager._handle_space_signal,
+                            )
+                            self.logger.info("✅ SpaceManager cross-instance sync registered on CHANNEL_SPACE")
+                        else:
+                            self.logger.warning("SpaceManager signal sync skipped — signal_manager or space_manager not available")
+                    except Exception as e:
+                        self.logger.warning(f"SpaceManager signal registration failed (non-critical): {e}")
+                    
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
             
@@ -474,8 +491,8 @@ class VitalGraphAppImpl:
         self.app.include_router(update_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
         self.app.include_router(insert_router, prefix="/api/graphs/sparql", tags=["SPARQL"])
         self.app.include_router(delete_router, prefix="/api/graphs/sparql")
-        self.app.include_router(graph_router, prefix="/api/graphs/sparql")
-        self.logger.info(f"Included graph router with prefix '/api/graphs/sparql' - {len(graph_router.routes)} routes")
+        self.app.include_router(graph_router, prefix="/api/graphs")
+        self.logger.info(f"Included graph router with prefix '/api/graphs' - {len(graph_router.routes)} routes")
     
     def _init_graph_data_routers(self):
         """Initialize graph data endpoint routers."""

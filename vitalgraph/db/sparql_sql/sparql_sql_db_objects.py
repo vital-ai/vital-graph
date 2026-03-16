@@ -14,6 +14,7 @@ Used by KGTypeImpl, ObjectsImpl, kgframe_graph_impl, and other
 endpoint implementations via backend_adapter.backend.db_objects.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -88,7 +89,7 @@ class SparqlSQLDbObjects:
                 return [], total_count
 
             # Phase 3 — VitalSigns conversion
-            objects = self._triples_to_vitalsigns(triples)
+            objects = await self._triples_to_vitalsigns(triples)
             return objects, total_count
 
         except Exception as e:
@@ -116,7 +117,7 @@ class SparqlSQLDbObjects:
             if not triples:
                 return []
 
-            return self._triples_to_vitalsigns(triples)
+            return await self._triples_to_vitalsigns(triples)
 
         except Exception as e:
             self.logger.error("get_objects_by_uris failed: %s", e)
@@ -376,10 +377,10 @@ class SparqlSQLDbObjects:
         return []
 
     @staticmethod
-    def _triples_to_vitalsigns(triples: List[Tuple]) -> List[Any]:
+    async def _triples_to_vitalsigns(triples: List[Tuple]) -> List[Any]:
         """Convert rdflib triples to VitalSigns GraphObjects."""
         if not triples:
             return []
         from vital_ai_vitalsigns.vitalsigns import VitalSigns
         vs = VitalSigns()
-        return vs.from_triples_list(triples)
+        return await asyncio.to_thread(vs.from_triples_list, triples)

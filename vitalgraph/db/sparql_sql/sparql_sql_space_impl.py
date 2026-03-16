@@ -248,6 +248,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         # Core adapter (provides create_transaction)
         self.core = _SparqlSQLCoreAdapter(self)
 
+        # Shared async HTTP client for sidecar (created lazily)
+        self._sidecar_client = None
+
         logger.info("SparqlSQLSpaceImpl initialized (sidecar=%s)", self.sidecar_url)
 
     # ==================================================================
@@ -275,8 +278,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return False
 
     async def disconnect(self) -> bool:
-        """Shut down the asyncpg pool."""
+        """Shut down the asyncpg pool and sidecar client."""
         try:
+            if self._sidecar_client:
+                await self._sidecar_client.close()
+                self._sidecar_client = None
             if self.db_impl:
                 await self.db_impl.disconnect()
             self.connected = False
@@ -296,6 +302,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 loop.run_until_complete(self.disconnect())
         except Exception:
             pass
+
+    def _get_sidecar_client(self):
+        """Return a shared AsyncSidecarClient, creating it lazily on first use."""
+        if self._sidecar_client is None:
+            from ..jena_sparql.jena_sidecar_client import AsyncSidecarClient
+            self._sidecar_client = AsyncSidecarClient(base_url=self.sidecar_url)
+        return self._sidecar_client
 
     @asynccontextmanager
     async def get_db_connection(self):
@@ -1143,17 +1156,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         """
         try:
             import time as _time
-            from ..jena_sparql.jena_sidecar_client import AsyncSidecarClient
             from ..jena_sparql.jena_ast_mapper import map_compile_response
             from .generator import generate_sql
 
             t0 = _time.monotonic()
-            client = AsyncSidecarClient(base_url=self.sidecar_url)
-
-            try:
-                raw = await client.compile(query)
-            finally:
-                await client.close()
+            client = self._get_sidecar_client()
+            raw = await client.compile(query)
             t_sidecar = _time.monotonic()
 
             cr = map_compile_response(raw)
@@ -1265,16 +1273,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                      **kwargs) -> bool:
         """Execute a SPARQL update via the V2 pipeline."""
         try:
-            from ..jena_sparql.jena_sidecar_client import AsyncSidecarClient
             from ..jena_sparql.jena_ast_mapper import map_compile_response
             from .generator import generate_sql
 
-            client = AsyncSidecarClient(base_url=self.sidecar_url)
-
-            try:
-                raw = await client.compile(update)
-            finally:
-                await client.close()
+            client = self._get_sidecar_client()
+            raw = await client.compile(update)
 
             cr = map_compile_response(raw)
             if not cr.ok:

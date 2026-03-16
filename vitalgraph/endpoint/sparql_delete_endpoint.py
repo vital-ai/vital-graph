@@ -60,22 +60,6 @@ class SPARQLDeleteEndpoint:
         ):
             return await self._execute_delete(space_id, update, current_user, graph_uri)
         
-        # Clear graph endpoint
-        @self.router.delete(
-            "/{space_id}/graph",
-            response_model=SPARQLDeleteResponse,
-            tags=["Graphs"],
-            summary="Clear Graph",
-            description="Clear all triples from a specific graph"
-        )
-        async def clear_graph(
-            space_id: str,
-            graph_uri: str = Body(..., description="Graph URI to clear"),
-            current_user: Dict = Depends(self.auth_dependency)
-        ):
-            # Convert to CLEAR GRAPH operation
-            clear_query = f"CLEAR GRAPH <{graph_uri}>"
-            return await self._execute_delete(space_id, clear_query, current_user, graph_uri)
 
     
     async def _execute_delete(

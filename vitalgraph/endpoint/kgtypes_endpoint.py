@@ -4,6 +4,7 @@ Implements REST API endpoints for KG type management operations.
 Based on the planned API specification in docs/planned_rest_api_endpoints.md
 """
 
+import asyncio
 from typing import Dict, Any, Optional, List, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Body, Request, Response
 from fastapi.responses import JSONResponse
@@ -176,7 +177,7 @@ class KGTypesEndpoint:
             
             self.logger.info(f"🔍 LIST: Received {len(triples)} RDFLib triples, total_count: {total_count}")
             
-            graph_objects = GraphObject.from_triples_list(triples) if triples else []
+            graph_objects = (await asyncio.to_thread(GraphObject.from_triples_list, triples)) if triples else []
             quads = graphobjects_to_quad_list(graph_objects, graph_id)
             return QuadResponse(
                 total_count=total_count,

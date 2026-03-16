@@ -20,6 +20,9 @@ from ..model.sparql_model import (
     SPARQLInsertRequest, SPARQLInsertResponse, SPARQLDeleteRequest, SPARQLDeleteResponse,
     GraphInfo, SPARQLGraphRequest, SPARQLGraphResponse
 )
+from .response.client_response import (
+    GraphResponse, GraphsListResponse, GraphCreateResponse, GraphDeleteResponse, GraphClearResponse
+)
 from ..model.triples_model import (
     TripleListResponse, TripleOperationResponse
 )
@@ -292,27 +295,27 @@ class VitalGraphClientInterface(ABC):
     # Graph Management Methods
     
     @abstractmethod
-    async def list_graphs(self, space_id: str) -> List[GraphInfo]:
+    async def list_graphs(self, space_id: str) -> GraphsListResponse:
         """List graphs in a space."""
         pass
     
     @abstractmethod
-    async def get_graph_info(self, space_id: str, graph_uri: str) -> GraphInfo:
+    async def get_graph_info(self, space_id: str, graph_uri: str) -> GraphResponse:
         """Get information about a specific graph."""
         pass
     
     @abstractmethod
-    async def create_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
+    async def create_graph(self, space_id: str, graph_uri: str) -> GraphCreateResponse:
         """Create a new graph."""
         pass
     
     @abstractmethod
-    async def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> SPARQLGraphResponse:
+    async def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> GraphDeleteResponse:
         """Drop (delete) a graph."""
         pass
     
     @abstractmethod
-    async def clear_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
+    async def clear_graph(self, space_id: str, graph_uri: str) -> GraphClearResponse:
         """Clear a graph (remove all triples but keep the graph)."""
         pass
     

@@ -9,6 +9,7 @@ Provides generic object CRUD operations using the correct VitalGraph patterns:
 Objects can be ANY VitalSigns graph object type with a valid vitaltype.
 """
 
+import asyncio
 import logging
 from typing import List, Optional, Dict, Any
 
@@ -148,7 +149,7 @@ class ObjectsImpl:
             from vital_ai_vitalsigns.vitalsigns import VitalSigns
             triples_list = [(s, p, o) for s, p, o, graph_ctx in quads]
             vitalsigns = VitalSigns()
-            graph_objects = vitalsigns.from_triples_list(triples_list)
+            graph_objects = await asyncio.to_thread(vitalsigns.from_triples_list, triples_list)
             
             self.logger.debug(f"Retrieved object {uri}: {len(graph_objects)} objects")
             return graph_objects

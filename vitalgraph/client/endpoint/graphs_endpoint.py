@@ -39,7 +39,7 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graphs"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graphs"
             
             response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
@@ -89,7 +89,7 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
             
             response = await self._make_authenticated_request('GET', url)
             response_data = response.json()
@@ -166,7 +166,7 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
             
             response = await self._make_authenticated_request('PUT', url)
             response_data = response.json()
@@ -206,7 +206,7 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph/{graph_uri}"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
             params = {"silent": silent} if silent else None
             
             response = await self._make_authenticated_request('DELETE', url, params=params)
@@ -247,7 +247,7 @@ class GraphsEndpoint(BaseEndpoint):
         
         try:
             # Use the POST endpoint for graph operations with CLEAR operation
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/graph"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph"
             
             request_data = SPARQLGraphRequest(
                 operation="CLEAR",

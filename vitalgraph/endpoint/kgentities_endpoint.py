@@ -856,7 +856,7 @@ class KGEntitiesEndpoint:
             frames = []
             if frame_results['frame_uris']:
                 triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_results['frame_uris'])
-                frames = self._convert_triples_to_vitalsigns_frames(triples)
+                frames = await self._convert_triples_to_vitalsigns_frames(triples)
                 self.logger.debug(f"Converted to {len(frames)} VitalSigns frame objects")
             
             quads = graphobjects_to_quad_list(frames, graph_id)
@@ -913,7 +913,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Found {len(frame_data['subject_uris'])} objects for frame {frame_uri}")
             
             triples = await self._get_all_triples_for_subjects(backend, space_id, graph_id, frame_data['subject_uris'])
-            frame_objects = self._convert_triples_to_vitalsigns_frames(triples)
+            frame_objects = await self._convert_triples_to_vitalsigns_frames(triples)
             
             class FrameResponse:
                 def __init__(self, graph):
@@ -2149,10 +2149,10 @@ class KGEntitiesEndpoint:
         from ..kg_impl.kg_sparql_utils import KGSparqlUtils
         return KGSparqlUtils.extract_count_from_results(results)
     
-    def _convert_triples_to_vitalsigns_frames(self, triples: List[Dict[str, str]]) -> List:
+    async def _convert_triples_to_vitalsigns_frames(self, triples: List[Dict[str, str]]) -> List:
         """Convert triples to VitalSigns frame objects using SPARQL utility."""
         from ..kg_impl.kg_sparql_utils import KGSparqlUtils
-        return KGSparqlUtils.convert_triples_to_vitalsigns_frames(triples)
+        return await KGSparqlUtils.convert_triples_to_vitalsigns_frames(triples)
     
     # Helper methods for proper VitalSigns integration
     
@@ -2235,7 +2235,7 @@ class KGEntitiesEndpoint:
                         
                         # Use from_triples_list with RDFLib Triple objects
                         self.logger.debug(f"🔍 Frame {frame_uri}: Converting {len(rdflib_triples)} RDFLib triples to VitalSigns objects")
-                        graph_objects = vs.from_triples_list(rdflib_triples)
+                        graph_objects = await asyncio.to_thread(vs.from_triples_list, rdflib_triples)
                         
                         # Log what types of objects were created
                         object_types = {}

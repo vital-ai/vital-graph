@@ -610,6 +610,50 @@ class SpaceManager:
         return iter(self._spaces.keys())
     
     def __repr__(self) -> str:
-        return f"SpaceManager(spaces={len(self._spaces)}, space_ids={list(self._spaces.keys())})"    
+        return f"SpaceManager(spaces={len(self._spaces)}, space_ids={list(self._spaces.keys())})"
+
+    # ------------------------------------------------------------------
+    # Cross-instance signal handler
+    # ------------------------------------------------------------------
+
+    async def _handle_space_signal(self, data: dict) -> None:
+        """Handle a PG NOTIFY on CHANNEL_SPACE to keep _spaces in sync
+        across parallel instances.
+
+        Payload shape (from SignalManager.notify_space_changed):
+            {"type": "created"|"deleted"|"updated", "space_id": "...", "timestamp": "..."}
+        """
+        signal_type = data.get("type", "")
+        space_id = data.get("space_id", "")
+        if not space_id:
+            return
+
+        if signal_type == "created":
+            if space_id in self._spaces:
+                self.logger.debug("Space '%s' already in local registry — ignoring created signal", space_id)
+                return
+            try:
+                backend = self.space_backend or self.db_impl
+                space_impl = SpaceImpl(space_id=space_id, backend=backend)
+                space_record = SpaceRecord(space_id=space_id, space_impl=space_impl)
+                self._spaces[space_id] = space_record
+                self.logger.info("📥 Space '%s' added to local registry via signal", space_id)
+            except Exception as e:
+                self.logger.error("Failed to add space '%s' from signal: %s", space_id, e)
+
+        elif signal_type == "deleted":
+            if space_id not in self._spaces:
+                self.logger.debug("Space '%s' not in local registry — ignoring deleted signal", space_id)
+                return
+            try:
+                record = self._spaces.pop(space_id, None)
+                if record and hasattr(record.space_impl, "close"):
+                    try:
+                        await record.space_impl.close()
+                    except Exception:
+                        pass
+                self.logger.info("📥 Space '%s' removed from local registry via signal", space_id)
+            except Exception as e:
+                self.logger.error("Failed to remove space '%s' from signal: %s", space_id, e)
     
     

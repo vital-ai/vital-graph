@@ -238,23 +238,23 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # Graph Management Methods - Delegate to MockGraphsEndpoint
     
-    def list_graphs(self, space_id: str) -> List['GraphInfo']:
+    def list_graphs(self, space_id: str) -> 'GraphsListResponse':
         """List graphs in a space."""
         return self.graphs.list_graphs(space_id)
     
-    def get_graph_info(self, space_id: str, graph_uri: str) -> 'GraphInfo':
+    def get_graph_info(self, space_id: str, graph_uri: str) -> 'GraphResponse':
         """Get information about a specific graph."""
         return self.graphs.get_graph_info(space_id, graph_uri)
     
-    def create_graph(self, space_id: str, graph_uri: str) -> 'SPARQLGraphResponse':
+    def create_graph(self, space_id: str, graph_uri: str) -> 'GraphCreateResponse':
         """Create a new graph."""
         return self.graphs.create_graph(space_id, graph_uri)
     
-    def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> 'SPARQLGraphResponse':
+    def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> 'GraphDeleteResponse':
         """Drop (delete) a graph."""
         return self.graphs.drop_graph(space_id, graph_uri, silent)
     
-    def clear_graph(self, space_id: str, graph_uri: str) -> 'SPARQLGraphResponse':
+    def clear_graph(self, space_id: str, graph_uri: str) -> 'GraphClearResponse':
         """Clear a graph (remove all triples but keep the graph)."""
         return self.graphs.clear_graph(space_id, graph_uri)
     

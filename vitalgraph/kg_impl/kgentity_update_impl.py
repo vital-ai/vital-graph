@@ -6,6 +6,7 @@ using the DELETE + INSERT pattern for complete entity replacement with proper du
 coordination (PostgreSQL first, then Fuseki).
 """
 
+import asyncio
 import logging
 import time
 from typing import List, Optional, Dict, Any, Union
@@ -265,8 +266,8 @@ class KGEntityUpdateProcessor:
             List[tuple]: List of quad tuples (subject, predicate, object, graph) to insert
         """
         try:
-            # Convert VitalSigns objects to triples
-            triples = GraphObject.to_triples_list(objects)
+            # Convert VitalSigns objects to triples (offload to thread to avoid blocking event loop)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
             
             # Convert triples to quads by adding graph_id
             # Keep RDFLib objects (especially Literal with datatype/language)

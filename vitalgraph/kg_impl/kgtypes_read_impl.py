@@ -5,6 +5,7 @@ This module provides READ operations for KGTypes using SPARQL queries.
 Implements GET, LIST, and batch GET operations with proper VitalSigns integration.
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -114,7 +115,7 @@ class KGTypesReadProcessor:
             
             # Convert RDFLib triples to VitalSigns GraphObjects
             from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            graph_objects = GraphObject.from_triples_list(triples)
+            graph_objects = await asyncio.to_thread(GraphObject.from_triples_list, triples)
             
             self.logger.debug(f"✅ Retrieved {len(graph_objects)} KGType GraphObjects from {len(triples)} triples")
             return graph_objects

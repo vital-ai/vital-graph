@@ -34,6 +34,9 @@ from .utils.client_utils import VitalGraphClientError
 from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
+from .response.client_response import (
+    GraphResponse, GraphsListResponse, GraphCreateResponse, GraphDeleteResponse, GraphClearResponse
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1716,7 +1719,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # Graph Management Methods - Delegated to GraphsEndpoint
     
-    async def list_graphs(self, space_id: str) -> List[GraphInfo]:
+    async def list_graphs(self, space_id: str) -> GraphsListResponse:
         """
         List graphs in a space.
         
@@ -1724,11 +1727,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             space_id: Space identifier
             
         Returns:
-            List of GraphInfo objects
+            GraphsListResponse with graphs list
         """
         return await self.graphs.list_graphs(space_id)
     
-    async def get_graph_info(self, space_id: str, graph_uri: str) -> Optional[GraphInfo]:
+    async def get_graph_info(self, space_id: str, graph_uri: str) -> GraphResponse:
         """
         Get information about a specific graph.
         
@@ -1737,11 +1740,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_uri: Graph URI
             
         Returns:
-            GraphInfo object or None if graph doesn't exist
+            GraphResponse with graph info
         """
         return await self.graphs.get_graph_info(space_id, graph_uri)
     
-    async def create_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
+    async def create_graph(self, space_id: str, graph_uri: str) -> GraphCreateResponse:
         """
         Create a new graph.
         
@@ -1750,11 +1753,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_uri: Graph URI to create
             
         Returns:
-            SPARQLGraphResponse with creation result
+            GraphCreateResponse with creation result
         """
         return await self.graphs.create_graph(space_id, graph_uri)
     
-    async def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> SPARQLGraphResponse:
+    async def drop_graph(self, space_id: str, graph_uri: str, silent: bool = False) -> GraphDeleteResponse:
         """
         Drop (delete) a graph.
         
@@ -1764,11 +1767,11 @@ class VitalGraphClient(VitalGraphClientInterface):
             silent: Execute silently (optional)
             
         Returns:
-            SPARQLGraphResponse with deletion result
+            GraphDeleteResponse with deletion result
         """
         return await self.graphs.drop_graph(space_id, graph_uri, silent)
     
-    async def clear_graph(self, space_id: str, graph_uri: str) -> SPARQLGraphResponse:
+    async def clear_graph(self, space_id: str, graph_uri: str) -> GraphClearResponse:
         """
         Clear a graph (remove all triples but keep the graph).
         
@@ -1777,7 +1780,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             graph_uri: Graph URI to clear
             
         Returns:
-            SPARQLGraphResponse with clear operation result
+            GraphClearResponse with clear operation result
         """
         return await self.graphs.clear_graph(space_id, graph_uri)
     

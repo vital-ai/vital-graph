@@ -6,6 +6,7 @@ using the atomic update_quads function for true atomicity and consistency with p
 dual-write coordination (PostgreSQL first, then Fuseki).
 """
 
+import asyncio
 import logging
 from typing import List, Optional, Dict, Any, Union
 from ..model.kgtypes_model import KGTypeFilter
@@ -300,8 +301,8 @@ class KGTypesUpdateProcessor:
             List[tuple]: List of quad tuples (subject, predicate, object, graph) to insert
         """
         try:
-            # Convert VitalSigns objects to triples
-            triples = GraphObject.to_triples_list(objects)
+            # Convert VitalSigns objects to triples (offload to thread to avoid blocking event loop)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, objects)
             
             # Convert triples to quads by adding graph_id
             # Keep RDFLib objects (especially Literal with datatype/language)

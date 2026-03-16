@@ -8,6 +8,7 @@ and linking them to existing KGEntities following the kg_impl processor pattern.
 REFACTORING SOURCE: Extracted from KGEntitiesEndpoint._create_or_update_frames()
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -382,7 +383,7 @@ class KGEntityFrameCreateProcessor:
             self.logger.debug(f"🔍 Edge properties: URI={entity_frame_edge.URI}, edgeSource={getattr(entity_frame_edge, 'edgeSource', 'NOT_SET')}, edgeDestination={getattr(entity_frame_edge, 'edgeDestination', 'NOT_SET')}")
             
             # Debug: Test individual edge triple generation
-            edge_triples = GraphObject.to_triples_list([entity_frame_edge])
+            edge_triples = await asyncio.to_thread(GraphObject.to_triples_list, [entity_frame_edge])
             self.logger.debug(f"🔍 Edge {entity_frame_edge.URI} generates {len(edge_triples)} triples:")
             for i, (s, p, o) in enumerate(edge_triples):
                 self.logger.debug(f"  Edge triple {i+1}: s={repr(str(s))}, p={repr(str(p))}, o={repr(str(o))}")
@@ -581,8 +582,8 @@ class KGEntityFrameCreateProcessor:
                 self.logger.debug(f"🔍   Object {i+1}: {obj_type} - {obj_uri}")
                 self.logger.debug(f"🔍   Has kGGraphURI: {has_kg_graph_uri}, Value: {kg_graph_uri_value}")
             
-            # Convert VitalSigns objects to triples
-            triples = GraphObject.to_triples_list(all_objects)
+            # Convert VitalSigns objects to triples (offload to thread to avoid blocking event loop)
+            triples = await asyncio.to_thread(GraphObject.to_triples_list, all_objects)
             
             self.logger.debug(f"🔍 to_triples_list returned {len(triples)} RDFLib triple objects")
             

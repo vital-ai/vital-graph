@@ -312,22 +312,10 @@ async def main() -> int:
     logger = logging.getLogger(__name__)
     
     print("Starting VitalGraph Graphs Endpoint Test...")
-    
-    # Determine config file path (required for JWT client)
-    config_dir = Path(__file__).parent.parent / "vitalgraphclient_config"
-    config_file = config_dir / "vitalgraphclient-config.yaml"
-    
-    if config_file.exists():
-        config_path = str(config_file)
-        print(f"✓ Found config file: {config_path}")
-    else:
-        print(f"❌ Config file not found: {config_file}")
-        print("   JWT client requires a configuration file.")
-        print("   Please ensure vitalgraphclient-config.yaml exists in the vitalgraphclient_config directory.")
-        return 1
+    print("   Configuration loaded from environment variables")
     
     # Run graphs endpoint tests
-    success = await test_graphs_endpoint(config_path)
+    success = await test_graphs_endpoint(config_path=None)
     
     if success:
         print("\n🎉 Graphs endpoint testing completed successfully!")

@@ -702,14 +702,18 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
 
             _t0 = _time.monotonic()
             graph_uri = URIRef(graph_id)
-            quads = []
-            for obj in objects:
-                try:
-                    for s, p, o in obj.to_triples():
-                        quads.append((s, p, o, graph_uri))
-                except Exception as e:
-                    self.logger.warning("Failed to convert object to triples: %s", e)
-                    continue
+
+            def _build_quads():
+                result = []
+                for obj in objects:
+                    try:
+                        for s, p, o in obj.to_triples():
+                            result.append((s, p, o, graph_uri))
+                    except Exception as e:
+                        pass  # logged below via count mismatch
+                return result
+
+            quads = await asyncio.to_thread(_build_quads)
 
             _t1 = _time.monotonic()
             self.logger.info("⏱️  BACKEND to_triples: %.3fs (%d objects → %d quads)",

@@ -5,6 +5,7 @@ This module provides REST API endpoints for managing KG relations.
 KG relations represent direct entity-to-entity relationships in the knowledge graph.
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends, HTTPException, Body
@@ -188,7 +189,7 @@ class KGRelationsEndpoint:
             if triples:
                 from vital_ai_vitalsigns.vitalsigns import VitalSigns
                 vs = VitalSigns()
-                graph_objects = vs.from_triples_list(triples)
+                graph_objects = await asyncio.to_thread(vs.from_triples_list, triples)
             else:
                 graph_objects = []
             
@@ -231,7 +232,7 @@ class KGRelationsEndpoint:
             if triples:
                 from vital_ai_vitalsigns.vitalsigns import VitalSigns
                 vs = VitalSigns()
-                graph_objects = vs.from_triples_list(triples)
+                graph_objects = await asyncio.to_thread(vs.from_triples_list, triples)
             else:
                 graph_objects = []
             
