@@ -176,8 +176,10 @@ def graphobjects_to_quad_list(
 def quad_list_to_graphobjects(quads: List[Quad]) -> List[GraphObject]:
     """Convert a list of Quad models back to VitalSigns GraphObjects.
 
-    Parses N-Quads term encoding from each Quad, builds an RDFLib graph,
-    then uses VitalSigns to reconstruct GraphObjects.
+    Optimized path: parses N-Quads terms directly into property maps and
+    calls GraphObject.from_property_maps — bypasses rdflib entirely.
+
+    Falls back to the original rdflib path on any error.
 
     Args:
         quads: List of Quad Pydantic models
@@ -188,9 +190,148 @@ def quad_list_to_graphobjects(quads: List[Quad]) -> List[GraphObject]:
     if not quads:
         return []
 
+    try:
+        return _quad_list_to_graphobjects_fast(quads)
+    except Exception as e:
+        logger.warning("Fast quad→GraphObject path failed (%s), falling back to rdflib", e)
+        return _quad_list_to_graphobjects_rdflib(quads)
+
+
+# ---------------------------------------------------------------------------
+# Optimised path — no rdflib
+# ---------------------------------------------------------------------------
+
+_RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+_VITALTYPE = "http://vital.ai/ontology/vital-core#vitaltype"
+_URI_PROP = "http://vital.ai/ontology/vital-core#URIProp"
+_XSD = "http://www.w3.org/2001/XMLSchema#"
+
+
+def _parse_nquads_object(term_str: str) -> Any:
+    """Parse an N-Quads object term into a native Python value.
+
+    Returns:
+        str for URIs and plain/language literals,
+        int/float/bool/datetime for typed literals.
+    """
+    term_str = term_str.strip()
+
+    # URI
+    if term_str.startswith('<') and term_str.endswith('>'):
+        return term_str[1:-1]
+
+    # Blank node — return as-is
+    if term_str.startswith('_:'):
+        return term_str
+
+    # Literal
+    if term_str.startswith('"'):
+        i = 1
+        while i < len(term_str):
+            if term_str[i] == '\\':
+                i += 2
+                continue
+            if term_str[i] == '"':
+                break
+            i += 1
+
+        lexical = _unescape_nquads_string(term_str[1:i])
+        rest = term_str[i + 1:]
+
+        if rest.startswith('^^<') and rest.endswith('>'):
+            datatype = rest[3:-1]
+            return _convert_typed_literal(lexical, datatype)
+        # Language-tagged or plain string → just return lexical value
+        return lexical
+
+    return term_str
+
+
+def _convert_typed_literal(value_str: str, datatype: str):
+    """Convert a typed literal to the appropriate Python type."""
+    if not datatype.startswith(_XSD):
+        return value_str
+    local = datatype[len(_XSD):]
+    if local in ('integer', 'int', 'long', 'short', 'byte',
+                 'nonNegativeInteger', 'positiveInteger',
+                 'nonPositiveInteger', 'negativeInteger',
+                 'unsignedLong', 'unsignedInt', 'unsignedShort', 'unsignedByte'):
+        return int(value_str)
+    if local in ('float', 'double', 'decimal'):
+        return float(value_str)
+    if local == 'boolean':
+        return value_str.lower() in ('true', '1')
+    if local == 'dateTime':
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(value_str.replace('Z', '+00:00'))
+        except ValueError:
+            return value_str
+    return value_str
+
+
+def _parse_nquads_uri(term_str: str) -> str:
+    """Extract URI from an N-Quads angle-bracket term."""
+    term_str = term_str.strip()
+    if term_str.startswith('<') and term_str.endswith('>'):
+        return term_str[1:-1]
+    return term_str
+
+
+def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
+    """Convert quads → GraphObjects via from_property_maps (no rdflib)."""
+    from collections import defaultdict
+
+    subjects: dict = defaultdict(lambda: {'type_uri': None, 'properties': {}})
+
+    for quad in quads:
+        s_uri = _parse_nquads_uri(quad.s)
+        p_uri = _parse_nquads_uri(quad.p)
+        o_val = _parse_nquads_object(quad.o)
+
+        if p_uri == _RDF_TYPE or p_uri == _VITALTYPE:
+            # Type URI — extract the URI value
+            if isinstance(o_val, str):
+                subjects[s_uri]['type_uri'] = o_val
+            continue
+        if p_uri == _URI_PROP:
+            continue
+
+        props = subjects[s_uri]['properties']
+        if p_uri in props:
+            existing = props[p_uri]
+            if isinstance(existing, list):
+                existing.append(o_val)
+            else:
+                props[p_uri] = [existing, o_val]
+        else:
+            props[p_uri] = o_val
+
+    entries = []
+    for subject_uri, data in subjects.items():
+        if data['type_uri']:
+            entries.append({
+                'subject_uri': subject_uri,
+                'type_uri': data['type_uri'],
+                'properties': data['properties'],
+            })
+
+    if not entries:
+        return []
+
+    graph_objects = GraphObject.from_property_maps(entries)
+    logger.debug("Converted %d quads to %d GraphObjects (fast path)", len(quads), len(graph_objects))
+    return graph_objects
+
+
+# ---------------------------------------------------------------------------
+# Original rdflib path — kept for fallback / revert
+# ---------------------------------------------------------------------------
+
+def _quad_list_to_graphobjects_rdflib(quads: List[Quad]) -> List[GraphObject]:
+    """ORIGINAL: Convert quads to GraphObjects via rdflib. Kept for revert."""
     from rdflib import Graph as RDFGraph
 
-    # Build an RDFLib graph from the quads
     g = RDFGraph()
     for quad in quads:
         s = nquads_term_to_rdflib(quad.s)
@@ -198,12 +339,9 @@ def quad_list_to_graphobjects(quads: List[Quad]) -> List[GraphObject]:
         o = nquads_term_to_rdflib(quad.o)
         g.add((s, p, o))
 
-    # Use VitalSigns to convert the RDFLib graph to GraphObjects
     triples_list = list(g.triples((None, None, None)))
-
     graph_objects = GraphObject.from_triples_list(triples_list)
-
-    logger.debug(f"Converted {len(quads)} quads to {len(graph_objects)} GraphObjects")
+    logger.debug("Converted %d quads to %d GraphObjects (rdflib path)", len(quads), len(graph_objects))
     return graph_objects
 
 
