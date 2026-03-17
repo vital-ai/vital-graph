@@ -5,6 +5,7 @@ This module provides REST API endpoints for managing graph objects.
 Graph objects represent RDF resources with their associated triples.
 """
 
+import asyncio
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, HTTPException, Depends, Query, Request, Response, Body
 from pydantic import BaseModel, Field
@@ -129,7 +130,7 @@ class GraphObjectsEndpoint:
                 search_text=search
             )
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
                 total_count=total_count,
                 page_size=page_size,
@@ -150,7 +151,7 @@ class GraphObjectsEndpoint:
                 graph_id=graph_id
             )
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id) if graph_objects else []
+            quads = (await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)) if graph_objects else []
             return QuadResultsResponse(
                 total_count=len(graph_objects) if graph_objects else 0,
                 results=quads,
@@ -171,7 +172,7 @@ class GraphObjectsEndpoint:
                 graph_id=graph_id
             )
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id) if graph_objects else []
+            quads = (await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)) if graph_objects else []
             return QuadResultsResponse(
                 total_count=len(graph_objects) if graph_objects else 0,
                 results=quads,

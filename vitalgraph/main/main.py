@@ -85,24 +85,35 @@ def run_server():
     
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8001"))
+    workers = int(os.getenv("WORKERS", "1"))
     
     # Read log level from config environment variable
     env = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
     log_level = os.getenv(f'{env}_LOG_LEVEL', os.getenv('LOG_LEVEL', 'info')).lower()
     
-    app = create_app()
-    
-    uvicorn.run(
-        app, 
-        host=host, 
-        port=port, 
-        reload=False,
-        log_level=log_level
-    )
+    if workers > 1:
+        # Multi-worker: pass factory string so each worker creates its own app
+        # with independent DB connections, caches, and VitalSigns state
+        uvicorn.run(
+            "vitalgraph.main.main:create_app",
+            factory=True,
+            host=host,
+            port=port,
+            workers=workers,
+            reload=False,
+            log_level=log_level
+        )
+    else:
+        # Single-worker: create app directly (preserves existing behavior)
+        app = create_app()
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            reload=False,
+            log_level=log_level
+        )
 
-
-# For development and testing
-app = create_app()
 
 if __name__ == "__main__":
     run_server()

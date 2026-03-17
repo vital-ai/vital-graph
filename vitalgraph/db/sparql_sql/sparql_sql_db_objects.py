@@ -30,6 +30,37 @@ _MATERIALIZED_PREDICATES = frozenset([
 ])
 
 
+_XSD = 'http://www.w3.org/2001/XMLSchema#'
+_RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+_VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
+_URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
+
+
+def _convert_literal(value_str: str, datatype: Optional[str]):
+    """Convert a SPARQL literal value string to a native Python type."""
+    if not datatype:
+        return value_str
+    if not datatype.startswith(_XSD):
+        return value_str
+    local = datatype[len(_XSD):]
+    if local in ('integer', 'int', 'long', 'short', 'byte',
+                 'nonNegativeInteger', 'positiveInteger',
+                 'nonPositiveInteger', 'negativeInteger',
+                 'unsignedLong', 'unsignedInt', 'unsignedShort', 'unsignedByte'):
+        return int(value_str)
+    if local in ('float', 'double', 'decimal'):
+        return float(value_str)
+    if local == 'boolean':
+        return value_str.lower() in ('true', '1')
+    if local == 'dateTime':
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(value_str.replace('Z', '+00:00'))
+        except ValueError:
+            return value_str
+    return value_str
+
+
 def _materialized_filter(pred_var: str = "?p") -> str:
     """SPARQL FILTER clause to exclude materialized predicates."""
     clauses = [f"{pred_var} != <{p}>" for p in _MATERIALIZED_PREDICATES]
@@ -81,15 +112,10 @@ class SparqlSQLDbObjects:
             if not subject_uris:
                 return [], total_count
 
-            # Phase 2 — get triples
-            triples = await self._get_triples_for_uris(
+            # Phase 2+3 — fetch bindings and convert directly to GraphObjects
+            objects = await self._fetch_objects_for_uris(
                 space_id, graph_id, subject_uris
             )
-            if not triples:
-                return [], total_count
-
-            # Phase 3 — VitalSigns conversion
-            objects = await self._triples_to_vitalsigns(triples)
             return objects, total_count
 
         except Exception as e:
@@ -113,11 +139,7 @@ class SparqlSQLDbObjects:
             if not uris:
                 return []
 
-            triples = await self._get_triples_for_uris(space_id, graph_id, uris)
-            if not triples:
-                return []
-
-            return await self._triples_to_vitalsigns(triples)
+            return await self._fetch_objects_for_uris(space_id, graph_id, uris)
 
         except Exception as e:
             self.logger.error("get_objects_by_uris failed: %s", e)
@@ -277,6 +299,94 @@ class SparqlSQLDbObjects:
         # Approximate total count from returned page
         total_count = len(uris)
         return uris, total_count
+
+    async def _fetch_objects_for_uris(
+        self,
+        space_id: str,
+        graph_id: str,
+        subject_uris: List[str],
+        batch_size: int = 100,
+    ) -> List[Any]:
+        """Fetch SPARQL bindings and convert directly to GraphObjects.
+
+        Bypasses rdflib entirely — goes straight from SPARQL JSON bindings
+        to GraphObject.from_property_maps for maximum throughput.
+        """
+        from collections import defaultdict
+        from vital_ai_vitalsigns.model.GraphObject import GraphObject
+
+        all_entries: List[Dict[str, Any]] = []
+
+        for i in range(0, len(subject_uris), batch_size):
+            batch = subject_uris[i : i + batch_size]
+            uri_values = " ".join(f"<{u}>" for u in batch)
+
+            query = f"""
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?s {{ {uri_values} }}
+                    ?s ?p ?o .
+                    {_materialized_filter()}
+                }}
+            }}
+            """
+
+            result = await self.space_impl.execute_sparql_query(space_id, query)
+            bindings = self._extract_bindings(result)
+
+            # Group by subject
+            subjects: Dict[str, Dict] = defaultdict(
+                lambda: {'type_uri': None, 'properties': {}}
+            )
+
+            for b in bindings:
+                s = b.get('s', {}).get('value')
+                p = b.get('p', {}).get('value')
+                o_data = b.get('o', {})
+                if not (s and p and o_data.get('value') is not None):
+                    continue
+
+                o_val = o_data['value']
+                o_type = o_data.get('type', 'literal')
+
+                # Extract type URI
+                if p == _RDF_TYPE or p == _VITALTYPE:
+                    subjects[s]['type_uri'] = o_val
+                    continue
+                if p == _URI_PROP:
+                    continue  # redundant with subject URI
+
+                # Convert value
+                if o_type == 'uri':
+                    value = o_val
+                else:
+                    value = _convert_literal(o_val, o_data.get('datatype'))
+
+                # Handle multi-value properties
+                props = subjects[s]['properties']
+                if p in props:
+                    existing = props[p]
+                    if isinstance(existing, list):
+                        existing.append(value)
+                    else:
+                        props[p] = [existing, value]
+                else:
+                    props[p] = value
+
+            for subject_uri, data in subjects.items():
+                if data['type_uri']:
+                    all_entries.append({
+                        'subject_uri': subject_uri,
+                        'type_uri': data['type_uri'],
+                        'properties': data['properties'],
+                    })
+
+        if not all_entries:
+            return []
+
+        return await asyncio.to_thread(
+            GraphObject.from_property_maps, all_entries
+        )
 
     async def _get_triples_for_uris(
         self,

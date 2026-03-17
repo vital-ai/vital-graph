@@ -193,7 +193,7 @@ class KGRelationsEndpoint:
             else:
                 graph_objects = []
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=total_count,
@@ -236,7 +236,7 @@ class KGRelationsEndpoint:
             else:
                 graph_objects = []
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResultsResponse(
                 results=quads,
                 total_count=len(graph_objects),

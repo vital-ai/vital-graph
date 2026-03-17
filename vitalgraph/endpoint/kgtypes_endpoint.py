@@ -178,7 +178,7 @@ class KGTypesEndpoint:
             self.logger.info(f"🔍 LIST: Received {len(triples)} RDFLib triples, total_count: {total_count}")
             
             graph_objects = (await asyncio.to_thread(GraphObject.from_triples_list, triples)) if triples else []
-            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
                 total_count=total_count,
                 page_size=page_size,
@@ -229,7 +229,7 @@ class KGTypesEndpoint:
                     results=[],
                 )
             
-            quads = graphobjects_to_quad_list([kgtype_object], graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, [kgtype_object], graph_id)
             return QuadResultsResponse(
                 message=f"Found KGType '{uri}'",
                 total_count=1,
@@ -273,7 +273,7 @@ class KGTypesEndpoint:
             
             self.logger.info(f"🔍 GET_BY_URIS: Received {len(kgtype_objects)} KGType GraphObjects for {len(uris)} URIs")
             
-            quads = graphobjects_to_quad_list(kgtype_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, kgtype_objects, graph_id)
             return QuadResponse(
                 total_count=len(kgtype_objects),
                 page_size=len(kgtype_objects),

@@ -99,6 +99,40 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Term constants cache: (space_id, term_text, term_type) → term_uuid
+# Populated incrementally by materialize_constants; avoids a DB round
+# trip when all requested constants are already known.
+# ---------------------------------------------------------------------------
+
+_term_cache: Dict[tuple, str] = {}   # (space_id, text, type) → uuid str
+
+
+def invalidate_term_cache(space_id: Optional[str] = None) -> None:
+    """Clear cached term UUIDs.  If *space_id* is given, only that space."""
+    if space_id is None:
+        _term_cache.clear()
+    else:
+        to_del = [k for k in _term_cache if k[0] == space_id]
+        for k in to_del:
+            del _term_cache[k]
+
+
+# ---------------------------------------------------------------------------
+# Datatype cache: space_id → {datatype_id: datatype_uri}
+# ---------------------------------------------------------------------------
+
+_datatype_cache: Dict[str, Dict[int, str]] = {}
+
+
+def invalidate_datatype_cache(space_id: Optional[str] = None) -> None:
+    """Clear cached datatype mappings."""
+    if space_id is None:
+        _datatype_cache.clear()
+    else:
+        _datatype_cache.pop(space_id, None)
+
+
+# ---------------------------------------------------------------------------
 # Predicate cardinality stats for join reordering
 # ---------------------------------------------------------------------------
 
@@ -166,7 +200,13 @@ async def _load_datatype_cache(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
 ) -> Dict[int, str]:
-    """Load datatype_id → datatype_uri mapping from {space}_datatype table."""
+    """Load datatype_id → datatype_uri mapping from {space}_datatype table.
+
+    Results are cached in _datatype_cache keyed by space_id.
+    """
+    if space_id in _datatype_cache:
+        return _datatype_cache[space_id]
+
     if conn is None and conn_params is None:
         return {}
 
@@ -179,12 +219,14 @@ async def _load_datatype_cache(
             conn_params=conn_params, conn=conn,
         )
         cache = {r["datatype_id"]: r["datatype_uri"] for r in rows}
+        _datatype_cache[space_id] = cache
         logger.debug("Loaded %d datatype mappings from %s",
                      len(cache), datatype_table)
         return cache
     except Exception:
         logger.debug("No datatype table for space %s — datatype cache empty",
                      space_id)
+        _datatype_cache[space_id] = {}
         return {}
 
 
@@ -213,22 +255,42 @@ async def materialize_constants(
     conn_params: Optional[Dict[str, Any]] = None,
     conn=None,
 ) -> None:
-    """Batch-resolve all registered constants to UUIDs via one DB query."""
+    """Batch-resolve all registered constants to UUIDs via one DB query.
+
+    Uses _term_cache to avoid the DB round trip when all constants are
+    already known.  Any newly resolved UUIDs are added to the cache.
+    """
     if not aliases.constants:
+        return
+
+    # Extract space_id from term_table name (e.g. "myspace_term" → "myspace")
+    space_id = term_table.rsplit("_term", 1)[0] if term_table.endswith("_term") else ""
+
+    # Check cache first — resolve as many as possible without DB
+    missing_pairs = []
+    for (text, ttype), col_name in aliases.constants.items():
+        cached = _term_cache.get((space_id, text, ttype))
+        if cached is not None:
+            aliases.resolved_constants[col_name] = cached
+        else:
+            missing_pairs.append((text, ttype))
+
+    if not missing_pairs:
+        logger.debug("Materialized %d/%d constants (all cached)",
+                     len(aliases.resolved_constants), len(aliases.constants))
         return
 
     from . import db_provider as db
 
-    pairs = list(aliases.constants.keys())
-    if len(pairs) == 1:
-        text, ttype = pairs[0]
+    if len(missing_pairs) == 1:
+        text, ttype = missing_pairs[0]
         sql = (
             f"SELECT term_text, term_type, term_uuid FROM {term_table} "
             f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1"
         )
     else:
         values = ", ".join(
-            f"('{_esc(text)}', '{ttype}')" for text, ttype in pairs
+            f"('{_esc(text)}', '{ttype}')" for text, ttype in missing_pairs
         )
         sql = (
             f"SELECT term_text, term_type, term_uuid FROM {term_table} "
@@ -239,14 +301,18 @@ async def materialize_constants(
     text_map = {(r["term_text"], r["term_type"]): str(r["term_uuid"]) for r in rows}
 
     for (text, ttype), col_name in aliases.constants.items():
+        if col_name in aliases.resolved_constants:
+            continue  # already resolved from cache
         uuid_str = text_map.get((text, ttype))
         if uuid_str:
             aliases.resolved_constants[col_name] = uuid_str
+            _term_cache[(space_id, text, ttype)] = uuid_str
         else:
             logger.warning("Constant not found: text=%r type=%r", text, ttype)
 
-    logger.debug("Materialized %d/%d constants",
-                 len(aliases.resolved_constants), len(aliases.constants))
+    logger.debug("Materialized %d/%d constants (%d from cache, %d from DB)",
+                 len(aliases.resolved_constants), len(aliases.constants),
+                 len(aliases.constants) - len(missing_pairs), len(missing_pairs))
 
 
 async def generate_sql(

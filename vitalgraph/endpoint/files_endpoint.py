@@ -5,6 +5,7 @@ This module provides REST API endpoints for managing files and file content,
 with binary handling for file content upload/download.
 """
 
+import asyncio
 from typing import Dict, List, Optional, Union, Any
 from fastapi import APIRouter, Depends, Query, File, UploadFile, HTTPException, Request, Response, Body
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -222,7 +223,7 @@ class FilesEndpoint:
                 file_filter=file_filter
             )
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
                 total_count=total_count,
                 page_size=page_size,
@@ -243,7 +244,7 @@ class FilesEndpoint:
                 graph_id=graph_id
             )
             
-            quads = graphobjects_to_quad_list([graph_object], graph_id) if graph_object else []
+            quads = (await asyncio.to_thread(graphobjects_to_quad_list, [graph_object], graph_id)) if graph_object else []
             return QuadResultsResponse(
                 total_count=1 if graph_object else 0,
                 results=quads,
@@ -263,7 +264,7 @@ class FilesEndpoint:
                 graph_id=graph_id
             )
             
-            quads = graphobjects_to_quad_list(graph_objects, graph_id) if graph_objects else []
+            quads = (await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)) if graph_objects else []
             return QuadResultsResponse(
                 total_count=len(graph_objects) if graph_objects else 0,
                 results=quads,

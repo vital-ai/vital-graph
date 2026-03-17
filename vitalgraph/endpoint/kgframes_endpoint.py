@@ -331,7 +331,7 @@ class KGFramesEndpoint:
             results = await backend.execute_sparql_query(space_id, sparql_query)
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
             
-            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
             return QuadResponse(results=quads, total_count=len(frames), page_size=page_size, offset=offset)
             
         except Exception as e:
@@ -504,7 +504,7 @@ class KGFramesEndpoint:
             
             self.logger.info(f"Listed {len(slot_objects)} slots (total: {total_count}) in graph '{graph_id}' in space '{space_id}'")
             
-            quads = graphobjects_to_quad_list(slot_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, slot_objects, graph_id)
             return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
             
         except Exception as e:
@@ -708,7 +708,7 @@ class KGFramesEndpoint:
             count_query = self._build_count_frames_query(backend, space_id, graph_id, search)
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
-            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=total_count,
@@ -763,7 +763,7 @@ class KGFramesEndpoint:
                     # Legacy path: frame_graph.graph contains GraphObjects directly
                     all_objects.extend(frame_graph.graph)
             
-            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResultsResponse(
                 results=quads,
                 total_count=len(all_objects),
@@ -797,7 +797,7 @@ class KGFramesEndpoint:
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
             
-            quads = graphobjects_to_quad_list(frames or [], graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
             return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
             
         except Exception as e:
@@ -840,7 +840,7 @@ class KGFramesEndpoint:
                 if result and hasattr(result, 'objects') and result.objects:
                     all_objects.extend(result.objects)
             
-            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=len(all_objects),

@@ -24,9 +24,15 @@ from ..space_backend_interface import SpaceBackendInterface, SparqlBackendInterf
 from .sparql_sql_db_impl import SparqlSQLDbImpl
 from .sparql_sql_db_objects import SparqlSQLDbObjects
 from .sparql_sql_schema import SparqlSQLSchema, STANDARD_DATATYPES
+from .compile_cache import SparqlCompileCache
+from .generator import invalidate_datatype_cache
 from . import db_provider
 
 logger = logging.getLogger(__name__)
+
+# Module-level shared compile cache (space-independent, sidecar compilation
+# depends only on SPARQL structure, not on which space is queried).
+_compile_cache = SparqlCompileCache(maxsize=512)
 
 # Deterministic UUID namespace (same as fuseki_postgresql for compatibility)
 _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -1161,14 +1167,16 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
             t0 = _time.monotonic()
             client = self._get_sidecar_client()
-            raw = await client.compile(query)
+            raw = await _compile_cache.compile(query, client)
             t_sidecar = _time.monotonic()
 
             cr = map_compile_response(raw)
             if not cr.ok:
                 return {'results': {'bindings': []}, 'success': False, 'error': cr.error}
 
+            t_pre_acquire = _time.monotonic()
             async with self.db_impl.connection_pool.acquire() as conn:
+                t_acquired = _time.monotonic()
                 gen = await generate_sql(cr, space_id, conn=conn)
                 sql = gen.sql
                 var_map = gen.var_map or {}
@@ -1188,13 +1196,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             join_count = sql.upper().count(' JOIN ')
             sql_len = len(sql)
 
+            acquire_ms = (t_acquired - t_pre_acquire) * 1000
             logger.info(
-                "SPARQL pipeline [%s]: sidecar=%.0fms gen=%.0fms exec=%.0fms "
+                "SPARQL pipeline [%s]: acquire=%.0fms sidecar=%.0fms gen=%.0fms exec=%.0fms "
                 "rows→dict=%.0fms bindings=%.0fms total=%.0fms "
                 "(%d rows, %d joins, %d chars SQL)",
                 space_id,
+                acquire_ms,
                 (t_sidecar - t0) * 1000,
-                (t_gen - t_sidecar) * 1000,
+                (t_gen - t_acquired) * 1000,
                 (t_exec - t_gen) * 1000,
                 (t_convert_rows - t_exec) * 1000,
                 (t_bindings - t_convert_rows) * 1000,
@@ -1277,7 +1287,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             from .generator import generate_sql
 
             client = self._get_sidecar_client()
-            raw = await client.compile(update)
+            raw = await _compile_cache.compile(update, client)
 
             cr = map_compile_response(raw)
             if not cr.ok:
@@ -1390,7 +1400,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         )
         if row:
             return row['datatype_id']
-        # Insert new datatype
+        # Insert new datatype — invalidate cache so gen picks up the new mapping
+        space_id = tables['datatype'].rsplit("_datatype", 1)[0]
+        invalidate_datatype_cache(space_id)
         return await conn.fetchval(
             f"INSERT INTO {tables['datatype']} (datatype_uri) "
             f"VALUES ($1) ON CONFLICT (datatype_uri) "

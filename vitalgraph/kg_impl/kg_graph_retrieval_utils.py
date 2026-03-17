@@ -9,10 +9,99 @@ are optimization triples created in Fuseki for query performance. They should be
 in most operations to prevent VitalSigns conversion errors, but included in deletion and update
 operations to ensure complete cleanup.
 """
+import asyncio
 from typing import List, Dict, Any, Optional, Tuple
+from collections import defaultdict
 import logging
 
 logger = logging.getLogger(__name__)
+
+_XSD = 'http://www.w3.org/2001/XMLSchema#'
+_RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+_VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
+_URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
+
+
+def _convert_literal(value_str: str, datatype: Optional[str]):
+    """Convert a SPARQL literal value string to a native Python type."""
+    if not datatype:
+        return value_str
+    if not datatype.startswith(_XSD):
+        return value_str
+    local = datatype[len(_XSD):]
+    if local in ('integer', 'int', 'long', 'short', 'byte',
+                 'nonNegativeInteger', 'positiveInteger',
+                 'nonPositiveInteger', 'negativeInteger',
+                 'unsignedLong', 'unsignedInt', 'unsignedShort', 'unsignedByte'):
+        return int(value_str)
+    if local in ('float', 'double', 'decimal'):
+        return float(value_str)
+    if local == 'boolean':
+        return value_str.lower() in ('true', '1')
+    if local == 'dateTime':
+        from datetime import datetime
+        try:
+            return datetime.fromisoformat(value_str.replace('Z', '+00:00'))
+        except ValueError:
+            return value_str
+    return value_str
+
+
+def _bindings_to_objects(bindings: List[Dict]) -> List[Any]:
+    """Convert SPARQL ?s ?p ?o bindings directly to GraphObjects via from_property_maps.
+
+    Bypasses rdflib entirely for maximum throughput.
+    """
+    from vital_ai_vitalsigns.model.GraphObject import GraphObject
+
+    subjects: Dict[str, Dict] = defaultdict(
+        lambda: {'type_uri': None, 'properties': {}}
+    )
+
+    for b in bindings:
+        s = b.get('s', {}).get('value')
+        p = b.get('p', {}).get('value')
+        o_data = b.get('o', {})
+        if not (s and p and o_data.get('value') is not None):
+            continue
+
+        o_val = o_data['value']
+        o_type = o_data.get('type', 'literal')
+
+        if p == _RDF_TYPE or p == _VITALTYPE:
+            subjects[s]['type_uri'] = o_val
+            continue
+        if p == _URI_PROP:
+            continue
+
+        if o_type == 'uri':
+            value = o_val
+        else:
+            value = _convert_literal(o_val, o_data.get('datatype'))
+
+        props = subjects[s]['properties']
+        if p in props:
+            existing = props[p]
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                props[p] = [existing, value]
+        else:
+            props[p] = value
+
+    entries = []
+    for subject_uri, data in subjects.items():
+        if data['type_uri']:
+            entries.append({
+                'subject_uri': subject_uri,
+                'type_uri': data['type_uri'],
+                'properties': data['properties'],
+            })
+
+    if not entries:
+        return []
+
+    return GraphObject.from_property_maps(entries)
 
 
 class MaterializedPredicateConstants:
@@ -497,6 +586,95 @@ class GraphObjectRetriever:
         
         return triples
     
+    async def get_entity_graph_as_objects(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_uri: str,
+        include_materialized_edges: bool = False
+    ) -> List[Any]:
+        """Retrieve complete entity graph as GraphObjects (fast path, no rdflib)."""
+        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    {{
+                        <{entity_uri}> ?p ?o .
+                        BIND(<{entity_uri}> AS ?s)
+                        {filter_clause}
+                    }}
+                    UNION
+                    {{
+                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
+                        ?s ?p ?o .
+                        {filter_clause}
+                    }}
+                }}
+            }}
+        """
+        
+        self.logger.debug(f"Retrieving entity graph as objects for {entity_uri}")
+        results = await self.backend.execute_sparql_query(space_id, query)
+        
+        if isinstance(results, dict):
+            results = results.get('results', {}).get('bindings', [])
+        
+        if not results:
+            return []
+        
+        return await asyncio.to_thread(_bindings_to_objects, results)
+    
+    async def get_entity_graph_by_reference_id_as_objects(
+        self,
+        space_id: str,
+        graph_id: str,
+        reference_id: str,
+        include_materialized_edges: bool = False
+    ) -> Optional[List[Any]]:
+        """Retrieve complete entity graph by reference ID as GraphObjects (fast path, no rdflib)."""
+        filter_clause = "" if include_materialized_edges else MaterializedPredicateConstants.get_filter_clause()
+        
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            PREFIX aimp: <http://vital.ai/ontology/vital-aimp#>
+            
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    {{
+                        ?entity a haley:KGEntity .
+                        ?entity aimp:hasReferenceIdentifier "{reference_id}" .
+                        ?entity ?p ?o .
+                        BIND(?entity AS ?s)
+                        {filter_clause}
+                    }}
+                    UNION
+                    {{
+                        ?entity a haley:KGEntity .
+                        ?entity aimp:hasReferenceIdentifier "{reference_id}" .
+                        ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
+                        ?s ?p ?o .
+                        {filter_clause}
+                    }}
+                }}
+            }}
+        """
+        
+        self.logger.debug(f"Retrieving entity graph by reference ID '{reference_id}' as objects")
+        results = await self.backend.execute_sparql_query(space_id, query)
+        
+        if isinstance(results, dict):
+            results = results.get('results', {}).get('bindings', [])
+        
+        if not results:
+            return None
+        
+        return await asyncio.to_thread(_bindings_to_objects, results)
+
     async def list_objects(
         self,
         space_id: str,

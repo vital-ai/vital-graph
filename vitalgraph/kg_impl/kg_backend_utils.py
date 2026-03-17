@@ -802,13 +802,12 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph(self, space_id: str, graph_id: str,
                                entity_uri: str) -> BackendOperationResult:
         try:
-            triples = await self.retriever.get_entity_graph(
+            objects = await self.retriever.get_entity_graph_as_objects(
                 space_id, graph_id, entity_uri, include_materialized_edges=False
             )
-            if not triples:
+            if not objects:
                 return BackendOperationResult(
                     success=False, message=f"Entity graph not found: {entity_uri}", objects=[])
-            objects = await self._triples_to_vitalsigns(triples)
             return BackendOperationResult(success=True, message="OK", objects=objects)
         except Exception as e:
             self.logger.error("get_entity_graph failed: %s", e)
@@ -831,13 +830,12 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
     async def get_entity_graph_by_reference_id(self, space_id: str, graph_id: str,
                                                reference_id: str) -> BackendOperationResult:
         try:
-            triples = await self.retriever.get_entity_graph_by_reference_id(
+            objects = await self.retriever.get_entity_graph_by_reference_id_as_objects(
                 space_id, graph_id, reference_id, include_materialized_edges=False
             )
-            if not triples:
+            if not objects:
                 return BackendOperationResult(
                     success=False, message=f"Not found: {reference_id}", objects=[])
-            objects = await self._triples_to_vitalsigns(triples)
             return BackendOperationResult(success=True, message="OK", objects=objects)
         except Exception as e:
             self.logger.error("get_entity_graph_by_reference_id failed: %s", e)

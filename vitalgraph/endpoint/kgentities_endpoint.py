@@ -268,6 +268,8 @@ class KGEntitiesEndpoint:
     async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict):
         """List entities using KGEntityListProcessor."""
         try:
+            import time as _time
+            t0 = _time.monotonic()
             self.logger.debug(f"Listing KGEntities from space {space_id}, graph {graph_id}")
             
             # Backend setup
@@ -281,6 +283,7 @@ class KGEntitiesEndpoint:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             backend_adapter = create_backend_adapter(backend)
+            t_setup = _time.monotonic()
             
             # Use KGEntityListProcessor
             list_processor = KGEntityListProcessor(logger=self.logger)
@@ -295,14 +298,30 @@ class KGEntitiesEndpoint:
                 search=search,
                 include_entity_graph=include_entity_graph
             )
+            t_query = _time.monotonic()
             
-            quads = graphobjects_to_quad_list(result.entities or [], graph_id)
-            return QuadResponse(
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, result.entities or [], graph_id)
+            t_quads = _time.monotonic()
+            resp = QuadResponse(
                 results=quads,
                 total_count=result.total_count,
                 page_size=page_size,
                 offset=offset,
             )
+            t_resp = _time.monotonic()
+            n_ent = len(result.entities) if result.entities else 0
+            n_quads = len(quads)
+            self.logger.info(
+                "LIST_ENTITIES timing: setup=%.0fms query=%.0fms quads=%.0fms resp=%.0fms total=%.0fms "
+                "(%d entities, %d quads, graph=%s)",
+                (t_setup - t0) * 1000,
+                (t_query - t_setup) * 1000,
+                (t_quads - t_query) * 1000,
+                (t_resp - t_quads) * 1000,
+                (t_resp - t0) * 1000,
+                n_ent, n_quads, include_entity_graph,
+            )
+            return resp
             
         except Exception as e:
             self.logger.error(f"Error listing KGEntities: {e}")
@@ -311,6 +330,8 @@ class KGEntitiesEndpoint:
     async def _get_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: Optional[str], include_entity_graph: bool, current_user: Dict, reference_id: Optional[str] = None):
         """Get single entity by URI or reference ID."""
         try:
+            import time as _time
+            t0 = _time.monotonic()
             if uri:
                 self.logger.debug(f"Getting KGEntity {uri} from space {space_id}, graph {graph_id}")
             elif reference_id:
@@ -330,6 +351,7 @@ class KGEntitiesEndpoint:
             
             # Use backend adapter for consistent retrieval
             backend_adapter = create_backend_adapter(backend)
+            t_setup = _time.monotonic()
             
             # Use kg_impl module for entity retrieval
             get_processor = KGEntityGetProcessor(logger=self.logger)
@@ -343,14 +365,30 @@ class KGEntitiesEndpoint:
                 include_entity_graph=include_entity_graph,
                 backend_adapter=backend_adapter
             )
+            t_query = _time.monotonic()
             
             self.logger.debug(f"🔍 KGEntityGetProcessor returned {len(graph_objects) if graph_objects else 0} objects for entity {uri} (include_entity_graph={include_entity_graph})")
             
-            quads = graphobjects_to_quad_list(graph_objects or [], graph_id)
-            return QuadResultsResponse(
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects or [], graph_id)
+            t_quads = _time.monotonic()
+            resp = QuadResultsResponse(
                 results=quads,
                 total_count=len(graph_objects) if graph_objects else 0,
             )
+            t_resp = _time.monotonic()
+            n_obj = len(graph_objects) if graph_objects else 0
+            n_quads = len(quads)
+            self.logger.info(
+                "GET_ENTITY timing: setup=%.0fms query=%.0fms quads=%.0fms resp=%.0fms total=%.0fms "
+                "(%d objects, %d quads, graph=%s)",
+                (t_setup - t0) * 1000,
+                (t_query - t_setup) * 1000,
+                (t_quads - t_query) * 1000,
+                (t_resp - t_quads) * 1000,
+                (t_resp - t0) * 1000,
+                n_obj, n_quads, include_entity_graph,
+            )
+            return resp
             
         except Exception as e:
             self.logger.error(f"Error getting KGEntity: {e}")
@@ -406,7 +444,7 @@ class KGEntitiesEndpoint:
             for objs in results:
                 all_objects.extend(objs)
             
-            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=len(all_objects),
@@ -859,7 +897,7 @@ class KGEntitiesEndpoint:
                 frames = await self._convert_triples_to_vitalsigns_frames(triples)
                 self.logger.debug(f"Converted to {len(frames)} VitalSigns frame objects")
             
-            quads = graphobjects_to_quad_list(frames, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, frames, graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=frame_results['total_count'],
@@ -1789,7 +1827,7 @@ class KGEntitiesEndpoint:
                     if entity_list:
                         all_objects.extend(entity_list)
             
-            quads = graphobjects_to_quad_list(all_objects, graph_id)
+            quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
                 results=quads,
                 total_count=query_results['total_count'],

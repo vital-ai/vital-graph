@@ -412,13 +412,13 @@ class KGSparqlUtils:
             # The method expects a Generator[Tuple, None, None] of RDFLib (URIRef, URIRef, URIRef/Literal) tuples
             def triples_generator():
                 from rdflib import URIRef, Literal
+                from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
                 for triple in triples:
                     subject = URIRef(triple["subject"])
                     predicate = URIRef(triple["predicate"])
                     
                     # Object might be a URI or literal value
                     obj_str = triple["object"]
-                    from vital_ai_vitalsigns.utils.uri_utils import validate_rfc3986
                     if validate_rfc3986(obj_str, rule='URI'):
                         obj = URIRef(obj_str)
                     else:
@@ -438,7 +438,7 @@ class KGSparqlUtils:
                 if isinstance(obj, KGFrame):
                     frames.append(obj)
             
-            logger.info(f"🔍 DEBUG: Converted {len(triples)} triples to {len(all_objects)} objects, {len(frames)} frames")
+            logger.debug(f"Converted {len(triples)} triples to {len(all_objects)} objects, {len(frames)} frames")
             
             return frames
             
