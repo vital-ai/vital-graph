@@ -140,6 +140,11 @@ def graphobjects_to_quad_list(
 ) -> List[Quad]:
     """Convert VitalSigns GraphObjects to a list of Quad models.
 
+    Optimized path: uses to_property_maps + ontology manager for type
+    resolution — bypasses rdflib entirely.
+
+    Falls back to the original rdflib path on any error.
+
     Args:
         graph_objects: VitalSigns GraphObject instances
         graph_uri: Optional graph URI (without angle brackets).
@@ -152,7 +157,18 @@ def graphobjects_to_quad_list(
     if not graph_objects:
         return []
 
-    # Get triples from VitalSigns
+    try:
+        return _graphobjects_to_quad_list_fast(graph_objects, graph_uri)
+    except Exception as e:
+        logger.warning("Fast GraphObject→Quad path failed (%s), falling back to rdflib", e)
+        return _graphobjects_to_quad_list_rdflib(graph_objects, graph_uri)
+
+
+def _graphobjects_to_quad_list_rdflib(
+    graph_objects: List[GraphObject],
+    graph_uri: Optional[str] = None
+) -> List[Quad]:
+    """ORIGINAL: Convert GraphObjects to Quads via rdflib. Kept for revert."""
     if len(graph_objects) == 1:
         triples = graph_objects[0].to_triples()
     else:
@@ -169,7 +185,92 @@ def graphobjects_to_quad_list(
             g=g_encoded,
         ))
 
-    logger.debug(f"Converted {len(graph_objects)} GraphObjects to {len(quads)} quads")
+    logger.debug("Converted %d GraphObjects to %d quads (rdflib path)", len(graph_objects), len(quads))
+    return quads
+
+
+# ---------------------------------------------------------------------------
+# Fast outbound path — no rdflib (uses to_property_maps + ontology manager)
+# ---------------------------------------------------------------------------
+
+# Cache: property_uri → bool (is URI property)
+_uri_prop_cache: dict = {}
+
+
+def _is_uri_property(prop_uri: str) -> Optional[bool]:
+    """Check if a property URI is a URI-typed property via ontology manager."""
+    cached = _uri_prop_cache.get(prop_uri)
+    if cached is not None:
+        return cached
+
+    try:
+        from vital_ai_vitalsigns.vitalsigns import VitalSigns
+        from vital_ai_vitalsigns.model.properties.URIProperty import URIProperty
+        vs = VitalSigns()
+        ont_manager = vs.get_ontology_manager()
+        prop_info = ont_manager.get_property_info(prop_uri)
+        prop_class = prop_info.get("prop_class") if prop_info else None
+        result = prop_class is URIProperty
+        _uri_prop_cache[prop_uri] = result
+        return result
+    except Exception:
+        return None
+
+
+def _value_to_nquads_outbound(value, is_uri: bool) -> str:
+    """Encode a native Python value to an N-Quads object term string."""
+    if is_uri and isinstance(value, str):
+        return f"<{value}>"
+    if isinstance(value, bool):
+        return f'"{str(value).lower()}"^^<{_XSD}boolean>'
+    if isinstance(value, int):
+        return f'"{value}"^^<{_XSD}integer>'
+    if isinstance(value, float):
+        return f'"{value}"^^<{_XSD}double>'
+    if isinstance(value, str):
+        escaped = _escape_nquads_string(value)
+        return f'"{escaped}"'
+    # datetime
+    from datetime import datetime
+    if isinstance(value, datetime):
+        iso = value.isoformat()
+        return f'"{iso}"^^<{_XSD}dateTime>'
+    # fallback
+    escaped = _escape_nquads_string(str(value))
+    return f'"{escaped}"'
+
+
+def _graphobjects_to_quad_list_fast(
+    graph_objects: List[GraphObject],
+    graph_uri: Optional[str] = None
+) -> List[Quad]:
+    """Convert GraphObjects → Quads via to_property_maps (no rdflib)."""
+    maps = GraphObject.to_property_maps(graph_objects)
+
+    g_encoded = f"<{graph_uri}>" if graph_uri else None
+    quads = []
+
+    for pm in maps:
+        s = f"<{pm['subject_uri']}>"
+        type_uri = pm['type_uri']
+
+        # rdf:type, vitaltype, URIProp triples
+        quads.append(Quad(s=s, p=f"<{_RDF_TYPE}>", o=f"<{type_uri}>", g=g_encoded))
+        quads.append(Quad(s=s, p=f"<{_VITALTYPE}>", o=f"<{type_uri}>", g=g_encoded))
+        quads.append(Quad(s=s, p=f"<{_URI_PROP}>", o=s, g=g_encoded))
+
+        for prop_uri, value in pm['properties'].items():
+            p_enc = f"<{prop_uri}>"
+            is_uri = _is_uri_property(prop_uri)
+            if is_uri is None:
+                is_uri = False
+
+            values = value if isinstance(value, list) else [value]
+            for v in values:
+                o_enc = _value_to_nquads_outbound(v, is_uri)
+                quads.append(Quad(s=s, p=p_enc, o=o_enc, g=g_encoded))
+
+    logger.debug("Converted %d GraphObjects to %d quads (fast path)", len(graph_objects), len(quads))
     return quads
 
 

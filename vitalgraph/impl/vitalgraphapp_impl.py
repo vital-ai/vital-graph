@@ -282,7 +282,7 @@ class VitalGraphAppImpl:
                             from vitalgraph.process.maintenance_job import MaintenanceJob
                             
                             # Get PostgreSQL config for lock manager connection
-                            backend_type = self.config.get_backend_type()
+                            backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
                             if backend_type == 'sparql_sql':
                                 pg_config = self.config.get_sparql_sql_config().get('database', {})
                             else:

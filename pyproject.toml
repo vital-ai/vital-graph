@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vital-graph"
-version = "0.0.15"
+version = "0.0.17"
 authors = [
     {name = "Marc Hadfield", email = "marc@vital.ai"},
 ]
@@ -21,7 +21,7 @@ keywords = ["knowledge-graph", "rdf", "sparql", "database", "semantic-web"]
 
 # Core dependencies - minimal set for basic functionality
 dependencies = [
-    "vital-ai-vitalsigns>=0.1.49",
+    "vital-ai-vitalsigns>=0.1.50",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",

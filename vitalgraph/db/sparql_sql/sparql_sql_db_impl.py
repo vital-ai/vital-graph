@@ -107,7 +107,8 @@ class SparqlSQLDbImpl(DbImplInterface):
                 user=self.config.get('username', 'vitalgraph_user'),
                 password=self.config.get('password', 'vitalgraph_pass'),
                 min_size=self.config.get('min_pool_size', self.config.get('pool_size', 5)),
-                max_size=self.config.get('max_pool_size', self.config.get('pool_size', 10) + self.config.get('max_overflow', 20)),
+                max_size=self.config.get('max_pool_size', 15),
+                max_inactive_connection_lifetime=120.0,
                 command_timeout=self.config.get('command_timeout', 60),
             )
 
