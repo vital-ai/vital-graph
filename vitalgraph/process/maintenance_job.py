@@ -386,4 +386,6 @@ class MaintenanceJob:
             f"{space_id}_datatype",
             f"{space_id}_rdf_pred_stats",
             f"{space_id}_rdf_stats",
+            f"{space_id}_edge",
+            f"{space_id}_frame_entity",
         ]

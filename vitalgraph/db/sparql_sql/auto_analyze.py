@@ -1,8 +1,8 @@
 """Per-space row-change counter and automatic ANALYZE trigger.
 
 Tracks how many quad rows have been inserted or deleted since the last
-ANALYZE.  When the threshold is reached, runs ANALYZE on the main
-rdf_quad table and resets the counter.
+ANALYZE.  When the threshold is reached, runs ANALYZE on all per-space
+tables and resets the counter.
 
 This keeps PostgreSQL planner statistics fresh without requiring manual
 intervention or periodic cron jobs.
@@ -32,7 +32,7 @@ async def maybe_analyze(
     space_id: str,
     threshold: int = DEFAULT_ANALYZE_THRESHOLD,
 ) -> bool:
-    """Run ANALYZE on rdf_quad if the change count exceeds the threshold.
+    """Run ANALYZE on all per-space tables if the change count exceeds the threshold.
 
     Returns True if ANALYZE was run, False otherwise.
     Must be called with a connection NOT inside a transaction (ANALYZE
@@ -42,11 +42,20 @@ async def maybe_analyze(
     if count < threshold:
         return False
 
-    t_quad = f"{space_id}_rdf_quad"
+    tables = [
+        f"{space_id}_rdf_quad",
+        f"{space_id}_term",
+        f"{space_id}_edge",
+        f"{space_id}_frame_entity",
+        f"{space_id}_rdf_pred_stats",
+        f"{space_id}_rdf_stats",
+        f"{space_id}_datatype",
+    ]
     try:
-        await conn.execute(f"ANALYZE {t_quad}")
+        for tbl in tables:
+            await conn.execute(f"ANALYZE {tbl}")
         _change_counts[space_id] = 0
-        logger.debug("auto_analyze(%s): ANALYZE after %d row changes", space_id, count)
+        logger.debug("auto_analyze(%s): ANALYZE %d tables after %d row changes", space_id, len(tables), count)
         return True
     except Exception as e:
         logger.warning("auto_analyze(%s): ANALYZE failed: %s", space_id, e)

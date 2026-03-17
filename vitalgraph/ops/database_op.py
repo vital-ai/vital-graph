@@ -68,6 +68,8 @@ class DatabaseOp(GraphOp):
                 f"{sid}_datatype",
                 f"{sid}_rdf_pred_stats",
                 f"{sid}_rdf_stats",
+                f"{sid}_edge",
+                f"{sid}_frame_entity",
             ]
 
 

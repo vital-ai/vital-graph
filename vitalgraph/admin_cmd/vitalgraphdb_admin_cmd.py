@@ -1998,11 +1998,19 @@ Note: All commands must end with a semicolon (;)
                 await conn.execute(row['indexdef'])
         print(f"   Indexes recreated in {time.time() - idx_t0:.1f}s")
 
-        # --- ANALYZE ---
-        print("\n📊 Running ANALYZE...")
+        # --- Resync auxiliary tables (edge, frame_entity, stats) + ANALYZE ---
+        print("\n� Syncing auxiliary tables (edge, frame_entity, stats)...")
+        from vitalgraph.db.sparql_sql.resync_all import resync_all_auxiliary_tables
+        import time as _time
+        resync_t0 = _time.time()
         async with pool.acquire() as conn:
-            await conn.execute(f"ANALYZE {term_tbl}")
-            await conn.execute(f"ANALYZE {quad_tbl}")
+            resync_result = await resync_all_auxiliary_tables(conn, space_id)
+        resync_dt = _time.time() - resync_t0
+        print(f"   edge={resync_result['edge_rows']:,}, "
+              f"frame_entity={resync_result['frame_entity_rows']:,}, "
+              f"pred_stats={resync_result['pred_stats_rows']:,}, "
+              f"quad_stats={resync_result['quad_stats_rows']:,}  "
+              f"({resync_dt:.1f}s)")
 
         # --- register graph in admin tables ---
         async with pool.acquire() as conn:

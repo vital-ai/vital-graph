@@ -732,7 +732,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
                 t = SparqlSQLSchema.get_table_names(space_id)
                 async with self.backend.db_impl.connection_pool.acquire() as conn:
-                    for tbl in (t['rdf_quad'], t['term'], t['edge'], t['frame_entity']):
+                    for tbl in (t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
+                                t['rdf_pred_stats'], t['rdf_stats'], t['datatype']):
                         await conn.execute(f"ANALYZE {tbl}")
                 _t2a = _time.monotonic()
                 self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
