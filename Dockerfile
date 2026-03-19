@@ -34,6 +34,11 @@ COPY MANIFEST.in .
 # Install Python dependencies with server extras
 RUN pip install --no-cache-dir -e ".[server]"
 
+# Copy VitalSigns config and pre-warm registry cache (before code layers for caching)
+COPY vitalhome/ ./vitalhome/
+ENV VITAL_HOME=/app/vitalhome
+RUN python -c "from vital_ai_vitalsigns.vitalsigns import VitalSigns; VitalSigns()"
+
 # Copy the application code
 COPY vitalgraph/ ./vitalgraph/
 
@@ -42,11 +47,6 @@ COPY frontend/ ./frontend/
 
 # Build frontend (this will copy built files to vitalgraph/api/frontend/)
 RUN cd frontend && npm install --production=false && npm run build && npm cache clean --force
-
-COPY vitalhome/ ./vitalhome/
-
-# Set up VitalSigns configuration
-ENV VITAL_HOME=/app/vitalhome
 
 # Expose the default port (actual port is configurable via PORT environment variable at runtime)
 EXPOSE 8001

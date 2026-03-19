@@ -21,7 +21,7 @@ keywords = ["knowledge-graph", "rdf", "sparql", "database", "semantic-web"]
 
 # Core dependencies - minimal set for basic functionality
 dependencies = [
-    "vital-ai-vitalsigns>=0.1.50",
+    "vital-ai-vitalsigns>=0.1.51",
     "vital-ai-haley-kg>=0.1.24",
     "python-dotenv",
     "rdflib>=7.0.0",
