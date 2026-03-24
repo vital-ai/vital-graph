@@ -92,6 +92,15 @@ class KGQueriesEndpoint:
             query_type = query_request.criteria.query_type
             self.logger.info(f"Executing {query_type} query in space {space_id}, graph {graph_id}")
             
+            try:
+                from ..db.sparql_sql.auto_analyze import get_last_analyze_time
+                import time as _time
+                last_at = get_last_analyze_time(space_id)
+                age = f"{_time.monotonic() - last_at:.1f}s ago" if last_at is not None else "never"
+                self.logger.debug(f"last_analyze for '{space_id}': {age}")
+            except Exception:
+                pass
+            
             # Validate query type
             if query_type not in ["relation", "frame"]:
                 raise HTTPException(
@@ -100,7 +109,7 @@ class KGQueriesEndpoint:
                 )
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
             

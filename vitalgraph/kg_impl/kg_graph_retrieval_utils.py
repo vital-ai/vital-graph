@@ -287,6 +287,7 @@ class GraphObjectRetriever:
                     {{
                         # Get objects with same entity-level grouping URI
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
+                        FILTER(?s != <{entity_uri}>)
                         ?s ?p ?o .
                         {filter_clause}
                     }}
@@ -540,6 +541,7 @@ class GraphObjectRetriever:
                         ?entity a haley:KGEntity .
                         ?entity aimp:hasReferenceIdentifier "{reference_id}" .
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
+                        FILTER(?s != ?entity)
                         ?s ?p ?o .
                         {filter_clause}
                     }}
@@ -610,6 +612,7 @@ class GraphObjectRetriever:
                     UNION
                     {{
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> <{entity_uri}> .
+                        FILTER(?s != <{entity_uri}>)
                         ?s ?p ?o .
                         {filter_clause}
                     }}
@@ -657,6 +660,7 @@ class GraphObjectRetriever:
                         ?entity a haley:KGEntity .
                         ?entity aimp:hasReferenceIdentifier "{reference_id}" .
                         ?s <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?entity .
+                        FILTER(?s != ?entity)
                         ?s ?p ?o .
                         {filter_clause}
                     }}

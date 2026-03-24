@@ -153,7 +153,7 @@ class KGTypesEndpoint:
             self.logger.info(f"Listing KG types in space '{space_id}', graph '{graph_id}' for user '{current_user.get('username', 'unknown')}'")
             
             # Get complete document from atomic processor
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
             
@@ -204,7 +204,7 @@ class KGTypesEndpoint:
     ) -> QuadResultsResponse:
         """Get a specific KGType by URI."""
         try:
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
             
@@ -254,7 +254,7 @@ class KGTypesEndpoint:
         """Get multiple KGTypes by URI list."""
         try:
             uris = [u.strip() for u in uri_list.split(',') if u.strip()]
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
             
@@ -307,9 +307,11 @@ class KGTypesEndpoint:
                 raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
             kgtype_objects = typed_objects
 
-            if not self.space_manager or not self.space_manager.has_space(space_id):
+            if not self.space_manager:
                 raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             backend_adapter = create_backend_adapter(backend)
@@ -351,9 +353,11 @@ class KGTypesEndpoint:
                 raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
             kgtype_objects = typed_objects
 
-            if not self.space_manager or not self.space_manager.has_space(space_id):
+            if not self.space_manager:
                 raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             backend_adapter = create_backend_adapter(backend)
@@ -397,13 +401,6 @@ class KGTypesEndpoint:
                     detail="Space manager not available"
                 )
             
-            # Validate space exists (same as triples endpoint)
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
             # Validate that at least one deletion method is provided
             if not uri and not uri_list and not (document and document.graph):
                 raise HTTPException(
@@ -420,7 +417,7 @@ class KGTypesEndpoint:
                     # Delete single KGType by URI
                     # Ensure URI is a string (handle CombinedProperty from VitalSigns)
                     uri_str = str(uri) if uri else uri
-                    space_record = self.space_manager.get_space(space_id)
+                    space_record = await self.space_manager.get_space_or_load(space_id)
                     if not space_record:
                         raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
                     

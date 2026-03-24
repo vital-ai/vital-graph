@@ -62,6 +62,8 @@ class SpaceManager:
         self._spaces: Dict[str, SpaceRecord] = {}
         self._initialized = False
         self.signal_manager = None
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_interval: int = 60  # seconds, overridden by start_periodic_refresh()
         
         if space_backend:
             self.logger.info(f"SpaceManager initialized with space_backend: {type(space_backend).__name__}")
@@ -117,7 +119,12 @@ class SpaceManager:
                     try:
                         # Create generic SpaceImpl with the appropriate backend
                         backend = self.space_backend or self.db_impl
-                        space_impl = SpaceImpl(space_id=space_id, backend=backend)
+                        space_impl = SpaceImpl(
+                            space_id=space_id,
+                            backend=backend,
+                            space_name=space_data.get('space_name'),
+                            space_description=space_data.get('space_description'),
+                        )
                         
                         # Create SpaceRecord and add to registry
                         space_record = SpaceRecord(space_id=space_id, space_impl=space_impl)
@@ -513,7 +520,95 @@ class SpaceManager:
         exists = space_id in self._spaces
         self.logger.debug(f"has_space('{space_id}') returning {exists}")
         return exists
+
+    async def ensure_space_loaded(self, space_id: str) -> bool:
+        """
+        Ensure a space is loaded in the in-memory cache, with DB fallback.
+        
+        Checks the cache first. On a miss, queries the backend/DB to see if
+        the space exists there and lazily loads it into the cache.
+        
+        This should be used instead of has_space() in endpoint handlers to
+        avoid 404 errors when a space exists in the DB but was not loaded
+        during initialization (e.g. startup race, init failure, space created
+        by another process/container).
+        
+        Args:
+            space_id: Unique identifier of the space to check/load
+            
+        Returns:
+            True if space is available (was cached or successfully loaded),
+            False if space does not exist in either cache or DB
+        """
+        # Fast path: already in cache
+        if space_id in self._spaces:
+            return True
+
+        self.logger.info(f"ensure_space_loaded: cache miss for '{space_id}', checking backend...")
+
+        # Try to load from backend/DB
+        backend = self.space_backend or self.db_impl
+        if not backend:
+            self.logger.warning(f"ensure_space_loaded: no backend available to check '{space_id}'")
+            return False
+
+        try:
+            # Try to get full metadata for the space (name, description, etc.)
+            space_meta = None
+
+            if hasattr(backend, 'get_space_metadata'):
+                space_meta = await backend.get_space_metadata(space_id)
+            elif hasattr(backend, 'list_spaces'):
+                spaces = await backend.list_spaces()
+                for s in spaces:
+                    if (s.get('space_id') or s.get('space')) == space_id:
+                        space_meta = s
+                        break
+            elif hasattr(backend, 'space_exists'):
+                exists = await backend.space_exists(space_id)
+                if exists:
+                    space_meta = {'space_id': space_id}
+            else:
+                self.logger.warning(f"ensure_space_loaded: backend has no space lookup method")
+                return False
+
+            if not space_meta:
+                self.logger.debug(f"ensure_space_loaded: '{space_id}' not found in backend either")
+                return False
+
+            # Space exists in DB but not in cache — load it with metadata
+            space_impl = SpaceImpl(
+                space_id=space_id,
+                backend=backend,
+                space_name=space_meta.get('space_name'),
+                space_description=space_meta.get('space_description'),
+            )
+            space_record = SpaceRecord(space_id=space_id, space_impl=space_impl)
+            self._spaces[space_id] = space_record
+            self.logger.info(f"ensure_space_loaded: lazily loaded '{space_id}' into cache")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"ensure_space_loaded: error checking/loading '{space_id}': {e}")
+            return False
     
+    async def get_space_or_load(self, space_id: str) -> Optional['SpaceRecord']:
+        """
+        Get a space record, lazily loading from the DB on cache miss.
+        
+        Combines ensure_space_loaded() + get_space() in one async call.
+        Use this in endpoint handlers instead of get_space() to avoid 404
+        errors when a space exists in the DB but wasn't loaded at startup.
+        
+        Args:
+            space_id: Unique identifier of the space
+            
+        Returns:
+            SpaceRecord if found (in cache or DB), None otherwise
+        """
+        await self.ensure_space_loaded(space_id)
+        return self._spaces.get(space_id)
+
     async def get_space_info(self, space_id: str) -> Optional[Dict[str, Any]]:
         """
         Get detailed information about a space.
@@ -653,5 +748,114 @@ class SpaceManager:
                 self.logger.info("📥 Space '%s' removed from local registry via signal", space_id)
             except Exception as e:
                 self.logger.error("Failed to remove space '%s' from signal: %s", space_id, e)
-    
-    
+
+    # ── Periodic cache refresh ────────────────────────────────────────
+
+    async def start_periodic_refresh(self, interval_seconds: int = 60) -> None:
+        """
+        Start a background task that periodically syncs the in-memory space
+        cache with the database.  New spaces found in the DB are added to the
+        cache; spaces that no longer exist in the DB are removed.
+
+        Args:
+            interval_seconds: How often (in seconds) to refresh.  Defaults to 60.
+        """
+        if self._refresh_task is not None:
+            self.logger.warning("Periodic refresh already running — skipping duplicate start")
+            return
+
+        self._refresh_interval = interval_seconds
+        self._refresh_task = asyncio.create_task(self._periodic_refresh_loop())
+        self.logger.info(
+            "Started periodic space-cache refresh (interval=%ds)", interval_seconds
+        )
+
+    async def stop_periodic_refresh(self) -> None:
+        """Cancel the background refresh task, if running."""
+        if self._refresh_task is None:
+            return
+        self._refresh_task.cancel()
+        try:
+            await self._refresh_task
+        except asyncio.CancelledError:
+            pass
+        self._refresh_task = None
+        self.logger.info("Stopped periodic space-cache refresh")
+
+    async def _periodic_refresh_loop(self) -> None:
+        """Internal loop that runs until cancelled."""
+        while True:
+            try:
+                await asyncio.sleep(self._refresh_interval)
+                await self._refresh_cache_from_db()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error("Periodic space-cache refresh failed: %s", e)
+                # Keep running; next iteration will retry after the interval
+
+    async def _refresh_cache_from_db(self) -> None:
+        """
+        One-shot cache sync: query all spaces from the DB, add missing ones,
+        and remove stale ones that are no longer in the DB.
+        """
+        backend = self.space_backend or self.db_impl
+        if not backend or not hasattr(backend, 'list_spaces'):
+            return
+
+        try:
+            db_spaces = await backend.list_spaces()
+        except Exception as e:
+            self.logger.warning("_refresh_cache_from_db: list_spaces failed: %s", e)
+            return
+
+        db_space_map: Dict[str, dict] = {}
+        for s in db_spaces:
+            sid = s.get('space_id') or s.get('space')
+            if sid:
+                db_space_map[sid] = s
+
+        # Add spaces present in DB but missing from cache
+        added = 0
+        for sid, sdata in db_space_map.items():
+            if sid not in self._spaces:
+                try:
+                    space_impl = SpaceImpl(
+                        space_id=sid,
+                        backend=backend,
+                        space_name=sdata.get('space_name'),
+                        space_description=sdata.get('space_description'),
+                    )
+                    self._spaces[sid] = SpaceRecord(space_id=sid, space_impl=space_impl)
+                    added += 1
+                except Exception as e:
+                    self.logger.warning("_refresh_cache_from_db: failed to load '%s': %s", sid, e)
+            else:
+                # Refresh metadata for existing cached spaces
+                rec = self._spaces[sid]
+                db_name = sdata.get('space_name')
+                db_desc = sdata.get('space_description')
+                if db_name and hasattr(rec.space_impl, 'space_name'):
+                    rec.space_impl.space_name = db_name
+                if db_desc is not None and hasattr(rec.space_impl, 'space_description'):
+                    rec.space_impl.space_description = db_desc
+
+        # Remove spaces from cache that are no longer in DB
+        removed = 0
+        stale_ids = [sid for sid in self._spaces if sid not in db_space_map]
+        for sid in stale_ids:
+            record = self._spaces.pop(sid, None)
+            if record and hasattr(record.space_impl, 'close'):
+                try:
+                    await record.space_impl.close()
+                except Exception:
+                    pass
+            removed += 1
+
+        if added or removed:
+            self.logger.info(
+                "Periodic space-cache refresh: +%d added, -%d removed (total: %d)",
+                added, removed, len(self._spaces)
+            )
+
+

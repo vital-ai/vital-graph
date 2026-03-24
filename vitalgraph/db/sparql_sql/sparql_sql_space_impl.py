@@ -372,6 +372,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             logger.error("space_exists(%s) failed: %s", space_id, e)
             return False
 
+    async def get_space_metadata(self, space_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single space row from the space table, or None if not found."""
+        try:
+            rows = await self.db_impl.execute_query(
+                "SELECT space_id, space_name, space_description, tenant, update_time "
+                "FROM space WHERE space_id = $1",
+                [space_id],
+            )
+            return rows[0] if rows else None
+        except Exception as e:
+            logger.error("get_space_metadata(%s) failed: %s", space_id, e)
+            return None
+
     async def list_spaces(self) -> List[Dict[str, Any]]:
         """List all spaces from PostgreSQL admin tables."""
         try:
@@ -433,6 +446,35 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return True
         except Exception as e:
             logger.error("create_space_metadata(%s) failed: %s", space_id, e)
+            return False
+
+    async def update_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
+        """Update space_name and/or space_description in the space table."""
+        try:
+            sets = []
+            params = []
+            idx = 1
+
+            if 'space_name' in metadata:
+                sets.append(f"space_name = ${idx}")
+                params.append(metadata['space_name'])
+                idx += 1
+            if 'space_description' in metadata:
+                sets.append(f"space_description = ${idx}")
+                params.append(metadata['space_description'])
+                idx += 1
+
+            if not sets:
+                return True  # nothing to update
+
+            sets.append(f"update_time = NOW()")
+            params.append(space_id)
+
+            sql = f"UPDATE space SET {', '.join(sets)} WHERE space_id = ${idx}"
+            await self.db_impl.execute_query(sql, params)
+            return True
+        except Exception as e:
+            logger.error("update_space_metadata(%s) failed: %s", space_id, e)
             return False
 
     # ==================================================================

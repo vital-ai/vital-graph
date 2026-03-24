@@ -232,13 +232,20 @@ class VitalGraphAPI:
             )
         
         try:
-            # Check if space exists
-            space_record = self.space_manager.get_space(space_id)
+            # Check if space exists (with DB fallback on cache miss)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 logger.error(f"Space not found: {space_id}")
                 raise HTTPException(status_code=404, detail="Space not found")
             
-            # Update space metadata in SpaceImpl
+            # Persist to database
+            backend = self.space_manager.space_backend or self.space_manager.db_impl
+            if backend and hasattr(backend, 'update_space_metadata'):
+                db_ok = await backend.update_space_metadata(space_id, space_data)
+                if not db_ok:
+                    logger.warning(f"update_space: DB persist failed for '{space_id}'")
+
+            # Update in-memory cache too
             if hasattr(space_record.space_impl, 'space_name') and 'space_name' in space_data:
                 space_record.space_impl.space_name = space_data['space_name']
             if hasattr(space_record.space_impl, 'space_description') and 'space_description' in space_data:
@@ -312,8 +319,8 @@ class VitalGraphAPI:
             )
         
         try:
-            # Get space record
-            space_record = self.space_manager.get_space(space_id)
+            # Get space record (with DB fallback on cache miss)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if space_record:
                 # Call get_space_info to trigger backend operations like quad logging
                 # but don't use its return value - we construct our own response

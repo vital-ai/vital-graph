@@ -49,7 +49,7 @@ async def check_subject_uri_conflicts(space_manager, space_id: str, subject_uris
     
     try:
         # Get space implementation
-        space_record = space_manager.get_space(space_id)
+        space_record = await space_manager.get_space_or_load(space_id)
         if not space_record:
             raise ImplValidationError(f"Space '{space_id}' not found")
         
@@ -88,7 +88,7 @@ async def get_existing_quads_for_uris(space_manager, space_id: str, graph_id: st
     
     try:
         # Get space implementation
-        space_record = space_manager.get_space(space_id)
+        space_record = await space_manager.get_space_or_load(space_id)
         if not space_record:
             raise ImplValidationError(f"Space '{space_id}' not found")
         
@@ -128,7 +128,7 @@ async def execute_with_transaction(space_manager, space_id: str, operation_func,
     
     try:
         # Get space implementation
-        space_record = space_manager.get_space(space_id)
+        space_record = await space_manager.get_space_or_load(space_id)
         if not space_record:
             raise ImplValidationError(f"Space '{space_id}' not found")
         
@@ -163,7 +163,7 @@ async def get_db_space_impl(space_manager, space_id: str):
     Returns:
         Database space implementation
     """
-    space_record = space_manager.get_space(space_id)
+    space_record = await space_manager.get_space_or_load(space_id)
     if not space_record:
         raise ImplValidationError(f"Space {space_id} not found")
     

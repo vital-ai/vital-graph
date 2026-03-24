@@ -107,7 +107,7 @@ class KGFramesEndpoint:
     
     async def _get_backend_adapter(self, space_id: str):
         """Get backend adapter for the space."""
-        space_record = self.space_manager.get_space(space_id)
+        space_record = await self.space_manager.get_space_or_load(space_id)
         if not space_record:
             raise ValueError(f"Space not found: {space_id}")
         
@@ -154,7 +154,7 @@ class KGFramesEndpoint:
 
         try:
             # --- backend ---
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return _fail(f"Space {space_id} not found")
             space_impl = space_record.space_impl
@@ -305,7 +305,7 @@ class KGFramesEndpoint:
     async def _get_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, current_user: Dict, page_size: int = 10, offset: int = 0):
         """Get frames associated with a specific entity."""
         try:
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
@@ -687,7 +687,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
@@ -726,7 +726,7 @@ class KGFramesEndpoint:
             self.logger.info(f"🔍 Getting KGFrame {uri} from space {space_id}, graph {graph_id}, include_frame_graph={include_frame_graph}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 self.logger.warning(f"❌ Space not found: {space_id}")
                 return QuadResultsResponse(results=[], total_count=0)
@@ -780,7 +780,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Getting KGFrames with slots in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
@@ -864,7 +864,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Querying frames in space {space_id}, graph {graph_id} with criteria: {query_request}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameQueryResponse(
                     frame_uris=[],
@@ -937,7 +937,7 @@ class KGFramesEndpoint:
             self.logger.info(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameDeleteResponse(
                     success=False,
@@ -1003,7 +1003,7 @@ class KGFramesEndpoint:
             self.logger.info(f"Deleting {len(uris)} frames from space {space_id}, graph {graph_id}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameDeleteResponse(
                     success=False,
@@ -1059,7 +1059,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Getting slots for frame {frame_uri} in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return []
             
@@ -1086,7 +1086,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Creating slots for frame {frame_uri} with operation_mode {operation_mode}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotCreateResponse(
                     success=False,
@@ -1169,7 +1169,7 @@ class KGFramesEndpoint:
         try:
             self.logger.info(f"Updating slots for frame {frame_uri} in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotUpdateResponse(
                     success=False,
@@ -1246,7 +1246,7 @@ class KGFramesEndpoint:
             self.logger.info(f"Deleting {len(slot_uris)} slots from frame {frame_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotDeleteResponse(
                     success=False,

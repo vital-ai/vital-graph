@@ -11,12 +11,16 @@ intervention or periodic cron jobs.
 from __future__ import annotations
 
 import logging
-from typing import Dict
+import time
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # Per-space counters: space_id → number of rows changed since last ANALYZE
 _change_counts: Dict[str, int] = {}
+
+# Per-space timestamp of the last ANALYZE run (monotonic seconds)
+_last_analyze_time: Dict[str, float] = {}
 
 # Default threshold: ANALYZE after this many row changes
 DEFAULT_ANALYZE_THRESHOLD = 1000
@@ -55,6 +59,7 @@ async def maybe_analyze(
         for tbl in tables:
             await conn.execute(f"ANALYZE {tbl}")
         _change_counts[space_id] = 0
+        _last_analyze_time[space_id] = time.monotonic()
         logger.debug("auto_analyze(%s): ANALYZE %d tables after %d row changes", space_id, len(tables), count)
         return True
     except Exception as e:
@@ -70,3 +75,21 @@ def reset_counter(space_id: str) -> None:
 def get_counter(space_id: str) -> int:
     """Get the current change count for a space."""
     return _change_counts.get(space_id, 0)
+
+
+def was_analyzed_recently(space_id: str, max_age_seconds: float = 10.0) -> bool:
+    """Return True if ANALYZE was run for this space within the last *max_age_seconds*."""
+    last = _last_analyze_time.get(space_id)
+    if last is None:
+        return False
+    return (time.monotonic() - last) < max_age_seconds
+
+
+def set_last_analyze_time(space_id: str) -> None:
+    """Manually mark that ANALYZE was just run for this space."""
+    _last_analyze_time[space_id] = time.monotonic()
+
+
+def get_last_analyze_time(space_id: str) -> Optional[float]:
+    """Return the monotonic timestamp of the last ANALYZE, or None."""
+    return _last_analyze_time.get(space_id)

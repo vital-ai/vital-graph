@@ -310,6 +310,14 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"Process scheduler initialization failed: {e}")
                     
+                    # Start periodic space-cache refresh
+                    try:
+                        cache_refresh_interval = self.config.config_data.get('space_cache', {}).get('refresh_interval_seconds', 60)
+                        await self.space_manager.start_periodic_refresh(interval_seconds=cache_refresh_interval)
+                        self.logger.info(f"✅ Space cache periodic refresh started (interval={cache_refresh_interval}s)")
+                    except Exception as e:
+                        self.logger.warning(f"Space cache periodic refresh failed to start: {e}")
+
                     # Endpoints are already initialized in __init__
                     # SpaceManager is now fully initialized and connected
                     self.logger.info("SpaceManager ready for endpoint operations")
@@ -423,6 +431,14 @@ class VitalGraphAppImpl:
             self.logger.info("🛑 Shutting down VitalGraph server...")
             
             try:
+                # Stop periodic space-cache refresh
+                if self.space_manager:
+                    try:
+                        await self.space_manager.stop_periodic_refresh()
+                        self.logger.info("✅ Space cache periodic refresh stopped")
+                    except Exception as e:
+                        self.logger.warning(f"Error stopping space cache refresh: {e}")
+
                 # Stop process scheduler
                 if self.process_scheduler:
                     try:

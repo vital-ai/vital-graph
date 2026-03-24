@@ -169,7 +169,7 @@ class KGRelationsEndpoint:
         try:
             self.logger.info(f"Listing KG Relations in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
             
@@ -215,7 +215,7 @@ class KGRelationsEndpoint:
         try:
             self.logger.info(f"Getting KG Relation {relation_uri} in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
             
@@ -270,7 +270,7 @@ class KGRelationsEndpoint:
                 raise HTTPException(status_code=400, detail="No valid Edge/relation objects found in request")
 
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
             space_impl = space_record.space_impl
@@ -311,7 +311,7 @@ class KGRelationsEndpoint:
             self.logger.info(f"Deleting KG Relations in space {space_id}, graph {graph_id}: {request.relation_uris}")
             
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
             
@@ -344,7 +344,7 @@ class KGRelationsEndpoint:
             self.logger.info(f"Querying KG Relations in space {space_id}, graph {graph_id} with criteria: {query_request.criteria}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
             
@@ -493,9 +493,9 @@ class KGRelationsEndpoint:
         # TODO: Implement validation logic
         pass
     
-    def _get_backend_adapter(self, space_id: str):
+    async def _get_backend_adapter(self, space_id: str):
         """Get wrapped backend adapter for a space, consistent with other endpoints."""
-        space_record = self.space_manager.get_space(space_id)
+        space_record = await self.space_manager.get_space_or_load(space_id)
         if not space_record:
             return None
         
@@ -511,7 +511,7 @@ class KGRelationsEndpoint:
         if not relations:
             return []
         
-        backend = self._get_backend_adapter(space_id)
+        backend = await self._get_backend_adapter(space_id)
         if not backend:
             return []
         
@@ -540,7 +540,7 @@ class KGRelationsEndpoint:
         if not relations:
             return []
         
-        backend = self._get_backend_adapter(space_id)
+        backend = await self._get_backend_adapter(space_id)
         if not backend:
             return []
         
@@ -593,7 +593,7 @@ class KGRelationsEndpoint:
         if not relations:
             return []
         
-        backend = self._get_backend_adapter(space_id)
+        backend = await self._get_backend_adapter(space_id)
         if not backend:
             return []
         

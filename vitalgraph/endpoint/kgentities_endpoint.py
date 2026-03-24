@@ -273,7 +273,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Listing KGEntities from space {space_id}, graph {graph_id}")
             
             # Backend setup
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
@@ -340,7 +340,7 @@ class KGEntitiesEndpoint:
                 raise ValueError("Either uri or reference_id must be provided")
             
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResultsResponse(results=[], total_count=0)
             
@@ -409,7 +409,7 @@ class KGEntitiesEndpoint:
                 raise ValueError("Either uris or reference_ids must be provided")
             
             # Get backend
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=len(identifiers), offset=0)
             space_impl = space_record.space_impl
@@ -476,7 +476,7 @@ class KGEntitiesEndpoint:
                     return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
                 return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
 
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 msg = f"Space {space_id} not found"
                 if operation_mode == OperationMode.CREATE:
@@ -692,7 +692,7 @@ class KGEntitiesEndpoint:
                 )
             
             # Backend setup (following established pattern)
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return EntityDeleteResponse(
                     message=f"Space {space_id} not found",
@@ -782,7 +782,7 @@ class KGEntitiesEndpoint:
                 )
             
             # Backend setup (following established pattern)
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return EntityDeleteResponse(
                     message=f"Space {space_id} not found",
@@ -864,7 +864,7 @@ class KGEntitiesEndpoint:
         try:
             self.logger.debug(f"Getting KGEntity frames in space {space_id}, graph {graph_id}, entity_uri {entity_uri}, frame_uris {frame_uris}, parent_frame_uri {parent_frame_uri}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
@@ -914,7 +914,7 @@ class KGEntitiesEndpoint:
         try:
             self.logger.debug(f"Getting individual frame {frame_uri} from space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 class FrameResponse:
                     def __init__(self, graph): self.graph = []
@@ -981,7 +981,7 @@ class KGEntitiesEndpoint:
             
             self.logger.debug(f"Creating/updating frames for entity {entity_uri} in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
@@ -1094,7 +1094,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
             
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
@@ -1182,7 +1182,7 @@ class KGEntitiesEndpoint:
             mode_str = operation_mode.value if hasattr(operation_mode, 'value') else str(operation_mode)
             self.logger.debug(f"Processing entity frames for {entity_uri} in space {space_id}, graph {graph_id}, mode '{mode_str}'")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameCreateResponse(
                     success=False,
@@ -1357,7 +1357,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}")
             
             # Get backend implementation via generic interface
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
@@ -1465,7 +1465,7 @@ class KGEntitiesEndpoint:
             else:
                 self.logger.debug(f"Updating TOP-LEVEL entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
@@ -1788,7 +1788,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Query request: {query_request.model_dump_json()}")
             self.logger.debug(f"Query criteria: {query_request.criteria}")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
             
@@ -2046,7 +2046,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Updating entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             self.logger.debug(f"Received {len(graph_objects) if graph_objects else 0} VitalSigns objects")
             
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
@@ -2117,7 +2117,7 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}")
             
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(

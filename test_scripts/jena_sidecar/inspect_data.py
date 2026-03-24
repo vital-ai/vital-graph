@@ -15,7 +15,21 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from vitalgraph_sparql_sql.db import get_connection, execute_query, execute_scalar
+import psycopg
+import psycopg.rows
+
+
+def _get_sync_connection():
+    """Open a synchronous psycopg connection using PG* env vars."""
+    import os
+    return psycopg.connect(
+        host=os.environ.get('PGHOST', 'localhost'),
+        port=int(os.environ.get('PGPORT', '5432')),
+        dbname=os.environ.get('PGDATABASE', 'sparql_sql_graph'),
+        user=os.environ.get('PGUSER', 'postgres'),
+        password=os.environ.get('PGPASSWORD', ''),
+        row_factory=psycopg.rows.dict_row,
+    )
 
 
 def discover_spaces(conn):
@@ -286,7 +300,7 @@ def main():
     print("SPARQL-to-SQL Data Inspection")
     print("=" * 70)
 
-    with get_connection() as conn:
+    with _get_sync_connection() as conn:
         # Test connection
         cur = conn.cursor()
         cur.execute("SELECT version()")

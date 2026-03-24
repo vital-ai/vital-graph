@@ -58,7 +58,7 @@ MAX_FILES = 100
 SAMPLE_SIZE = 5
 
 # Set to True to skip bulk load and use previously loaded data
-SKIP_LOAD = False
+SKIP_LOAD = True
 # Set to True to delete the space at the end (False to preserve for inspection)
 DELETE_SPACE_AT_END = False
 

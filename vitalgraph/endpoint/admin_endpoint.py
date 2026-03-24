@@ -48,7 +48,7 @@ class AdminEndpoint:
             Use after bulk loads, disaster recovery, or manual DB edits.
             """
             # Get backend implementation
-            space_record = self.space_manager.get_space(space_id)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
 

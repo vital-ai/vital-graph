@@ -728,15 +728,22 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             # freshly-loaded data.  Without this, complex multi-join queries
             # (e.g. KGQuery relation queries with frame/slot filters) choose
             # catastrophically bad join orders — up to 9× slower.
+            # Skip if ANALYZE already ran for this space within the last 10s
+            # (e.g. from auto_analyze threshold or a previous store_objects call).
             try:
-                from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-                t = SparqlSQLSchema.get_table_names(space_id)
-                async with self.backend.db_impl.connection_pool.acquire() as conn:
-                    for tbl in (t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
-                                t['rdf_pred_stats'], t['rdf_stats'], t['datatype']):
-                        await conn.execute(f"ANALYZE {tbl}")
-                _t2a = _time.monotonic()
-                self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
+                from ..db.sparql_sql.auto_analyze import was_analyzed_recently, set_last_analyze_time
+                if was_analyzed_recently(space_id, max_age_seconds=10.0):
+                    self.logger.debug("⏱️  BACKEND ANALYZE: skipped (ran within 10s)")
+                else:
+                    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+                    t = SparqlSQLSchema.get_table_names(space_id)
+                    async with self.backend.db_impl.connection_pool.acquire() as conn:
+                        for tbl in (t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
+                                    t['rdf_pred_stats'], t['rdf_stats'], t['datatype']):
+                            await conn.execute(f"ANALYZE {tbl}")
+                    set_last_analyze_time(space_id)
+                    _t2a = _time.monotonic()
+                    self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
             except Exception as ae:
                 self.logger.warning("ANALYZE after bulk insert failed (non-fatal): %s", ae)
 

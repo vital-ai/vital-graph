@@ -111,19 +111,12 @@ class TriplesEndpoint:
                     detail="Space manager not available"
                 )
             
-            # Validate space exists
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
-            # Get space record and implementation
-            space_record = self.space_manager.get_space(space_id)
+            # Validate space exists (with DB fallback on cache miss)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Space '{space_id}' not available"
+                    detail=f"Space '{space_id}' not found"
                 )
             
             space_impl = space_record.space_impl
@@ -239,19 +232,12 @@ class TriplesEndpoint:
                     detail="Space manager not available"
                 )
             
-            # Validate space exists
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
-            # Get space record and implementation
-            space_record = self.space_manager.get_space(space_id)
+            # Validate space exists (with DB fallback on cache miss)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Space '{space_id}' not available"
+                    detail=f"Space '{space_id}' not found"
                 )
             
             space_impl = space_record.space_impl
@@ -315,19 +301,12 @@ class TriplesEndpoint:
                     detail="Space manager not available"
                 )
             
-            # Validate space exists
-            if not self.space_manager.has_space(space_id):
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
-                )
-            
-            # Get space record and implementation
-            space_record = self.space_manager.get_space(space_id)
+            # Validate space exists (with DB fallback on cache miss)
+            space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Space '{space_id}' not available"
+                    detail=f"Space '{space_id}' not found"
                 )
             
             space_impl = space_record.space_impl
