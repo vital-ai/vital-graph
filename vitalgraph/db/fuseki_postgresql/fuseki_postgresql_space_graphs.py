@@ -66,18 +66,13 @@ class FusekiPostgreSQLSpaceGraphs:
             try:
                 signal_manager = self.space_impl.get_signal_manager()
                 if signal_manager:
-                    # Import signal constants
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
-                    
-                    # Notify graph changes (async task to avoid blocking)
-                    import asyncio
-                    asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_CREATED))
-                    asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED))
+                    await signal_manager.notify_graphs_changed(SIGNAL_TYPE_CREATED)
+                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED)
                     self.logger.debug(f"Sent notifications for graph creation: {graph_uri}")
                 else:
                     self.logger.warning("No SignalManager available for notifications")
             except Exception as e:
-                # Log but don't fail the operation if notification fails
                 self.logger.warning(f"Failed to send graph creation notifications: {e}")
             
             return True
@@ -117,18 +112,13 @@ class FusekiPostgreSQLSpaceGraphs:
             try:
                 signal_manager = self.space_impl.get_signal_manager()
                 if signal_manager:
-                    # Import signal constants
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
-                    
-                    # Notify graph changes (async task to avoid blocking)
-                    import asyncio
-                    asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_DELETED))
-                    asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED))
+                    await signal_manager.notify_graphs_changed(SIGNAL_TYPE_DELETED)
+                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED)
                     self.logger.debug(f"Sent notifications for graph deletion: {graph_uri}")
                 else:
                     self.logger.warning("No SignalManager available for notifications")
             except Exception as e:
-                # Log but don't fail the operation if notification fails
                 self.logger.warning(f"Failed to send graph deletion notifications: {e}")
             
             return True
@@ -162,18 +152,13 @@ class FusekiPostgreSQLSpaceGraphs:
                 try:
                     signal_manager = self.space_impl.get_signal_manager()
                     if signal_manager:
-                        # Import signal constants
                         from vitalgraph.signal.signal_manager import SIGNAL_TYPE_UPDATED
-                        
-                        # Notify graph changes (async task to avoid blocking)
-                        import asyncio
-                        asyncio.create_task(signal_manager.notify_graphs_changed(SIGNAL_TYPE_UPDATED))
-                        asyncio.create_task(signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED))
+                        await signal_manager.notify_graphs_changed(SIGNAL_TYPE_UPDATED)
+                        await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED)
                         self.logger.debug(f"Sent notifications for graph clear: {graph_uri}")
                     else:
                         self.logger.warning("No SignalManager available for notifications")
                 except Exception as e:
-                    # Log but don't fail the operation if notification fails
                     self.logger.warning(f"Failed to send graph clear notifications: {e}")
             
             return success

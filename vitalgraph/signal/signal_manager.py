@@ -2,11 +2,9 @@
 import asyncio
 import json
 import logging
-import psycopg
-import threading
+import asyncpg
 from asyncio import Task
-from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, Callable, Any, Set, Union, Awaitable
+from typing import Dict, List, Optional, Callable, Set, Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +17,7 @@ CHANNEL_SPACE = "vitalgraph_space"
 CHANNEL_GRAPH = "vitalgraph_graph"
 CHANNEL_ENTITY_DEDUP = "vitalgraph_entity_dedup"
 CHANNEL_PROCESS = "vitalgraph_process"
+CHANNEL_CACHE_INVALIDATE = "vitalgraph_cache_invalidate"
 
 # Signal types
 SIGNAL_TYPE_CREATED = "created"
@@ -59,6 +58,7 @@ class SignalManager:
             CHANNEL_GRAPH: [],
             CHANNEL_ENTITY_DEDUP: [],
             CHANNEL_PROCESS: [],
+            CHANNEL_CACHE_INVALIDATE: [],
         }
         
         # Set of channels we're currently listening to
@@ -69,65 +69,20 @@ class SignalManager:
     
     def _is_connection_closed(self, connection) -> bool:
         """
-        Check if a connection is closed, handling different connection types.
+        Check if an asyncpg connection is closed.
         
         Args:
-            connection: Database connection object
+            connection: asyncpg connection object
             
         Returns:
             bool: True if connection is closed or None, False if open
         """
         if connection is None:
             return True
-            
-        # Handle different connection types
         try:
-            # psycopg3 async connections have .closed attribute
-            if hasattr(connection, 'closed'):
-                return connection.closed
-            # Some connection types might have is_closed() method
-            elif hasattr(connection, 'is_closed'):
-                return connection.is_closed()
-            # Some connection types might have _closed attribute
-            elif hasattr(connection, '_closed'):
-                return connection._closed
-            else:
-                # If we can't determine, assume it's open
-                return False
+            return connection.is_closed()
         except Exception:
-            # If any error occurs checking status, assume closed
             return True
-    
-    def _commit_connection(self, connection) -> bool:
-        """
-        Commit a transaction on a connection, handling different connection types.
-        
-        Args:
-            connection: Database connection object
-            
-        Returns:
-            bool: True if commit succeeded, False otherwise
-        """
-        if connection is None:
-            return False
-            
-        # Handle different connection types
-        try:
-            # Most connections have commit() method
-            if hasattr(connection, 'commit'):
-                connection.commit()
-                return True
-            # Some async connections might use different methods
-            elif hasattr(connection, 'commit_async'):
-                connection.commit_async()
-                return True
-            # Some connections might auto-commit
-            else:
-                # If no commit method, assume auto-commit or not needed
-                return True
-        except Exception as e:
-            self.logger.debug(f"Error committing connection: {e}")
-            return False
     
     def _register_default_logging_callbacks(self):
         """Register default logging callbacks for all notification channels."""
@@ -209,7 +164,10 @@ class SignalManager:
             
         # Close listen connection
         if self.listen_connection and not self._is_connection_closed(self.listen_connection):
-            self.listen_connection.close()
+            try:
+                await self.listen_connection.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing listen connection: {e}")
             self.listen_connection = None
             
         # Close notify connection
@@ -217,124 +175,77 @@ class SignalManager:
             
         self.logger.info("PostgreSQL notification listener stopped")
     
+    def _get_db_config(self) -> dict:
+        """Extract database config dict from db_impl."""
+        if hasattr(self.db_impl, 'config'):
+            if hasattr(self.db_impl.config, 'get_database_config'):
+                return self.db_impl.config.get_database_config()
+            else:
+                return self.db_impl.config
+        raise AttributeError(f"Backend {type(self.db_impl)} has no config for building connection")
+
+    async def _create_dedicated_connection(self) -> asyncpg.Connection:
+        """Create a dedicated asyncpg connection (not from the pool) for signal operations."""
+        db_config = self._get_db_config()
+        return await asyncpg.connect(
+            host=db_config.get('host', 'localhost'),
+            port=db_config.get('port', 5432),
+            database=db_config.get('database', 'vitalgraph'),
+            user=db_config.get('username', 'vitalgraph_user'),
+            password=db_config.get('password', 'vitalgraph_pass'),
+            command_timeout=60,
+        )
+
     async def _listen_for_notifications(self):
-        """Background task that listens for PostgreSQL notifications."""
+        """Background task that listens for PostgreSQL notifications using asyncpg."""
         retry_delay = 1
         max_retry_delay = 30
         
         while self.running:
             self.listen_connection = None
             try:
-                # Create a dedicated connection for notifications (not from pool)
-                self.logger.debug("Creating dedicated connection for notifications")
-                # Get database config - handle both dict and VitalGraphConfig object
-                if hasattr(self.db_impl.config, 'get_database_config'):
-                    db_config = self.db_impl.config.get_database_config()
-                else:
-                    # Assume it's already a dict with database config
-                    db_config = self.db_impl.config
-                conn_str = f"postgresql://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
+                self.listen_connection = await self._create_dedicated_connection()
+                retry_delay = 1  # Reset on successful connect
                 
-                import psycopg
-                # Use async connection for proper notification handling
-                self.listen_connection = await psycopg.AsyncConnection.connect(conn_str)
-                self.logger.debug(f"Got dedicated async connection: {self.listen_connection}")
-                await self.listen_connection.set_autocommit(True)
+                # Define the notification handler that asyncpg will call
+                def notification_handler(connection, pid, channel, payload):
+                    asyncio.create_task(
+                        self._process_notification_async(connection, pid, channel, payload)
+                    )
                 
-                # Reset retry delay on successful connection
-                retry_delay = 1
-                
-                # Note: We don't need add_notify_handler since we're actively consuming notifies()
-                # The active consumption pattern is more reliable than passive handlers
-                self.logger.info("🔔 DEBUG: Using active notification consumption (no handler needed)")
-                
-                # DEBUG: Show exactly what channels we have
-                all_channels = list(self.callbacks.keys())
-                self.logger.debug(f"🔔 SignalManager has {len(all_channels)} channels: {all_channels}")
-                
-                # Listen on all channels using async cursor
+                # Register listener for each channel using asyncpg add_listener
                 for channel in self.callbacks.keys():
                     try:
-                        async with self.listen_connection.cursor() as cursor:
-                            await cursor.execute(f"LISTEN {channel}")
-                        self.logger.debug(f"🔔 Executed LISTEN {channel} on async connection")
+                        await self.listen_connection.add_listener(channel, notification_handler)
+                        self.logger.debug(f"🔔 Added asyncpg listener for channel: {channel}")
                     except Exception as e:
-                        self.logger.error(f"Error executing LISTEN {channel}: {e}")
-                        self.logger.error(f"🔔 Error executing LISTEN {channel}: {e}")
+                        self.logger.error(f"Error adding listener for {channel}: {e}")
                     
                 self.active_channels = set(self.callbacks.keys())
+                self.logger.info(
+                    f"PostgreSQL notification listener connected, "
+                    f"listening on {len(self.active_channels)} channels"
+                )
                 
-                self.logger.info(f"PostgreSQL notification listener connected, listening on {len(self.active_channels)} channels")
-                self.logger.debug(f"🔔 Listening setup complete. Registered callbacks: {list(self.callbacks.keys())}")
-                self.logger.debug(f"🔔 Connection supports notifies: {hasattr(self.listen_connection, 'notifies')}")
-                self.logger.debug(f"🔔 Final channel list: {list(self.active_channels)}")
-                
-                # Keep connection alive until we're told to stop
-                self.logger.info("Notification listener running - keeping connection alive")
-                self.logger.info(f" Starting notification listener loop")
-                
-                # Create the async generator ONCE and reuse it across iterations
-                # to avoid creating/discarding generator objects every second
-                gen = self.listen_connection.notifies()
-                debug_counter = 0
-                
+                # Keep connection alive — asyncpg delivers notifications via the handler
                 while self.running:
-                    try:
-                        try:
-                            # Wait for notification with timeout using the persistent generator
-                            notify = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-                            
-                            self.logger.debug(f"🔔 Notification received: channel={notify.channel}, payload={notify.payload}, pid={notify.pid}")
-                            
-                            # Process the notification through our handler
-                            await self._process_notification_async(self.listen_connection, notify.pid, notify.channel, notify.payload)
-                            
-                        except asyncio.TimeoutError:
-                            # Timeout is expected - no notifications in the last second
-                            pass
-                        except StopAsyncIteration:
-                            # Generator exhausted, recreate it
-                            gen = self.listen_connection.notifies()
-                        
-                        debug_counter += 1
-                        if debug_counter % 10 == 0:  # Log every 10 seconds
-                            self.logger.debug(f"🔔 Listener still running, callbacks registered: {sum(len(cbs) for cbs in self.callbacks.values())}")
-                            
-                    except Exception as e:
-                        self.logger.error(f"Error in notification listener loop: {str(e)}")
-                        import traceback
-                        self.logger.error(f"Traceback: {traceback.format_exc()}")
-                        break
+                    await asyncio.sleep(1.0)
                     
+            except asyncio.CancelledError:
+                self.logger.debug("Listen task cancelled")
+                return
             except Exception as e:
-                self.logger.error(f"Error in notification listener: {str(e)}")
-                
-                # Clear active channels
+                self.logger.error(f"Error in notification listener: {e}")
                 self.active_channels.clear()
-                
-                # Clean up async connection if it exists
-                if hasattr(self, 'listen_connection') and self.listen_connection:
-                    try:
-                        if not self._is_connection_closed(self.listen_connection):
-                            self.logger.debug("Closing async connection after error")
-                            await self.listen_connection.close()
-                    except Exception:
-                        pass
-                    self.listen_connection = None
-                
             finally:
-                # Clean up dedicated async connection
-                if hasattr(self, 'listen_connection') and self.listen_connection:
+                if self.listen_connection and not self._is_connection_closed(self.listen_connection):
                     try:
-                        if not self._is_connection_closed(self.listen_connection):
-                            self.logger.debug("Closing dedicated async notification connection")
-                            await self.listen_connection.close()
+                        await self.listen_connection.close()
                     except Exception as e:
-                        self.logger.error(f"Error closing dedicated connection: {e}")
-                    finally:
-                        self.listen_connection = None
+                        self.logger.debug(f"Error closing listen connection: {e}")
+                    self.listen_connection = None
                         
-            # Only retry if we're still supposed to be running
+            # Retry if still supposed to be running
             if self.running:
                 self.logger.info(f"Reconnecting in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
@@ -407,7 +318,6 @@ class SignalManager:
             # Parse JSON payload if it's a string
             if isinstance(payload, str):
                 try:
-                    import json
                     data = json.loads(payload)
                 except json.JSONDecodeError:
                     self.logger.warning(f"Failed to parse JSON payload: {payload}")
@@ -419,9 +329,7 @@ class SignalManager:
             await self._execute_callbacks(channel, data)
             
         except Exception as e:
-            self.logger.error(f"Error processing notification: {str(e)}")
-            import traceback
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self.logger.error(f"Error processing notification: {e}", exc_info=True)
     
     def register_callback(self, channel: str, callback: Callable[[dict], Awaitable[None]]):
         """
@@ -446,14 +354,20 @@ class SignalManager:
         total_callbacks = sum(len(cbs) for cbs in self.callbacks.values())
         self.logger.debug(f"Total callbacks across all channels: {total_callbacks}")
         
-        # If we're already listening, make sure we're listening on this channel
+        # If we're already listening, dynamically add listener for this channel
         if self.running and self.listen_connection and not self._is_connection_closed(self.listen_connection):
-            # Use async cursor for LISTEN command
-            async def listen_on_channel():
-                async with self.listen_connection.cursor() as cursor:
-                    await cursor.execute(f"LISTEN {channel}")
-            asyncio.create_task(listen_on_channel())
-            self.logger.debug(f"🔔 Executed LISTEN {channel} on async connection")
+            async def add_channel_listener():
+                try:
+                    def notification_handler(connection, pid, ch, payload):
+                        asyncio.create_task(
+                            self._process_notification_async(connection, pid, ch, payload)
+                        )
+                    await self.listen_connection.add_listener(channel, notification_handler)
+                    self.active_channels.add(channel)
+                    self.logger.debug(f"🔔 Dynamically added asyncpg listener for channel: {channel}")
+                except Exception as e:
+                    self.logger.error(f"Error dynamically adding listener for {channel}: {e}")
+            asyncio.create_task(add_channel_listener())
     
     async def notify_users_changed(self, signal_type: str = SIGNAL_TYPE_UPDATED):
         """
@@ -529,43 +443,43 @@ class SignalManager:
             "timestamp": str(asyncio.get_event_loop().time())
         })
         await self._send_notification(CHANNEL_GRAPH, payload)
+
+    async def notify_cache_invalidate(self, cache_type: str, space_id: str):
+        """
+        Send a cache invalidation signal to all instances.
+        
+        Args:
+            cache_type: Which cache to invalidate ("datatype" or "stats")
+            space_id: Space whose cache entry should be invalidated
+        """
+        payload = json.dumps({
+            "cache_type": cache_type,
+            "space_id": space_id,
+            "timestamp": str(asyncio.get_event_loop().time()),
+        })
+        await self._send_notification(CHANNEL_CACHE_INVALIDATE, payload)
     
     async def _init_notify_connection(self):
         """
-        Initialize a persistent connection for sending notifications.
+        Initialize a dedicated asyncpg connection for sending notifications.
+        asyncpg runs in autocommit mode by default — NOTIFY is sent immediately.
         """
         try:
-            # Handle different backend types
-            if hasattr(self.db_impl, 'rdf_pool'):
-                # Standard PostgreSQL backend
-                self.notify_connection = self.db_impl.rdf_pool.getconn()
-            elif hasattr(self.db_impl, 'connection_pool'):
-                # Hybrid FusekiPostgreSQLDbImpl backend
-                self.notify_connection = await self.db_impl.connection_pool.acquire()
-            else:
-                raise AttributeError(f"Backend {type(self.db_impl)} doesn't have a supported connection pool")
-            
-            self.logger.info(f"Initialized persistent notification connection ID: {id(self.notify_connection)}")
+            self.notify_connection = await self._create_dedicated_connection()
+            self.logger.info("Initialized dedicated asyncpg NOTIFY connection")
         except Exception as e:
-            self.logger.error(f"Failed to initialize notification connection: {str(e)}")
+            self.logger.error(f"Failed to initialize notification connection: {e}")
             self.notify_connection = None
             raise
 
     async def _close_notify_connection(self):
         """
-        Close the persistent notification connection.
+        Close the dedicated NOTIFY connection.
         """
         if self.notify_connection and not self._is_connection_closed(self.notify_connection):
             try:
-                # Handle different backend types
-                if hasattr(self.db_impl, 'rdf_pool'):
-                    # Standard PostgreSQL backend - no await needed for this pool
-                    self.db_impl.rdf_pool.putconn(self.notify_connection)
-                elif hasattr(self.db_impl, 'connection_pool'):
-                    # Hybrid FusekiPostgreSQLDbImpl backend - await needed for asyncpg pool
-                    await self.db_impl.connection_pool.release(self.notify_connection)
-                
-                self.logger.info("Closed persistent notification connection")
+                await self.notify_connection.close()
+                self.logger.info("Closed dedicated NOTIFY connection")
             except Exception as e:
                 self.logger.error(f"Error closing notification connection: {str(e)}")
             finally:
@@ -573,7 +487,7 @@ class SignalManager:
             
     async def _send_notification(self, channel: str, payload: str):
         """
-        Send a notification via PostgreSQL NOTIFY using an async connection.
+        Send a notification via PostgreSQL NOTIFY using a dedicated asyncpg connection.
         
         Args:
             channel: The notification channel
@@ -586,18 +500,19 @@ class SignalManager:
                 if self.notify_connection is None or self._is_connection_closed(self.notify_connection):
                     await self._init_notify_connection()
                 if self.notify_connection:
-                    self.logger.info(f"🔔 Using notification connection ID: {id(self.notify_connection)}")
-                    # Send the notification - PostgreSQL NOTIFY requires payload to be embedded directly
                     # Escape single quotes in payload to prevent SQL injection
                     escaped_payload = payload.replace("'", "''")
                     notify_sql = f"NOTIFY {channel}, '{escaped_payload}'"
-                    self.logger.info(f"🔔 Executing SQL: {notify_sql}")
-                    # Use synchronous execute for the pooled connection
-                    self.notify_connection.execute(notify_sql)
-                    # Commit the transaction to ensure notification is sent
-                    self._commit_connection(self.notify_connection)
+                    await self.notify_connection.execute(notify_sql)
                     self.logger.info(f"🔔 Sent notification on channel '{channel}': {payload}")
                 else:
                     self.logger.error(f"No notification connection available for channel '{channel}'")
             except Exception as e:
-                self.logger.error(f"Error sending notification on channel '{channel}': {str(e)}")
+                self.logger.error(f"Error sending notification on channel '{channel}': {e}")
+                # Reset connection on error so it gets recreated next time
+                try:
+                    if self.notify_connection and not self._is_connection_closed(self.notify_connection):
+                        await self.notify_connection.close()
+                except Exception:
+                    pass
+                self.notify_connection = None

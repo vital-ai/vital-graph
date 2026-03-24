@@ -48,6 +48,16 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     from .auto_analyze import reset_counter
     reset_counter(space_id)
 
+    # 6. Notify other instances to invalidate their stats cache
+    try:
+        from . import db_provider as _db
+        impl = _db._impl
+        sm = impl.get_signal_manager() if impl and hasattr(impl, 'get_signal_manager') else None
+        if sm:
+            await sm.notify_cache_invalidate("stats", space_id)
+    except Exception as e:
+        logger.debug("Stats cache invalidation notify failed (non-critical): %s", e)
+
     result = {
         'edge_rows': edge_count,
         'frame_entity_rows': fe_count,

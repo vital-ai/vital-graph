@@ -204,9 +204,8 @@ class SpaceManager:
                 signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
                 
                 if signal_manager:
-                    # Send notification asynchronously without blocking
-                    asyncio.create_task(signal_manager.notify_spaces_changed(SIGNAL_TYPE_CREATED))
-                    asyncio.create_task(signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_CREATED))
+                    await signal_manager.notify_spaces_changed(SIGNAL_TYPE_CREATED)
+                    await signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_CREATED)
                     self.logger.info(f"📤 Sent notifications for space creation: '{space_id}'")
                 else:
                     self.logger.warning(f"No SignalManager available for notifications")
@@ -298,9 +297,8 @@ class SpaceManager:
                 signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
                 
                 if signal_manager:
-                    # Send notification asynchronously without blocking
-                    asyncio.create_task(signal_manager.notify_spaces_changed(SIGNAL_TYPE_DELETED))
-                    asyncio.create_task(signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_DELETED))
+                    await signal_manager.notify_spaces_changed(SIGNAL_TYPE_DELETED)
+                    await signal_manager.notify_space_changed(space_id, SIGNAL_TYPE_DELETED)
                     self.logger.info(f"📤 Sent notifications for space deletion: '{space_id}'")
                 else:
                     self.logger.warning(f"No SignalManager available for notifications")

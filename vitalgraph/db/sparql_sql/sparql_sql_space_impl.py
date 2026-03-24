@@ -110,6 +110,16 @@ class _SparqlSQLGraphsAdapter:
                         f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
                         ctx_uuid,
                     )
+            # Notify other instances of graph clear
+            try:
+                sm = self._impl._signal_manager or (
+                    self._impl.db_impl.get_signal_manager() if self._impl.db_impl else None)
+                if sm:
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_UPDATED
+                    await sm.notify_graphs_changed(SIGNAL_TYPE_UPDATED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED)
+            except Exception as ne:
+                logger.debug("Graph clear notify failed (non-critical): %s", ne)
             return True
         except Exception as e:
             logger.error("clear_graph(%s, %s) failed: %s", space_id, graph_uri, e)
@@ -485,6 +495,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                    VALUES ($1, $2, $3, $4)""",
                 [space_id, graph_uri, graph_name, datetime.now()],
             )
+            # Notify other instances of graph creation
+            try:
+                sm = self._signal_manager or (self.db_impl.get_signal_manager() if self.db_impl else None)
+                if sm:
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
+                    await sm.notify_graphs_changed(SIGNAL_TYPE_CREATED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED)
+            except Exception as ne:
+                logger.debug("Graph creation notify failed (non-critical): %s", ne)
             return True
         except Exception as e:
             logger.error("create_graph(%s, %s) failed: %s", space_id, graph_uri, e)
@@ -510,6 +529,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
                 [space_id, graph_uri],
             )
+            # Notify other instances of graph deletion
+            try:
+                sm = self._signal_manager or (self.db_impl.get_signal_manager() if self.db_impl else None)
+                if sm:
+                    from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
+                    await sm.notify_graphs_changed(SIGNAL_TYPE_DELETED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED)
+            except Exception as ne:
+                logger.debug("Graph deletion notify failed (non-critical): %s", ne)
             return True
         except Exception as e:
             logger.error("drop_graph(%s, %s) failed: %s", space_id, graph_uri, e)
@@ -1403,13 +1431,21 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         # Insert new datatype — invalidate cache so gen picks up the new mapping
         space_id = tables['datatype'].rsplit("_datatype", 1)[0]
         invalidate_datatype_cache(space_id)
-        return await conn.fetchval(
+        result = await conn.fetchval(
             f"INSERT INTO {tables['datatype']} (datatype_uri) "
             f"VALUES ($1) ON CONFLICT (datatype_uri) "
             f"DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
             f"RETURNING datatype_id",
             datatype_uri,
         )
+        # Notify other instances to invalidate their datatype cache
+        try:
+            sm = self._signal_manager or (self.db_impl.get_signal_manager() if self.db_impl else None)
+            if sm:
+                await sm.notify_cache_invalidate("datatype", space_id)
+        except Exception as e:
+            logger.debug("Datatype cache invalidation notify failed (non-critical): %s", e)
+        return result
 
     @staticmethod
     def _infer_type(value: str) -> str:

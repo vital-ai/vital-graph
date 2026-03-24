@@ -358,6 +358,48 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"SpaceManager signal registration failed (non-critical): {e}")
                     
+                    # Register cache invalidation callback for cross-instance datatype/stats sync
+                    try:
+                        signal_manager = self.vital_graph_impl.signal_manager
+                        if signal_manager is None:
+                            signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                        if signal_manager:
+                            from vitalgraph.signal.signal_manager import CHANNEL_CACHE_INVALIDATE
+                            from vitalgraph.db.sparql_sql.generator import invalidate_datatype_cache, invalidate_stats_cache
+
+                            async def _handle_cache_invalidate(data: dict):
+                                cache_type = data.get("cache_type", "")
+                                space_id = data.get("space_id", "")
+                                if cache_type == "datatype" and space_id:
+                                    invalidate_datatype_cache(space_id)
+                                    self.logger.debug(f"Cache invalidation: cleared datatype cache for {space_id}")
+                                elif cache_type == "stats" and space_id:
+                                    invalidate_stats_cache(space_id)
+                                    self.logger.debug(f"Cache invalidation: cleared stats cache for {space_id}")
+
+                            signal_manager.register_callback(
+                                CHANNEL_CACHE_INVALIDATE,
+                                _handle_cache_invalidate,
+                            )
+                            self.logger.info("✅ Cache invalidation cross-instance sync registered on CHANNEL_CACHE_INVALIDATE")
+                        else:
+                            self.logger.warning("Cache invalidation signal sync skipped — signal_manager not available")
+                    except Exception as e:
+                        self.logger.warning(f"Cache invalidation signal registration failed (non-critical): {e}")
+
+                    # Start the NOTIFY listener so cross-instance signals are received
+                    try:
+                        signal_manager = self.vital_graph_impl.signal_manager
+                        if signal_manager is None:
+                            signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                        if signal_manager:
+                            await signal_manager.start_listening()
+                            self.logger.info("✅ SignalManager NOTIFY listener started")
+                        else:
+                            self.logger.warning("SignalManager not available — NOTIFY listener not started")
+                    except Exception as e:
+                        self.logger.warning(f"SignalManager listener start failed (non-critical): {e}")
+                    
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
             
