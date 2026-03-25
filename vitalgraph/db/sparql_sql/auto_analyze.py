@@ -23,7 +23,7 @@ _change_counts: Dict[str, int] = {}
 _last_analyze_time: Dict[str, float] = {}
 
 # Default threshold: ANALYZE after this many row changes
-DEFAULT_ANALYZE_THRESHOLD = 1000
+DEFAULT_ANALYZE_THRESHOLD = 50000
 
 
 def record_changes(space_id: str, row_count: int) -> None:
