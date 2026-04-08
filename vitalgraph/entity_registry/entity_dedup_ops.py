@@ -46,16 +46,22 @@ class DedupMixin:
         # Phase 1: Get candidate IDs from LSH (hits MemoryDB)
         candidate_ids = self.dedup_index.get_candidate_ids(entity)
         if not candidate_ids:
+            logger.info("find_similar(%s): 0 LSH candidates", name)
             return []
 
         # Phase 1.5: Fetch candidate entity data from PG
         candidate_data = await self._fetch_entities_for_scoring(list(candidate_ids))
+        logger.info("find_similar(%s): %d LSH candidates, %d fetched from PG",
+                    name, len(candidate_ids), len(candidate_data))
 
         # Phase 2: Score with RapidFuzz
-        return self.dedup_index.score_candidates(
+        results = self.dedup_index.score_candidates(
             entity, candidate_data,
             limit=limit, min_score=min_score, type_key=type_key,
         )
+        logger.info("find_similar(%s): %d results (min_score=%.1f)",
+                    name, len(results), min_score)
+        return results
 
     async def _fetch_entities_for_scoring(self, entity_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """Batch-fetch entity scoring data from PostgreSQL.
@@ -71,7 +77,7 @@ class DedupMixin:
                 "SELECT e.entity_id, e.primary_name, et.type_key, "
                 "e.country, e.region, e.locality, ea.alias_name "
                 "FROM entity e "
-                "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                "LEFT JOIN entity_type et ON et.type_id = e.entity_type_id "
                 "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
                 "AND ea.status != 'retracted' "
                 "WHERE e.entity_id = ANY($1) AND e.status != 'deleted'",

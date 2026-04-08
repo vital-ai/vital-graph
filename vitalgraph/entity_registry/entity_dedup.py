@@ -34,6 +34,8 @@ DEFAULT_SHINGLE_K = 3
 DEFAULT_MIN_SCORE = 50.0
 DEFAULT_PHONETIC_BONUS = 10.0
 DEFAULT_PHONETIC_LSH_THRESHOLD = 0.3
+DEFAULT_MAX_CANDIDATES = 5000
+DEFAULT_MIN_CANDIDATES = 20   # relax band threshold until we hit this many
 BULK_BATCH_SIZE = 1000  # entities per pipeline flush during bulk init
 
 # Distributed lock parameters (Redis / MemoryDB)
@@ -247,7 +249,12 @@ class EntityDedupIndex:
             # For cluster mode, per-band hash tags distribute bands across
             # shards (set via hash_tag_prefix, applied in _create_lsh).
             # For standalone Redis, use a simple hash-tagged basename.
-            tag_prefix = f"{env_name}_dedup" if env_name else 'dedup'
+            # Production (and empty) use the bare 'dedup' prefix; other
+            # environments (dev, staging, etc.) get a prefixed namespace.
+            if env_name in ('', 'prod', 'production'):
+                tag_prefix = 'dedup'
+            else:
+                tag_prefix = f"{env_name}_dedup"
             basename = f"{{{tag_prefix}}}"
 
             storage_config = {
@@ -721,11 +728,19 @@ class EntityDedupIndex:
                 p_key = self._phonetic_lsh_key(entity_id, idx_p)
                 phonetic_entries.append((p_key, mh))
 
-        # Phase 2: Bulk write to Redis — one pipeline flush per LSH index
-        if lsh_entries:
-            self._bulk_write_lsh(self.lsh, lsh_entries)
-        if phonetic_entries:
-            self._bulk_write_lsh(self.phonetic_lsh, phonetic_entries)
+        # Phase 2: Write LSH entries
+        if self.storage_config:
+            # Redis / MemoryDB: bulk pipeline flush
+            if lsh_entries:
+                self._bulk_write_lsh(self.lsh, lsh_entries)
+            if phonetic_entries:
+                self._bulk_write_lsh(self.phonetic_lsh, phonetic_entries)
+        else:
+            # In-memory: use normal datasketch insert
+            for raw_key, mh in lsh_entries:
+                self.lsh.insert(raw_key, mh)
+            for raw_key, mh in phonetic_entries:
+                self.phonetic_lsh.insert(raw_key, mh)
 
         # Phase 3: Batch-store dedup hashes in Redis HASH
         client = self._get_redis_client()
@@ -959,26 +974,56 @@ class EntityDedupIndex:
         if not query_names:
             return set()
 
-        candidate_ids = set()
-
-        # 1a. MinHash LSH candidates
+        # Build minhashes for primary and phonetic LSH
+        primary_mh = []
         for name in query_names:
             shingles = self._name_shingles(name, entity)
-            if not shingles:
-                continue
-            mh = self._build_minhash(shingles)
-            try:
-                raw_keys = self.lsh.query(mh)
-            except ValueError:
-                continue
-            for key in raw_keys:
-                candidate_ids.add(self._entity_id_from_lsh_key(key))
+            if shingles:
+                primary_mh.append(self._build_minhash(shingles))
 
-        # 1b. Phonetic candidates (Double Metaphone code lookup)
-        candidate_ids.update(self._phonetic_candidates(query_names))
+        phonetic_mh = []
+        for name in query_names:
+            codes = self._phonetic_codes(name)
+            if codes:
+                phonetic_mh.append(self._build_minhash(set(codes)))
 
-        # 1c. Typo candidates (edit-distance-1 query variants → primary LSH)
-        candidate_ids.update(self._typo_candidates(query_names, entity))
+        # Progressive cascade: strict → relaxed, stopping as soon as
+        # we have enough candidates.  Each step is a separate LSH
+        # query that only runs if prior steps didn't find enough.
+        candidate_ids: Set[str] = set()
+
+        # Step 1: Primary LSH (progressive band query)
+        if primary_mh:
+            candidate_ids = self._progressive_query(
+                self.lsh, primary_mh,
+                min_candidates=DEFAULT_MIN_CANDIDATES,
+                max_candidates=DEFAULT_MAX_CANDIDATES,
+            )
+        if len(candidate_ids) >= DEFAULT_MIN_CANDIDATES:
+            return candidate_ids
+
+        # Step 2: Phonetic LSH (progressive band query)
+        if phonetic_mh:
+            ph_ids = self._progressive_query(
+                self.phonetic_lsh, phonetic_mh,
+                min_candidates=DEFAULT_MIN_CANDIDATES,
+                max_candidates=DEFAULT_MAX_CANDIDATES,
+                phonetic_keys=True,
+            )
+            candidate_ids.update(ph_ids)
+        if len(candidate_ids) >= DEFAULT_MIN_CANDIDATES:
+            return candidate_ids
+
+        # Step 3: Typo variants (progressive band query, limited variants)
+        typo_mh = self._build_typo_minhashes(query_names, entity,
+                                              max_variants=50)
+        if typo_mh:
+            typo_ids = self._progressive_query(
+                self.lsh, typo_mh,
+                min_candidates=DEFAULT_MIN_CANDIDATES,
+                max_candidates=DEFAULT_MAX_CANDIDATES,
+            )
+            candidate_ids.update(typo_ids)
 
         return candidate_ids
 
@@ -1193,6 +1238,121 @@ class EntityDedupIndex:
             return {pickle.loads(k) for k in candidates}
         return candidates
 
+    def _progressive_query(
+        self,
+        lsh: MinHashLSH,
+        minhashes: List[MinHash],
+        min_candidates: int = DEFAULT_MIN_CANDIDATES,
+        max_candidates: int = DEFAULT_MAX_CANDIDATES,
+        band_batch_size: int = 3,
+        phonetic_keys: bool = False,
+    ) -> Set[str]:
+        """Progressive band query with early stopping.
+
+        Queries LSH bands in small batches.  After each batch, checks
+        whether enough strong candidates have been found and stops
+        early if so.  This avoids the full O(B) Redis sweep for queries
+        where high-quality matches exist in the first few bands.
+
+        A candidate is "strong" after *N* bands queried if it appeared
+        in >= max(2, N // 2) of them.
+
+        Args:
+            lsh: The MinHashLSH index to query.
+            minhashes: MinHash signatures to query.
+            min_candidates: Target candidate count for early stop.
+            max_candidates: Hard cap on returned candidates.
+            band_batch_size: Bands to query per Redis round-trip.
+            phonetic_keys: If True, strip ``P::`` prefix from keys.
+
+        Returns:
+            Set of candidate entity_id strings.
+        """
+        if not minhashes:
+            return set()
+
+        from collections import Counter
+
+        bands = list(zip(lsh.hashranges, lsh.hashtables))
+        band_hits: Counter = Counter()  # raw_key → band count
+        bands_queried = 0
+
+        for batch_start in range(0, len(bands), band_batch_size):
+            batch = bands[batch_start:batch_start + band_batch_size]
+
+            for (start, end), hashtable in batch:
+                band_hashes = [lsh._H(mh.hashvalues[start:end])
+                               for mh in minhashes]
+                results = hashtable.getmany(*band_hashes)
+                band_keys: set = set()
+                for result_set in results:
+                    for key in result_set:
+                        band_keys.add(key)
+                for key in band_keys:
+                    band_hits[key] += 1
+
+            bands_queried += len(batch)
+
+            # Early exit: check if we have enough strong candidates
+            if bands_queried >= 3:
+                min_hits = max(2, bands_queried // 2)
+                strong = sum(1 for cnt in band_hits.values()
+                             if cnt >= min_hits)
+                if strong >= min_candidates:
+                    logger.debug(
+                        "progressive_query: early stop after %d/%d bands "
+                        "(%d strong candidates, target=%d)",
+                        bands_queried, len(bands), strong, min_candidates)
+                    break
+
+        if not band_hits:
+            return set()
+
+        # Unpickle if needed
+        if lsh.prepickle:
+            band_hits = Counter(
+                {pickle.loads(k): v for k, v in band_hits.items()}
+            )
+
+        # Extract entity_ids with adaptive threshold
+        def _extract_eid(k: str) -> str:
+            if phonetic_keys and '::' in k:
+                k = k.split('::', 1)[1]
+            return self._entity_id_from_lsh_key(k)
+
+        id_best: Dict[str, int] = {}
+        for k, cnt in band_hits.items():
+            eid = _extract_eid(k)
+            if cnt > id_best.get(eid, 0):
+                id_best[eid] = cnt
+
+        # Adaptive filter: strict → relaxed
+        max_level = max(id_best.values())
+        min_level = 2
+        entity_ids: Set[str] = set()
+        chosen_level = min_level
+
+        for level in range(max_level, min_level - 1, -1):
+            entity_ids = {eid for eid, cnt in id_best.items()
+                          if cnt >= level}
+            chosen_level = level
+            if len(entity_ids) >= min_candidates:
+                break
+
+        # Cap
+        if len(entity_ids) > max_candidates:
+            ranked = sorted(entity_ids,
+                            key=lambda eid: id_best[eid], reverse=True)
+            entity_ids = set(ranked[:max_candidates])
+
+        logger.debug(
+            "progressive_query: %d/%d bands, %d raw keys, "
+            "level=%d → %d ids (target=%d, cap=%d)",
+            bands_queried, len(bands), len(band_hits),
+            chosen_level, len(entity_ids),
+            min_candidates, max_candidates)
+        return entity_ids
+
     def _get_name_variants(self, entity: Dict[str, Any]) -> List[str]:
         """Extract all name variants from an entity dict."""
         names = []
@@ -1297,21 +1457,20 @@ class EntityDedupIndex:
         return list(codes)
 
     def _phonetic_candidates(self, query_names: List[str]) -> Set[str]:
-        """Get candidate entity IDs via phonetic LSH query."""
-        candidates = set()
+        """Get candidate entity IDs via phonetic LSH (progressive)."""
+        minhashes = []
         for name in query_names:
             codes = self._phonetic_codes(name)
-            if not codes:
-                continue
-            mh = self._build_minhash(set(codes))
-            try:
-                raw_keys = self.phonetic_lsh.query(mh)
-            except ValueError:
-                continue
-            for key in raw_keys:
-                # Extract entity_id from P::entity_id::idx
-                candidates.add(self._entity_id_from_lsh_key(key.split('::', 1)[1]))
-        return candidates
+            if codes:
+                minhashes.append(self._build_minhash(set(codes)))
+        if not minhashes:
+            return set()
+        return self._progressive_query(
+            self.phonetic_lsh, minhashes,
+            min_candidates=DEFAULT_MIN_CANDIDATES,
+            max_candidates=DEFAULT_MAX_CANDIDATES,
+            phonetic_keys=True,
+        )
 
     def _phonetic_match(self, query_names: List[str], candidate: Dict[str, Any]) -> bool:
         """Check if any query name shares a phonetic code with any candidate name."""
@@ -1344,16 +1503,17 @@ class EntityDedupIndex:
         inserts    = {L + c + R                for L, R in splits for c in letters}
         return deletes | transposes | replaces | inserts
 
-    def _typo_candidates(self, query_names: List[str], entity: Dict[str, Any]) -> Set[str]:
-        """Get candidate entity IDs by querying the primary LSH with
-        edit-distance-1 variants of the query words.
+    def _build_typo_minhashes(
+        self,
+        query_names: List[str],
+        entity: Dict[str, Any],
+        max_variants: int = 50,
+    ) -> List[MinHash]:
+        """Build MinHash signatures for edit-distance-1 typo variants.
 
-        For each query name, each word (len 3–8) is varied one edit away.
-        The variant word replaces the original in the full name, the result
-        is shingled and its MinHash is collected.  All MinHashes are then
-        batch-queried against the primary LSH using _batch_query_lsh(),
-        which costs O(B) Redis round-trips regardless of variant count
-        (B = number of LSH bands, typically ~37).
+        Generates deletion and transposition variants first (cheapest and
+        most common typos), then replacements, stopping at *max_variants*
+        to bound Redis I/O in the progressive query.
         """
         all_minhashes: List[MinHash] = []
         for name in query_names:
@@ -1362,17 +1522,32 @@ class EntityDedupIndex:
                 lower_word = word.lower().strip()
                 if len(lower_word) < 3 or len(lower_word) > 8:
                     continue
-                for variant in self._edit_distance_1(lower_word):
+                # Prioritise deletions + transpositions (common typos)
+                splits = [(lower_word[:i], lower_word[i:])
+                          for i in range(len(lower_word) + 1)]
+                variants = (
+                    {L + R[1:] for L, R in splits if R}  # deletes
+                    | {L + R[1] + R[0] + R[2:] for L, R in splits
+                       if len(R) > 1}  # transposes
+                )
+                for variant in variants:
                     variant_words = list(words)
                     variant_words[word_idx] = variant
                     variant_name = ' '.join(variant_words)
                     shingles = self._name_shingles(variant_name, entity)
-                    if not shingles:
-                        continue
-                    all_minhashes.append(self._build_minhash(shingles))
+                    if shingles:
+                        all_minhashes.append(self._build_minhash(shingles))
+                    if len(all_minhashes) >= max_variants:
+                        return all_minhashes
+        return all_minhashes
 
-        if not all_minhashes:
+    def _typo_candidates(self, query_names: List[str], entity: Dict[str, Any]) -> Set[str]:
+        """Get candidate entity IDs via typo-variant LSH (progressive)."""
+        minhashes = self._build_typo_minhashes(query_names, entity)
+        if not minhashes:
             return set()
-
-        raw_keys = self._batch_query_lsh(self.lsh, all_minhashes)
-        return {self._entity_id_from_lsh_key(k) for k in raw_keys}
+        return self._progressive_query(
+            self.lsh, minhashes,
+            min_candidates=DEFAULT_MIN_CANDIDATES,
+            max_candidates=DEFAULT_MAX_CANDIDATES,
+        )
