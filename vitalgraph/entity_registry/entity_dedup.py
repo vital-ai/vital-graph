@@ -10,6 +10,7 @@ Supports two storage backends:
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import pickle
@@ -22,15 +23,18 @@ import redis as redis_lib
 from datasketch import MinHash, MinHashLSH
 from rapidfuzz import fuzz
 
+from vitalgraph.entity_registry.datasketch_cluster import register_cluster_storage, distribute_lsh_hash_tags
+
 logger = logging.getLogger(__name__)
 
 # Default tuning parameters
-DEFAULT_NUM_PERM = 128
+DEFAULT_NUM_PERM = 64
 DEFAULT_LSH_THRESHOLD = 0.3
 DEFAULT_SHINGLE_K = 3
 DEFAULT_MIN_SCORE = 50.0
 DEFAULT_PHONETIC_BONUS = 10.0
-DEFAULT_PHONETIC_LSH_THRESHOLD = 0.15
+DEFAULT_PHONETIC_LSH_THRESHOLD = 0.3
+BULK_BATCH_SIZE = 1000  # entities per pipeline flush during bulk init
 
 # Distributed lock parameters (Redis / MemoryDB)
 LOCK_KEY_SUFFIX = b'_init_lock'
@@ -84,6 +88,31 @@ def build_shingles(entity: Dict[str, Any], k: int = DEFAULT_SHINGLE_K) -> set:
             shingles.add(f"{field}:{val.lower().strip()}")
 
     return shingles
+
+
+def compute_dedup_hash(entity: Dict[str, Any]) -> str:
+    """Compute a deterministic MD5 hash of the dedup-relevant fields.
+
+    Fields: type_key, primary_name, country, region, locality, sorted aliases.
+    Returns a 32-char hex string.  Used to detect changes between PostgreSQL
+    and the MemoryDB dedup index without comparing full entity data.
+    """
+    parts = [
+        (entity.get('type_key') or '').lower().strip(),
+        (entity.get('primary_name') or '').lower().strip(),
+        (entity.get('country') or '').lower().strip(),
+        (entity.get('region') or '').lower().strip(),
+        (entity.get('locality') or '').lower().strip(),
+    ]
+    # Collect and sort alias names for deterministic ordering
+    aliases = []
+    for alias in (entity.get('aliases') or []):
+        name = alias.get('alias_name') if isinstance(alias, dict) else None
+        if name:
+            aliases.append(name.lower().strip())
+    aliases.sort()
+    parts.append(','.join(aliases))
+    return hashlib.md5('|'.join(parts).encode('utf-8')).hexdigest()
 
 
 class EntityDedupIndex:
@@ -145,7 +174,14 @@ class EntityDedupIndex:
         }
         if storage_config:
             kwargs['storage_config'] = storage_config
-        return MinHashLSH(**kwargs)
+            if storage_config.get('type') == 'redis_cluster':
+                kwargs['prepickle'] = True
+        lsh = MinHashLSH(**kwargs)
+        # Distribute bands across cluster slots with per-band hash tags
+        if storage_config and storage_config.get('type') == 'redis_cluster':
+            prefix = storage_config.get('hash_tag_prefix', 'dedup')
+            distribute_lsh_hash_tags(lsh, prefix)
+        return lsh
 
     def _phonetic_storage_config(self) -> Optional[Dict[str, Any]]:
         """Build storage config for the phonetic LSH with a distinct Redis namespace."""
@@ -156,6 +192,9 @@ class EntityDedupIndex:
         if isinstance(base, str):
             base = base.encode()
         config['basename'] = base + b'_phonetic'
+        # Distinct hash tag prefix so phonetic bands use different slots
+        if 'hash_tag_prefix' in config:
+            config['hash_tag_prefix'] = config['hash_tag_prefix'] + '_ph'
         return config
 
     @classmethod
@@ -196,18 +235,31 @@ class EntityDedupIndex:
                 redis_params['ssl'] = True
                 redis_params['ssl_cert_reqs'] = None  # MemoryDB uses Amazon-managed certs
 
+            # Redis Cluster mode (MemoryDB / ElastiCache cluster)
+            use_cluster = os.environ.get('ENTITY_DEDUP_REDIS_CLUSTER', 'false').lower() in ('true', '1', 'yes')
+            if use_cluster:
+                register_cluster_storage()
+                storage_type = 'redis_cluster'
+            else:
+                storage_type = 'redis'
+
             env_name = os.environ.get('VITALGRAPH_ENVIRONMENT', '').strip().lower()
-            # Wrap in Redis hash tags {…} so all datasketch keys hash to the
-            # same cluster slot (required for MemoryDB / Redis Cluster).
-            basename = f"{{{env_name}_dedup}}" if env_name else '{dedup}'
+            # For cluster mode, per-band hash tags distribute bands across
+            # shards (set via hash_tag_prefix, applied in _create_lsh).
+            # For standalone Redis, use a simple hash-tagged basename.
+            tag_prefix = f"{env_name}_dedup" if env_name else 'dedup'
+            basename = f"{{{tag_prefix}}}"
 
             storage_config = {
-                'type': 'redis',
+                'type': storage_type,
                 'basename': basename.encode(),
                 'redis': redis_params,
             }
+            if use_cluster:
+                storage_config['hash_tag_prefix'] = tag_prefix
             logger.info(f"Entity dedup using Redis backend: {redis_host}:{redis_port} "
-                         f"(ssl={use_ssl}, env='{env_name or '(none)'}')")
+                         f"(ssl={use_ssl}, cluster={use_cluster}, "
+                         f"env='{env_name or '(none)'}')")
         else:
             logger.info("Entity dedup using in-memory backend")
 
@@ -243,6 +295,13 @@ class EntityDedupIndex:
         if isinstance(base, str):
             base = base.encode()
         return base + LOCK_KEY_SUFFIX
+
+    def _dedup_hash_key(self) -> bytes:
+        """Redis HASH key that maps entity_id → dedup_hash for fast comparison."""
+        base = self.storage_config.get('basename', b'dedup') if self.storage_config else b'dedup'
+        if isinstance(base, str):
+            base = base.encode()
+        return base + b'_dedup_hashes'
 
     def _try_acquire_lock(self, ttl: int = LOCK_TTL_SECONDS) -> bool:
         """Single non-blocking attempt to acquire the lock. Returns True if acquired."""
@@ -296,12 +355,62 @@ class EntityDedupIndex:
     # Index management
     # ------------------------------------------------------------------
 
+    def _delete_redis_keys(self):
+        """Delete all datasketch keys for this index from Redis.
+
+        Handles both the legacy single-hash-tag pattern and the distributed
+        per-band hash tag patterns.
+        """
+        if not self.storage_config:
+            return
+        client = self._get_redis_client()
+        if not client:
+            return
+
+        # Collect all patterns to scan — legacy basename + per-band tags
+        patterns = []
+        basename = self.storage_config.get('basename', b'dedup')
+        if isinstance(basename, str):
+            basename = basename.encode()
+        patterns.append(basename + b'*')
+
+        # Per-band distributed patterns (primary + phonetic LSH)
+        tag_prefix = self.storage_config.get('hash_tag_prefix')
+        if tag_prefix:
+            for pfx in [tag_prefix, tag_prefix + '_ph']:
+                patterns.append(f'{{{pfx}_b*'.encode())
+                patterns.append(f'{{{pfx}_keys}}*'.encode())
+
+        deleted = 0
+        BATCH = 5000
+        for pattern in patterns:
+            batch = []
+            for key in client.scan_iter(match=pattern, count=2000):
+                batch.append(key)
+                if len(batch) >= BATCH:
+                    pipe = client.pipeline()
+                    for k in batch:
+                        pipe.unlink(k)
+                    pipe.execute()
+                    deleted += len(batch)
+                    batch.clear()
+                    if deleted % 50000 == 0:
+                        logger.info(f"  ... deleted {deleted:,} keys so far")
+            if batch:
+                pipe = client.pipeline()
+                for k in batch:
+                    pipe.unlink(k)
+                pipe.execute()
+                deleted += len(batch)
+        if deleted:
+            logger.info(f"Deleted {deleted:,} Redis keys")
+
     def clear_index(self):
         """Wipe the LSH index and entity cache, creating a fresh empty state.
 
         For in-memory backend: simply replaces the LSH object.
-        For Redis backend: creates a new LSH (datasketch clears Redis keys
-        associated with the previous index prefix automatically on new init).
+        For Redis/cluster backend: deletes all existing Redis keys for this
+        index, then creates fresh LSH objects.
 
         Acquires a distributed lock (Redis backends) to prevent concurrent
         clear/initialize races across processes.
@@ -309,6 +418,14 @@ class EntityDedupIndex:
         if not self._acquire_lock_sync():
             raise RuntimeError("Could not acquire dedup init lock for clear_index")
         try:
+            self._delete_redis_keys()
+            # Delete the dedup hash comparison key
+            client = self._get_redis_client()
+            if client:
+                try:
+                    client.delete(self._dedup_hash_key())
+                except Exception as e:
+                    logger.warning(f"Error deleting dedup hash key: {e}")
             self.lsh = self._create_lsh(self.threshold, self.storage_config)
             self.phonetic_lsh = self._create_lsh(
                 self.phonetic_threshold, self._phonetic_storage_config(),
@@ -320,7 +437,9 @@ class EntityDedupIndex:
             self._release_lock()
 
     async def initialize(self, pool, since=None, chunk_size: int = 5000,
-                         skip_lock: bool = False) -> int:
+                         skip_lock: bool = False,
+                         batch_delay: float = 0.0,
+                         num_workers: int = 1) -> int:
         """Load entities from the database and build/update the LSH index.
 
         Uses a single bulk query (entity + aliases via LEFT JOIN) and processes
@@ -342,107 +461,193 @@ class EntityDedupIndex:
             chunk_size: Number of entity rows to fetch per chunk.
             skip_lock: If True, skip the distributed lock (for read-only
                        operations like --status / --check).
+            batch_delay: Seconds to sleep between each pipeline flush
+                (rate-limits Redis writes so bulk sync doesn't monopolize
+                MemoryDB). Use 0 for maximum speed.
+            num_workers: Number of parallel worker threads for batch
+                processing. Each worker computes minhashes (CPU) and flushes
+                a pipeline to Redis (I/O) concurrently. Higher values improve
+                throughput on multi-shard clusters.
 
         Returns:
             Number of entities indexed.
         """
         if skip_lock:
-            return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
+            return await self._do_initialize(pool, since=since,
+                                             chunk_size=chunk_size,
+                                             batch_delay=batch_delay,
+                                             num_workers=num_workers)
 
         if not await self._acquire_lock_async():
             raise RuntimeError("Could not acquire dedup init lock for initialize")
 
         try:
-            return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
+            return await self._do_initialize(pool, since=since,
+                                             chunk_size=chunk_size,
+                                             batch_delay=batch_delay,
+                                             num_workers=num_workers)
         finally:
             self._release_lock()
 
-    async def _do_initialize(self, pool, since=None, chunk_size: int = 5000) -> int:
-        """Inner initialize logic (called under the distributed lock)."""
+    async def _do_initialize(self, pool, since=None, chunk_size: int = 5000,
+                             batch_delay: float = 0.0, num_workers: int = 1) -> int:
+        """Inner initialize logic (called under the distributed lock).
+
+        When num_workers > 1, uses a producer-consumer pattern:
+        - Producer: streams entity rows from PostgreSQL, groups into batches
+        - Workers: N async tasks consume batches, each running
+          _bulk_insert_entities in a thread (CPU + Redis I/O) concurrently
+        """
         start = _time_mod.time()
 
         # Track IDs that existed in the index before this sync (for stale detection)
         pre_existing_ids = set(self._entity_cache.keys())
-
-        # Build the bulk query: entities LEFT JOIN aliases in one round-trip.
-        # Rows are ordered by entity_id so we can group sequentially.
-        if since is not None:
-            entity_sql = (
-                "SELECT e.entity_id, e.primary_name, et.type_key, e.country, e.region, e.locality, "
-                "ea.alias_name "
-                "FROM entity e "
-                "JOIN entity_type et ON et.type_id = e.entity_type_id "
-                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                "AND ea.status != 'retracted' "
-                "WHERE e.status != 'deleted' AND e.updated_time >= $1 "
-                "ORDER BY e.entity_id"
-            )
-            query_args = [since]
-        else:
-            entity_sql = (
-                "SELECT e.entity_id, e.primary_name, et.type_key, e.country, e.region, e.locality, "
-                "ea.alias_name "
-                "FROM entity e "
-                "JOIN entity_type et ON et.type_id = e.entity_type_id "
-                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                "AND ea.status != 'retracted' "
-                "WHERE e.status != 'deleted' "
-                "ORDER BY e.entity_id"
-            )
-            query_args = []
 
         active_ids = set()
         count = 0
         current_entity_id = None
         current_entity = None
 
-        async with pool.acquire() as conn:
-            # Use a cursor for chunked streaming — avoids loading all rows at once
-            async with conn.transaction():
-                cursor = await conn.cursor(entity_sql, *query_args)
+        # -- Worker infrastructure for parallel batch processing --
+        batch_queue: asyncio.Queue = asyncio.Queue(maxsize=num_workers * 2)
+        batches_submitted = 0
+        batches_done = 0
+        worker_error = None
 
-                while True:
-                    rows = await cursor.fetch(chunk_size)
-                    if not rows:
-                        break
+        async def _worker(worker_id: int):
+            """Consume batches from the queue and process them in a thread."""
+            nonlocal batches_done, worker_error
+            while True:
+                batch = await batch_queue.get()
+                if batch is None:  # poison pill
+                    batch_queue.task_done()
+                    break
+                try:
+                    await asyncio.to_thread(self._bulk_insert_entities, batch)
+                    batches_done += 1
+                    if batch_delay > 0:
+                        await asyncio.sleep(batch_delay)
+                except Exception as e:
+                    worker_error = e
+                    logger.error(f"Worker {worker_id} error: {e}")
+                finally:
+                    batch_queue.task_done()
 
-                    for row in rows:
-                        entity_id = row['entity_id']
+        # Start worker tasks
+        entity_batch: List[tuple] = []
+        workers = [asyncio.create_task(_worker(i)) for i in range(num_workers)]
+        if num_workers > 1:
+            logger.info(f"Bulk sync: {num_workers} parallel workers")
 
-                        if entity_id != current_entity_id:
-                            # Flush previous entity
-                            if current_entity_id is not None:
-                                try:
-                                    self.add_entity(current_entity_id, current_entity)
-                                    count += 1
-                                except Exception as e:
-                                    logger.warning(f"Failed to index entity {current_entity_id}: {e}")
+        # Use keyset pagination instead of a long-lived cursor so we don't
+        # hold a PG connection open for the entire (potentially 50+ minute) sync.
+        PAGE_SIZE = 50000  # rows per page (entities × aliases)
+        last_entity_id = ''  # keyset cursor
 
-                            # Start new entity
-                            current_entity_id = entity_id
-                            active_ids.add(entity_id)
-                            current_entity = {
-                                'entity_id': entity_id,
-                                'primary_name': row['primary_name'],
-                                'type_key': row['type_key'],
-                                'country': row['country'],
-                                'region': row['region'],
-                                'locality': row['locality'],
-                                'aliases': [],
-                            }
+        try:
+            while True:
+                # Fetch one page of rows, release connection immediately
+                if since is not None:
+                    page_sql = (
+                        "SELECT e.entity_id, e.primary_name, et.type_key, "
+                        "e.country, e.region, e.locality, ea.alias_name "
+                        "FROM entity e "
+                        "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                        "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                        "AND ea.status != 'retracted' "
+                        "WHERE e.status != 'deleted' AND e.updated_time >= $1 "
+                        "AND e.entity_id > $2 "
+                        "ORDER BY e.entity_id LIMIT $3"
+                    )
+                    page_args = [since, last_entity_id, PAGE_SIZE]
+                else:
+                    page_sql = (
+                        "SELECT e.entity_id, e.primary_name, et.type_key, "
+                        "e.country, e.region, e.locality, ea.alias_name "
+                        "FROM entity e "
+                        "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                        "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                        "AND ea.status != 'retracted' "
+                        "WHERE e.status != 'deleted' AND e.entity_id > $1 "
+                        "ORDER BY e.entity_id LIMIT $2"
+                    )
+                    page_args = [last_entity_id, PAGE_SIZE]
 
-                        # Append alias (LEFT JOIN may produce NULL)
-                        alias_name = row['alias_name']
-                        if alias_name:
-                            current_entity['aliases'].append({'alias_name': alias_name})
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(page_sql, *page_args)
 
-        # Flush last entity
-        if current_entity_id is not None:
-            try:
-                self.add_entity(current_entity_id, current_entity)
+                if not rows:
+                    break
+
+                for row in rows:
+                    entity_id = row['entity_id']
+
+                    if entity_id != current_entity_id:
+                        # Flush previous entity into batch
+                        if current_entity_id is not None:
+                            entity_batch.append((current_entity_id, current_entity))
+                            count += 1
+
+                        # Submit batch when it reaches threshold
+                        if len(entity_batch) >= BULK_BATCH_SIZE:
+                            await batch_queue.put(list(entity_batch))
+                            batches_submitted += 1
+                            entity_batch.clear()
+
+                            if count % 10000 == 0:
+                                elapsed = _time_mod.time() - start
+                                rate = count / elapsed if elapsed > 0 else 0
+                                logger.info(
+                                    f"  ... {count:,} entities indexed "
+                                    f"({rate:.0f}/s, {elapsed:.0f}s elapsed, "
+                                    f"{batches_submitted} batches submitted, "
+                                    f"{batches_done} flushed)")
+
+                            if worker_error:
+                                raise worker_error
+
+                        # Start new entity
+                        current_entity_id = entity_id
+                        active_ids.add(entity_id)
+                        current_entity = {
+                            'entity_id': entity_id,
+                            'primary_name': row['primary_name'],
+                            'type_key': row['type_key'],
+                            'country': row['country'],
+                            'region': row['region'],
+                            'locality': row['locality'],
+                            'aliases': [],
+                        }
+
+                    # Append alias (LEFT JOIN may produce NULL)
+                    alias_name = row['alias_name']
+                    if alias_name:
+                        current_entity['aliases'].append({'alias_name': alias_name})
+
+                # Advance keyset cursor to last entity_id seen in this page
+                last_entity_id = rows[-1]['entity_id']
+
+                # If page was smaller than PAGE_SIZE, we've reached the end
+                if len(rows) < PAGE_SIZE:
+                    break
+
+            # Flush last entity + remaining batch
+            if current_entity_id is not None:
+                entity_batch.append((current_entity_id, current_entity))
                 count += 1
-            except Exception as e:
-                logger.warning(f"Failed to index entity {current_entity_id}: {e}")
+            if entity_batch:
+                await batch_queue.put(list(entity_batch))
+                batches_submitted += 1
+
+        finally:
+            # Send poison pills to stop workers
+            for _ in range(num_workers):
+                await batch_queue.put(None)
+            # Wait for all workers to finish
+            await asyncio.gather(*workers, return_exceptions=True)
+
+        if worker_error:
+            raise worker_error
 
         # Remove stale entries (only meaningful for full sync on persistent backends)
         if since is None:
@@ -455,8 +660,115 @@ class EntityDedupIndex:
         self._initialized = True
         duration = _time_mod.time() - start
         logger.info(f"Entity dedup index: {count:,} entities indexed in {duration:.1f}s"
+                     f" ({num_workers} workers)"
                      f"{' (incremental)' if since else ' (full)'}")
         return count
+
+    def _bulk_insert_entities(self, batch: List[tuple]):
+        """Insert a batch of entities into both LSH indexes via a single pipeline flush.
+
+        Pre-computes all minhashes (CPU), then writes all Redis commands for
+        the entire batch in one pipeline round-trip per LSH index.
+
+        Args:
+            batch: List of (entity_id, entity_dict) tuples.
+        """
+        # Phase 1: Pre-compute all minhashes (pure CPU, no Redis)
+        lsh_entries = []       # [(pickled_key, minhash), ...]
+        phonetic_entries = []  # [(pickled_key, minhash), ...]
+        for entity_id, entity in batch:
+            alias_names = []
+            for alias in (entity.get('aliases') or []):
+                name = alias.get('alias_name') if isinstance(alias, dict) else None
+                if name:
+                    alias_names.append(name)
+
+            all_names = []
+            primary = entity.get('primary_name', '')
+            if primary:
+                all_names.append(primary)
+            all_names.extend(alias_names)
+
+            variant_count = 0
+            for idx, name in enumerate(all_names):
+                shingles = self._name_shingles(name, entity)
+                if not shingles:
+                    continue
+                mh = self._build_minhash(shingles)
+                lsh_key = self._lsh_key(entity_id, idx)
+                lsh_entries.append((lsh_key, mh))
+                variant_count += 1
+
+            if variant_count == 0:
+                continue
+
+            # Cache for scoring
+            self._entity_cache[entity_id] = {
+                'primary_name': primary,
+                'type_key': entity.get('type_key'),
+                'alias_names': alias_names,
+                'country': entity.get('country'),
+                'region': entity.get('region'),
+                'locality': entity.get('locality'),
+                '_variant_count': len(all_names),
+            }
+
+            for idx_p, name in enumerate(all_names):
+                codes = self._phonetic_codes(name)
+                if not codes:
+                    continue
+                mh = self._build_minhash(set(codes))
+                p_key = self._phonetic_lsh_key(entity_id, idx_p)
+                phonetic_entries.append((p_key, mh))
+
+        # Phase 2: Bulk write to Redis — one pipeline flush per LSH index
+        if lsh_entries:
+            self._bulk_write_lsh(self.lsh, lsh_entries)
+        if phonetic_entries:
+            self._bulk_write_lsh(self.phonetic_lsh, phonetic_entries)
+
+        # Phase 3: Batch-store dedup hashes in Redis HASH
+        client = self._get_redis_client()
+        if client and batch:
+            try:
+                hash_key = self._dedup_hash_key()
+                pipe = client.pipeline()
+                for entity_id, entity in batch:
+                    if entity_id in self._entity_cache:  # only if actually indexed
+                        h = compute_dedup_hash(entity)
+                        pipe.hset(hash_key, entity_id, h)
+                pipe.execute()
+            except Exception as e:
+                logger.warning(f"Error storing batch dedup hashes: {e}")
+
+    def _bulk_write_lsh(self, lsh: MinHashLSH, entries: List[tuple]):
+        """Write pre-computed (key, minhash) pairs to an LSH's Redis storage
+        in a single pipeline flush.
+
+        Replicates datasketch's _insert logic but batches all commands.
+        """
+        # Get the shared Redis client from any hashtable's storage
+        client = lsh.hashtables[0]._redis
+        pipe = client.pipeline()
+
+        for raw_key, minhash in entries:
+            key = pickle.dumps(raw_key) if lsh.prepickle else raw_key
+            Hs = [lsh._H(minhash.hashvalues[start:end])
+                  for start, end in lsh.hashranges]
+
+            # keys storage (ordered list): map key → band hashes
+            keys_store = lsh.keys
+            rk = keys_store.redis_key(key)
+            pipe.hset(keys_store._name, key, rk)
+            pipe.rpush(rk, *Hs)
+
+            # hashtable storage (unordered sets): map band_hash → key
+            for H, ht in zip(Hs, lsh.hashtables):
+                rk_ht = ht.redis_key(H)
+                pipe.hset(ht._name, H, rk_ht)
+                pipe.sadd(rk_ht, key)
+
+        pipe.execute()
 
     def _name_shingles(self, name: str, entity: Dict[str, Any]) -> set:
         """Build shingles for a single name variant, including location tokens."""
@@ -497,7 +809,9 @@ class EntityDedupIndex:
             except ValueError:
                 pass
 
-    def add_entity(self, entity_id: str, entity: Dict[str, Any]):
+    def add_entity(self, entity_id: str, entity: Dict[str, Any],
+                   _lsh_session=None, _phonetic_session=None,
+                   _check_duplication=True):
         """Add or update an entity in the LSH index.
 
         Each name variant (primary_name + aliases) is indexed as a separate
@@ -507,7 +821,14 @@ class EntityDedupIndex:
         Args:
             entity_id: The entity ID.
             entity: Entity dict with primary_name, aliases, country, region, locality.
+            _lsh_session: Optional insertion session for pipelined primary LSH inserts.
+            _phonetic_session: Optional insertion session for pipelined phonetic LSH inserts.
+            _check_duplication: If False, skip per-key HEXISTS checks (use during
+                bulk init from a clean index to avoid individual round-trips).
         """
+        lsh_target = _lsh_session if _lsh_session is not None else self.lsh
+        phonetic_target = _phonetic_session if _phonetic_session is not None else self.phonetic_lsh
+
         # Remove existing entries if present (for updates)
         if entity_id in self._entity_cache:
             old_variant_count = self._entity_cache[entity_id].get('_variant_count', 1)
@@ -536,7 +857,7 @@ class EntityDedupIndex:
             mh = self._build_minhash(shingles)
             lsh_key = self._lsh_key(entity_id, idx)
             try:
-                self.lsh.insert(lsh_key, mh)
+                lsh_target.insert(lsh_key, mh, check_duplication=_check_duplication)
                 variant_count += 1
             except ValueError:
                 pass  # duplicate key, skip
@@ -555,6 +876,15 @@ class EntityDedupIndex:
             '_variant_count': len(all_names),
         }
 
+        # Store dedup hash in Redis for PG ↔ MemoryDB comparison
+        client = self._get_redis_client()
+        if client:
+            try:
+                h = compute_dedup_hash(entity)
+                client.hset(self._dedup_hash_key(), entity_id, h)
+            except Exception as e:
+                logger.warning(f"Error storing dedup hash for {entity_id}: {e}")
+
         # Insert into phonetic LSH (one entry per name variant, phonetic codes as shingles)
         for idx_p, name in enumerate(all_names):
             codes = self._phonetic_codes(name)
@@ -563,7 +893,7 @@ class EntityDedupIndex:
             mh = self._build_minhash(set(codes))
             p_key = self._phonetic_lsh_key(entity_id, idx_p)
             try:
-                self.phonetic_lsh.insert(p_key, mh)
+                phonetic_target.insert(p_key, mh, check_duplication=_check_duplication)
             except ValueError:
                 pass  # duplicate key, skip
 
@@ -575,6 +905,13 @@ class EntityDedupIndex:
             self._remove_from_phonetic_lsh(entity_id, len(all_names))
         self._remove_from_lsh(entity_id)
         self._entity_cache.pop(entity_id, None)
+        # Remove dedup hash from Redis
+        client = self._get_redis_client()
+        if client:
+            try:
+                client.hdel(self._dedup_hash_key(), entity_id)
+            except Exception:
+                pass
 
     def _remove_from_lsh(self, entity_id: str):
         """Remove all LSH entries for an entity (one per name variant)."""

@@ -58,6 +58,29 @@ logger = logging.getLogger(__name__)
 LINE = '─' * 60
 
 
+def _load_completed_ids(path: Path, id_key: str) -> set:
+    """Scan an existing JSONL file and return the set of IDs already written.
+
+    If the file doesn't exist or is empty, returns an empty set.
+    Handles truncated last lines gracefully (partial writes from a crash).
+    """
+    completed = set()
+    if not path.exists():
+        return completed
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                completed.add(record[id_key])
+            except (json.JSONDecodeError, KeyError):
+                # Truncated last line from a crash — skip it
+                continue
+    return completed
+
+
 async def create_pool(db_url: str = None) -> asyncpg.Pool:
     if db_url:
         return await asyncpg.create_pool(db_url, min_size=1, max_size=5)
@@ -76,201 +99,241 @@ async def create_pool(db_url: str = None) -> asyncpg.Pool:
 
 
 async def generate_entity_vectors(pool, vectorizer, output_path: Path,
-                                  limit: int = None) -> int:
+                                  limit: int = None,
+                                  batch_size: int = 1000) -> int:
     """Generate entity vectors and write to JSONL file.
 
-    Returns the number of entities vectorized.
+    Uses keyset pagination — each batch is fetched with short independent
+    queries so no long-lived transaction/cursor is needed.  This avoids
+    connection timeouts on RDS during hours of CPU-heavy vectorization.
+
+    Returns the number of NEW entities vectorized this run.
     """
-    entity_sql = (
-        "SELECT e.entity_id, e.primary_name, e.description, e.country, "
-        "e.region, e.locality, e.website, e.latitude, e.longitude, e.status, "
-        "e.notes, "
-        "et.type_key, et.type_label, et.type_description, "
-        "ea.alias_name, ea.alias_type, "
-        "ec.category_key, ec.category_label "
-        "FROM entity e "
-        "JOIN entity_type et ON e.entity_type_id = et.type_id "
-        "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-        "AND ea.status = 'active' "
-        "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
-        "AND ecm.status = 'active' "
-        "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
-        "WHERE e.status = 'active' "
-        "ORDER BY e.entity_id"
-    )
+    # Resume support: load entity IDs already written
+    completed_ids = _load_completed_ids(output_path, 'entity_id')
+    if completed_ids:
+        logger.info(f"  Resuming: {len(completed_ids):,} entities already vectorized")
 
-    # Also need locations and identifiers per entity for accurate vectorization
     count = 0
-    current_entity_id = None
-    current_entity = None
-    seen_aliases = set()
-    seen_categories = set()
+    skipped = 0
+    last_entity_id = ''  # keyset cursor — entity_id is text, '' sorts before all
 
-    entities_pending = []
+    file_mode = 'a' if completed_ids else 'w'
+    with open(output_path, file_mode) as f:
+        while True:
+            if limit is not None and count >= limit:
+                break
 
-    def _flush_entity():
-        nonlocal current_entity
-        if current_entity is not None:
-            entities_pending.append(current_entity)
+            # 1) Fetch next page of entity IDs (short query, no long txn)
+            async with pool.acquire() as conn:
+                page_ids = await conn.fetch(
+                    "SELECT entity_id FROM entity "
+                    "WHERE status = 'active' AND entity_id > $1 "
+                    "ORDER BY entity_id LIMIT $2",
+                    last_entity_id, batch_size
+                )
+            if not page_ids:
+                break
+            eids = [r['entity_id'] for r in page_ids]
+            last_entity_id = eids[-1]
+
+            # 2) Fetch full entity data for this page
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT e.entity_id, e.primary_name, e.description, "
+                    "e.country, e.region, e.locality, e.website, "
+                    "e.latitude, e.longitude, e.status, e.notes, "
+                    "et.type_key, et.type_label, et.type_description, "
+                    "ea.alias_name, ea.alias_type, "
+                    "ec.category_key, ec.category_label "
+                    "FROM entity e "
+                    "JOIN entity_type et ON e.entity_type_id = et.type_id "
+                    "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                    "AND ea.status = 'active' "
+                    "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
+                    "AND ecm.status = 'active' "
+                    "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
+                    "WHERE e.entity_id = ANY($1) "
+                    "ORDER BY e.entity_id",
+                    eids
+                )
+
+            # 3) Group rows into entity dicts (LEFT JOINs produce multiple rows)
+            entities = []
+            current_entity_id = None
             current_entity = None
-
-    async def _enrich_with_locations(conn, batch):
-        eids = [e['entity_id'] for e in batch]
-        loc_rows = await conn.fetch(
-            "SELECT el.entity_id, el.location_name, el.formatted_address, "
-            "el.locality, el.admin_area_1, el.country "
-            "FROM entity_location el "
-            "WHERE el.entity_id = ANY($1) AND el.status = 'active' "
-            "ORDER BY el.entity_id, el.is_primary DESC, el.location_id",
-            eids
-        )
-        loc_map = {}
-        for lr in loc_rows:
-            loc_map.setdefault(lr['entity_id'], []).append(dict(lr))
-        for entity in batch:
-            entity['locations'] = loc_map.get(entity['entity_id'], [])
-
-    async def _enrich_with_identifiers(conn, batch):
-        eids = [e['entity_id'] for e in batch]
-        id_rows = await conn.fetch(
-            "SELECT entity_id, identifier_namespace, identifier_value "
-            "FROM entity_identifier "
-            "WHERE entity_id = ANY($1) AND status = 'active' "
-            "ORDER BY entity_id",
-            eids
-        )
-        id_map = {}
-        for ir in id_rows:
-            id_map.setdefault(ir['entity_id'], []).append(dict(ir))
-        for entity in batch:
-            entity['identifiers'] = id_map.get(entity['entity_id'], [])
-
-    with open(output_path, 'w') as f:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                cursor = await conn.cursor(entity_sql)
-                while True:
-                    rows = await cursor.fetch(5000)
-                    if not rows:
-                        break
-                    for row in rows:
-                        entity_id = row['entity_id']
-                        if entity_id != current_entity_id:
-                            _flush_entity()
-                            current_entity_id = entity_id
-                            seen_aliases = set()
-                            seen_categories = set()
-                            current_entity = {
-                                'entity_id': entity_id,
-                                'primary_name': row['primary_name'],
-                                'description': row['description'],
-                                'country': row['country'],
-                                'region': row['region'],
-                                'locality': row['locality'],
-                                'website': row['website'],
-                                'latitude': row['latitude'],
-                                'longitude': row['longitude'],
-                                'status': row['status'],
-                                'notes': row.get('notes') or '',
-                                'type_key': row['type_key'],
-                                'type_label': row['type_label'],
-                                'type_description': row['type_description'],
-                                'aliases': [],
-                                'categories': [],
-                            }
-
-                        alias_name = row['alias_name']
-                        if alias_name and alias_name not in seen_aliases:
-                            seen_aliases.add(alias_name)
-                            current_entity['aliases'].append({
-                                'alias_name': alias_name,
-                                'alias_type': row['alias_type'],
-                            })
-
-                        cat_key = row['category_key']
-                        if cat_key and cat_key not in seen_categories:
-                            seen_categories.add(cat_key)
-                            current_entity['categories'].append({
-                                'category_key': cat_key,
-                                'category_label': row['category_label'],
-                            })
-
-            _flush_entity()
-
-            # Process in batches for enrichment + vectorization
-            batch_size = 100
-            for i in range(0, len(entities_pending), batch_size):
-                batch = entities_pending[i:i + batch_size]
-                await _enrich_with_locations(conn, batch)
-                await _enrich_with_identifiers(conn, batch)
-
-                for entity in batch:
-                    if limit is not None and count >= limit:
-                        break
-                    props = entity_to_weaviate_properties(entity)
-                    text = build_entity_vectorization_text(props)
-                    vec = vectorizer.vectorize_text(text)
-                    record = {
-                        'entity_id': entity['entity_id'],
-                        'vector': vec.tolist(),
+            seen_aliases = set()
+            seen_categories = set()
+            for row in rows:
+                eid = row['entity_id']
+                if eid != current_entity_id:
+                    if current_entity is not None:
+                        entities.append(current_entity)
+                    current_entity_id = eid
+                    seen_aliases = set()
+                    seen_categories = set()
+                    current_entity = {
+                        'entity_id': eid,
+                        'primary_name': row['primary_name'],
+                        'description': row['description'],
+                        'country': row['country'],
+                        'region': row['region'],
+                        'locality': row['locality'],
+                        'website': row['website'],
+                        'latitude': row['latitude'],
+                        'longitude': row['longitude'],
+                        'status': row['status'],
+                        'notes': row.get('notes') or '',
+                        'type_key': row['type_key'],
+                        'type_label': row['type_label'],
+                        'type_description': row['type_description'],
+                        'aliases': [],
+                        'categories': [],
                     }
-                    f.write(json.dumps(record) + '\n')
-                    count += 1
-                    if count % 500 == 0:
-                        logger.info(f"  Entity vectors: {count:,}")
 
+                alias_name = row['alias_name']
+                if alias_name and alias_name not in seen_aliases:
+                    seen_aliases.add(alias_name)
+                    current_entity['aliases'].append({
+                        'alias_name': alias_name,
+                        'alias_type': row['alias_type'],
+                    })
+
+                cat_key = row['category_key']
+                if cat_key and cat_key not in seen_categories:
+                    seen_categories.add(cat_key)
+                    current_entity['categories'].append({
+                        'category_key': cat_key,
+                        'category_label': row['category_label'],
+                    })
+            if current_entity is not None:
+                entities.append(current_entity)
+
+            # 4) Enrich with locations + identifiers (short queries)
+            async with pool.acquire() as conn:
+                loc_rows = await conn.fetch(
+                    "SELECT el.entity_id, el.location_name, el.formatted_address, "
+                    "el.locality, el.admin_area_1, el.country "
+                    "FROM entity_location el "
+                    "WHERE el.entity_id = ANY($1) AND el.status = 'active' "
+                    "ORDER BY el.entity_id, el.is_primary DESC, el.location_id",
+                    eids
+                )
+                loc_map = {}
+                for lr in loc_rows:
+                    loc_map.setdefault(lr['entity_id'], []).append(dict(lr))
+
+                id_rows = await conn.fetch(
+                    "SELECT entity_id, identifier_namespace, identifier_value "
+                    "FROM entity_identifier "
+                    "WHERE entity_id = ANY($1) AND status = 'active' "
+                    "ORDER BY entity_id",
+                    eids
+                )
+                id_map = {}
+                for ir in id_rows:
+                    id_map.setdefault(ir['entity_id'], []).append(dict(ir))
+
+            for entity in entities:
+                entity['locations'] = loc_map.get(entity['entity_id'], [])
+                entity['identifiers'] = id_map.get(entity['entity_id'], [])
+
+            # 5) Vectorize + write
+            for entity in entities:
                 if limit is not None and count >= limit:
                     break
+                if entity['entity_id'] in completed_ids:
+                    skipped += 1
+                    continue
+                props = entity_to_weaviate_properties(entity)
+                text = build_entity_vectorization_text(props)
+                vec = vectorizer.vectorize_text(text)
+                record = {
+                    'entity_id': entity['entity_id'],
+                    'vector': vec.tolist(),
+                }
+                f.write(json.dumps(record) + '\n')
+                count += 1
+                if count % 500 == 0:
+                    logger.info(f"  Entity vectors: {count:,} new "
+                                f"(skipped {skipped:,}, page cursor: {last_entity_id})")
 
+    if skipped:
+        logger.info(f"  Skipped {skipped:,} already-vectorized entities")
     return count
 
 
 async def generate_location_vectors(pool, vectorizer, output_path: Path,
-                                    limit: int = None) -> int:
+                                    limit: int = None,
+                                    batch_size: int = 1000) -> int:
     """Generate location vectors and write to JSONL file.
 
-    Returns the number of locations vectorized.
+    Uses keyset pagination on location_id — short independent queries,
+    no long-lived transaction/cursor.
+
+    Returns the number of NEW locations vectorized this run.
     """
-    loc_sql = (
-        "SELECT el.location_id, el.entity_id, el.location_name, el.description, "
-        "el.address_line_1, el.address_line_2, el.locality, el.admin_area_1, el.country, "
-        "el.country_code, el.postal_code, el.formatted_address, "
-        "el.latitude, el.longitude, el.is_primary, el.status, "
-        "el.external_location_id, "
-        "elt.type_key AS location_type_key, elt.type_label AS location_type_label "
-        "FROM entity_location el "
-        "JOIN entity_location_type elt ON el.location_type_id = elt.location_type_id "
-        "WHERE el.status = 'active' "
-        "ORDER BY el.entity_id, el.location_id"
-    )
+    # Resume support: load location IDs already written
+    completed_ids = _load_completed_ids(output_path, 'location_id')
+    if completed_ids:
+        logger.info(f"  Resuming: {len(completed_ids):,} locations already vectorized")
 
     count = 0
-    with open(output_path, 'w') as f:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                cursor = await conn.cursor(loc_sql)
-                while True:
-                    rows = await cursor.fetch(5000)
-                    if not rows:
-                        break
-                    for row in rows:
-                        if limit is not None and count >= limit:
-                            break
-                        loc = dict(row)
-                        props = location_to_weaviate_properties(loc)
-                        text = build_location_vectorization_text(props)
-                        vec = vectorizer.vectorize_text(text)
-                        record = {
-                            'location_id': loc['location_id'],
-                            'vector': vec.tolist(),
-                        }
-                        f.write(json.dumps(record) + '\n')
-                        count += 1
-                        if count % 500 == 0:
-                            logger.info(f"  Location vectors: {count:,}")
-                    if limit is not None and count >= limit:
-                        break
+    skipped = 0
+    last_location_id = 0  # location_id is integer
 
+    file_mode = 'a' if completed_ids else 'w'
+    with open(output_path, file_mode) as f:
+        while True:
+            if limit is not None and count >= limit:
+                break
+
+            # Fetch next page of locations (short query)
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT el.location_id, el.entity_id, el.location_name, "
+                    "el.description, el.address_line_1, el.address_line_2, "
+                    "el.locality, el.admin_area_1, el.country, "
+                    "el.country_code, el.postal_code, el.formatted_address, "
+                    "el.latitude, el.longitude, el.is_primary, el.status, "
+                    "el.external_location_id, "
+                    "elt.type_key AS location_type_key, "
+                    "elt.type_label AS location_type_label "
+                    "FROM entity_location el "
+                    "JOIN entity_location_type elt "
+                    "ON el.location_type_id = elt.location_type_id "
+                    "WHERE el.status = 'active' AND el.location_id > $1 "
+                    "ORDER BY el.location_id LIMIT $2",
+                    last_location_id, batch_size
+                )
+            if not rows:
+                break
+            last_location_id = rows[-1]['location_id']
+
+            # Vectorize + write
+            for row in rows:
+                if limit is not None and count >= limit:
+                    break
+                loc_id = row['location_id']
+                if loc_id in completed_ids:
+                    skipped += 1
+                    continue
+                loc = dict(row)
+                props = location_to_weaviate_properties(loc)
+                text = build_location_vectorization_text(props)
+                vec = vectorizer.vectorize_text(text)
+                record = {
+                    'location_id': loc_id,
+                    'vector': vec.tolist(),
+                }
+                f.write(json.dumps(record) + '\n')
+                count += 1
+                if count % 500 == 0:
+                    logger.info(f"  Location vectors: {count:,} new "
+                                f"(skipped {skipped:,}, last_id: {last_location_id})")
+
+    if skipped:
+        logger.info(f"  Skipped {skipped:,} already-vectorized locations")
     return count
 
 
@@ -300,6 +363,10 @@ async def main():
         '--device', type=str, default=None,
         choices=['cpu', 'mps', 'cuda'],
         help='Torch device for inference (default: auto-detect best)',
+    )
+    parser.add_argument(
+        '--batch-size', type=int, default=1000,
+        help='Number of entities to enrich+vectorize per batch (default: 1000)',
     )
     parser.add_argument(
         '--db-url', type=str, default=None,
@@ -336,6 +403,7 @@ async def main():
 
         if args.limit:
             print(f"  Limit: {args.limit}")
+        print(f"  Batch size: {args.batch_size:,}")
         print(f"  PostgreSQL active entities:  {pg_entities:,}")
         print(f"  PostgreSQL active locations: {pg_locations:,}")
 
@@ -348,7 +416,8 @@ async def main():
             print(f"\n  Generating entity vectors → {entity_path.name}")
             t2 = time.time()
             n_ent = await generate_entity_vectors(pool, vectorizer, entity_path,
-                                                  limit=args.limit)
+                                                  limit=args.limit,
+                                                  batch_size=args.batch_size)
             t3 = time.time()
             rate = n_ent / (t3 - t2) if t3 > t2 else 0
             print(f"  ✅ {n_ent:,} entity vectors in {t3-t2:.1f}s ({rate:.0f}/sec)")
@@ -359,7 +428,8 @@ async def main():
             print(f"\n  Generating location vectors → {location_path.name}")
             t4 = time.time()
             n_loc = await generate_location_vectors(pool, vectorizer, location_path,
-                                                    limit=args.limit)
+                                                    limit=args.limit,
+                                                    batch_size=args.batch_size)
             t5 = time.time()
             rate = n_loc / (t5 - t4) if t5 > t4 else 0
             print(f"  ✅ {n_loc:,} location vectors in {t5-t4:.1f}s ({rate:.0f}/sec)")

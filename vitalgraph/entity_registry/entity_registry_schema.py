@@ -39,6 +39,7 @@ class EntityRegistrySchema:
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 status VARCHAR(20) NOT NULL DEFAULT 'active',
+                dedup_hash VARCHAR(32),
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 created_by VARCHAR(255),
@@ -339,6 +340,8 @@ class EntityRegistrySchema:
         "THEN EXECUTE 'ALTER INDEX idx_category_key RENAME TO idx_category_key_old'; END IF; END $$",
         # Add external_location_id for business-assigned location references
         "ALTER TABLE entity_location ADD COLUMN IF NOT EXISTS external_location_id VARCHAR(50)",
+        # Dedup hash: MD5 of dedup-relevant fields for fast PG ↔ MemoryDB comparison
+        "ALTER TABLE entity ADD COLUMN IF NOT EXISTS dedup_hash VARCHAR(32)",
     ]
 
     VIEWS = [

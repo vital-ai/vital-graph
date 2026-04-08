@@ -4,6 +4,8 @@ Alias operations mixin for the Entity Registry.
 
 from typing import Any, Dict, List, Optional
 
+from .entity_dedup import compute_dedup_hash
+
 
 class AliasMixin:
     """Alias CRUD methods."""
@@ -45,10 +47,15 @@ class AliasMixin:
                     is_primary, created_by, notes
                 )
 
-                # Refresh dedup index with new alias and notify
-                if self.dedup_index:
-                    entity = await self.get_entity(entity_id)
-                    if entity:
+                # Recompute dedup hash (aliases changed) and refresh index
+                entity = await self.get_entity(entity_id)
+                if entity:
+                    new_hash = compute_dedup_hash(entity)
+                    await conn.execute(
+                        "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                        new_hash, entity_id
+                    )
+                    if self.dedup_index:
                         self.dedup_index.add_entity(entity_id, entity)
                         await self._notify_dedup_change('add', entity_id)
 
@@ -74,10 +81,15 @@ class AliasMixin:
                     'alias_id': alias_id, 'alias_name': row['alias_name']
                 }, changed_by=retracted_by)
 
-                # Refresh dedup index without retracted alias and notify
-                if self.dedup_index:
-                    entity = await self.get_entity(row['entity_id'])
-                    if entity:
+                # Recompute dedup hash (alias retracted) and refresh index
+                entity = await self.get_entity(row['entity_id'])
+                if entity:
+                    new_hash = compute_dedup_hash(entity)
+                    await conn.execute(
+                        "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                        new_hash, row['entity_id']
+                    )
+                    if self.dedup_index:
                         self.dedup_index.add_entity(row['entity_id'], entity)
                         await self._notify_dedup_change('add', row['entity_id'])
 

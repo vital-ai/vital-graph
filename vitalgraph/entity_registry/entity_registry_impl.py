@@ -28,7 +28,7 @@ from vitalgraph.utils.db_retry import with_db_retry
 from .entity_alias_ops import AliasMixin
 from .entity_category_ops import CategoryMixin
 from .entity_changelog_ops import ChangeLogMixin
-from .entity_dedup import EntityDedupIndex
+from .entity_dedup import EntityDedupIndex, compute_dedup_hash
 from .entity_dedup_ops import DedupMixin
 from .entity_identifier_ops import IdentifierMixin
 from .entity_location_ops import LocationMixin
@@ -103,11 +103,21 @@ class EntityRegistryImpl(
 
             # Initialize dedup index if configured
             if self.dedup_index:
-                try:
-                    count = await self.dedup_index.initialize(self.pool)
-                    logger.info(f"Entity dedup index loaded {count} entities")
-                except Exception as e:
-                    logger.error(f"Failed to initialize entity dedup index: {e}")
+                if self.dedup_index.storage_config:
+                    # Persistent backend (Redis/MemoryDB): skip bulk init at
+                    # startup — the index is populated by the standalone
+                    # sync_dedup_index.py script. Just mark as initialized
+                    # so incremental updates via add_entity/remove_entity work.
+                    self.dedup_index._initialized = True
+                    logger.info("Entity dedup index: using existing MemoryDB data "
+                                "(run sync_dedup_index.py for full sync)")
+                else:
+                    # In-memory backend: must load from DB on every startup
+                    try:
+                        count = await self.dedup_index.initialize(self.pool)
+                        logger.info(f"Entity dedup index loaded {count} entities")
+                    except Exception as e:
+                        logger.error(f"Failed to initialize entity dedup index: {e}")
 
             # Ensure Weaviate collection if configured
             if self.weaviate_index:
@@ -212,15 +222,25 @@ class EntityRegistryImpl(
                 if entity_id is None:
                     raise RuntimeError("Failed to generate unique entity ID after 5 attempts")
 
+                # Compute dedup hash from the fields that will be indexed
+                alias_list = [
+                    {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
+                ]
+                dedup_hash = compute_dedup_hash({
+                    'type_key': type_key, 'primary_name': primary_name,
+                    'country': country, 'region': region, 'locality': locality,
+                    'aliases': alias_list,
+                })
+
                 row = await conn.fetchrow(
                     "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
                     "country, region, locality, website, latitude, longitude, "
-                    "metadata, created_by, notes) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13) "
+                    "metadata, created_by, notes, dedup_hash) "
+                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14) "
                     "RETURNING *",
                     entity_id, type_id, primary_name, description,
                     country, region, locality, website, latitude, longitude,
-                    metadata_json, created_by, notes
+                    metadata_json, created_by, notes, dedup_hash
                 )
                 entity = dict(row)
                 entity['entity_uri'] = entity_id_to_uri(entity_id)
@@ -252,9 +272,8 @@ class EntityRegistryImpl(
                 # Update dedup index and notify other workers
                 if self.dedup_index:
                     entity_for_index = dict(entity)
-                    entity_for_index['aliases'] = [
-                        {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
-                    ]
+                    entity_for_index['type_key'] = type_key
+                    entity_for_index['aliases'] = alias_list
                     self.dedup_index.add_entity(entity_id, entity_for_index)
                     await self._notify_dedup_change('add', entity_id)
 
@@ -440,10 +459,16 @@ class EntityRegistryImpl(
 
         updated = await self.get_entity(entity_id)
 
-        # Refresh dedup index if name or location fields changed
-        if self.dedup_index and updated:
-            dedup_fields = {'primary_name', 'country', 'region', 'locality'}
-            if dedup_fields & set(fields.keys()):
+        # Refresh dedup index and hash if name or location fields changed
+        dedup_fields = {'primary_name', 'country', 'region', 'locality'}
+        if updated and dedup_fields & set(fields.keys()):
+            new_hash = compute_dedup_hash(updated)
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                    new_hash, entity_id
+                )
+            if self.dedup_index:
                 self.dedup_index.add_entity(entity_id, updated)
                 await self._notify_dedup_change('add', entity_id)
 
