@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class DedupMixin:
     """Near-duplicate detection and cross-worker dedup sync methods."""
 
-    def find_similar(
+    async def find_similar(
         self,
         name: str,
         country: Optional[str] = None,
@@ -27,18 +27,76 @@ class DedupMixin:
         """Find entities similar to the given name/location.
 
         Uses the MinHash LSH index for candidate blocking and RapidFuzz for scoring.
+        For persistent backends (MemoryDB), fetches missing entity scoring data
+        from PostgreSQL on demand rather than caching the entire database.
 
         Returns:
             List of scored candidate dicts, or empty list if dedup is not enabled.
         """
         if not self.dedup_index:
             return []
-        return self.dedup_index.find_similar_by_name(
-            name=name, country=country, region=region, locality=locality,
-            type_key=type_key, limit=limit, min_score=min_score,
+
+        entity = {
+            'primary_name': name,
+            'country': country,
+            'region': region,
+            'locality': locality,
+        }
+
+        # Phase 1: Get candidate IDs from LSH (hits MemoryDB)
+        candidate_ids = self.dedup_index.get_candidate_ids(entity)
+        if not candidate_ids:
+            return []
+
+        # Phase 1.5: Fetch candidate entity data from PG
+        candidate_data = await self._fetch_entities_for_scoring(list(candidate_ids))
+
+        # Phase 2: Score with RapidFuzz
+        return self.dedup_index.score_candidates(
+            entity, candidate_data,
+            limit=limit, min_score=min_score, type_key=type_key,
         )
 
-    def find_duplicates_for_entity(
+    async def _fetch_entities_for_scoring(self, entity_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Batch-fetch entity scoring data from PostgreSQL.
+
+        Returns:
+            Mapping of entity_id → dict with primary_name, type_key,
+            alias_names, country, region, locality.
+        """
+        if not entity_ids:
+            return {}
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT e.entity_id, e.primary_name, et.type_key, "
+                "e.country, e.region, e.locality, ea.alias_name "
+                "FROM entity e "
+                "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                "AND ea.status != 'retracted' "
+                "WHERE e.entity_id = ANY($1) AND e.status != 'deleted'",
+                entity_ids,
+            )
+
+        entities: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            eid = row['entity_id']
+            if eid not in entities:
+                entities[eid] = {
+                    'primary_name': row['primary_name'],
+                    'type_key': row['type_key'],
+                    'alias_names': [],
+                    'country': row['country'],
+                    'region': row['region'],
+                    'locality': row['locality'],
+                }
+            alias = row['alias_name']
+            if alias:
+                entities[eid]['alias_names'].append(alias)
+
+        return entities
+
+    async def find_duplicates_for_entity(
         self,
         entity: Dict[str, Any],
         limit: int = 5,
@@ -51,9 +109,17 @@ class DedupMixin:
         """
         if not self.dedup_index:
             return []
-        return self.dedup_index.find_similar(
-            entity, limit=limit, min_score=min_score,
-            exclude_ids={entity.get('entity_id')},
+
+        exclude_ids = {entity.get('entity_id')}
+        candidate_ids = self.dedup_index.get_candidate_ids(entity)
+        if not candidate_ids:
+            return []
+
+        candidate_data = await self._fetch_entities_for_scoring(list(candidate_ids))
+
+        return self.dedup_index.score_candidates(
+            entity, candidate_data,
+            limit=limit, min_score=min_score, exclude_ids=exclude_ids,
         )
 
     # ------------------------------------------------------------------

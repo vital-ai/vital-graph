@@ -936,6 +936,110 @@ class EntityDedupIndex:
     # Query
     # ------------------------------------------------------------------
 
+    def get_candidate_ids(
+        self,
+        entity: Dict[str, Any],
+        query_names: Optional[List[str]] = None,
+    ) -> set:
+        """Phase 1: Retrieve candidate entity IDs from LSH indexes.
+
+        Uses MinHash LSH, phonetic, and typo-variant lookups.
+        Does NOT require _entity_cache — only queries the LSH indexes.
+
+        Args:
+            entity: Dict with primary_name and optional aliases/location.
+            query_names: Pre-computed name variants (optimization to avoid
+                         recomputing when called from find_similar).
+
+        Returns:
+            Set of candidate entity_id strings.
+        """
+        if query_names is None:
+            query_names = self._get_name_variants(entity)
+        if not query_names:
+            return set()
+
+        candidate_ids = set()
+
+        # 1a. MinHash LSH candidates
+        for name in query_names:
+            shingles = self._name_shingles(name, entity)
+            if not shingles:
+                continue
+            mh = self._build_minhash(shingles)
+            try:
+                raw_keys = self.lsh.query(mh)
+            except ValueError:
+                continue
+            for key in raw_keys:
+                candidate_ids.add(self._entity_id_from_lsh_key(key))
+
+        # 1b. Phonetic candidates (Double Metaphone code lookup)
+        candidate_ids.update(self._phonetic_candidates(query_names))
+
+        # 1c. Typo candidates (edit-distance-1 query variants → primary LSH)
+        candidate_ids.update(self._typo_candidates(query_names, entity))
+
+        return candidate_ids
+
+    def score_candidates(
+        self,
+        entity: Dict[str, Any],
+        candidate_data: Dict[str, Dict[str, Any]],
+        limit: int = 10,
+        min_score: float = DEFAULT_MIN_SCORE,
+        exclude_ids: Optional[set] = None,
+        type_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Score pre-fetched candidate entities against the query entity.
+
+        Used by the async mixin for persistent backends where candidate
+        data is fetched from PostgreSQL on demand (no local cache).
+
+        Args:
+            entity: Query entity dict with primary_name, aliases, location.
+            candidate_data: Mapping of entity_id → entity dict (from PG).
+            limit: Maximum number of results.
+            min_score: Minimum composite score (0-100).
+            exclude_ids: Entity IDs to skip.
+            type_key: Optional type filter.
+
+        Returns:
+            Scored candidate list, sorted by score descending.
+        """
+        exclude_ids = exclude_ids or set()
+        query_names = self._get_name_variants(entity)
+        if not query_names:
+            return []
+
+        results = []
+        for cid, cached in candidate_data.items():
+            if cid in exclude_ids:
+                continue
+            if type_key and cached.get('type_key') != type_key:
+                continue
+
+            score_info = self._score_pair(query_names, cached)
+            score = score_info['score']
+
+            is_phonetic = self._phonetic_match(query_names, cached)
+            if is_phonetic and self.phonetic_bonus > 0:
+                score = min(score + self.phonetic_bonus, 100.0)
+            score_info['detail']['phonetic_match'] = is_phonetic
+
+            if score >= min_score:
+                results.append({
+                    'entity_id': cid,
+                    'primary_name': cached['primary_name'],
+                    'type_key': cached.get('type_key'),
+                    'score': round(score, 1),
+                    'match_level': self._match_level(score),
+                    'score_detail': score_info['detail'],
+                })
+
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:limit]
+
     def find_similar(
         self,
         entity: Dict[str, Any],
@@ -976,27 +1080,7 @@ class EntityDedupIndex:
         if not query_names:
             return []
 
-        # Phase 1: Candidate retrieval (union of all methods)
-        candidate_ids = set()
-
-        # 1a. MinHash LSH candidates
-        for name in query_names:
-            shingles = self._name_shingles(name, entity)
-            if not shingles:
-                continue
-            mh = self._build_minhash(shingles)
-            try:
-                raw_keys = self.lsh.query(mh)
-            except ValueError:
-                continue
-            for key in raw_keys:
-                candidate_ids.add(self._entity_id_from_lsh_key(key))
-
-        # 1b. Phonetic candidates (Double Metaphone code lookup)
-        candidate_ids.update(self._phonetic_candidates(query_names))
-
-        # 1c. Typo candidates (edit-distance-1 query variants → primary LSH)
-        candidate_ids.update(self._typo_candidates(query_names, entity))
+        candidate_ids = self.get_candidate_ids(entity, query_names=query_names)
 
         # Phase 2: RapidFuzz scoring + phonetic bonus
         results = []

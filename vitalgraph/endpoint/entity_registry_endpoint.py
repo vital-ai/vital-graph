@@ -783,7 +783,7 @@ class EntityRegistryEndpoint:
             min_score: float = Query(50.0, ge=0, le=100),
             current_user: Dict = Depends(auth),
         ):
-            candidates = self.registry.find_similar(
+            candidates = await self.registry.find_similar(
                 name=name, country=country, region=region, locality=locality,
                 type_key=type_key, limit=limit, min_score=min_score,
             )
