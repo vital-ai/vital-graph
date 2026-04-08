@@ -39,6 +39,7 @@ class VitalGraphDBAdminREPL:
         self.db_connection = None
         self.config = None
         self.db_impl = None  # PostgreSQL database implementation
+        self.space_backend = None  # Space backend (has list_spaces, etc.)
         self.current_space_id = None  # Currently active space ID
         self.log_level = log_level.upper()  # Store current logging level
         self.loop = None  # Persistent event loop for async operations
@@ -195,6 +196,7 @@ class VitalGraphDBAdminREPL:
                 connected = self._run_async(space_backend.connect())
                 if connected:
                     self.db_impl = space_backend.db_impl
+                    self.space_backend = space_backend
                     self.vital_graph_impl.db_impl = self.db_impl
                     self.connected = True
                     sidecar_url = getattr(space_backend, 'sidecar_url', 'N/A')
@@ -242,6 +244,12 @@ class VitalGraphDBAdminREPL:
         
         return True
     
+    async def _list_spaces_async(self) -> list:
+        """List spaces, routing through space_backend for sparql_sql or db_impl otherwise."""
+        if self.space_backend and hasattr(self.space_backend, 'list_spaces'):
+            return await self.space_backend.list_spaces()
+        return await self.db_impl.list_spaces()
+
     def _get_backend_admin(self):
         """Return the backend-specific admin module for the current backend type."""
         backend_type = self.config.get_backend_config().get('type', 'postgresql')
@@ -464,12 +472,25 @@ class VitalGraphDBAdminREPL:
         
         try:
             # Get spaces from database
-            spaces = self._run_async(self.db_impl.list_spaces())
+            # Route through space_backend if available (sparql_sql), else db_impl
+            if self.space_backend and hasattr(self.space_backend, 'list_spaces'):
+                raw_spaces = self._run_async(self.space_backend.list_spaces())
+            else:
+                raw_spaces = self._run_async(self.db_impl.list_spaces())
             
-            # Define table headers
-            headers = ['ID', 'Space', 'Name', 'Tenant', 'Description', 'Updated']
+            # Normalize to dicts with display-friendly keys
+            spaces = []
+            for s in raw_spaces:
+                row = dict(s) if hasattr(s, 'keys') else s
+                spaces.append({
+                    'space_id': row.get('space_id', 'N/A'),
+                    'space_name': row.get('space_name', ''),
+                    'tenant': row.get('tenant', 'default'),
+                    'description': row.get('space_description', ''),
+                    'updated': row.get('update_time', ''),
+                })
             
-            # Display as formatted table
+            headers = ['Space ID', 'Space Name', 'Tenant', 'Description', 'Updated']
             self.format_table(spaces, headers, "VitalGraphDB Graph Spaces")
                     
         except Exception as e:
@@ -492,17 +513,27 @@ class VitalGraphDBAdminREPL:
             return True
         
         try:
-            # Get users from database
-            users = self._run_async(self.db_impl.list_users())
+            # Get users via backend admin
+            admin = self._get_backend_admin()
+            if admin and hasattr(admin, 'list_users'):
+                raw_users = self._run_async(admin.list_users(self.db_impl))
+            else:
+                raw_users = self._run_async(self.db_impl.list_users())
             
-            # Add password status to each user for display
-            for user in users:
-                user['password_status'] = '[HIDDEN]' if user.get('password') else '[NOT SET]'
+            # Normalize to dicts with display-friendly keys
+            users = []
+            for u in raw_users:
+                row = dict(u) if hasattr(u, 'keys') else u.__dict__ if hasattr(u, '__dict__') else u
+                users.append({
+                    'user_id': row.get('user_id', 'N/A'),
+                    'username': row.get('username', ''),
+                    'email': row.get('email', ''),
+                    'tenant': row.get('tenant', 'default'),
+                    'password_status': '[HIDDEN]' if row.get('password') else '[NOT SET]',
+                    'updated': row.get('update_time', ''),
+                })
             
-            # Define table headers
-            headers = ['ID', 'Username', 'Email', 'Tenant', 'Password Status', 'Updated']
-            
-            # Display as formatted table
+            headers = ['User ID', 'Username', 'Email', 'Tenant', 'Password Status', 'Updated']
             self.format_table(users, headers, "VitalGraphDB Database Users")
                     
         except Exception as e:
@@ -622,14 +653,16 @@ class VitalGraphDBAdminREPL:
         
         try:
             # Get all spaces from database to validate the space_id
-            spaces = self._run_async(self.db_impl.list_spaces())
+            spaces = self._run_async(self._list_spaces_async())
             
             # Check if space_id exists (can be either ID or space name)
             valid_space = None
             for space in spaces:
-                if (str(space.get('id')) == space_id or 
-                    space.get('space') == space_id or
-                    space.get('space_name') == space_id):
+                row = dict(space) if hasattr(space, 'keys') else space
+                if (str(row.get('id')) == space_id or 
+                    row.get('space_id') == space_id or
+                    row.get('space') == space_id or
+                    row.get('space_name') == space_id):
                     valid_space = space
                     break
             
@@ -971,11 +1004,13 @@ class VitalGraphDBAdminREPL:
     def _validate_space_exists(self, space_id: str) -> bool:
         """Validate that a space exists in the database."""
         try:
-            spaces = asyncio.run(self.db_impl.list_spaces())
+            spaces = self._run_async(self._list_spaces_async())
             for space in spaces:
-                if (str(space.get('id')) == space_id or 
-                    space.get('space') == space_id or
-                    space.get('space_name') == space_id):
+                row = dict(space) if hasattr(space, 'keys') else space
+                if (str(row.get('id')) == space_id or 
+                    row.get('space_id') == space_id or
+                    row.get('space') == space_id or
+                    row.get('space_name') == space_id):
                     return True
             return False
         except Exception:
@@ -997,12 +1032,14 @@ class VitalGraphDBAdminREPL:
         
         # Validate space exists
         try:
-            spaces = asyncio.run(self.db_impl.list_spaces())
+            spaces = self._run_async(self._list_spaces_async())
             valid_space = None
             for space in spaces:
-                if (str(space.get('id')) == params['space_id'] or 
-                    space.get('space') == params['space_id'] or
-                    space.get('space_name') == params['space_id']):
+                row = dict(space) if hasattr(space, 'keys') else space
+                if (str(row.get('id')) == params['space_id'] or 
+                    row.get('space_id') == params['space_id'] or
+                    row.get('space') == params['space_id'] or
+                    row.get('space_name') == params['space_id']):
                     valid_space = space
                     break
             
@@ -1165,8 +1202,8 @@ class VitalGraphDBAdminREPL:
             if sid:
                 space_ids = [sid]
             else:
-                spaces = await self.db_impl.list_spaces()
-                space_ids = [s.get('space', s.get('id', '')) for s in spaces if s]
+                spaces = await self._list_spaces_async()
+                space_ids = [dict(s).get('space_id', dict(s).get('space', dict(s).get('id', ''))) if hasattr(s, 'keys') else s.get('space_id', s.get('space', s.get('id', ''))) for s in spaces if s]
                 if not space_ids:
                     print("No spaces found.")
                     return
@@ -1232,8 +1269,8 @@ class VitalGraphDBAdminREPL:
             if sid:
                 space_ids = [sid]
             else:
-                spaces = await self.db_impl.list_spaces()
-                space_ids = [s.get('space', s.get('id', '')) for s in spaces if s]
+                spaces = await self._list_spaces_async()
+                space_ids = [dict(s).get('space_id', dict(s).get('space', '')) if hasattr(s, 'keys') else s.get('space_id', s.get('space', '')) for s in spaces if s]
                 if not space_ids:
                     print("No spaces found.")
                     return
@@ -1279,8 +1316,8 @@ class VitalGraphDBAdminREPL:
             if sid:
                 space_ids = [sid]
             else:
-                spaces = await self.db_impl.list_spaces()
-                space_ids = [s.get('space', s.get('id', '')) for s in spaces if s]
+                spaces = await self._list_spaces_async()
+                space_ids = [dict(s).get('space_id', dict(s).get('space', '')) if hasattr(s, 'keys') else s.get('space_id', s.get('space', '')) for s in spaces if s]
                 if not space_ids:
                     print("No spaces found.")
                     return
@@ -1326,8 +1363,8 @@ class VitalGraphDBAdminREPL:
             if sid:
                 space_ids = [sid]
             else:
-                spaces = await self.db_impl.list_spaces()
-                space_ids = [s.get('space', s.get('id', '')) for s in spaces if s]
+                spaces = await self._list_spaces_async()
+                space_ids = [dict(s).get('space_id', dict(s).get('space', '')) if hasattr(s, 'keys') else s.get('space_id', s.get('space', '')) for s in spaces if s]
                 if not space_ids:
                     print("No spaces found.")
                     return
@@ -1378,8 +1415,8 @@ class VitalGraphDBAdminREPL:
             if sid:
                 space_ids = [sid]
             else:
-                spaces = await self.db_impl.list_spaces()
-                space_ids = [s.get('space', s.get('id', '')) for s in spaces if s]
+                spaces = await self._list_spaces_async()
+                space_ids = [dict(s).get('space_id', dict(s).get('space', '')) if hasattr(s, 'keys') else s.get('space_id', s.get('space', '')) for s in spaces if s]
                 if not space_ids:
                     print("No spaces found.")
                     return
@@ -1544,6 +1581,7 @@ Note: All commands must end with a semicolon (;)
                 connected = self._run_async(space_backend.connect())
                 if connected:
                     self.db_impl = space_backend.db_impl
+                    self.space_backend = space_backend
                     self.connected = True
                     return True
                 else:
@@ -2239,6 +2277,15 @@ def setup_logging(log_level: str = "INFO"):
 def main():
     """Main entry point for VitalGraphDB admin REPL."""
     args = parse_args()
+    
+    # Load .env file so profile-based env vars (PROD_*, LOCAL_*, etc.) are available
+    try:
+        from dotenv import load_dotenv
+        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path, override=False)
+    except ImportError:
+        pass
     
     # Setup logging for progress tracking with specified level
     setup_logging(args.log_level)

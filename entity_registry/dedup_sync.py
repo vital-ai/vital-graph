@@ -297,7 +297,7 @@ async def main():
         since_dt = _parse_since(args.since) if args.since else None
 
         if args.status or args.check:
-            await dedup_index.initialize(pool)
+            await dedup_index.initialize(pool, skip_lock=True)
 
             if args.status:
                 await show_status(dedup_index, pool)
@@ -310,7 +310,7 @@ async def main():
                             since=since_dt)
         elif args.entity_id:
             # Initialize first so we can update incrementally
-            await dedup_index.initialize(pool)
+            await dedup_index.initialize(pool, skip_lock=True)
             await single_entity_sync(dedup_index, pool, args.entity_id,
                                       dry_run=args.dry_run)
     finally:

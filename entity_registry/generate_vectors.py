@@ -58,7 +58,9 @@ logger = logging.getLogger(__name__)
 LINE = '─' * 60
 
 
-async def create_pool() -> asyncpg.Pool:
+async def create_pool(db_url: str = None) -> asyncpg.Pool:
+    if db_url:
+        return await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     from vitalgraph.config.config_loader import VitalGraphConfig
     config = VitalGraphConfig()
     db_config = config.get_database_config()
@@ -299,6 +301,11 @@ async def main():
         choices=['cpu', 'mps', 'cuda'],
         help='Torch device for inference (default: auto-detect best)',
     )
+    parser.add_argument(
+        '--db-url', type=str, default=None,
+        help='PostgreSQL connection URL (e.g. postgresql://user:pass@host:5432/dbname). '
+             'Overrides config/env vars when provided.',
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -316,7 +323,7 @@ async def main():
     print(f"  Model loaded in {t1-t0:.1f}s (dim={vectorizer.dim})")
 
     # Create DB pool
-    pool = await create_pool()
+    pool = await create_pool(db_url=args.db_url)
 
     try:
         async with pool.acquire() as conn:

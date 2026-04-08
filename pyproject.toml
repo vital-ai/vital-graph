@@ -66,6 +66,7 @@ server = [
     "pytidb",
     "weaviate-client>=4.19.2",
     "datasketch>=1.6.0",
+    "redis>=5.0.0",
     "rapidfuzz>=3.0.0",
     "jellyfish>=1.0.0",
 ]

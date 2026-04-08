@@ -13,6 +13,10 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+# Force native DNS resolver for async gRPC — the default c-ares resolver
+# does not respect VPN/system DNS on some platforms.
+os.environ.setdefault('GRPC_DNS_RESOLVER', 'native')
+
 import requests
 import weaviate
 from weaviate.classes.data import DataObject, DataReference

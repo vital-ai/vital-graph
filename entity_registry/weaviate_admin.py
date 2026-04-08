@@ -20,6 +20,10 @@ import sys
 import time
 from pathlib import Path
 
+# Force native DNS resolver for async gRPC — the default c-ares resolver
+# does not respect VPN/system DNS on some platforms.
+os.environ.setdefault('GRPC_DNS_RESOLVER', 'native')
+
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))

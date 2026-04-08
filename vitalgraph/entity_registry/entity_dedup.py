@@ -9,12 +9,16 @@ Supports two storage backends:
 - Redis: persistent, shared across workers
 """
 
+import asyncio
 import logging
 import os
 import pickle
+import time as _time_mod
+import uuid
 from typing import Any, Dict, List, Optional, Set
 
 import jellyfish
+import redis as redis_lib
 from datasketch import MinHash, MinHashLSH
 from rapidfuzz import fuzz
 
@@ -27,6 +31,21 @@ DEFAULT_SHINGLE_K = 3
 DEFAULT_MIN_SCORE = 50.0
 DEFAULT_PHONETIC_BONUS = 10.0
 DEFAULT_PHONETIC_LSH_THRESHOLD = 0.15
+
+# Distributed lock parameters (Redis / MemoryDB)
+LOCK_KEY_SUFFIX = b'_init_lock'
+LOCK_TTL_SECONDS = 600       # 10-minute safety TTL
+LOCK_RETRY_INTERVAL = 2      # seconds between retries
+LOCK_MAX_WAIT = 300           # 5 minutes max wait
+
+# Lua script for atomic release: only delete if we still own the lock
+_LUA_RELEASE = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
 
 
 def build_shingles(entity: Dict[str, Any], k: int = DEFAULT_SHINGLE_K) -> set:
@@ -114,6 +133,10 @@ class EntityDedupIndex:
 
         self._initialized = False
 
+        # Distributed lock state (Redis / MemoryDB only)
+        self._redis_client: Optional[redis_lib.Redis] = None
+        self._lock_id: Optional[str] = None
+
     def _create_lsh(self, threshold: float, storage_config: Optional[Dict[str, Any]] = None) -> MinHashLSH:
         """Create a MinHashLSH instance."""
         kwargs: Dict[str, Any] = {
@@ -189,6 +212,85 @@ class EntityDedupIndex:
         return cls(num_perm=num_perm, threshold=threshold, storage_config=storage_config)
 
     # ------------------------------------------------------------------
+    # Distributed lock (Redis / MemoryDB)
+    # ------------------------------------------------------------------
+
+    def _get_redis_client(self) -> Optional[redis_lib.Redis]:
+        """Get or create a Redis client for distributed locking.
+
+        Tries RedisCluster first (required for MemoryDB / ElastiCache
+        cluster mode), falls back to standalone Redis for local dev.
+        """
+        if not self.storage_config:
+            return None
+        if self._redis_client is not None:
+            return self._redis_client
+        redis_params = dict(self.storage_config.get('redis', {}))
+        redis_params.setdefault('decode_responses', False)
+        try:
+            self._redis_client = redis_lib.RedisCluster(**redis_params)
+            logger.debug("Dedup lock using RedisCluster client")
+        except (redis_lib.exceptions.RedisClusterException, Exception):
+            self._redis_client = redis_lib.Redis(**redis_params)
+            logger.debug("Dedup lock using standalone Redis client")
+        return self._redis_client
+
+    def _lock_key(self) -> bytes:
+        """Redis key for the distributed init/rebuild lock."""
+        base = self.storage_config.get('basename', b'dedup') if self.storage_config else b'dedup'
+        if isinstance(base, str):
+            base = base.encode()
+        return base + LOCK_KEY_SUFFIX
+
+    def _try_acquire_lock(self, ttl: int = LOCK_TTL_SECONDS) -> bool:
+        """Single non-blocking attempt to acquire the lock. Returns True if acquired."""
+        client = self._get_redis_client()
+        if client is None:
+            return True  # in-memory backend — no lock needed
+        self._lock_id = str(uuid.uuid4())
+        acquired = client.set(self._lock_key(), self._lock_id.encode(), nx=True, ex=ttl)
+        if acquired:
+            logger.info(f"Acquired dedup init lock (id={self._lock_id[:8]})")
+        return bool(acquired)
+
+    def _release_lock(self):
+        """Release the distributed lock (only if we still own it)."""
+        client = self._get_redis_client()
+        if client is None or self._lock_id is None:
+            return
+        try:
+            client.eval(_LUA_RELEASE, 1, self._lock_key(), self._lock_id.encode())
+            logger.info(f"Released dedup init lock (id={self._lock_id[:8]})")
+        except Exception as e:
+            logger.warning(f"Error releasing dedup lock: {e}")
+        finally:
+            self._lock_id = None
+
+    def _acquire_lock_sync(self, ttl: int = LOCK_TTL_SECONDS,
+                           max_wait: int = LOCK_MAX_WAIT) -> bool:
+        """Blocking sync lock acquisition with retries (for clear_index)."""
+        deadline = _time_mod.time() + max_wait
+        while _time_mod.time() < deadline:
+            if self._try_acquire_lock(ttl):
+                return True
+            logger.info("Dedup init lock held by another process, waiting...")
+            _time_mod.sleep(LOCK_RETRY_INTERVAL)
+        logger.warning(f"Could not acquire dedup init lock after {max_wait}s")
+        return False
+
+    async def _acquire_lock_async(self, ttl: int = LOCK_TTL_SECONDS,
+                                  max_wait: int = LOCK_MAX_WAIT) -> bool:
+        """Non-blocking async lock acquisition with retries (for initialize)."""
+        deadline = _time_mod.time() + max_wait
+        while _time_mod.time() < deadline:
+            if self._try_acquire_lock(ttl):
+                return True
+            logger.info("Dedup init lock held by another process, waiting...")
+            await asyncio.sleep(LOCK_RETRY_INTERVAL)
+        logger.warning(f"Could not acquire dedup init lock after {max_wait}s")
+        return False
+
+    # ------------------------------------------------------------------
     # Index management
     # ------------------------------------------------------------------
 
@@ -198,16 +300,25 @@ class EntityDedupIndex:
         For in-memory backend: simply replaces the LSH object.
         For Redis backend: creates a new LSH (datasketch clears Redis keys
         associated with the previous index prefix automatically on new init).
-        """
-        self.lsh = self._create_lsh(self.threshold, self.storage_config)
-        self.phonetic_lsh = self._create_lsh(
-            self.phonetic_threshold, self._phonetic_storage_config(),
-        )
-        self._entity_cache.clear()
-        self._initialized = False
-        logger.info("Dedup index cleared")
 
-    async def initialize(self, pool, since=None, chunk_size: int = 5000) -> int:
+        Acquires a distributed lock (Redis backends) to prevent concurrent
+        clear/initialize races across processes.
+        """
+        if not self._acquire_lock_sync():
+            raise RuntimeError("Could not acquire dedup init lock for clear_index")
+        try:
+            self.lsh = self._create_lsh(self.threshold, self.storage_config)
+            self.phonetic_lsh = self._create_lsh(
+                self.phonetic_threshold, self._phonetic_storage_config(),
+            )
+            self._entity_cache.clear()
+            self._initialized = False
+            logger.info("Dedup index cleared")
+        finally:
+            self._release_lock()
+
+    async def initialize(self, pool, since=None, chunk_size: int = 5000,
+                         skip_lock: bool = False) -> int:
         """Load entities from the database and build/update the LSH index.
 
         Uses a single bulk query (entity + aliases via LEFT JOIN) and processes
@@ -218,17 +329,35 @@ class EntityDedupIndex:
         PostgreSQL. For the in-memory backend this is a no-op since the index
         starts empty on each process start.
 
+        Acquires a distributed lock (Redis backends) so that concurrent
+        processes (e.g. multiple ECS tasks) don't duplicate work or race
+        during stale-entry cleanup.
+
         Args:
             pool: asyncpg connection pool.
             since: Optional datetime — if provided, only sync entities whose
                    updated_time >= since (incremental sync). Full sync if None.
             chunk_size: Number of entity rows to fetch per chunk.
+            skip_lock: If True, skip the distributed lock (for read-only
+                       operations like --status / --check).
 
         Returns:
             Number of entities indexed.
         """
-        import time as _time
-        start = _time.time()
+        if skip_lock:
+            return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
+
+        if not await self._acquire_lock_async():
+            raise RuntimeError("Could not acquire dedup init lock for initialize")
+
+        try:
+            return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
+        finally:
+            self._release_lock()
+
+    async def _do_initialize(self, pool, since=None, chunk_size: int = 5000) -> int:
+        """Inner initialize logic (called under the distributed lock)."""
+        start = _time_mod.time()
 
         # Track IDs that existed in the index before this sync (for stale detection)
         pre_existing_ids = set(self._entity_cache.keys())
@@ -322,7 +451,7 @@ class EntityDedupIndex:
                 logger.info(f"Removed {len(stale_ids)} stale entities from dedup index")
 
         self._initialized = True
-        duration = _time.time() - start
+        duration = _time_mod.time() - start
         logger.info(f"Entity dedup index: {count:,} entities indexed in {duration:.1f}s"
                      f"{' (incremental)' if since else ' (full)'}")
         return count
