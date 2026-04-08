@@ -197,7 +197,9 @@ class EntityDedupIndex:
                 redis_params['ssl_cert_reqs'] = None  # MemoryDB uses Amazon-managed certs
 
             env_name = os.environ.get('VITALGRAPH_ENVIRONMENT', '').strip().lower()
-            basename = f"{env_name}_dedup" if env_name else 'dedup'
+            # Wrap in Redis hash tags {…} so all datasketch keys hash to the
+            # same cluster slot (required for MemoryDB / Redis Cluster).
+            basename = f"{{{env_name}_dedup}}" if env_name else '{dedup}'
 
             storage_config = {
                 'type': 'redis',
