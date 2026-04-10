@@ -882,11 +882,13 @@ class EntityRegistryEndpoint:
                     locations=[EntitySearchLocationResult(**loc) for loc in r.get('locations', [])],
                 ) for r in raw]
             else:
-                # Identifier-only: use Weaviate filter search (no vector, no geo)
-                raw = await weaviate_index.search_topic(
-                    query=identifier_value, type_key=type_key, category_key=category_key,
+                # Identifier-only: Weaviate filter search (exact match, no vector)
+                raw = await weaviate_index.search_by_identifier(
+                    identifier_value=identifier_value,
+                    identifier_namespace=identifier_namespace,
+                    type_key=type_key, category_key=category_key,
                     country=country, region=region, locality=locality,
-                    limit=limit, min_certainty=0.0, **id_kw,
+                    limit=limit,
                 )
                 results = [EntitySearchResult(**r) for r in raw]
 

@@ -19,7 +19,7 @@ os.environ.setdefault('GRPC_DNS_RESOLVER', 'native')
 
 import requests
 import weaviate
-from weaviate.classes.data import DataObject, DataReference
+from weaviate.classes.data import DataObject
 from weaviate.classes.init import Auth
 import weaviate.classes.query as wvq
 
@@ -74,6 +74,7 @@ class EntityWeaviateIndex:
             token_data['access_token'],
             expires_in=86400,  # Large fake value; we manage refresh ourselves
         )
+        from weaviate.config import AdditionalConfig, ConnectionConfig
         return weaviate.use_async_with_custom(
             http_host=http_host,
             http_port=443,
@@ -83,6 +84,12 @@ class EntityWeaviateIndex:
             grpc_secure=False,
             auth_credentials=auth_creds,
             skip_init_checks=True,
+            additional_config=AdditionalConfig(
+                connection=ConnectionConfig(
+                    session_pool_connections=100,
+                    session_pool_maxsize=200,
+                ),
+            ),
         )
 
     def _reconnect(self):
@@ -101,18 +108,37 @@ class EntityWeaviateIndex:
             logger.error(f"Weaviate reconnect failed: {e}")
 
     async def _ensure_connected(self):
-        """If a token refresh created a pending client, swap and connect it."""
+        """If a token refresh created a pending client, swap and connect it.
+
+        Retries up to 3 times with exponential backoff on transient errors
+        (e.g. ConnectTimeout) so long-running jobs aren't killed by blips.
+        """
         if self._needs_reconnect and self._pending_client:
+            import asyncio
+            import warnings
             old_client = self.client
             self.client = self._pending_client
-            await self.client.connect()
+            max_retries = 3
+            for attempt in range(1, max_retries + 1):
+                try:
+                    await self.client.connect()
+                    break
+                except Exception as e:
+                    if attempt == max_retries:
+                        raise
+                    wait = 5 * attempt
+                    logger.warning(f"Weaviate reconnect attempt {attempt}/{max_retries} failed: {e} "
+                                   f"— retrying in {wait}s")
+                    await asyncio.sleep(wait)
             self._collection = None
             self._location_collection = None
             self._needs_reconnect = False
             self._pending_client = None
             logger.info("Weaviate async client reconnected")
             try:
-                await old_client.close()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", ResourceWarning)
+                    await old_client.close()
             except Exception:
                 pass
 
@@ -898,8 +924,8 @@ class EntityWeaviateIndex:
         pg_loc_ids = set()
         upserted_count = 0
         pending_batch = []
-        # Track entity_id → [location_id] for cross-ref setting
-        entity_loc_map: Dict[str, List[int]] = {}
+        # Track entity_id → {location_id} for cross-ref setting (set prevents dupes)
+        entity_loc_map: Dict[str, set] = {}
 
         async def _flush_loc_batch():
             nonlocal upserted_count
@@ -971,7 +997,7 @@ class EntityWeaviateIndex:
             for row in rows:
                 loc = dict(row)
                 pg_loc_ids.add(loc['location_id'])
-                entity_loc_map.setdefault(loc['entity_id'], []).append(loc['location_id'])
+                entity_loc_map.setdefault(loc['entity_id'], set()).add(loc['location_id'])
                 pending_batch.append(loc)
 
                 if len(pending_batch) >= batch_size:
@@ -980,39 +1006,50 @@ class EntityWeaviateIndex:
         # Flush remaining
         await _flush_loc_batch()
 
-        # Set Entity→Location cross-references (batched)
-        ref_batch = []
-        ref_batch_size = 500
+        # Set Entity→Location cross-references using reference_replace
+        # (idempotent — replaces all refs rather than appending, so re-runs
+        # produce clean data with no duplicates)
+        import asyncio
+        import logging as _logging
         ref_count = 0
+        ref_errors = 0
         total_refs = len(entity_loc_map)
+        sem = asyncio.Semaphore(100)
 
-        async def _flush_ref_batch():
-            nonlocal ref_count
-            if ref_batch:
-                await self._ensure_connected()
-                response = await self.collection.data.reference_add_many(ref_batch)
-                if hasattr(response, 'errors') and response.errors:
-                    for err in response.errors:
-                        logger.error(f"Cross-ref batch error: {err}")
-                ref_count += len(ref_batch)
-                if ref_count % 2000 < len(ref_batch):
-                    logger.info(f"  Cross-refs set: {ref_count:,}/{total_refs:,} entities...")
-                ref_batch.clear()
+        _logging.getLogger("httpx").setLevel(_logging.WARNING)
 
-        for eid, loc_ids in entity_loc_map.items():
+        async def _replace_one(eid: str, loc_ids: set):
+            nonlocal ref_count, ref_errors
             entity_uuid = entity_id_to_weaviate_uuid(eid)
             loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in loc_ids]
-            ref_batch.append(DataReference(
-                from_property="locations",
-                from_uuid=entity_uuid,
-                to_uuid=loc_uuids,
-            ))
-            if len(ref_batch) >= ref_batch_size:
-                await _flush_ref_batch()
-        await _flush_ref_batch()
+            async with sem:
+                try:
+                    await self.collection.data.reference_replace(
+                        from_uuid=entity_uuid,
+                        from_property="locations",
+                        to=loc_uuids,
+                    )
+                    ref_count += 1
+                except Exception as e:
+                    ref_errors += 1
+                    if ref_errors <= 5:
+                        logger.error(f"Cross-ref replace error for {eid}: {e}")
 
+        items = list(entity_loc_map.items())
+        chunk_size = 1000
+        for i in range(0, len(items), chunk_size):
+            chunk = items[i:i + chunk_size]
+            await self._ensure_connected()
+            await asyncio.gather(*[_replace_one(eid, lids) for eid, lids in chunk])
+            elapsed = _time.time() - start
+            rate = ref_count / elapsed if elapsed > 0 else 0
+            logger.info(f"  Cross-refs: {ref_count:,}/{total_refs:,} "
+                        f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
+
+        _logging.getLogger("httpx").setLevel(_logging.INFO)
         if ref_count:
-            logger.info(f"Set location cross-refs on {ref_count:,} entities")
+            logger.info(f"Set location cross-refs on {ref_count:,} entities"
+                        f"{f' ({ref_errors} errors)' if ref_errors else ''}")
 
         # Remove stale location objects (full sync only)
         deleted_count = 0
@@ -1052,17 +1089,19 @@ class EntityWeaviateIndex:
     # Cross-reference repair
     # ------------------------------------------------------------------
 
-    async def set_cross_refs(self, pool, batch_size: int = 500) -> int:
+    async def set_cross_refs(self, pool, batch_size: int = 500, skip: int = 0) -> int:
         """Set Entity→Location cross-references from PostgreSQL mapping.
 
         Use this to repair cross-refs without re-inserting entities/locations.
+        Args:
+            skip: Number of entities to skip (for resuming interrupted runs).
         """
         import time as _time
         start = _time.time()
         await self._ensure_connected()
 
         logger.info("Building entity→location mapping from PostgreSQL...")
-        entity_loc_map: Dict[str, List[int]] = {}
+        entity_loc_map: Dict[str, set] = {}
         last_location_id = 0
         total_locs = 0
         while True:
@@ -1077,45 +1116,59 @@ class EntityWeaviateIndex:
                 break
             last_location_id = rows[-1]['location_id']
             for row in rows:
-                entity_loc_map.setdefault(row['entity_id'], []).append(row['location_id'])
+                entity_loc_map.setdefault(row['entity_id'], set()).add(row['location_id'])
             total_locs += len(rows)
 
         logger.info(f"Found {total_locs:,} locations across {len(entity_loc_map):,} entities")
 
-        ref_batch = []
-        ref_count = 0
+        import asyncio
+        import logging as _logging
+
         total_refs = len(entity_loc_map)
+        ref_count = 0
+        ref_errors = 0
+        sem = asyncio.Semaphore(100)
 
-        async def _flush():
-            nonlocal ref_count
-            if ref_batch:
-                await self._ensure_connected()
-                response = await self.collection.data.reference_add_many(ref_batch)
-                if hasattr(response, 'errors') and response.errors:
-                    for err in response.errors:
-                        logger.error(f"Cross-ref batch error: {err}")
-                ref_count += len(ref_batch)
-                if ref_count % 2000 < len(ref_batch) or ref_count < batch_size * 2:
-                    elapsed = _time.time() - start
-                    rate = ref_count / elapsed if elapsed > 0 else 0
-                    logger.info(f"  Cross-refs: {ref_count:,}/{total_refs:,} "
-                                f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
-                ref_batch.clear()
+        # Suppress per-request httpx logging for speed
+        _logging.getLogger("httpx").setLevel(_logging.WARNING)
 
-        for eid, loc_ids in entity_loc_map.items():
+        async def _replace_one(eid: str, loc_ids: set):
+            nonlocal ref_count, ref_errors
             entity_uuid = entity_id_to_weaviate_uuid(eid)
             loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in loc_ids]
-            ref_batch.append(DataReference(
-                from_property="locations",
-                from_uuid=entity_uuid,
-                to_uuid=loc_uuids,
-            ))
-            if len(ref_batch) >= batch_size:
-                await _flush()
-        await _flush()
+            async with sem:
+                try:
+                    await self.collection.data.reference_replace(
+                        from_uuid=entity_uuid,
+                        from_property="locations",
+                        to=loc_uuids,
+                    )
+                    ref_count += 1
+                except Exception as e:
+                    ref_errors += 1
+                    if ref_errors <= 5:
+                        logger.error(f"Cross-ref replace error for {eid}: {e}")
 
+        items = list(entity_loc_map.items())
+        if skip > 0:
+            logger.info(f"Skipping first {skip:,} entities (already processed)")
+            items = items[skip:]
+            total_refs = len(items)
+            logger.info(f"Resuming with {total_refs:,} remaining entities")
+        chunk_size = 1000
+        for i in range(0, len(items), chunk_size):
+            chunk = items[i:i + chunk_size]
+            await self._ensure_connected()
+            await asyncio.gather(*[_replace_one(eid, lids) for eid, lids in chunk])
+            elapsed = _time.time() - start
+            rate = ref_count / elapsed if elapsed > 0 else 0
+            logger.info(f"  Cross-refs: {ref_count:,}/{total_refs:,} "
+                        f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
+
+        _logging.getLogger("httpx").setLevel(_logging.INFO)
         duration = _time.time() - start
-        logger.info(f"Cross-refs complete: {ref_count:,} entities linked in {duration:.1f}s")
+        logger.info(f"Cross-refs complete: {ref_count:,} entities linked in {duration:.1f}s"
+                    f"{f' ({ref_errors} errors)' if ref_errors else ''}")
         return ref_count
 
     # ------------------------------------------------------------------
@@ -1200,6 +1253,62 @@ class EntityWeaviateIndex:
 
         except Exception as e:
             logger.error(f"Weaviate topic search failed: {e}")
+            return []
+
+    async def search_by_identifier(
+        self,
+        identifier_value: str,
+        identifier_namespace: Optional[str] = None,
+        type_key: Optional[str] = None,
+        category_key: Optional[str] = None,
+        country: Optional[str] = None,
+        region: Optional[str] = None,
+        locality: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Filter-only identifier search using Weaviate (no vector similarity).
+
+        Uses fetch_objects with exact-match filters on identifier_keys or
+        identifier_values properties.
+        """
+        await self._ensure_connected()
+        try:
+            filters = self._build_filters(
+                type_key=type_key, category_key=category_key,
+                country=country, region=region, locality=locality,
+                identifier_value=identifier_value,
+                identifier_namespace=identifier_namespace,
+            )
+
+            response = await self.collection.query.fetch_objects(
+                filters=filters,
+                limit=limit,
+            )
+
+            results = []
+            for obj in response.objects:
+                props = obj.properties
+                result = {
+                    "entity_id": props.get("entity_id"),
+                    "primary_name": props.get("primary_name"),
+                    "description": props.get("description"),
+                    "type_key": props.get("type_key"),
+                    "type_label": props.get("type_label"),
+                    "country": props.get("country"),
+                    "region": props.get("region"),
+                    "locality": props.get("locality"),
+                    "category_keys": props.get("category_keys", []),
+                    "latitude": getattr(props.get("geo_location"), "latitude", None) if props.get("geo_location") else None,
+                    "longitude": getattr(props.get("geo_location"), "longitude", None) if props.get("geo_location") else None,
+                    "score": 1.0,
+                    "distance": 0.0,
+                }
+                results.append(result)
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Weaviate identifier search failed: {e}")
             return []
 
     async def search_hybrid(

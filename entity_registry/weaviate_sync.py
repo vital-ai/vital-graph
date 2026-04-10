@@ -319,6 +319,8 @@ async def main():
                         help='Resume a previous full sync — skip entities already in Weaviate')
     parser.add_argument('--refs-only', action='store_true',
                         help='Only set Entity→Location cross-references (no entity/location inserts)')
+    parser.add_argument('--skip', type=int, default=0,
+                        help='Skip N entities when using --refs-only (resume interrupted run)')
     parser.add_argument('--entity-vectors', metavar='FILE',
                         help='Path to entity_vectors.jsonl (pre-computed vectors)')
     parser.add_argument('--location-vectors', metavar='FILE',
@@ -371,7 +373,7 @@ async def main():
             logger.info("Cross-reference repair")
             logger.info("=" * 60)
             ref_count = await weaviate_index.set_cross_refs(
-                pool, batch_size=args.batch_size,
+                pool, batch_size=args.batch_size, skip=args.skip,
             )
             logger.info(f"Done: {ref_count:,} entities linked")
         elif args.full or args.since:
