@@ -22,9 +22,12 @@ Usage:
 """
 
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
@@ -206,6 +209,9 @@ class WeaviateLocalVectorizer:
 def load_vectors_from_jsonl(path: Path, id_key: str) -> dict:
     """Load a vector JSONL file into a dict keyed by id_key.
 
+    WARNING: Loads the entire file into memory. For production-scale data
+    (1M+ records), use StreamingVectorLookup instead.
+
     Args:
         path: Path to the JSONL file.
         id_key: The JSON key used as the dictionary key ('entity_id' or 'location_id').
@@ -213,9 +219,125 @@ def load_vectors_from_jsonl(path: Path, id_key: str) -> dict:
     Returns:
         Dict mapping id → vector list.
     """
+    import time as _time
+    t0 = _time.time()
+    file_size_mb = path.stat().st_size / (1024 * 1024)
+    logger.info(f"Loading vectors from {path.name} ({file_size_mb:,.0f} MB)...")
     vectors = {}
     with open(path) as f:
         for line in f:
             record = json.loads(line)
             vectors[record[id_key]] = record['vector']
+            if len(vectors) % 100_000 == 0:
+                elapsed = _time.time() - t0
+                logger.info(f"  {len(vectors):,} vectors loaded ({elapsed:.0f}s)")
+    elapsed = _time.time() - t0
+    logger.info(f"  {len(vectors):,} vectors loaded in {elapsed:.1f}s")
     return vectors
+
+
+class StreamingVectorLookup:
+    """Stream a sorted JSONL vector file, yielding vectors batch-at-a-time.
+
+    Both the JSONL file and the caller must iterate IDs in ascending order.
+    Only one batch of vectors is held in memory at a time.
+
+    Usage::
+
+        with StreamingVectorLookup(path, 'entity_id') as lookup:
+            for batch_ids in batches:
+                vecs = lookup.get_batch(batch_ids)
+                # vecs is {id: vector_list, ...}
+    """
+
+    def __init__(self, path: Path, id_key: str):
+        self.path = path
+        self.id_key = id_key
+        self._file = None
+        self._buffered_id = None
+        self._buffered_vec = None
+        self._exhausted = False
+        self.total_served = 0
+        self.total_missed = 0
+
+    def open(self):
+        file_size_mb = self.path.stat().st_size / (1024 * 1024)
+        logger.info(f"Streaming vectors from {self.path.name} ({file_size_mb:,.0f} MB)")
+        self._file = open(self.path)
+        return self
+
+    def close(self):
+        if self._file:
+            self._file.close()
+            self._file = None
+        if self.total_served or self.total_missed:
+            logger.info(f"StreamingVectorLookup closed: {self.total_served:,} served, "
+                        f"{self.total_missed:,} missed")
+
+    def __enter__(self):
+        self.open()
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def _read_next(self) -> bool:
+        """Read next record from file into buffer. Returns False at EOF."""
+        while True:
+            line = self._file.readline()
+            if not line:
+                self._exhausted = True
+                self._buffered_id = None
+                self._buffered_vec = None
+                return False
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                self._buffered_id = record[self.id_key]
+                self._buffered_vec = record['vector']
+                return True
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+    def get_batch(self, sorted_ids: list) -> dict:
+        """Get vectors for a batch of IDs (must be in ascending order).
+
+        Reads forward through the JSONL file to cover all requested IDs,
+        then stops. Only the returned dict is in memory.
+
+        Args:
+            sorted_ids: List of IDs in ascending sort order (same order
+                as the JSONL file).
+
+        Returns:
+            Dict mapping id → vector list for IDs that were found.
+        """
+        if not sorted_ids or self._exhausted:
+            self.total_missed += len(sorted_ids)
+            return {}
+
+        result = {}
+        id_set = set(sorted_ids)
+        max_id = sorted_ids[-1]
+
+        # Check buffered record from previous call
+        if self._buffered_id is not None:
+            if self._buffered_id in id_set:
+                result[self._buffered_id] = self._buffered_vec
+            if self._buffered_id > max_id:
+                self.total_served += len(result)
+                self.total_missed += len(sorted_ids) - len(result)
+                return result
+
+        # Read forward until we pass the max requested ID
+        while self._read_next():
+            if self._buffered_id in id_set:
+                result[self._buffered_id] = self._buffered_vec
+            if self._buffered_id > max_id:
+                break  # keep this record buffered for next batch
+
+        self.total_served += len(result)
+        self.total_missed += len(sorted_ids) - len(result)
+        return result

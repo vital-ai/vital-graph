@@ -138,6 +138,11 @@ class EntityWeaviateIndex:
 
         Returns None if ENTITY_WEAVIATE_ENABLED is not 'true'.
 
+        Uses ``get_scoped_env`` so that env vars are scoped by
+        ``VITALGRAPH_ENVIRONMENT`` (e.g. ``PROD_WEAVIATE_HTTP_HOST``
+        when ``VITALGRAPH_ENVIRONMENT=prod``), falling back to the
+        unprefixed name.
+
         Gets a token from Keycloak using client_id + client_secret (supports
         confidential clients). Starts a background thread that periodically
         gets a fresh token and reconnects the client before expiry.
@@ -153,7 +158,9 @@ class EntityWeaviateIndex:
             WEAVIATE_GRPC_HOST - Weaviate gRPC host
             WEAVIATE_GRPC_PORT - Weaviate gRPC port (default 50051)
         """
-        enabled = os.getenv('ENTITY_WEAVIATE_ENABLED', 'false').lower() == 'true'
+        from vitalgraph.config.config_loader import get_scoped_env
+
+        enabled = get_scoped_env('ENTITY_WEAVIATE_ENABLED', 'false').lower() == 'true'
         if not enabled:
             logger.info("Entity Weaviate indexing is disabled (ENTITY_WEAVIATE_ENABLED != true)")
             return None
@@ -164,9 +171,9 @@ class EntityWeaviateIndex:
                 logger.error("Failed to obtain JWT token for Weaviate")
                 return None
 
-            http_host = os.getenv('WEAVIATE_HTTP_HOST')
-            grpc_host = os.getenv('WEAVIATE_GRPC_HOST')
-            grpc_port = int(os.getenv('WEAVIATE_GRPC_PORT', '50051'))
+            http_host = get_scoped_env('WEAVIATE_HTTP_HOST')
+            grpc_host = get_scoped_env('WEAVIATE_GRPC_HOST')
+            grpc_port = int(get_scoped_env('WEAVIATE_GRPC_PORT', '50051'))
 
             if not http_host or not grpc_host:
                 logger.error("WEAVIATE_HTTP_HOST and WEAVIATE_GRPC_HOST are required")
@@ -203,11 +210,13 @@ class EntityWeaviateIndex:
     @staticmethod
     def _get_jwt_token() -> Optional[str]:
         """Get a JWT token from Keycloak for Weaviate auth."""
-        keycloak_url = os.getenv('WEAVIATE_KEYCLOAK_URL')
-        client_id = os.getenv('WEAVIATE_CLIENT_ID')
-        client_secret = os.getenv('WEAVIATE_CLIENT_SECRET')
-        username = os.getenv('WEAVIATE_USERNAME')
-        password = os.getenv('WEAVIATE_PASSWORD')
+        from vitalgraph.config.config_loader import get_scoped_env
+
+        keycloak_url = get_scoped_env('WEAVIATE_KEYCLOAK_URL')
+        client_id = get_scoped_env('WEAVIATE_CLIENT_ID')
+        client_secret = get_scoped_env('WEAVIATE_CLIENT_SECRET')
+        username = get_scoped_env('WEAVIATE_USERNAME')
+        password = get_scoped_env('WEAVIATE_PASSWORD')
 
         if not all([keycloak_url, client_id, client_secret, username, password]):
             logger.error("Missing Weaviate Keycloak credentials in environment")
@@ -577,9 +586,10 @@ class EntityWeaviateIndex:
     # Full sync from PostgreSQL
     # ------------------------------------------------------------------
 
-    async def full_sync(self, pool, batch_size: int = 100, since=None,
+    async def full_sync(self, pool, batch_size: int = 500, since=None,
                         chunk_size: int = 5000,
-                        entity_vectors: Optional[Dict[str, list]] = None,
+                        entity_vectors=None,
+                        resume_after: str = None,
                         ) -> Tuple[int, int]:
         """Sync entities from PostgreSQL → Weaviate.
 
@@ -593,9 +603,12 @@ class EntityWeaviateIndex:
             since: Optional datetime — if provided, only sync entities whose
                    updated_time >= since (incremental). Full sync if None.
             chunk_size: Number of rows to fetch per cursor chunk.
-            entity_vectors: Optional dict mapping entity_id → vector list.
-                If provided, vectors are passed directly to Weaviate and
-                server-side vectorization is skipped for those entities.
+            entity_vectors: Optional StreamingVectorLookup or dict mapping
+                entity_id → vector list. If provided, vectors are passed
+                directly to Weaviate and server-side vectorization is
+                skipped for those entities.
+            resume_after: Optional entity_id — skip all entities up to and
+                including this ID (keyset start point for resume).
 
         Returns:
             Tuple of (upserted_count, deleted_count)
@@ -605,45 +618,24 @@ class EntityWeaviateIndex:
         mode = 'incremental' if since else 'full'
         logger.info(f"Starting Weaviate {mode} sync...")
 
-        # Single bulk query: entity + type + aliases + categories via LEFT JOINs.
-        # Rows are ordered by entity_id so we can group sequentially.
-        # Each entity may appear multiple times (once per alias × category combo).
-        if since is not None:
-            entity_sql = (
-                "SELECT e.entity_id, e.primary_name, e.description, e.country, "
-                "e.region, e.locality, e.website, e.latitude, e.longitude, e.status, "
-                "et.type_key, et.type_label, et.type_description, "
-                "ea.alias_name, ea.alias_type, "
-                "ec.category_key, ec.category_label "
-                "FROM entity e "
-                "JOIN entity_type et ON e.entity_type_id = et.type_id "
-                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                "AND ea.status = 'active' "
-                "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
-                "AND ecm.status = 'active' "
-                "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
-                "WHERE e.status = 'active' AND e.updated_time >= $1 "
-                "ORDER BY e.entity_id"
-            )
-            query_args = [since]
-        else:
-            entity_sql = (
-                "SELECT e.entity_id, e.primary_name, e.description, e.country, "
-                "e.region, e.locality, e.website, e.latitude, e.longitude, e.status, "
-                "et.type_key, et.type_label, et.type_description, "
-                "ea.alias_name, ea.alias_type, "
-                "ec.category_key, ec.category_label "
-                "FROM entity e "
-                "JOIN entity_type et ON e.entity_type_id = et.type_id "
-                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                "AND ea.status = 'active' "
-                "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
-                "AND ecm.status = 'active' "
-                "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
-                "WHERE e.status = 'active' "
-                "ORDER BY e.entity_id"
-            )
-            query_args = []
+        # Keyset pagination: fetch pages of entity_ids, then joined data
+        # for each page.  Each query is short-lived — no long transactions.
+        entity_data_sql = (
+            "SELECT e.entity_id, e.primary_name, e.description, e.country, "
+            "e.region, e.locality, e.website, e.latitude, e.longitude, e.status, "
+            "et.type_key, et.type_label, et.type_description, "
+            "ea.alias_name, ea.alias_type, "
+            "ec.category_key, ec.category_label "
+            "FROM entity e "
+            "JOIN entity_type et ON e.entity_type_id = et.type_id "
+            "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+            "AND ea.status = 'active' "
+            "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
+            "AND ecm.status = 'active' "
+            "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
+            "WHERE e.entity_id = ANY($1) "
+            "ORDER BY e.entity_id"
+        )
 
         pg_ids = set()
         upserted_count = 0
@@ -698,105 +690,138 @@ class EntityWeaviateIndex:
             for entity in pending_batch:
                 entity['identifiers'] = id_map.get(entity['entity_id'], [])
 
-        async def _flush_batch(conn):
+        async def _flush_batch():
             """Enrich with locations and identifiers, then insert_many to Weaviate."""
             nonlocal upserted_count
             if pending_batch:
                 await self._ensure_connected()
                 batch_len = len(pending_batch)
-                await _enrich_with_locations(conn)
-                await _enrich_with_identifiers(conn)
+                async with pool.acquire() as enrich_conn:
+                    await _enrich_with_locations(enrich_conn)
+                    await _enrich_with_identifiers(enrich_conn)
+                # Get vectors for this batch
+                vec_batch = None
+                if entity_vectors is not None:
+                    batch_ids = [e['entity_id'] for e in pending_batch]
+                    if hasattr(entity_vectors, 'get_batch'):
+                        vec_batch = entity_vectors.get_batch(batch_ids)
+                    else:
+                        vec_batch = {eid: entity_vectors[eid] for eid in batch_ids
+                                     if eid in entity_vectors}
                 objects = []
                 for entity in pending_batch:
                     try:
                         obj_uuid = entity_id_to_weaviate_uuid(entity['entity_id'])
                         properties = entity_to_weaviate_properties(entity)
-                        vec = entity_vectors.get(entity['entity_id']) if entity_vectors else None
+                        vec = vec_batch.get(entity['entity_id']) if vec_batch else None
                         objects.append(DataObject(properties=properties, uuid=obj_uuid,
                                                   vector=vec))
                     except Exception as e:
                         logger.error(f"Failed to prepare entity {entity.get('entity_id')}: {e}")
                 if objects:
+                    await self._ensure_connected()
                     response = await self.collection.data.insert_many(objects)
                     inserted = len(objects) - len(response.errors) if response.errors else len(objects)
                     upserted_count += inserted
                     if response.has_errors:
                         for i, err in enumerate(response.errors):
                             logger.error(f"Entity insert error at index {i}: {err}")
-                logger.info(f"  Entity batch inserted: {batch_len} rows (total {upserted_count:,})")
+                elapsed = _time.time() - start
+                rate = upserted_count / elapsed if elapsed > 0 else 0
+                if upserted_count % 5000 < batch_len or upserted_count < batch_len * 2:
+                    logger.info(f"  Entities: {upserted_count:,} upserted "
+                                f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
                 pending_batch.clear()
 
         await self._ensure_connected()
 
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                cursor = await conn.cursor(entity_sql, *query_args)
+        last_entity_id = resume_after or ''
+        if resume_after:
+            logger.info(f"Resuming entity sync after entity_id={resume_after!r}")
+        while True:
+            # Fetch next page of entity IDs (short-lived connection)
+            async with pool.acquire() as conn:
+                if since is not None:
+                    id_rows = await conn.fetch(
+                        "SELECT entity_id FROM entity WHERE status = 'active' "
+                        "AND updated_time >= $1 AND entity_id > $2 "
+                        "ORDER BY entity_id LIMIT $3",
+                        since, last_entity_id, chunk_size
+                    )
+                else:
+                    id_rows = await conn.fetch(
+                        "SELECT entity_id FROM entity WHERE status = 'active' "
+                        "AND entity_id > $1 ORDER BY entity_id LIMIT $2",
+                        last_entity_id, chunk_size
+                    )
+            if not id_rows:
+                break
+            batch_eids = [r['entity_id'] for r in id_rows]
+            last_entity_id = batch_eids[-1]
+            pg_ids.update(batch_eids)
 
-                while True:
-                    rows = await cursor.fetch(chunk_size)
-                    if not rows:
-                        break
+            # Fetch full joined data for these entity IDs
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(entity_data_sql, batch_eids)
 
-                    for row in rows:
-                        entity_id = row['entity_id']
+            for row in rows:
+                entity_id = row['entity_id']
 
-                        if entity_id != current_entity_id:
-                            # Flush previous entity
-                            _flush_entity()
+                if entity_id != current_entity_id:
+                    # Flush previous entity
+                    _flush_entity()
 
-                            # Flush batch when it hits batch_size
-                            if len(pending_batch) >= batch_size:
-                                await _flush_batch(conn)
+                    # Flush batch when it hits batch_size
+                    if len(pending_batch) >= batch_size:
+                        await _flush_batch()
 
-                            # Start new entity
-                            current_entity_id = entity_id
-                            pg_ids.add(entity_id)
-                            seen_aliases = set()
-                            seen_categories = set()
-                            current_entity = {
-                                'entity_id': entity_id,
-                                'primary_name': row['primary_name'],
-                                'description': row['description'],
-                                'country': row['country'],
-                                'region': row['region'],
-                                'locality': row['locality'],
-                                'website': row['website'],
-                                'latitude': row['latitude'],
-                                'longitude': row['longitude'],
-                                'status': row['status'],
-                                'type_key': row['type_key'],
-                                'type_label': row['type_label'],
-                                'type_description': row['type_description'],
-                                'aliases': [],
-                                'categories': [],
-                            }
+                    # Start new entity
+                    current_entity_id = entity_id
+                    seen_aliases = set()
+                    seen_categories = set()
+                    current_entity = {
+                        'entity_id': entity_id,
+                        'primary_name': row['primary_name'],
+                        'description': row['description'],
+                        'country': row['country'],
+                        'region': row['region'],
+                        'locality': row['locality'],
+                        'website': row['website'],
+                        'latitude': row['latitude'],
+                        'longitude': row['longitude'],
+                        'status': row['status'],
+                        'type_key': row['type_key'],
+                        'type_label': row['type_label'],
+                        'type_description': row['type_description'],
+                        'aliases': [],
+                        'categories': [],
+                    }
 
-                        # Deduplicate aliases (cross-join with categories produces duplicates)
-                        alias_name = row['alias_name']
-                        if alias_name and alias_name not in seen_aliases:
-                            seen_aliases.add(alias_name)
-                            current_entity['aliases'].append({
-                                'alias_name': alias_name,
-                                'alias_type': row['alias_type'],
-                            })
+                # Deduplicate aliases (cross-join with categories produces duplicates)
+                alias_name = row['alias_name']
+                if alias_name and alias_name not in seen_aliases:
+                    seen_aliases.add(alias_name)
+                    current_entity['aliases'].append({
+                        'alias_name': alias_name,
+                        'alias_type': row['alias_type'],
+                    })
 
-                        # Deduplicate categories
-                        cat_key = row['category_key']
-                        if cat_key and cat_key not in seen_categories:
-                            seen_categories.add(cat_key)
-                            current_entity['categories'].append({
-                                'category_key': cat_key,
-                                'category_label': row['category_label'],
-                            })
+                # Deduplicate categories
+                cat_key = row['category_key']
+                if cat_key and cat_key not in seen_categories:
+                    seen_categories.add(cat_key)
+                    current_entity['categories'].append({
+                        'category_key': cat_key,
+                        'category_label': row['category_label'],
+                    })
 
-        # Flush remaining (new connection since cursor transaction is closed)
+        # Flush remaining
         _flush_entity()
-        async with pool.acquire() as conn:
-            await _flush_batch(conn)
+        await _flush_batch()
 
-        # Remove stale Weaviate objects (only for full sync)
+        # Remove stale Weaviate objects (only for full sync, not resume)
         deleted_count = 0
-        if since is None:
+        if since is None and resume_after is None:
             try:
                 weaviate_ids = set()
                 cursor_uuid = None
@@ -811,13 +836,18 @@ class EntityWeaviateIndex:
                         weaviate_ids.add(obj.properties.get('entity_id'))
                         cursor_uuid = obj.uuid
 
+                logger.info(f"Fetched {len(weaviate_ids):,} entity IDs from Weaviate for stale detection")
                 stale_ids = weaviate_ids - pg_ids
+                if stale_ids:
+                    logger.info(f"Deleting {len(stale_ids):,} stale entities from Weaviate...")
                 for stale_id in stale_ids:
                     await self.delete_entity(stale_id)
                     deleted_count += 1
+                    if deleted_count % 500 == 0:
+                        logger.info(f"  Stale entities deleted: {deleted_count:,}/{len(stale_ids):,}")
 
                 if deleted_count > 0:
-                    logger.info(f"Deleted {deleted_count} stale objects from Weaviate")
+                    logger.info(f"Deleted {deleted_count} stale entities from Weaviate")
             except Exception as e:
                 logger.warning(f"Could not check for stale Weaviate objects: {e}")
 
@@ -826,9 +856,9 @@ class EntityWeaviateIndex:
                      f"{deleted_count:,} deleted in {duration:.1f}s")
         return upserted_count, deleted_count
 
-    async def location_sync(self, pool, batch_size: int = 200, since=None,
+    async def location_sync(self, pool, batch_size: int = 1000, since=None,
                             chunk_size: int = 5000,
-                            location_vectors: Optional[Dict[int, list]] = None,
+                            location_vectors=None,
                             ) -> Tuple[int, int]:
         """Sync locations from PostgreSQL → Weaviate LocationIndex.
 
@@ -839,9 +869,10 @@ class EntityWeaviateIndex:
             batch_size: Number of locations per Weaviate batch upsert
             since: Optional datetime — incremental sync if provided.
             chunk_size: Number of rows per cursor chunk.
-            location_vectors: Optional dict mapping location_id (int) → vector list.
-                If provided, vectors are passed directly to Weaviate and
-                server-side vectorization is skipped for those locations.
+            location_vectors: Optional StreamingVectorLookup or dict mapping
+                location_id (int) → vector list. If provided, vectors are
+                passed directly to Weaviate and server-side vectorization
+                is skipped for those locations.
 
         Returns:
             Tuple of (upserted_count, deleted_count)
@@ -851,34 +882,18 @@ class EntityWeaviateIndex:
         mode = 'incremental' if since else 'full'
         logger.info(f"Starting Weaviate location {mode} sync...")
 
-        if since is not None:
-            loc_sql = (
-                "SELECT el.location_id, el.entity_id, el.location_name, el.description, "
-                "el.address_line_1, el.address_line_2, el.locality, el.admin_area_1, el.country, "
-                "el.country_code, el.postal_code, el.formatted_address, "
-                "el.latitude, el.longitude, el.is_primary, el.status, "
-                "el.external_location_id, "
-                "elt.type_key AS location_type_key, elt.type_label AS location_type_label "
-                "FROM entity_location el "
-                "JOIN entity_location_type elt ON el.location_type_id = elt.location_type_id "
-                "WHERE el.status = 'active' AND el.updated_time >= $1 "
-                "ORDER BY el.entity_id, el.location_id"
-            )
-            query_args = [since]
-        else:
-            loc_sql = (
-                "SELECT el.location_id, el.entity_id, el.location_name, el.description, "
-                "el.address_line_1, el.address_line_2, el.locality, el.admin_area_1, el.country, "
-                "el.country_code, el.postal_code, el.formatted_address, "
-                "el.latitude, el.longitude, el.is_primary, el.status, "
-                "el.external_location_id, "
-                "elt.type_key AS location_type_key, elt.type_label AS location_type_label "
-                "FROM entity_location el "
-                "JOIN entity_location_type elt ON el.location_type_id = elt.location_type_id "
-                "WHERE el.status = 'active' "
-                "ORDER BY el.entity_id, el.location_id"
-            )
-            query_args = []
+        # Base SQL for location data (keyset pagination adds WHERE clause)
+        loc_select = (
+            "SELECT el.location_id, el.entity_id, el.location_name, el.description, "
+            "el.address_line_1, el.address_line_2, el.locality, el.admin_area_1, el.country, "
+            "el.country_code, el.postal_code, el.formatted_address, "
+            "el.latitude, el.longitude, el.is_primary, el.status, "
+            "el.external_location_id, "
+            "elt.type_key AS location_type_key, elt.type_label AS location_type_label "
+            "FROM entity_location el "
+            "JOIN entity_location_type elt ON el.location_type_id = elt.location_type_id "
+            "WHERE el.status = 'active' "
+        )
 
         pg_loc_ids = set()
         upserted_count = 0
@@ -891,13 +906,22 @@ class EntityWeaviateIndex:
             if pending_batch:
                 await self._ensure_connected()
                 batch_len = len(pending_batch)
+                # Get vectors for this batch
+                vec_batch = None
+                if location_vectors is not None:
+                    batch_ids = [loc['location_id'] for loc in pending_batch]
+                    if hasattr(location_vectors, 'get_batch'):
+                        vec_batch = location_vectors.get_batch(batch_ids)
+                    else:
+                        vec_batch = {lid: location_vectors[lid] for lid in batch_ids
+                                     if lid in location_vectors}
                 objects = []
                 for loc in pending_batch:
                     try:
                         obj_uuid = location_id_to_weaviate_uuid(loc['location_id'])
                         entity_uuid = entity_id_to_weaviate_uuid(loc['entity_id'])
                         properties = location_to_weaviate_properties(loc)
-                        vec = location_vectors.get(loc['location_id']) if location_vectors else None
+                        vec = vec_batch.get(loc['location_id']) if vec_batch else None
                         objects.append(DataObject(
                             properties=properties,
                             uuid=obj_uuid,
@@ -907,32 +931,51 @@ class EntityWeaviateIndex:
                     except Exception as e:
                         logger.error(f"Failed to prepare location {loc.get('location_id')}: {e}")
                 if objects:
+                    await self._ensure_connected()
                     response = await self.location_collection.data.insert_many(objects)
                     inserted = len(objects) - len(response.errors) if response.errors else len(objects)
                     upserted_count += inserted
                     if response.has_errors:
                         for i, err in enumerate(response.errors):
                             logger.error(f"Location insert error at index {i}: {err}")
-                logger.info(f"  Location batch inserted: {batch_len} rows (total {upserted_count:,})")
+                elapsed = _time.time() - start
+                rate = upserted_count / elapsed if elapsed > 0 else 0
+                if upserted_count % 5000 < batch_len or upserted_count < batch_len * 2:
+                    logger.info(f"  Locations: {upserted_count:,} upserted "
+                                f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
                 pending_batch.clear()
 
         await self._ensure_connected()
 
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                cursor = await conn.cursor(loc_sql, *query_args)
-                while True:
-                    rows = await cursor.fetch(chunk_size)
-                    if not rows:
-                        break
-                    for row in rows:
-                        loc = dict(row)
-                        pg_loc_ids.add(loc['location_id'])
-                        entity_loc_map.setdefault(loc['entity_id'], []).append(loc['location_id'])
-                        pending_batch.append(loc)
+        # Keyset pagination — short-lived connections, no long transactions
+        last_location_id = 0
+        while True:
+            async with pool.acquire() as conn:
+                if since is not None:
+                    rows = await conn.fetch(
+                        loc_select +
+                        "AND el.updated_time >= $1 AND el.location_id > $2 "
+                        "ORDER BY el.location_id LIMIT $3",
+                        since, last_location_id, chunk_size
+                    )
+                else:
+                    rows = await conn.fetch(
+                        loc_select +
+                        "AND el.location_id > $1 "
+                        "ORDER BY el.location_id LIMIT $2",
+                        last_location_id, chunk_size
+                    )
+            if not rows:
+                break
+            last_location_id = rows[-1]['location_id']
+            for row in rows:
+                loc = dict(row)
+                pg_loc_ids.add(loc['location_id'])
+                entity_loc_map.setdefault(loc['entity_id'], []).append(loc['location_id'])
+                pending_batch.append(loc)
 
-                        if len(pending_batch) >= batch_size:
-                            await _flush_loc_batch()
+                if len(pending_batch) >= batch_size:
+                    await _flush_loc_batch()
 
         # Flush remaining
         await _flush_loc_batch()
@@ -946,6 +989,7 @@ class EntityWeaviateIndex:
         async def _flush_ref_batch():
             nonlocal ref_count
             if ref_batch:
+                await self._ensure_connected()
                 response = await self.collection.data.reference_add_many(ref_batch)
                 if hasattr(response, 'errors') and response.errors:
                     for err in response.errors:
@@ -1003,6 +1047,76 @@ class EntityWeaviateIndex:
         logger.info(f"Weaviate location {mode} sync complete: {upserted_count:,} upserted, "
                      f"{deleted_count:,} deleted in {duration:.1f}s")
         return upserted_count, deleted_count
+
+    # ------------------------------------------------------------------
+    # Cross-reference repair
+    # ------------------------------------------------------------------
+
+    async def set_cross_refs(self, pool, batch_size: int = 500) -> int:
+        """Set Entity→Location cross-references from PostgreSQL mapping.
+
+        Use this to repair cross-refs without re-inserting entities/locations.
+        """
+        import time as _time
+        start = _time.time()
+        await self._ensure_connected()
+
+        logger.info("Building entity→location mapping from PostgreSQL...")
+        entity_loc_map: Dict[str, List[int]] = {}
+        last_location_id = 0
+        total_locs = 0
+        while True:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT entity_id, location_id FROM entity_location "
+                    "WHERE status = 'active' AND location_id > $1 "
+                    "ORDER BY location_id LIMIT $2",
+                    last_location_id, 5000
+                )
+            if not rows:
+                break
+            last_location_id = rows[-1]['location_id']
+            for row in rows:
+                entity_loc_map.setdefault(row['entity_id'], []).append(row['location_id'])
+            total_locs += len(rows)
+
+        logger.info(f"Found {total_locs:,} locations across {len(entity_loc_map):,} entities")
+
+        ref_batch = []
+        ref_count = 0
+        total_refs = len(entity_loc_map)
+
+        async def _flush():
+            nonlocal ref_count
+            if ref_batch:
+                await self._ensure_connected()
+                response = await self.collection.data.reference_add_many(ref_batch)
+                if hasattr(response, 'errors') and response.errors:
+                    for err in response.errors:
+                        logger.error(f"Cross-ref batch error: {err}")
+                ref_count += len(ref_batch)
+                if ref_count % 2000 < len(ref_batch) or ref_count < batch_size * 2:
+                    elapsed = _time.time() - start
+                    rate = ref_count / elapsed if elapsed > 0 else 0
+                    logger.info(f"  Cross-refs: {ref_count:,}/{total_refs:,} "
+                                f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
+                ref_batch.clear()
+
+        for eid, loc_ids in entity_loc_map.items():
+            entity_uuid = entity_id_to_weaviate_uuid(eid)
+            loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in loc_ids]
+            ref_batch.append(DataReference(
+                from_property="locations",
+                from_uuid=entity_uuid,
+                to_uuid=loc_uuids,
+            ))
+            if len(ref_batch) >= batch_size:
+                await _flush()
+        await _flush()
+
+        duration = _time.time() - start
+        logger.info(f"Cross-refs complete: {ref_count:,} entities linked in {duration:.1f}s")
+        return ref_count
 
     # ------------------------------------------------------------------
     # Topic search

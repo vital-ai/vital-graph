@@ -23,14 +23,16 @@ def get_collection_name(env: str = None) -> str:
     Examples: devxxxEntityIndex, prodxxxEntityIndex, testxxxEntityIndex
     """
     if env is None:
-        env = os.getenv('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
+        from vitalgraph.config.config_loader import get_scoped_env
+        env = get_scoped_env('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
     return f"{env}xxxEntityIndex"
 
 
 def get_location_collection_name(env: str = None) -> str:
     """Return the environment-scoped LocationIndex collection name."""
     if env is None:
-        env = os.getenv('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
+        from vitalgraph.config.config_loader import get_scoped_env
+        env = get_scoped_env('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
     return f"{env}xxxLocationIndex"
 
 

@@ -68,7 +68,9 @@ class BulkLoadDatasetTester:
         
         start_time = time.time()
         
+        entity_times = []
         for idx, lead_file in enumerate(lead_files, 1):
+            t_entity = time.time()
             try:
                 # Load N-Triples file using RDFLib
                 rdf_graph = RDFGraph()
@@ -94,15 +96,15 @@ class BulkLoadDatasetTester:
                     entity_uri = response.created_uris[0]
                 
                 if entity_uri:
+                    et = time.time() - t_entity
+                    entity_times.append(et)
                     loaded_entities.append({
                         'uri': entity_uri,
                         'file': lead_file.name,
-                        'triples': triple_count
+                        'triples': triple_count,
                     })
                     total_triples += triple_count
-                    
-                    if idx % 10 == 0:
-                        print(f"   Loaded {idx}/{len(lead_files)} files ({len(loaded_entities)} entities, {total_triples:,} triples)")
+                    print(f"   [{idx:3d}/{len(lead_files)}] {triple_count} triples  {et:.3f}s")
                 else:
                     failed_loads.append(lead_file.name)
                     print(f"   ⚠️  Failed to extract entity URI from {lead_file.name}")
@@ -120,6 +122,14 @@ class BulkLoadDatasetTester:
         print(f"   Total triples: {total_triples:,}")
         print(f"   Load time: {load_time:.2f}s")
         print(f"   Average: {load_time/len(lead_files):.2f}s per file")
+        
+        if len(entity_times) >= 20:
+            first_10 = entity_times[:10]
+            last_10 = entity_times[-10:]
+            print(f"\n⏱️  Insert Timing Analysis (slowdown check):")
+            print(f"   First 10 avg: {sum(first_10)/len(first_10):.3f}s")
+            print(f"   Last  10 avg: {sum(last_10)/len(last_10):.3f}s")
+            print(f"   Ratio (last/first): {(sum(last_10)/len(last_10))/(sum(first_10)/len(first_10)):.2f}x")
         
         # Test: Verify expected number of entities loaded
         expected_entities = len(lead_files) - len(failed_loads)

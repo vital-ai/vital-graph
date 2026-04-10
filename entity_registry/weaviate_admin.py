@@ -189,47 +189,55 @@ async def cmd_load(weaviate_index: EntityWeaviateIndex, batch_size: int = 100,
         print(f"  PostgreSQL active entities:  {pg_entities:,}")
         print(f"  PostgreSQL active locations: {pg_locations:,}")
 
-        # Load pre-computed vectors if provided
+        # Open streaming vector lookups (batch-at-a-time, not loaded into memory)
+        from vitalgraph.entity_registry.entity_vectorizer import StreamingVectorLookup
         entity_vectors = None
         location_vectors = None
         if vectors_dir:
-            from vitalgraph.entity_registry.entity_vectorizer import load_vectors_from_jsonl
             vdir = Path(vectors_dir)
             ent_vec_path = vdir / 'entity_vectors.jsonl'
             loc_vec_path = vdir / 'location_vectors.jsonl'
             if ent_vec_path.exists():
-                entity_vectors = load_vectors_from_jsonl(ent_vec_path, 'entity_id')
-                print(f"  Loaded {len(entity_vectors):,} entity vectors from {ent_vec_path.name}")
+                entity_vectors = StreamingVectorLookup(ent_vec_path, 'entity_id')
+                entity_vectors.open()
+                print(f"  Streaming entity vectors from {ent_vec_path.name}")
             if loc_vec_path.exists():
-                location_vectors = load_vectors_from_jsonl(loc_vec_path, 'location_id')
-                print(f"  Loaded {len(location_vectors):,} location vectors from {loc_vec_path.name}")
+                location_vectors = StreamingVectorLookup(loc_vec_path, 'location_id')
+                location_vectors.open()
+                print(f"  Streaming location vectors from {loc_vec_path.name}")
             if not entity_vectors and not location_vectors:
                 print(f"  ⚠️  No vector files found in {vdir}")
 
-        if dry_run:
-            print(f"\n  DRY RUN — would sync {pg_entities:,} entities and {pg_locations:,} locations")
-            return
+        try:
+            if dry_run:
+                print(f"\n  DRY RUN — would sync {pg_entities:,} entities and {pg_locations:,} locations")
+                return
 
-        # Ensure collections exist with cross-refs
-        await weaviate_index.ensure_collection()
+            # Ensure collections exist with cross-refs
+            await weaviate_index.ensure_collection()
 
-        # Sync entities
-        vec_label = f", {len(entity_vectors):,} pre-computed vectors" if entity_vectors else ""
-        print(f"\n  Syncing entities (batch_size={batch_size}{vec_label})...")
-        t0 = time.time()
-        ent_upserted, ent_deleted = await weaviate_index.full_sync(
-            pool, batch_size=batch_size, entity_vectors=entity_vectors)
-        t1 = time.time()
-        print(f"  ✅ Entities: {ent_upserted:,} upserted, {ent_deleted:,} stale deleted in {t1-t0:.1f}s")
+            # Sync entities
+            vec_label = f", streaming vectors" if entity_vectors else ""
+            print(f"\n  Syncing entities (batch_size={batch_size}{vec_label})...")
+            t0 = time.time()
+            ent_upserted, ent_deleted = await weaviate_index.full_sync(
+                pool, batch_size=batch_size, entity_vectors=entity_vectors)
+            t1 = time.time()
+            print(f"  ✅ Entities: {ent_upserted:,} upserted, {ent_deleted:,} stale deleted in {t1-t0:.1f}s")
 
-        # Sync locations
-        vec_label = f", {len(location_vectors):,} pre-computed vectors" if location_vectors else ""
-        print(f"\n  Syncing locations (batch_size={batch_size * 2}{vec_label})...")
-        t2 = time.time()
-        loc_upserted, loc_deleted = await weaviate_index.location_sync(
-            pool, batch_size=batch_size * 2, location_vectors=location_vectors)
-        t3 = time.time()
-        print(f"  ✅ Locations: {loc_upserted:,} upserted, {loc_deleted:,} stale deleted in {t3-t2:.1f}s")
+            # Sync locations
+            vec_label = f", streaming vectors" if location_vectors else ""
+            print(f"\n  Syncing locations (batch_size={batch_size * 2}{vec_label})...")
+            t2 = time.time()
+            loc_upserted, loc_deleted = await weaviate_index.location_sync(
+                pool, batch_size=batch_size * 2, location_vectors=location_vectors)
+            t3 = time.time()
+            print(f"  ✅ Locations: {loc_upserted:,} upserted, {loc_deleted:,} stale deleted in {t3-t2:.1f}s")
+        finally:
+            if entity_vectors:
+                entity_vectors.close()
+            if location_vectors:
+                location_vectors.close()
 
         # Final status
         print(f"\n  Total time: {t3-t0:.1f}s")

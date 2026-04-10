@@ -39,13 +39,20 @@ logger = logging.getLogger(__name__)
 
 
 async def create_pool() -> asyncpg.Pool:
-    """Create an asyncpg connection pool from env vars."""
+    """Create an asyncpg connection pool using VitalGraphConfig.
+
+    Resolves DB credentials from profile-prefixed env vars
+    (e.g. PROD_DB_HOST when VITALGRAPH_ENVIRONMENT=prod).
+    """
+    from vitalgraph.config.config_loader import VitalGraphConfig
+    config = VitalGraphConfig()
+    db_config = config.get_database_config()
     return await asyncpg.create_pool(
-        host=os.getenv('DATABASE_HOST', 'localhost'),
-        port=int(os.getenv('DATABASE_PORT', '5432')),
-        database=os.getenv('DATABASE_NAME', 'vitalgraph'),
-        user=os.getenv('DATABASE_USERNAME', 'vitalgraph_user'),
-        password=os.getenv('DATABASE_PASSWORD', 'vitalgraph_pass'),
+        host=db_config.get('host', 'localhost'),
+        port=int(db_config.get('port', 5432)),
+        database=db_config.get('database', 'vitalgraph'),
+        user=db_config.get('username', 'postgres'),
+        password=db_config.get('password', ''),
         min_size=1,
         max_size=5,
     )
@@ -86,8 +93,9 @@ def _parse_since(value: str):
 
 
 async def full_sync(weaviate_index: EntityWeaviateIndex, pool: asyncpg.Pool,
-                     dry_run: bool = False, batch_size: int = 100, since=None,
-                     entity_vectors=None, location_vectors=None):
+                     dry_run: bool = False, batch_size: int = 500, since=None,
+                     entity_vectors=None, location_vectors=None,
+                     resume: bool = False):
     """Full or incremental sync: PostgreSQL → Weaviate."""
     mode = 'incremental' if since else 'full'
     logger.info("=" * 60)
@@ -118,21 +126,60 @@ async def full_sync(weaviate_index: EntityWeaviateIndex, pool: asyncpg.Pool,
     logger.info(f"Weaviate object count: {status.get('object_count', 0):,}")
 
     if dry_run:
-        logger.info(f"Would sync {pg_count:,} entities to Weaviate")
+        async with pool.acquire() as conn:
+            pg_loc_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity_location WHERE status = 'active'"
+            )
+        logger.info(f"PostgreSQL locations to sync: {pg_loc_count:,}")
+        logger.info(f"Entity vectors: streaming from {entity_vectors.path.name}" if entity_vectors else "Entity vectors: none (will use server-side vectorization)")
+        logger.info(f"Location vectors: streaming from {location_vectors.path.name}" if location_vectors else "Location vectors: none (will use server-side vectorization)")
+        logger.info(f"Target collections: {weaviate_index.collection_name}, {weaviate_index.location_collection_name}")
+        logger.info(f"Would sync {pg_count:,} entities + {pg_loc_count:,} locations to Weaviate")
+        logger.info("=" * 60)
         return
 
     await weaviate_index.ensure_collection()
 
+    # Resume support: find the max entity_id already in Weaviate
+    resume_after = None
+    if resume and not since:
+        logger.info("Resume mode: scanning Weaviate for last loaded entity_id...")
+        max_eid = None
+        cursor_uuid = None
+        scanned = 0
+        while True:
+            kwargs = {"limit": 1000, "include_vector": False,
+                      "return_properties": ["entity_id"]}
+            if cursor_uuid:
+                kwargs["after"] = cursor_uuid
+            response = await weaviate_index.collection.query.fetch_objects(**kwargs)
+            if not response.objects:
+                break
+            for obj in response.objects:
+                eid = obj.properties.get('entity_id')
+                if max_eid is None or (eid and eid > max_eid):
+                    max_eid = eid
+                cursor_uuid = obj.uuid
+            scanned += len(response.objects)
+            if scanned % 100000 < 1000:
+                logger.info(f"  Scanned {scanned:,} Weaviate objects...")
+        if max_eid:
+            resume_after = max_eid
+            logger.info(f"Resuming after entity_id={resume_after!r} ({scanned:,} objects in Weaviate)")
+        else:
+            logger.info("No existing entities found — starting from beginning")
+
     if entity_vectors:
-        logger.info(f"Using {len(entity_vectors):,} pre-computed entity vectors")
+        logger.info(f"Streaming entity vectors from {entity_vectors.path.name}")
     upserted, deleted = await weaviate_index.full_sync(
         pool, batch_size=batch_size, since=since,
         entity_vectors=entity_vectors,
+        resume_after=resume_after,
     )
     logger.info(f"Entities: {upserted:,} upserted, {deleted:,} deleted")
 
     if location_vectors:
-        logger.info(f"Using {len(location_vectors):,} pre-computed location vectors")
+        logger.info(f"Streaming location vectors from {location_vectors.path.name}")
     loc_upserted, loc_deleted = await weaviate_index.location_sync(
         pool, batch_size=batch_size * 2, since=since,
         location_vectors=location_vectors,
@@ -167,7 +214,16 @@ async def rebuild_sync(weaviate_index: EntityWeaviateIndex, pool: asyncpg.Pool,
     logger.info(f"Current Weaviate object count: {status.get('object_count', 0):,}")
 
     if dry_run:
-        logger.info(f"DRY RUN — would drop collection and rebuild with {pg_count:,} entities")
+        async with pool.acquire() as conn:
+            pg_loc_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM entity_location WHERE status = 'active'"
+            )
+        logger.info(f"PostgreSQL active locations: {pg_loc_count:,}")
+        logger.info(f"Entity vectors: streaming from {entity_vectors.path.name}" if entity_vectors else "Entity vectors: none (will use server-side vectorization)")
+        logger.info(f"Location vectors: streaming from {location_vectors.path.name}" if location_vectors else "Location vectors: none (will use server-side vectorization)")
+        logger.info(f"Target collections: {weaviate_index.collection_name}, {weaviate_index.location_collection_name}")
+        logger.info(f"DRY RUN — would drop collections and rebuild with {pg_count:,} entities + {pg_loc_count:,} locations")
+        logger.info("=" * 60)
         return
 
     # Drop and recreate
@@ -178,12 +234,12 @@ async def rebuild_sync(weaviate_index: EntityWeaviateIndex, pool: asyncpg.Pool,
 
     # Fresh load (no stale detection needed on empty collection)
     if entity_vectors:
-        logger.info(f"Using {len(entity_vectors):,} pre-computed entity vectors")
+        logger.info(f"Streaming entity vectors from {entity_vectors.path.name}")
     upserted, _ = await weaviate_index.full_sync(
         pool, batch_size=batch_size, entity_vectors=entity_vectors)
 
     if location_vectors:
-        logger.info(f"Using {len(location_vectors):,} pre-computed location vectors")
+        logger.info(f"Streaming location vectors from {location_vectors.path.name}")
     loc_upserted, _ = await weaviate_index.location_sync(
         pool, batch_size=batch_size * 2, location_vectors=location_vectors)
 
@@ -258,15 +314,19 @@ async def main():
     parser.add_argument('--entity-id', help='Sync a single entity by ID')
     parser.add_argument('--since', help='Incremental sync: ISO datetime or relative like "1h", "30m", "7d"')
     parser.add_argument('--dry-run', action='store_true', help='Report what would change')
-    parser.add_argument('--batch-size', type=int, default=100, help='Batch size for full sync')
+    parser.add_argument('--batch-size', type=int, default=500, help='Batch size for full sync')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume a previous full sync — skip entities already in Weaviate')
+    parser.add_argument('--refs-only', action='store_true',
+                        help='Only set Entity→Location cross-references (no entity/location inserts)')
     parser.add_argument('--entity-vectors', metavar='FILE',
                         help='Path to entity_vectors.jsonl (pre-computed vectors)')
     parser.add_argument('--location-vectors', metavar='FILE',
                         help='Path to location_vectors.jsonl (pre-computed vectors)')
     args = parser.parse_args()
 
-    if not args.full and not args.rebuild and not args.entity_id and not args.since:
-        parser.error("Must specify --full, --rebuild, --entity-id, or --since")
+    if not args.full and not args.rebuild and not args.entity_id and not args.since and not args.refs_only:
+        parser.error("Must specify --full, --rebuild, --entity-id, --since, or --refs-only")
 
     # Connect to Weaviate
     weaviate_index = await EntityWeaviateIndex.from_env()
@@ -278,24 +338,24 @@ async def main():
     pool = await create_pool()
 
     try:
-        # Load pre-computed vectors if provided
-        entity_vectors = None
-        location_vectors = None
+        # Open streaming vector lookups (batch-at-a-time, not loaded into memory)
+        from vitalgraph.entity_registry.entity_vectorizer import StreamingVectorLookup
+        entity_vec_lookup = None
+        location_vec_lookup = None
+
         if args.entity_vectors:
-            from vitalgraph.entity_registry.entity_vectorizer import load_vectors_from_jsonl
             vp = Path(args.entity_vectors)
             if vp.exists():
-                entity_vectors = load_vectors_from_jsonl(vp, 'entity_id')
-                logger.info(f"Loaded {len(entity_vectors):,} entity vectors from {vp.name}")
+                entity_vec_lookup = StreamingVectorLookup(vp, 'entity_id')
+                entity_vec_lookup.open()
             else:
                 logger.error(f"Entity vectors file not found: {vp}")
                 sys.exit(1)
         if args.location_vectors:
-            from vitalgraph.entity_registry.entity_vectorizer import load_vectors_from_jsonl
             vp = Path(args.location_vectors)
             if vp.exists():
-                location_vectors = load_vectors_from_jsonl(vp, 'location_id')
-                logger.info(f"Loaded {len(location_vectors):,} location vectors from {vp.name}")
+                location_vec_lookup = StreamingVectorLookup(vp, 'location_id')
+                location_vec_lookup.open()
             else:
                 logger.error(f"Location vectors file not found: {vp}")
                 sys.exit(1)
@@ -304,16 +364,29 @@ async def main():
         if args.rebuild:
             await rebuild_sync(weaviate_index, pool, dry_run=args.dry_run,
                                batch_size=args.batch_size,
-                               entity_vectors=entity_vectors,
-                               location_vectors=location_vectors)
+                               entity_vectors=entity_vec_lookup,
+                               location_vectors=location_vec_lookup)
+        elif args.refs_only:
+            logger.info("=" * 60)
+            logger.info("Cross-reference repair")
+            logger.info("=" * 60)
+            ref_count = await weaviate_index.set_cross_refs(
+                pool, batch_size=args.batch_size,
+            )
+            logger.info(f"Done: {ref_count:,} entities linked")
         elif args.full or args.since:
             await full_sync(weaviate_index, pool, dry_run=args.dry_run,
                             batch_size=args.batch_size, since=since_dt,
-                            entity_vectors=entity_vectors,
-                            location_vectors=location_vectors)
+                            entity_vectors=entity_vec_lookup,
+                            location_vectors=location_vec_lookup,
+                            resume=args.resume)
         elif args.entity_id:
             await single_entity_sync(weaviate_index, pool, args.entity_id, dry_run=args.dry_run)
     finally:
+        if entity_vec_lookup:
+            entity_vec_lookup.close()
+        if location_vec_lookup:
+            location_vec_lookup.close()
         await pool.close()
         await weaviate_index.close()
 

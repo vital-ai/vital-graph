@@ -203,6 +203,11 @@ class EntityDedupIndex:
     def from_env(cls) -> 'EntityDedupIndex':
         """Create an EntityDedupIndex from environment variables.
 
+        Uses ``get_scoped_env`` so that env vars are scoped by
+        ``VITALGRAPH_ENVIRONMENT`` (e.g. ``PROD_ENTITY_DEDUP_BACKEND``
+        when ``VITALGRAPH_ENVIRONMENT=prod``), falling back to the
+        unprefixed name.
+
         Reads:
             ENTITY_DEDUP_BACKEND: 'memory' (default) or 'redis'
             ENTITY_DEDUP_REDIS_HOST: Redis host (default 'localhost')
@@ -213,32 +218,34 @@ class EntityDedupIndex:
                 (e.g. 'local', 'dev', 'prod').  Results in keys like
                 ``dev_dedup_bucket_...`` and ``dev_dedup_phonetic_bucket_...``
         """
-        backend = os.environ.get('ENTITY_DEDUP_BACKEND', 'memory').lower()
-        num_perm = int(os.environ.get('ENTITY_DEDUP_NUM_PERM', str(DEFAULT_NUM_PERM)))
-        threshold = float(os.environ.get('ENTITY_DEDUP_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
+        from vitalgraph.config.config_loader import get_scoped_env
+
+        backend = get_scoped_env('ENTITY_DEDUP_BACKEND', 'memory').lower()
+        num_perm = int(get_scoped_env('ENTITY_DEDUP_NUM_PERM', str(DEFAULT_NUM_PERM)))
+        threshold = float(get_scoped_env('ENTITY_DEDUP_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
 
         storage_config = None
         if backend == 'redis':
-            redis_host = os.environ.get('ENTITY_DEDUP_REDIS_HOST', 'localhost')
-            redis_port = int(os.environ.get('ENTITY_DEDUP_REDIS_PORT', '6379'))
+            redis_host = get_scoped_env('ENTITY_DEDUP_REDIS_HOST', 'localhost')
+            redis_port = int(get_scoped_env('ENTITY_DEDUP_REDIS_PORT', '6379'))
             redis_params = {'host': redis_host, 'port': redis_port}
 
             # Optional auth (MemoryDB ACL / ElastiCache AUTH)
-            redis_username = os.environ.get('ENTITY_DEDUP_REDIS_USERNAME')
-            redis_password = os.environ.get('ENTITY_DEDUP_REDIS_PASSWORD')
+            redis_username = get_scoped_env('ENTITY_DEDUP_REDIS_USERNAME') or None
+            redis_password = get_scoped_env('ENTITY_DEDUP_REDIS_PASSWORD') or None
             if redis_username:
                 redis_params['username'] = redis_username
             if redis_password:
                 redis_params['password'] = redis_password
 
             # TLS (required for MemoryDB)
-            use_ssl = os.environ.get('ENTITY_DEDUP_REDIS_SSL', 'false').lower() in ('true', '1', 'yes')
+            use_ssl = get_scoped_env('ENTITY_DEDUP_REDIS_SSL', 'false').lower() in ('true', '1', 'yes')
             if use_ssl:
                 redis_params['ssl'] = True
                 redis_params['ssl_cert_reqs'] = None  # MemoryDB uses Amazon-managed certs
 
             # Redis Cluster mode (MemoryDB / ElastiCache cluster)
-            use_cluster = os.environ.get('ENTITY_DEDUP_REDIS_CLUSTER', 'false').lower() in ('true', '1', 'yes')
+            use_cluster = get_scoped_env('ENTITY_DEDUP_REDIS_CLUSTER', 'false').lower() in ('true', '1', 'yes')
             if use_cluster:
                 register_cluster_storage()
                 storage_type = 'redis_cluster'

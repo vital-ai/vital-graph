@@ -424,6 +424,30 @@ class VitalGraphConfig:
         return f"VitalGraphConfig(path={self.config_path}, sections={list(self.config_data.keys())})"
 
 
+def get_scoped_env(key: str, default: str = '') -> str:
+    """Get an environment variable with VITALGRAPH_ENVIRONMENT prefix scoping.
+
+    Mirrors VitalGraphConfig._get_profile_env() but usable as a standalone
+    function without instantiating the config object.
+
+    Lookup order:
+        1. ``{ENVIRONMENT}_{key}``  (e.g. ``PROD_WEAVIATE_HTTP_HOST``)
+        2. ``{key}``                (unprefixed fallback)
+        3. *default*
+
+    This allows subsystems (Entity Dedup, Weaviate, etc.) to share the same
+    environment-scoping convention used by the database / Fuseki config.
+    """
+    env = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
+    value = os.getenv(f'{env}_{key}')
+    if value is not None:
+        return value
+    value = os.getenv(key)
+    if value is not None:
+        return value
+    return default
+
+
 # Global configuration instance
 _config_instance: Optional[VitalGraphConfig] = None
 
