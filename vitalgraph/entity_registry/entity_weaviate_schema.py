@@ -16,23 +16,36 @@ import weaviate.classes.config as wvc
 DEFAULT_COLLECTION_PREFIX = "dev"
 
 
+def _get_weaviate_env() -> str:
+    """Derive the Weaviate collection prefix from VITALGRAPH_ENVIRONMENT.
+
+    Maps 'local' (and unset) to 'dev'; everything else passes through
+    (e.g. 'prod' → 'prod', 'staging' → 'staging').
+    """
+    raw = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').strip().lower()
+    if raw in ('', 'local'):
+        return DEFAULT_COLLECTION_PREFIX
+    return raw
+
+
 def get_collection_name(env: str = None) -> str:
     """Return the environment-scoped EntityIndex collection name.
 
     Uses 'xxx' as separator (underscore is technically allowed but problematic in Weaviate).
     Examples: devxxxEntityIndex, prodxxxEntityIndex, testxxxEntityIndex
+
+    Derives from VITALGRAPH_ENVIRONMENT by default (e.g. 'prod' → prodxxxEntityIndex).
+    Falls back to 'dev' when VITALGRAPH_ENVIRONMENT is 'local' or unset.
     """
     if env is None:
-        from vitalgraph.config.config_loader import get_scoped_env
-        env = get_scoped_env('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
+        env = _get_weaviate_env()
     return f"{env}xxxEntityIndex"
 
 
 def get_location_collection_name(env: str = None) -> str:
     """Return the environment-scoped LocationIndex collection name."""
     if env is None:
-        from vitalgraph.config.config_loader import get_scoped_env
-        env = get_scoped_env('ENTITY_WEAVIATE_ENV', DEFAULT_COLLECTION_PREFIX)
+        env = _get_weaviate_env()
     return f"{env}xxxLocationIndex"
 
 
