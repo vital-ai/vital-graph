@@ -50,8 +50,8 @@ class EntityWeaviateIndex:
     - Combined topic + geo queries via cross-reference traversal
     """
 
-    def __init__(self, client, collection_name: str = None,
-                 location_collection_name: str = None):
+    def __init__(self, client, collection_name: Optional[str] = None,
+                 location_collection_name: Optional[str] = None):
         self.client = client
         self.collection_name = collection_name or get_collection_name()
         self.location_collection_name = location_collection_name or get_location_collection_name()
@@ -234,7 +234,7 @@ class EntityWeaviateIndex:
             return None
 
     @staticmethod
-    def _get_jwt_token() -> Optional[str]:
+    def _get_jwt_token() -> Optional[dict]:
         """Get a JWT token from Keycloak for Weaviate auth."""
         from vitalgraph.config.config_loader import get_scoped_env
 
@@ -615,7 +615,7 @@ class EntityWeaviateIndex:
     async def full_sync(self, pool, batch_size: int = 500, since=None,
                         chunk_size: int = 5000,
                         entity_vectors=None,
-                        resume_after: str = None,
+                        resume_after: Optional[str] = None,
                         ) -> Tuple[int, int]:
         """Sync entities from PostgreSQL → Weaviate.
 
@@ -668,9 +668,9 @@ class EntityWeaviateIndex:
         pending_batch = []
 
         current_entity_id = None
-        current_entity = None
-        seen_aliases = None
-        seen_categories = None
+        current_entity: Optional[dict] = None
+        seen_aliases: set = set()
+        seen_categories: set = set()
 
         def _flush_entity():
             """Add the current entity to the pending batch."""
@@ -825,7 +825,7 @@ class EntityWeaviateIndex:
 
                 # Deduplicate aliases (cross-join with categories produces duplicates)
                 alias_name = row['alias_name']
-                if alias_name and alias_name not in seen_aliases:
+                if alias_name and alias_name not in seen_aliases and current_entity is not None:
                     seen_aliases.add(alias_name)
                     current_entity['aliases'].append({
                         'alias_name': alias_name,
@@ -834,7 +834,7 @@ class EntityWeaviateIndex:
 
                 # Deduplicate categories
                 cat_key = row['category_key']
-                if cat_key and cat_key not in seen_categories:
+                if cat_key and cat_key not in seen_categories and current_entity is not None:
                     seen_categories.add(cat_key)
                     current_entity['categories'].append({
                         'category_key': cat_key,
@@ -1572,8 +1572,8 @@ class EntityWeaviateIndex:
                 filtered_objects = []
                 for obj in response.objects:
                     p = obj.properties
-                    a1 = (p.get("address_line_1") or "").lower()
-                    a2 = (p.get("address_line_2") or "").lower()
+                    a1 = str(p.get("address_line_1") or "").lower()
+                    a2 = str(p.get("address_line_2") or "").lower()
                     if addr_lower in a1 or addr_lower in a2:
                         filtered_objects.append(obj)
                 response_objects = filtered_objects[:limit]
@@ -1605,7 +1605,7 @@ class EntityWeaviateIndex:
                 props = obj.properties
                 geo = props.get('geo_location')
                 results.append({
-                    "location_id": int(props.get("location_id", 0)),
+                    "location_id": int(props.get("location_id") or 0),  # type: ignore[arg-type]
                     "entity_id": props.get("entity_id"),
                     "location_name": props.get("location_name"),
                     "location_type_key": props.get("location_type_key"),
@@ -1725,7 +1725,7 @@ class EntityWeaviateIndex:
                         lp = loc_obj.properties
                         geo = lp.get('geo_location')
                         locations.append({
-                            "location_id": int(lp.get("location_id", 0)),
+                            "location_id": int(lp.get("location_id") or 0),  # type: ignore[arg-type]
                             "location_name": lp.get("location_name"),
                             "location_type_key": lp.get("location_type_key"),
                             "formatted_address": lp.get("formatted_address"),
@@ -1750,8 +1750,8 @@ class EntityWeaviateIndex:
                     "region": props.get("region"),
                     "locality": props.get("locality"),
                     "category_keys": props.get("category_keys", []),
-                    "score": obj.metadata.certainty if obj.metadata.certainty else 0.0,
-                    "distance": obj.metadata.distance if obj.metadata.distance else 0.0,
+                    "score": getattr(obj.metadata, 'certainty', None) or 0.0,
+                    "distance": getattr(obj.metadata, 'distance', None) or 0.0,
                     "locations": locations,
                 }
                 results.append(result)
@@ -1840,7 +1840,7 @@ class EntityWeaviateIndex:
                         lp = loc_obj.properties
                         geo = lp.get('geo_location')
                         locations.append({
-                            "location_id": int(lp.get("location_id", 0)),
+                            "location_id": int(lp.get("location_id") or 0),  # type: ignore[arg-type]
                             "location_name": lp.get("location_name"),
                             "location_type_key": lp.get("location_type_key"),
                             "formatted_address": lp.get("formatted_address"),

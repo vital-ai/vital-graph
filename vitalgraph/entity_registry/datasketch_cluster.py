@@ -181,19 +181,19 @@ class _RedisClusterBase:
             return self._name.encode() + key
         return self._name + key
 
-    def keys(self):
-        return self._redis.hkeys(self._name)
+    def keys(self):  # type: ignore[override]
+        return self._redis.hkeys(self._name)  # type: ignore[arg-type]
 
     def status(self):
         s = _parse_config(self.config['redis'])
-        s.update(Storage.status(self))
+        s.update({"keyspace_size": len(self)})  # type: ignore[arg-type]
         return s
 
-    def size(self):
-        return self._redis.hlen(self._name)
+    def size(self):  # type: ignore[override]
+        return self._redis.hlen(self._name)  # type: ignore[arg-type]
 
-    def has_key(self, key):
-        return self._redis.hexists(self._name, key)
+    def has_key(self, key):  # type: ignore[override]
+        return self._redis.hexists(self._name, key)  # type: ignore[arg-type]
 
     def empty_buffer(self):
         self._buffer.execute()
@@ -206,16 +206,16 @@ class RedisClusterListStorage(OrderedStorage, _RedisClusterBase):
     def __init__(self, config, name=None):
         _RedisClusterBase.__init__(self, config, name=name)
 
-    def keys(self):
-        return self._redis.hkeys(self._name)
+    def keys(self):  # type: ignore[override]
+        return self._redis.hkeys(self._name)  # type: ignore[arg-type]
 
-    def size(self):
-        return self._redis.hlen(self._name)
+    def size(self):  # type: ignore[override]
+        return self._redis.hlen(self._name)  # type: ignore[arg-type]
 
-    def has_key(self, key):
-        return self._redis.hexists(self._name, key)
+    def has_key(self, key):  # type: ignore[override]
+        return self._redis.hexists(self._name, key)  # type: ignore[arg-type]
 
-    def get(self, key):
+    def get(self, key):  # type: ignore[override]
         return self._redis.lrange(self.redis_key(key), 0, -1)
 
     def getmany(self, *keys):
@@ -227,7 +227,7 @@ class RedisClusterListStorage(OrderedStorage, _RedisClusterBase):
     def remove(self, *keys, **kwargs):
         buffer = kwargs.pop('buffer', False)
         r = self._buffer if buffer else self._redis
-        r.hdel(self._name, *keys)
+        r.hdel(self._name, *keys)  # type: ignore[arg-type]
         for k in keys:
             r.delete(self.redis_key(k))
 
@@ -237,21 +237,21 @@ class RedisClusterListStorage(OrderedStorage, _RedisClusterBase):
         redis_key = self.redis_key(key)
         r.lrem(redis_key, 0, val)
         if not buffer and not self._redis.exists(redis_key):
-            self._redis.hdel(self._name, redis_key)
+            self._redis.hdel(self._name, redis_key)  # type: ignore[arg-type]
 
     def insert(self, key, *vals, **kwargs):
         buffer = kwargs.pop('buffer', False)
         r = self._buffer if buffer else self._redis
         redis_key = self.redis_key(key)
-        r.hset(self._name, key, redis_key)
+        r.hset(self._name, key, redis_key)  # type: ignore[arg-type]
         r.rpush(redis_key, *vals)
 
-    def itemcounts(self):
+    def itemcounts(self, **kwargs):  # type: ignore[override]
         pipe = self._redis.pipeline()
-        ks = self.keys()
+        ks = list(self.keys())  # type: ignore[arg-type]
         for k in ks:
             pipe.llen(self.redis_key(k))
-        return dict(zip(ks, pipe.execute()))
+        return dict(zip(ks, pipe.execute()))  # type: ignore[arg-type]
 
 
 class RedisClusterSetStorage(UnorderedStorage, _RedisClusterBase):
@@ -260,16 +260,16 @@ class RedisClusterSetStorage(UnorderedStorage, _RedisClusterBase):
     def __init__(self, config, name=None):
         _RedisClusterBase.__init__(self, config, name=name)
 
-    def keys(self):
-        return self._redis.hkeys(self._name)
+    def keys(self):  # type: ignore[override]
+        return self._redis.hkeys(self._name)  # type: ignore[arg-type]
 
-    def size(self):
-        return self._redis.hlen(self._name)
+    def size(self):  # type: ignore[override]
+        return self._redis.hlen(self._name)  # type: ignore[arg-type]
 
-    def has_key(self, key):
-        return self._redis.hexists(self._name, key)
+    def has_key(self, key):  # type: ignore[override]
+        return self._redis.hexists(self._name, key)  # type: ignore[arg-type]
 
-    def get(self, key):
+    def get(self, key):  # type: ignore[override]
         return self._redis.smembers(self.redis_key(key))
 
     def getmany(self, *keys):
@@ -281,7 +281,7 @@ class RedisClusterSetStorage(UnorderedStorage, _RedisClusterBase):
     def remove(self, *keys, **kwargs):
         buffer = kwargs.pop('buffer', False)
         r = self._buffer if buffer else self._redis
-        r.hdel(self._name, *keys)
+        r.hdel(self._name, *keys)  # type: ignore[arg-type]
         for k in keys:
             r.delete(self.redis_key(k))
 
@@ -291,21 +291,21 @@ class RedisClusterSetStorage(UnorderedStorage, _RedisClusterBase):
         redis_key = self.redis_key(key)
         r.srem(redis_key, val)
         if not buffer and not self._redis.exists(redis_key):
-            self._redis.hdel(self._name, redis_key)
+            self._redis.hdel(self._name, redis_key)  # type: ignore[arg-type]
 
     def insert(self, key, *vals, **kwargs):
         buffer = kwargs.pop('buffer', False)
         r = self._buffer if buffer else self._redis
         redis_key = self.redis_key(key)
-        r.hset(self._name, key, redis_key)
+        r.hset(self._name, key, redis_key)  # type: ignore[arg-type]
         r.sadd(redis_key, *vals)
 
-    def itemcounts(self):
+    def itemcounts(self, **kwargs):  # type: ignore[override]
         pipe = self._redis.pipeline()
-        ks = self.keys()
+        ks = list(self.keys())  # type: ignore[arg-type]
         for k in ks:
             pipe.scard(self.redis_key(k))
-        return dict(zip(ks, pipe.execute()))
+        return dict(zip(ks, pipe.execute()))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
