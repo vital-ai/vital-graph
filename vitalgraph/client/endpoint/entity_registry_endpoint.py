@@ -91,7 +91,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     ) -> EntityListResponse:
         """Search/list entities with filters."""
         self._check_connection()
-        params = {"page": page, "page_size": page_size}
+        params: Dict[str, Any] = {"page": page, "page_size": page_size}
         if query:
             params["query"] = query
         if type_key:
@@ -384,7 +384,11 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # ------------------------------------------------------------------
 
     async def create_relationship(self, request: RelationshipCreateRequest) -> RelationshipResponse:
-        """Create a relationship between two entities."""
+        """Create a relationship between two entities, or return the existing one.
+
+        The server handles duplicates idempotently — if the relationship
+        already exists it returns the existing one directly.
+        """
         self._check_connection()
         return await self._make_typed_request(
             "POST", self._url("/relationships"), RelationshipResponse,

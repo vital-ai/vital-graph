@@ -3,12 +3,14 @@
 REST API client for connecting to VitalGraph servers with JWT authentication.
 """
 
+from __future__ import annotations
+
 import httpx
 import logging
 import time
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Union
+from typing import TYPE_CHECKING, Optional, Dict, Any, List, Union
 from pathlib import Path
 
 from .config.client_config_loader import VitalGraphClientConfig, ClientConfigurationError
@@ -37,6 +39,31 @@ from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
 from .response.client_response import (
     GraphResponse, GraphsListResponse, GraphCreateResponse, GraphDeleteResponse, GraphClearResponse
 )
+
+if TYPE_CHECKING:
+    from ..model.quad_model import QuadResponse, QuadResultsResponse, QuadRequest
+    from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
+    from ..model.kgtypes_model import KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
+    from ..model.objects_model import ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+    from ..model.sparql_model import (
+        SPARQLQueryRequest, SPARQLQueryResponse, SPARQLUpdateRequest, SPARQLUpdateResponse,
+        SPARQLInsertRequest, SPARQLInsertResponse, SPARQLDeleteRequest, SPARQLDeleteResponse,
+    )
+    from ..model.triples_model import TripleListResponse, TripleOperationResponse
+    from ..model.users_model import User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
+    from ..model.spaces_model import Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse
+    from ..model.files_model import (
+        FileCreateResponse, FileUpdateResponse, FileDeleteResponse,
+        FileUploadResponse,
+    )
+    from ..model.import_model import (
+        ImportJobResponse, ImportDeleteResponse, ImportExecuteResponse,
+        ImportStatusResponse, ImportLogResponse, ImportUploadResponse,
+    )
+    from ..model.export_model import (
+        ExportJobResponse, ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse,
+    )
+    from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +218,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             VitalGraphClientError: If JWT authentication fails
         """
         # Get credentials from config
+        assert self.config is not None
         username, password = self.config.get_credentials()
         
         # Build login URL
@@ -204,13 +232,14 @@ class VitalGraphClient(VitalGraphClientInterface):
         
         # Add optional token_expiry_seconds if provided (for testing)
         if self.token_expiry_seconds is not None:
-            login_data["token_expiry_seconds"] = self.token_expiry_seconds
+            login_data["token_expiry_seconds"] = str(self.token_expiry_seconds)
             logger.info(f"Requesting custom token expiry: {self.token_expiry_seconds} seconds")
         
         try:
             logger.info(f"Authenticating with VitalGraph server at {login_url}")
             # Set content type for form data and send authentication request
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            assert self.async_session is not None
             response = await self.async_session.post(login_url, data=login_data, headers=headers)
             
             if response.status_code == 200:
@@ -279,6 +308,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         try:
             logger.info("Re-authenticating with server (no refresh token available)...")
             
+            assert self.config is not None
             server_url = self.config.get_server_url()
             api_base_path = self.config.get_api_base_path()
             timeout = self.config.get_timeout()
@@ -387,6 +417,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             logger.info("Refreshing access token...")
             
             # Build refresh URL
+            assert self.config is not None
             server_url = self.config.get_server_url()
             refresh_url = f"{server_url.rstrip('/')}/api/refresh"
             
@@ -484,6 +515,7 @@ class VitalGraphClient(VitalGraphClientInterface):
                 await self._ensure_valid_token()
             
             try:
+                assert self.async_session is not None
                 response = await self.async_session.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response
@@ -504,6 +536,7 @@ class VitalGraphClient(VitalGraphClientInterface):
                     # Retry the request ONCE with new token
                     logger.info("Retrying request with refreshed token")
                     try:
+                        assert self.async_session is not None
                         response = await self.async_session.request(method, url, **kwargs)
                         response.raise_for_status()
                         return response
@@ -521,8 +554,15 @@ class VitalGraphClient(VitalGraphClientInterface):
                         continue
                     raise VitalGraphClientError(f"Request failed after {max_retries + 1} attempts: {e}")
                 else:
-                    # Not a retryable error
-                    raise VitalGraphClientError(f"Request failed: {e}")
+                    # Not a retryable error — preserve status code and response detail
+                    detail = ""
+                    try:
+                        body = e.response.json()
+                        detail = body.get("detail", "")
+                    except Exception:
+                        pass
+                    msg = f"Request failed ({e.response.status_code}): {detail or e}"
+                    raise VitalGraphClientError(msg, status_code=e.response.status_code)
             except self._RETRYABLE_EXCEPTIONS as e:
                 # Transient connection errors — retry
                 last_exception = e

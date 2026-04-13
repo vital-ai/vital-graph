@@ -725,7 +725,7 @@ class EntityRegistryEndpoint:
             The Weaviate rebuild does a full entity + location sync (upsert, not drop/recreate).
             """
             import time as _time
-            reg = self._get_registry()
+            reg = self.registry
             results = {}
 
             if rebuild_dedup and reg.dedup_index:
@@ -936,6 +936,7 @@ class EntityRegistryEndpoint:
 
             # PostgreSQL path: external_location_id without geo/semantic/address
             if has_external_id and not has_geo and not has_semantic and not has_address:
+                assert external_location_id is not None
                 rows = await self.registry.search_locations_by_external_id(
                     external_location_id=external_location_id.strip(),
                     entity_id=entity_id,
@@ -961,7 +962,7 @@ class EntityRegistryEndpoint:
                 admin_area_1=admin_area_1, postal_code=postal_code,
                 location_name=location_name, entity_id=entity_id,
                 is_primary=is_primary,
-                external_location_id=external_location_id.strip() if has_external_id else None,
+                external_location_id=external_location_id.strip() if external_location_id else None,
                 min_certainty=min_certainty,
                 limit=limit,
             )

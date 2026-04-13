@@ -4,12 +4,23 @@ Relationship operations mixin for the Entity Registry.
 Includes relationship types and relationship CRUD.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 class RelationshipMixin:
     """Relationship type and relationship CRUD methods."""
+
+    pool: asyncpg.Pool
+
+    async def _log_change(self, conn: asyncpg.Connection, entity_id: Optional[str],
+                          change_type: str, details: Dict[str, Any],
+                          changed_by: Optional[str] = None) -> None: ...
 
     # ------------------------------------------------------------------
     # Relationship Type operations
@@ -77,6 +88,18 @@ class RelationshipMixin:
                 if type_id is None:
                     raise ValueError(f"Unknown relationship type: {relationship_type_key}")
 
+                # Check for existing relationship — return it directly (idempotent)
+                existing_id = await conn.fetchval(
+                    "SELECT relationship_id FROM entity_relationship "
+                    "WHERE entity_source = $1 AND entity_destination = $2 "
+                    "AND relationship_type_id = $3",
+                    entity_source, entity_destination, type_id
+                )
+                if existing_id is not None:
+                    result = await self._get_relationship_response(conn, existing_id)
+                    assert result is not None
+                    return result
+
                 row = await conn.fetchrow(
                     "INSERT INTO entity_relationship "
                     "(entity_source, entity_destination, relationship_type_id, "
@@ -93,7 +116,9 @@ class RelationshipMixin:
                     'dest_id': entity_destination,
                 }, changed_by=created_by)
 
-                return await self._get_relationship_response(conn, rel['relationship_id'])
+                result = await self._get_relationship_response(conn, rel['relationship_id'])
+                assert result is not None
+                return result
 
     async def _get_relationship_response(self, conn, relationship_id: int) -> Optional[Dict[str, Any]]:
         """Build a full relationship response dict from the view."""
