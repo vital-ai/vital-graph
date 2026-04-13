@@ -319,6 +319,8 @@ async def main():
                         help='Resume a previous full sync — skip entities already in Weaviate')
     parser.add_argument('--refs-only', action='store_true',
                         help='Only set Entity→Location cross-references (no entity/location inserts)')
+    parser.add_argument('--verify-refs', action='store_true',
+                        help='Verify cross-references exist (read-only, no writes)')
     parser.add_argument('--skip', type=int, default=0,
                         help='Skip N entities when using --refs-only (resume interrupted run)')
     parser.add_argument('--entity-vectors', metavar='FILE',
@@ -327,8 +329,8 @@ async def main():
                         help='Path to location_vectors.jsonl (pre-computed vectors)')
     args = parser.parse_args()
 
-    if not args.full and not args.rebuild and not args.entity_id and not args.since and not args.refs_only:
-        parser.error("Must specify --full, --rebuild, --entity-id, --since, or --refs-only")
+    if not args.full and not args.rebuild and not args.entity_id and not args.since and not args.refs_only and not args.verify_refs:
+        parser.error("Must specify --full, --rebuild, --entity-id, --since, --refs-only, or --verify-refs")
 
     # Connect to Weaviate
     weaviate_index = await EntityWeaviateIndex.from_env()
@@ -368,6 +370,15 @@ async def main():
                                batch_size=args.batch_size,
                                entity_vectors=entity_vec_lookup,
                                location_vectors=location_vec_lookup)
+        elif args.verify_refs:
+            logger.info("=" * 60)
+            logger.info("Cross-reference verification (read-only)")
+            logger.info("=" * 60)
+            result = await weaviate_index.verify_cross_refs(
+                pool, batch_size=args.batch_size,
+            )
+            logger.info(f"Done: ok={result['ok']:,}, mismatch={result['mismatch']:,}, "
+                        f"missing={result['missing']:,}")
         elif args.refs_only:
             logger.info("=" * 60)
             logger.info("Cross-reference repair")

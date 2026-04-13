@@ -1089,18 +1089,8 @@ class EntityWeaviateIndex:
     # Cross-reference repair
     # ------------------------------------------------------------------
 
-    async def set_cross_refs(self, pool, batch_size: int = 500, skip: int = 0) -> int:
-        """Set Entity→Location cross-references from PostgreSQL mapping.
-
-        Use this to repair cross-refs without re-inserting entities/locations.
-        Args:
-            skip: Number of entities to skip (for resuming interrupted runs).
-        """
-        import time as _time
-        start = _time.time()
-        await self._ensure_connected()
-
-        logger.info("Building entity→location mapping from PostgreSQL...")
+    async def _load_entity_loc_map(self, pool) -> tuple:
+        """Build entity→location_id set mapping from PostgreSQL."""
         entity_loc_map: Dict[str, set] = {}
         last_location_id = 0
         total_locs = 0
@@ -1118,11 +1108,36 @@ class EntityWeaviateIndex:
             for row in rows:
                 entity_loc_map.setdefault(row['entity_id'], set()).add(row['location_id'])
             total_locs += len(rows)
+        return entity_loc_map, total_locs
 
+    async def set_cross_refs(self, pool, batch_size: int = 500, skip: int = 0,
+                             error_log_path: Optional[str] = None) -> int:
+        """Set Entity→Location cross-references from PostgreSQL mapping.
+
+        Use this to repair cross-refs without re-inserting entities/locations.
+        Args:
+            skip: Number of entities to skip (for resuming interrupted runs).
+            error_log_path: Path to write failed entity IDs (one per line).
+                            Defaults to crossref_errors_<timestamp>.log.
+        """
+        import time as _time
+        from datetime import datetime
+        start = _time.time()
+        await self._ensure_connected()
+
+        logger.info("Building entity→location mapping from PostgreSQL...")
+        entity_loc_map, total_locs = await self._load_entity_loc_map(pool)
         logger.info(f"Found {total_locs:,} locations across {len(entity_loc_map):,} entities")
 
         import asyncio
         import logging as _logging
+
+        # Set up error log file
+        if not error_log_path:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            error_log_path = f"crossref_errors_{ts}.log"
+        error_log = open(error_log_path, "w")
+        logger.info(f"Error log: {error_log_path}")
 
         total_refs = len(entity_loc_map)
         ref_count = 0
@@ -1137,17 +1152,24 @@ class EntityWeaviateIndex:
             entity_uuid = entity_id_to_weaviate_uuid(eid)
             loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in loc_ids]
             async with sem:
-                try:
-                    await self.collection.data.reference_replace(
-                        from_uuid=entity_uuid,
-                        from_property="locations",
-                        to=loc_uuids,
-                    )
-                    ref_count += 1
-                except Exception as e:
-                    ref_errors += 1
-                    if ref_errors <= 5:
-                        logger.error(f"Cross-ref replace error for {eid}: {e}")
+                for attempt in range(1, 4):
+                    try:
+                        await self.collection.data.reference_replace(
+                            from_uuid=entity_uuid,
+                            from_property="locations",
+                            to=loc_uuids,
+                        )
+                        ref_count += 1
+                        return
+                    except Exception as e:
+                        if attempt < 3:
+                            await asyncio.sleep(1 * attempt)
+                            continue
+                        ref_errors += 1
+                        error_log.write(f"{eid}\t{e}\n")
+                        error_log.flush()
+                        if ref_errors <= 5:
+                            logger.error(f"Cross-ref replace error for {eid}: {e}")
 
         items = list(entity_loc_map.items())
         if skip > 0:
@@ -1165,11 +1187,110 @@ class EntityWeaviateIndex:
             logger.info(f"  Cross-refs: {ref_count:,}/{total_refs:,} "
                         f"({rate:.0f}/s, {elapsed:.0f}s elapsed)")
 
+        error_log.close()
         _logging.getLogger("httpx").setLevel(_logging.INFO)
         duration = _time.time() - start
         logger.info(f"Cross-refs complete: {ref_count:,} entities linked in {duration:.1f}s"
-                    f"{f' ({ref_errors} errors)' if ref_errors else ''}")
+                    f"{f' ({ref_errors} errors — see {error_log_path})' if ref_errors else ''}")
         return ref_count
+
+    async def verify_cross_refs(self, pool, batch_size: int = 500) -> Dict[str, Any]:
+        """Verify Entity→Location cross-references exist without rewriting.
+
+        Reads each entity from Weaviate and checks its location refs match
+        what PostgreSQL expects.  Much faster than set_cross_refs since it
+        only reads — no writes.
+
+        Returns dict with counts and list of mismatched entity IDs.
+        """
+        import time as _time
+        from datetime import datetime
+        start = _time.time()
+        await self._ensure_connected()
+
+        logger.info("Building entity→location mapping from PostgreSQL...")
+        entity_loc_map, total_locs = await self._load_entity_loc_map(pool)
+        logger.info(f"Found {total_locs:,} locations across {len(entity_loc_map):,} entities")
+
+        import asyncio
+        import logging as _logging
+        import weaviate.classes.query as wvq
+
+        _logging.getLogger("httpx").setLevel(_logging.WARNING)
+
+        total = len(entity_loc_map)
+        ok_count = 0
+        mismatch_count = 0
+        missing_count = 0
+        mismatched_ids: List[str] = []
+        sem = asyncio.Semaphore(100)
+
+        location_ref = wvq.QueryReference(link_on="locations",
+                                          return_properties=["location_id"])
+
+        async def _check_one(eid: str, expected_loc_ids: set):
+            nonlocal ok_count, mismatch_count, missing_count
+            entity_uuid = entity_id_to_weaviate_uuid(eid)
+            expected_uuids = {location_id_to_weaviate_uuid(lid) for lid in expected_loc_ids}
+            async with sem:
+                try:
+                    obj = await self.collection.query.fetch_object_by_id(
+                        entity_uuid,
+                        return_references=[location_ref],
+                    )
+                    if obj is None:
+                        missing_count += 1
+                        mismatched_ids.append(eid)
+                        return
+
+                    actual_uuids = set()
+                    refs = obj.references.get("locations")
+                    if refs and refs.objects:
+                        actual_uuids = {str(o.uuid) for o in refs.objects}
+
+                    if actual_uuids == expected_uuids:
+                        ok_count += 1
+                    else:
+                        mismatch_count += 1
+                        mismatched_ids.append(eid)
+                except Exception:
+                    mismatch_count += 1
+                    mismatched_ids.append(eid)
+
+        items = list(entity_loc_map.items())
+        chunk_size = 1000
+        for i in range(0, len(items), chunk_size):
+            chunk = items[i:i + chunk_size]
+            await self._ensure_connected()
+            await asyncio.gather(*[_check_one(eid, lids) for eid, lids in chunk])
+            elapsed = _time.time() - start
+            checked = ok_count + mismatch_count + missing_count
+            rate = checked / elapsed if elapsed > 0 else 0
+            logger.info(f"  Verify: {checked:,}/{total:,} "
+                        f"(ok={ok_count:,} mismatch={mismatch_count:,} "
+                        f"missing={missing_count:,}, {rate:.0f}/s)")
+
+        _logging.getLogger("httpx").setLevel(_logging.INFO)
+        duration = _time.time() - start
+        logger.info(f"Verify complete in {duration:.1f}s: "
+                    f"ok={ok_count:,}, mismatch={mismatch_count:,}, missing={missing_count:,}")
+
+        # Write mismatched IDs to file for targeted repair
+        if mismatched_ids:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            repair_path = f"crossref_repair_{ts}.txt"
+            with open(repair_path, "w") as f:
+                for eid in mismatched_ids:
+                    f.write(f"{eid}\n")
+            logger.info(f"Wrote {len(mismatched_ids)} entity IDs to {repair_path} for targeted repair")
+
+        return {
+            "ok": ok_count,
+            "mismatch": mismatch_count,
+            "missing": missing_count,
+            "mismatched_ids": mismatched_ids,
+            "duration_s": duration,
+        }
 
     # ------------------------------------------------------------------
     # Topic search

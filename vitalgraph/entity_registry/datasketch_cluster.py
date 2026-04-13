@@ -112,7 +112,7 @@ class ClusterBuffer:
                 self._count = 0
         return []
 
-    # -- Redis commands used by datasketch's _insert -------------------------
+    # -- Redis commands used by datasketch storage ----------------------------
 
     def hset(self, *args, **kwargs):
         self._auto_flush()
@@ -127,6 +127,26 @@ class ClusterBuffer:
     def rpush(self, *args, **kwargs):
         self._auto_flush()
         self._pipe.rpush(*args, **kwargs)
+        self._count += 1
+
+    def hdel(self, *args, **kwargs):
+        self._auto_flush()
+        self._pipe.hdel(*args, **kwargs)
+        self._count += 1
+
+    def delete(self, *args, **kwargs):
+        self._auto_flush()
+        self._pipe.delete(*args, **kwargs)
+        self._count += 1
+
+    def srem(self, *args, **kwargs):
+        self._auto_flush()
+        self._pipe.srem(*args, **kwargs)
+        self._count += 1
+
+    def lrem(self, *args, **kwargs):
+        self._auto_flush()
+        self._pipe.lrem(*args, **kwargs)
         self._count += 1
 
 
@@ -204,14 +224,19 @@ class RedisClusterListStorage(OrderedStorage, _RedisClusterBase):
             pipe.lrange(self.redis_key(key), 0, -1)
         return pipe.execute()
 
-    def remove(self, *keys):
-        self._redis.hdel(self._name, *keys)
-        self._redis.delete(*[self.redis_key(k) for k in keys])
+    def remove(self, *keys, **kwargs):
+        buffer = kwargs.pop('buffer', False)
+        r = self._buffer if buffer else self._redis
+        r.hdel(self._name, *keys)
+        for k in keys:
+            r.delete(self.redis_key(k))
 
-    def remove_val(self, key, val):
+    def remove_val(self, key, val, **kwargs):
+        buffer = kwargs.pop('buffer', False)
+        r = self._buffer if buffer else self._redis
         redis_key = self.redis_key(key)
-        self._redis.lrem(redis_key, 0, val)
-        if not self._redis.exists(redis_key):
+        r.lrem(redis_key, 0, val)
+        if not buffer and not self._redis.exists(redis_key):
             self._redis.hdel(self._name, redis_key)
 
     def insert(self, key, *vals, **kwargs):
@@ -253,14 +278,19 @@ class RedisClusterSetStorage(UnorderedStorage, _RedisClusterBase):
             pipe.smembers(self.redis_key(key))
         return pipe.execute()
 
-    def remove(self, *keys):
-        self._redis.hdel(self._name, *keys)
-        self._redis.delete(*[self.redis_key(k) for k in keys])
+    def remove(self, *keys, **kwargs):
+        buffer = kwargs.pop('buffer', False)
+        r = self._buffer if buffer else self._redis
+        r.hdel(self._name, *keys)
+        for k in keys:
+            r.delete(self.redis_key(k))
 
-    def remove_val(self, key, val):
+    def remove_val(self, key, val, **kwargs):
+        buffer = kwargs.pop('buffer', False)
+        r = self._buffer if buffer else self._redis
         redis_key = self.redis_key(key)
-        self._redis.srem(redis_key, val)
-        if not self._redis.exists(redis_key):
+        r.srem(redis_key, val)
+        if not buffer and not self._redis.exists(redis_key):
             self._redis.hdel(self._name, redis_key)
 
     def insert(self, key, *vals, **kwargs):
