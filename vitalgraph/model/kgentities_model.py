@@ -49,7 +49,7 @@ class SlotCriteria(BaseModel):
     slot_type: Optional[str] = Field(None, description="Slot type URI to filter by")
     slot_class_uri: Optional[str] = Field(None, description="Underlying slot class URI (e.g., KGTextSlot, KGDoubleSlot) to determine value property")
     value: Optional[Any] = Field(None, description="Value to compare against")
-    comparator: Optional[str] = Field(None, description="Comparison operator: eq, ne, gt, lt, gte, lte, contains, exists")
+    comparator: Optional[str] = Field(None, description="Comparison operator: eq, ne, gt, lt, gte, lte, contains, exists, not_exists, is_empty")
 
 
 class FrameCriteria(BaseModel):
@@ -64,6 +64,7 @@ class FrameCriteria(BaseModel):
     Example hierarchical: entity→parent_frame→child_frame→slot
     """
     frame_type: Optional[str] = Field(None, description="Frame type URI to filter by")
+    negate: bool = Field(False, description="When True, negate this frame criterion — match entities/frames that do NOT have this frame pattern")
     slot_criteria: Optional[List[SlotCriteria]] = Field(None, description="Slot criteria within this frame")
     frame_criteria: Optional[List['FrameCriteria']] = Field(None, description="Nested frame criteria for hierarchical frame structures (parent→child frames)")
 

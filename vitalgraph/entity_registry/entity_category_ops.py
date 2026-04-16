@@ -2,11 +2,26 @@
 Category operations mixin for the Entity Registry.
 """
 
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 class CategoryMixin:
     """Category CRUD methods (entity categories)."""
+
+    pool: asyncpg.Pool
+
+    async def _log_change(self, conn: asyncpg.Connection, entity_id: Optional[str],
+                          change_type: str, details: Dict[str, Any],
+                          changed_by: Optional[str] = None) -> None: ...
+
+    async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
+
+    async def _weaviate_upsert_entity(self, entity_id: str) -> None: ...
 
     async def list_categories(self) -> List[Dict[str, Any]]:
         """List all entity categories."""

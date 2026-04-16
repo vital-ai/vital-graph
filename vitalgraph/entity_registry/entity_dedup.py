@@ -16,7 +16,7 @@ import os
 import pickle
 import time as _time_mod
 import uuid
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 import jellyfish
 import redis as redis_lib
@@ -165,7 +165,7 @@ class EntityDedupIndex:
         self._initialized = False
 
         # Distributed lock state (Redis / MemoryDB only)
-        self._redis_client: Optional[redis_lib.Redis] = None
+        self._redis_client: Optional[Union[redis_lib.Redis, redis_lib.RedisCluster]] = None
         self._lock_id: Optional[str] = None
 
     def _create_lsh(self, threshold: float, storage_config: Optional[Dict[str, Any]] = None) -> MinHashLSH:
@@ -283,7 +283,7 @@ class EntityDedupIndex:
     # Distributed lock (Redis / MemoryDB)
     # ------------------------------------------------------------------
 
-    def _get_redis_client(self) -> Optional[redis_lib.Redis]:
+    def _get_redis_client(self) -> Optional[Union[redis_lib.Redis, redis_lib.RedisCluster]]:
         """Get or create a Redis client for distributed locking.
 
         Tries RedisCluster first (required for MemoryDB / ElastiCache
@@ -298,7 +298,7 @@ class EntityDedupIndex:
         try:
             self._redis_client = redis_lib.RedisCluster(**redis_params)
             logger.debug("Dedup lock using RedisCluster client")
-        except (redis_lib.exceptions.RedisClusterException, Exception):
+        except Exception:
             self._redis_client = redis_lib.Redis(**redis_params)
             logger.debug("Dedup lock using standalone Redis client")
         return self._redis_client
@@ -635,7 +635,7 @@ class EntityDedupIndex:
 
                     # Append alias (LEFT JOIN may produce NULL)
                     alias_name = row['alias_name']
-                    if alias_name:
+                    if alias_name and current_entity is not None:
                         current_entity['aliases'].append({'alias_name': alias_name})
 
                 # Advance keyset cursor to last entity_id seen in this page
@@ -758,7 +758,7 @@ class EntityDedupIndex:
                 for entity_id, entity in batch:
                     if entity_id in self._entity_cache:  # only if actually indexed
                         h = compute_dedup_hash(entity)
-                        pipe.hset(hash_key, entity_id, h)
+                        pipe.hset(hash_key, entity_id, h)  # type: ignore[arg-type]
                 pipe.execute()
             except Exception as e:
                 logger.warning(f"Error storing batch dedup hashes: {e}")
@@ -770,7 +770,7 @@ class EntityDedupIndex:
         Replicates datasketch's _insert logic but batches all commands.
         """
         # Get the shared Redis client from any hashtable's storage
-        client = lsh.hashtables[0]._redis
+        client = lsh.hashtables[0]._redis  # type: ignore[attr-defined]
         pipe = client.pipeline()
 
         for raw_key, minhash in entries:
@@ -780,14 +780,14 @@ class EntityDedupIndex:
 
             # keys storage (ordered list): map key → band hashes
             keys_store = lsh.keys
-            rk = keys_store.redis_key(key)
-            pipe.hset(keys_store._name, key, rk)
+            rk = keys_store.redis_key(key)  # type: ignore[attr-defined]
+            pipe.hset(keys_store._name, key, rk)  # type: ignore[attr-defined]
             pipe.rpush(rk, *Hs)
 
             # hashtable storage (unordered sets): map band_hash → key
             for H, ht in zip(Hs, lsh.hashtables):
-                rk_ht = ht.redis_key(H)
-                pipe.hset(ht._name, H, rk_ht)
+                rk_ht = ht.redis_key(H)  # type: ignore[attr-defined]
+                pipe.hset(ht._name, H, rk_ht)  # type: ignore[attr-defined]
                 pipe.sadd(rk_ht, key)
 
         pipe.execute()
@@ -903,7 +903,7 @@ class EntityDedupIndex:
         if client:
             try:
                 h = compute_dedup_hash(entity)
-                client.hset(self._dedup_hash_key(), entity_id, h)
+                client.hset(self._dedup_hash_key(), entity_id, h)  # type: ignore[arg-type]
             except Exception as e:
                 logger.warning(f"Error storing dedup hash for {entity_id}: {e}")
 
@@ -931,7 +931,7 @@ class EntityDedupIndex:
         client = self._get_redis_client()
         if client:
             try:
-                client.hdel(self._dedup_hash_key(), entity_id)
+                client.hdel(self._dedup_hash_key(), entity_id)  # type: ignore[arg-type]
             except Exception:
                 pass
 
@@ -1237,8 +1237,8 @@ class EntityDedupIndex:
             band_hashes = [lsh._H(mh.hashvalues[start:end]) for mh in minhashes]
             # Single getmany() call per band — one Redis pipeline
             results = hashtable.getmany(*band_hashes)
-            for result_set in results:
-                for key in result_set:
+            for result_set in (results or []):
+                for key in (result_set or []):
                     candidates.add(key)
 
         if lsh.prepickle:
@@ -1292,8 +1292,8 @@ class EntityDedupIndex:
                                for mh in minhashes]
                 results = hashtable.getmany(*band_hashes)
                 band_keys: set = set()
-                for result_set in results:
-                    for key in result_set:
+                for result_set in (results or []):
+                    for key in (result_set or []):
                         band_keys.add(key)
                 for key in band_keys:
                     band_hits[key] += 1

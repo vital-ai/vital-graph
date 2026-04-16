@@ -2,13 +2,31 @@
 Alias operations mixin for the Entity Registry.
 """
 
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
 
-from .entity_dedup import compute_dedup_hash
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from .entity_dedup import compute_dedup_hash, EntityDedupIndex
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 class AliasMixin:
     """Alias CRUD methods."""
+
+    pool: asyncpg.Pool
+    dedup_index: Optional[EntityDedupIndex]
+
+    async def _log_change(self, conn: asyncpg.Connection, entity_id: str,
+                          change_type: str, details: Dict[str, Any],
+                          changed_by: Optional[str] = None) -> None: ...
+
+    async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
+
+    async def _notify_dedup_change(self, action: str, entity_id: str) -> None: ...
+
+    async def _weaviate_upsert_entity(self, entity_id: str) -> None: ...
 
     async def _insert_alias(
         self, conn, entity_id: str,

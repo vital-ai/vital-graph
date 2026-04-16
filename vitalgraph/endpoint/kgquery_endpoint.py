@@ -226,6 +226,7 @@ class KGQueriesEndpoint:
                 
                 return BuilderFrameCriteria(
                     frame_type=frame_crit.frame_type,
+                    negate=getattr(frame_crit, 'negate', False),
                     slot_criteria=builder_slots,
                     frame_criteria=builder_nested_frames
                 )

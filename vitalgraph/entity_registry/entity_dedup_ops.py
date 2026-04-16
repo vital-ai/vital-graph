@@ -4,15 +4,29 @@ Dedup operations mixin for the Entity Registry.
 Near-duplicate detection and cross-worker dedup sync via PostgreSQL NOTIFY.
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+
+from .entity_dedup import EntityDedupIndex
+
+if TYPE_CHECKING:
+    import asyncpg
+    from vitalgraph.signal.signal_manager import SignalManager
 
 logger = logging.getLogger(__name__)
 
 
 class DedupMixin:
     """Near-duplicate detection and cross-worker dedup sync methods."""
+
+    pool: asyncpg.Pool
+    dedup_index: Optional[EntityDedupIndex]
+    signal_manager: Optional[SignalManager]
+
+    async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
 
     async def find_similar(
         self,

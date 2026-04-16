@@ -190,8 +190,9 @@ class KGConnectionQueryBuilder:
         ])
         
         # Frame type filtering
-        if criteria.shared_frame_types:
-            type_values = " ".join(f"<{uri}>" for uri in criteria.shared_frame_types)
+        shared_frame_types = getattr(criteria, 'shared_frame_types', None)
+        if shared_frame_types:
+            type_values = " ".join(f"<{uri}>" for uri in shared_frame_types)
             patterns.append(f"VALUES ?frame_type {{ {type_values} }}")
         
         return "\n                ".join(patterns)
@@ -250,26 +251,55 @@ class KGConnectionQueryBuilder:
                     slot_edge_var = f"source_slot_edge_{frame_idx}_{slot_idx}"
                     slot_value_var = f"source_slot_value_{frame_idx}_{slot_idx}"
                     
-                    # Connect slot to frame via Edge_hasKGSlot edge
-                    frame_patterns.extend([
-                        f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
-                        f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
-                    ])
-                    
-                    # Slot type filter
-                    if slot_criterion.slot_type:
-                        frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
-                    
-                    # Slot value filter with comparator
-                    if slot_criterion.value is not None and slot_criterion.comparator:
-                        value_filter = self._build_slot_value_filter(
-                            slot_var, slot_value_var, slot_criterion.value, 
-                            slot_criterion.comparator, slot_criterion.slot_class_uri
-                        )
-                        frame_patterns.extend(value_filter)
+                    if slot_criterion.comparator == "not_exists":
+                        # Wrap slot pattern in FILTER NOT EXISTS
+                        inner = [
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ]
+                        if slot_criterion.slot_type:
+                            inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        if slot_criterion.value is not None:
+                            self.logger.warning("not_exists comparator ignores the provided value")
+                        frame_patterns.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
+                    elif slot_criterion.comparator == "is_empty":
+                        # Slot connection mandatory, value check via OPTIONAL + !BOUND
+                        frame_patterns.extend([
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ])
+                        if slot_criterion.slot_type:
+                            frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        frame_patterns.append(
+                            f"OPTIONAL {{ ?{slot_var} haley:hasTextSlotValue ?{slot_value_var} . }} "
+                            f"FILTER(!BOUND(?{slot_value_var}))")
+                    else:
+                        # Connect slot to frame via Edge_hasKGSlot edge
+                        frame_patterns.extend([
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ])
+                        
+                        # Slot type filter
+                        if slot_criterion.slot_type:
+                            frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        
+                        # Slot value filter with comparator
+                        if slot_criterion.value is not None and slot_criterion.comparator:
+                            value_filter = self._build_slot_value_filter(
+                                slot_var, slot_value_var, slot_criterion.value, 
+                                slot_criterion.comparator, slot_criterion.slot_class_uri
+                            )
+                            frame_patterns.extend(value_filter)
             
-            patterns.extend(frame_patterns)
+            # Wrap in FILTER NOT EXISTS if frame is negated
+            if getattr(frame_criterion, 'negate', False):
+                patterns.append(f"FILTER NOT EXISTS {{ {' '.join(frame_patterns)} }}")
+            else:
+                patterns.extend(frame_patterns)
         
         return "\n                ".join(patterns)
     
@@ -309,26 +339,53 @@ class KGConnectionQueryBuilder:
                     slot_edge_var = f"dest_slot_edge_{frame_idx}_{slot_idx}"
                     slot_value_var = f"dest_slot_value_{frame_idx}_{slot_idx}"
                     
-                    # Connect slot to frame via Edge_hasKGSlot edge
-                    frame_patterns.extend([
-                        f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                        f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
-                        f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
-                    ])
-                    
-                    # Slot type filter
-                    if slot_criterion.slot_type:
-                        frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
-                    
-                    # Slot value filter with comparator
-                    if slot_criterion.value is not None and slot_criterion.comparator:
-                        value_filter = self._build_slot_value_filter(
-                            slot_var, slot_value_var, slot_criterion.value, 
-                            slot_criterion.comparator, slot_criterion.slot_class_uri
-                        )
-                        frame_patterns.extend(value_filter)
+                    if slot_criterion.comparator == "not_exists":
+                        inner = [
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ]
+                        if slot_criterion.slot_type:
+                            inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        if slot_criterion.value is not None:
+                            self.logger.warning("not_exists comparator ignores the provided value")
+                        frame_patterns.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
+                    elif slot_criterion.comparator == "is_empty":
+                        frame_patterns.extend([
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ])
+                        if slot_criterion.slot_type:
+                            frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        frame_patterns.append(
+                            f"OPTIONAL {{ ?{slot_var} haley:hasTextSlotValue ?{slot_value_var} . }} "
+                            f"FILTER(!BOUND(?{slot_value_var}))")
+                    else:
+                        # Connect slot to frame via Edge_hasKGSlot edge
+                        frame_patterns.extend([
+                            f"?{slot_edge_var} vital:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                            f"?{slot_edge_var} vital:hasEdgeSource ?{frame_var} .",
+                            f"?{slot_edge_var} vital:hasEdgeDestination ?{slot_var} ."
+                        ])
+                        
+                        # Slot type filter
+                        if slot_criterion.slot_type:
+                            frame_patterns.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                        
+                        # Slot value filter with comparator
+                        if slot_criterion.value is not None and slot_criterion.comparator:
+                            value_filter = self._build_slot_value_filter(
+                                slot_var, slot_value_var, slot_criterion.value, 
+                                slot_criterion.comparator, slot_criterion.slot_class_uri
+                            )
+                            frame_patterns.extend(value_filter)
             
-            patterns.extend(frame_patterns)
+            # Wrap in FILTER NOT EXISTS if frame is negated
+            if getattr(frame_criterion, 'negate', False):
+                patterns.append(f"FILTER NOT EXISTS {{ {' '.join(frame_patterns)} }}")
+            else:
+                patterns.extend(frame_patterns)
         
         return "\n                ".join(patterns)
     

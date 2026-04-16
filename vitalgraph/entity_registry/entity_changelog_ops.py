@@ -2,12 +2,19 @@
 Change Log operations mixin for the Entity Registry.
 """
 
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 class ChangeLogMixin:
     """Change log and helper methods."""
+
+    pool: asyncpg.Pool
 
     async def _log_change(
         self, conn, entity_id: Optional[str], change_type: str,
