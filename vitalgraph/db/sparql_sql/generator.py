@@ -308,7 +308,7 @@ async def materialize_constants(
             aliases.resolved_constants[col_name] = uuid_str
             _term_cache[(space_id, text, ttype)] = uuid_str
         else:
-            logger.warning("Constant not found: text=%r type=%r", text, ttype)
+            logger.debug("Constant not found: text=%r type=%r", text, ttype)
 
     logger.debug("Materialized %d/%d constants (%d from cache, %d from DB)",
                  len(aliases.resolved_constants), len(aliases.constants),
