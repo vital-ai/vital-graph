@@ -13,29 +13,31 @@ from typing import List
 import weaviate.classes.config as wvc
 
 
-DEFAULT_COLLECTION_PREFIX = "dev"
+DEFAULT_COLLECTION_PREFIX = "Dev"
 
 
 def _get_weaviate_env() -> str:
     """Derive the Weaviate collection prefix from VITALGRAPH_ENVIRONMENT.
 
-    Maps 'local' (and unset) to 'dev'; everything else passes through
-    (e.g. 'prod' → 'prod', 'staging' → 'staging').
+    Maps 'local' (and unset) to 'Dev'; everything else is capitalized
+    (e.g. 'prod' → 'Prod', 'staging' → 'Staging').
+
+    Weaviate requires collection names to start with an uppercase letter.
     """
     raw = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').strip().lower()
     if raw in ('', 'local'):
-        return DEFAULT_COLLECTION_PREFIX
-    return raw
+        return DEFAULT_COLLECTION_PREFIX.capitalize()
+    return raw.capitalize()
 
 
 def get_collection_name(env: str = None) -> str:
     """Return the environment-scoped EntityIndex collection name.
 
     Uses 'xxx' as separator (underscore is technically allowed but problematic in Weaviate).
-    Examples: devxxxEntityIndex, prodxxxEntityIndex, testxxxEntityIndex
+    Examples: DevxxxEntityIndex, ProdxxxEntityIndex, TestxxxEntityIndex
 
-    Derives from VITALGRAPH_ENVIRONMENT by default (e.g. 'prod' → prodxxxEntityIndex).
-    Falls back to 'dev' when VITALGRAPH_ENVIRONMENT is 'local' or unset.
+    Derives from VITALGRAPH_ENVIRONMENT by default (e.g. 'prod' → ProdxxxEntityIndex).
+    Falls back to 'Dev' when VITALGRAPH_ENVIRONMENT is 'local' or unset.
     """
     if env is None:
         env = _get_weaviate_env()
