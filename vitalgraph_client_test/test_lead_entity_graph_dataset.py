@@ -102,7 +102,7 @@ def print_test_summary(all_results: List[dict]) -> bool:
     return all_success
 
 
-def get_lead_files(lead_data_dir: Path, limit: int = None) -> List[Path]:
+def get_lead_files(lead_data_dir: Path, limit: int = None) -> List[Path]:  # type: ignore[assignment]
     """
     Get list of lead N-Triples files.
     
@@ -134,7 +134,7 @@ async def main():
     max_files = 100 # None
     
     # Skip data loading if data is already loaded (set to True to skip)
-    skip_load = True
+    skip_load = False
     
     # Number of entities to sample for detailed retrieval testing
     sample_size = 5
@@ -196,7 +196,7 @@ async def main():
         # Create fresh test space
         logger.info(f"\n📦 Creating test space '{space_id}'...")
         try:
-            space = Space(space=space_id, space_name="Lead Entity Graph Dataset Test Space")
+            space = Space(space=space_id, space_name="Lead Entity Graph Dataset Test Space")  # type: ignore[call-arg]
             create_response = await client.spaces.create_space(space)
             
             if not create_response.is_success:
@@ -276,7 +276,7 @@ async def main():
         # ====================================================================
         # STEP 4: KGQuery Frame-Based Queries
         # ====================================================================
-        kgquery_tester = KGQueryLeadQueriesTester(client, query_mode="direct")
+        kgquery_tester = KGQueryLeadQueriesTester(client, query_mode="edge")
         kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, entity_count)
         all_results.append(kgquery_results)
         

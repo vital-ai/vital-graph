@@ -91,6 +91,13 @@ class SparqlSQLDbImpl(DbImplInterface):
 
         logger.info("SparqlSQLDbImpl initialized")
 
+    @property
+    def _pool(self) -> asyncpg.Pool:
+        """Return connection_pool, raising if not connected."""
+        if self.connection_pool is None:
+            raise RuntimeError("SparqlSQLDbImpl not connected — call connect() first")
+        return self.connection_pool
+
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
@@ -116,7 +123,7 @@ class SparqlSQLDbImpl(DbImplInterface):
             track_pool(self.connection_pool)
 
             # Verify the pool works
-            async with self.connection_pool.acquire() as conn:
+            async with self._pool.acquire() as conn:
                 result = await conn.fetchval('SELECT 1')
                 if result == 1:
                     self.connected = True
@@ -161,7 +168,7 @@ class SparqlSQLDbImpl(DbImplInterface):
             return False
 
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._pool.acquire() as conn:
                 await conn.fetchval('SELECT 1')
             return True
         except Exception:
@@ -182,7 +189,7 @@ class SparqlSQLDbImpl(DbImplInterface):
             raise RuntimeError("sparql_sql backend not connected")
 
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._pool.acquire() as conn:
                 if params:
                     if isinstance(params, dict):
                         param_values = list(params.values())
@@ -208,7 +215,7 @@ class SparqlSQLDbImpl(DbImplInterface):
             raise RuntimeError("sparql_sql backend not connected")
 
         try:
-            async with self.connection_pool.acquire() as conn:
+            async with self._pool.acquire() as conn:
                 if params:
                     if isinstance(params, dict):
                         param_values = list(params.values())
@@ -238,7 +245,7 @@ class SparqlSQLDbImpl(DbImplInterface):
 
         connection = None
         try:
-            connection = await self.connection_pool.acquire()
+            connection = await self._pool.acquire()
 
             from ...utils.resource_manager import track_connection
             track_connection(connection)
@@ -246,12 +253,12 @@ class SparqlSQLDbImpl(DbImplInterface):
             transaction = connection.transaction()
             await transaction.start()
 
-            return SparqlSQLTransaction(connection, transaction, self.connection_pool)
+            return SparqlSQLTransaction(connection, transaction, self._pool)
 
         except Exception as e:
             logger.error(f"sparql_sql begin_transaction error: {e}")
             if connection is not None:
-                await self.connection_pool.release(connection)
+                await self._pool.release(connection)
             raise
 
     async def commit_transaction(self, transaction: SparqlSQLTransaction) -> bool:

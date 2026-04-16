@@ -18,7 +18,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Union
 
 from .process_lock_manager import ProcessLockManager
 
@@ -30,7 +30,7 @@ class _RegisteredJob:
     """Internal descriptor for a registered periodic job."""
     name: str
     interval_seconds: float
-    handler: Callable[[], Awaitable[Any]]
+    handler: Any  # Callable or object with async .run() method
     process_type: str = "maintenance"
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     run_count: int = 0
@@ -77,7 +77,7 @@ class ProcessScheduler:
         self,
         name: str,
         interval_seconds: float,
-        handler: Callable[[], Awaitable[Any]],
+        handler: Any,
         process_type: str = "maintenance",
     ) -> None:
         """Register a periodic job.
@@ -182,12 +182,12 @@ class ProcessScheduler:
             if space_id:
                 trigger_method = getattr(handler, f"trigger_{process_type}", None)
                 if callable(trigger_method):
-                    return await trigger_method(space_id)
+                    return await trigger_method(space_id)  # type: ignore[misc]
 
             # Fallback: call the handler's run()
             if hasattr(handler, "run") and callable(handler.run):
-                return await handler.run()
-            return await handler()
+                return await handler.run()  # type: ignore[misc]
+            return await handler()  # type: ignore[misc]
         finally:
             await self._lock_manager.release(process_type, lock_subtype)
 
@@ -228,9 +228,9 @@ class ProcessScheduler:
         try:
             logger.debug("ProcessScheduler: running '%s'", job.name)
             if hasattr(job.handler, "run") and callable(job.handler.run):
-                await job.handler.run()
+                await job.handler.run()  # type: ignore[misc]
             else:
-                await job.handler()
+                await job.handler()  # type: ignore[misc]
             job.run_count += 1
             job.last_run = time.monotonic()
             job.last_error = None

@@ -274,7 +274,7 @@ class EntityRegistryImpl(
                     entity_for_index = dict(entity)
                     entity_for_index['type_key'] = type_key
                     entity_for_index['aliases'] = alias_list
-                    self.dedup_index.add_entity(entity_id, entity_for_index)
+                    await self.dedup_index.async_add_entity(entity_id, entity_for_index)
                     await self._notify_dedup_change('add', entity_id)
 
                 # Sync to Weaviate
@@ -469,7 +469,7 @@ class EntityRegistryImpl(
                     new_hash, entity_id
                 )
             if self.dedup_index:
-                self.dedup_index.add_entity(entity_id, updated)
+                await self.dedup_index.async_add_entity(entity_id, updated)
                 await self._notify_dedup_change('add', entity_id)
 
         # Sync to Weaviate
@@ -500,7 +500,7 @@ class EntityRegistryImpl(
 
                 # Remove from dedup index and notify other workers
                 if self.dedup_index:
-                    self.dedup_index.remove_entity(entity_id)
+                    await self.dedup_index.async_remove_entity(entity_id)
                     await self._notify_dedup_change('remove', entity_id)
 
                 # Remove from Weaviate

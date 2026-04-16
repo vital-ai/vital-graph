@@ -74,7 +74,7 @@ class AliasMixin:
                         new_hash, entity_id
                     )
                     if self.dedup_index:
-                        self.dedup_index.add_entity(entity_id, entity)
+                        await self.dedup_index.async_add_entity(entity_id, entity)
                         await self._notify_dedup_change('add', entity_id)
 
                 # Sync to Weaviate (aliases changed)
@@ -108,7 +108,7 @@ class AliasMixin:
                         new_hash, row['entity_id']
                     )
                     if self.dedup_index:
-                        self.dedup_index.add_entity(row['entity_id'], entity)
+                        await self.dedup_index.async_add_entity(row['entity_id'], entity)
                         await self._notify_dedup_change('add', row['entity_id'])
 
                 # Sync to Weaviate (aliases changed)

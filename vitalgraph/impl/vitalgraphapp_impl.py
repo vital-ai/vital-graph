@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 # Import VitalGraph configuration loader
-from vitalgraph.config.config_loader import get_config, ConfigurationError
+from vitalgraph.config.config_loader import get_config, ConfigurationError, VitalGraphConfig
 from vitalgraph.api.vitalgraph_api import VitalGraphAPI
 from vitalgraph.auth.vitalgraph_auth import VitalGraphAuth
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
@@ -40,10 +40,12 @@ class VitalGraphAppImpl:
     - Frontend serving in production mode
     """
     
-    def __init__(self, app: FastAPI, config: Dict):
+    def __init__(self, app: FastAPI, config: VitalGraphConfig):
         """Initialize VitalGraph application with FastAPI app and configuration."""
         self.app = app
-        self.config = config
+        self.config: VitalGraphConfig = config
+        self.entity_registry: Any = None
+        self.agent_registry: Any = None
         
         # Configure logging based on config file
         try:
@@ -73,7 +75,7 @@ class VitalGraphAppImpl:
         self.db_impl = self.vital_graph_impl.get_db_impl()
         
         # Update config reference in case it was loaded by VitalGraphImpl
-        self.config = self.vital_graph_impl.get_config()
+        self.config = self.vital_graph_impl.get_config() or config
         
         # Initialize authentication
         # Get JWT secret key from environment variable (required)
@@ -91,7 +93,7 @@ class VitalGraphAppImpl:
         self.event_loop_monitor = EventLoopMonitor(threshold_ms=100, check_interval_ms=50)
         
         # Process scheduler (initialized in startup_event after DB connection)
-        self.process_scheduler = None
+        self.process_scheduler: Optional[Any] = None
         
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
@@ -289,7 +291,7 @@ class VitalGraphAppImpl:
                                 pg_config = self.config.get_fuseki_postgresql_config().get('database', {})
                             
                             tracker = ProcessTracker(pool)
-                            maintenance_job = MaintenanceJob(pool, process_tracker=tracker)
+                            maintenance_job = MaintenanceJob(pool, process_tracker=tracker, postgresql_config=pg_config)
                             
                             # Get maintenance config
                             maintenance_config = self.config.config_data.get('maintenance', {})
@@ -313,7 +315,8 @@ class VitalGraphAppImpl:
                     # Start periodic space-cache refresh
                     try:
                         cache_refresh_interval = self.config.config_data.get('space_cache', {}).get('refresh_interval_seconds', 60)
-                        await self.space_manager.start_periodic_refresh(interval_seconds=cache_refresh_interval)
+                        if self.space_manager:
+                            await self.space_manager.start_periodic_refresh(interval_seconds=cache_refresh_interval)
                         self.logger.info(f"✅ Space cache periodic refresh started (interval={cache_refresh_interval}s)")
                     except Exception as e:
                         self.logger.warning(f"Space cache periodic refresh failed to start: {e}")
@@ -335,10 +338,12 @@ class VitalGraphAppImpl:
                             
                             if signal_manager is None:
                                 # Fallback to db_impl.get_signal_manager() if direct access fails
-                                signal_manager = self.db_impl.get_signal_manager()
+                                signal_manager = getattr(self.db_impl, 'get_signal_manager', lambda: None)()
                                 self.logger.debug(f"Using db_impl.get_signal_manager(): {signal_manager}")
                                 
                             self.logger.debug("Setting up notification bridge between PostgreSQL and WebSocket...")
+                            if signal_manager is None:
+                                raise RuntimeError("No signal manager available")
                             bridge = await setup_notification_bridge(signal_manager, self.websocket_manager)
                             if bridge:
                                 self.logger.info("PostgreSQL notification bridge initialized successfully")
@@ -572,7 +577,7 @@ class VitalGraphAppImpl:
         kgframes_router = create_kgframes_router(self.space_manager, self.get_current_user)
         kgrelations_router = create_kgrelations_router(self.space_manager, self.get_current_user)
         kgqueries_router = create_kgqueries_router(self.space_manager, self.get_current_user)
-        files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config)
+        files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config.config_data)
         
         # Include routers in the FastAPI app  
         self.app.include_router(triples_router, prefix="/api/graphs")
@@ -711,14 +716,6 @@ class VitalGraphAppImpl:
     async def list_spaces(self, current_user: Dict):
         """Get list of spaces for the authenticated user"""
         return await self.api.list_spaces(current_user)
-
-    async def sparql_endpoint(
-        self,
-        query: str,
-        current_user: Dict
-    ):
-        """Execute a SPARQL query"""
-        return await self.api.execute_sparql_query(query, current_user)
 
     async def health(self):
         """Health check endpoint - delegates to API class"""

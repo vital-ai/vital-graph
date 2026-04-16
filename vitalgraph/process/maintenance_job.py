@@ -13,6 +13,7 @@ Freshness thresholds (skip if ALL true):
 - VACUUM:  n_dead_tup < 10,000 AND last_vacuum < 30 min ago
 """
 
+import asyncio
 import logging
 import os
 import platform
@@ -61,14 +62,19 @@ class MaintenanceJob:
     Also handles process-record cleanup (once per day).
     """
 
-    def __init__(self, pool, process_tracker=None):
+    def __init__(self, pool, process_tracker=None, postgresql_config: Optional[Dict] = None):
         """
         Args:
-            pool: asyncpg connection pool.
+            pool: asyncpg connection pool (used for lightweight async ops).
             process_tracker: Optional ProcessTracker for recording results.
+            postgresql_config: PostgreSQL connection dict (host, port, database,
+                username, password).  When provided, ANALYZE / VACUUM / stats
+                queries run in a background thread via a dedicated psycopg
+                sync connection so they never block the event loop.
         """
         self._pool = pool
         self._tracker = process_tracker
+        self._pg_config = postgresql_config
         self._instance_id = _get_instance_id()
         self._last_cleanup: Optional[float] = None
 
@@ -84,8 +90,17 @@ class MaintenanceJob:
         try:
             stats = await self._fetch_space_stats()
             if not stats:
-                logger.debug("MaintenanceJob: no space tables found, skipping")
+                logger.info("MaintenanceJob: no space tables found, skipping")
                 return summary
+
+            logger.info(
+                "MaintenanceJob: scored %d space(s): %s",
+                len(stats),
+                ", ".join(
+                    f"{sid}(mods={s['n_mod_since_analyze']}, dead={s['n_dead_tup']})"
+                    for sid, s in stats.items()
+                ),
+            )
 
             # --- ANALYZE ---
             analyze_space = self._pick_worst_for_analyze(stats)
@@ -137,9 +152,20 @@ class MaintenanceJob:
     async def _fetch_space_stats(self) -> Dict[str, Dict]:
         """Query pg_stat_user_tables for space tables, grouped by space_id.
 
+        If a psycopg config is available the query runs in a background thread
+        so it never blocks the event loop.
+
         Returns:
             {space_id: {n_mod_since_analyze, last_analyze, n_dead_tup, last_vacuum, ...}}
         """
+        if self._pg_config:
+            return await asyncio.to_thread(self._sync_fetch_space_stats)
+
+        # Fallback: use the asyncpg pool directly
+        return await self._async_fetch_space_stats()
+
+    async def _async_fetch_space_stats(self) -> Dict[str, Dict]:
+        """asyncpg-based stats fetch (original implementation)."""
         query = """
             SELECT
                 relname,
@@ -154,12 +180,38 @@ class MaintenanceJob:
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query)
+        return self._aggregate_space_stats(rows)
 
-        # Aggregate per space
+    def _sync_fetch_space_stats(self) -> Dict[str, Dict]:
+        """Thread-safe stats fetch using a dedicated psycopg connection."""
+        import psycopg
+        import psycopg.rows
+        conn = self._make_sync_connection()
+        try:
+            with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute("""
+                    SELECT
+                        relname,
+                        n_dead_tup,
+                        n_mod_since_analyze,
+                        last_analyze,
+                        last_autoanalyze,
+                        last_vacuum,
+                        last_autovacuum
+                    FROM pg_stat_user_tables
+                    WHERE relname LIKE '%\\_rdf\\_quad' OR relname LIKE '%\\_term'
+                """)
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        return self._aggregate_space_stats(rows)
+
+    @staticmethod
+    def _aggregate_space_stats(rows) -> Dict[str, Dict]:
+        """Aggregate per-table pg_stat rows into per-space summaries."""
         spaces: Dict[str, Dict] = {}
         for row in rows:
             relname = row["relname"]
-            # Extract space_id: everything before the last _rdf_quad or _term suffix
             if relname.endswith("_rdf_quad"):
                 sid = relname[: -len("_rdf_quad")]
             elif relname.endswith("_term"):
@@ -179,7 +231,6 @@ class MaintenanceJob:
             entry["n_mod_since_analyze"] += row["n_mod_since_analyze"] or 0
             entry["n_dead_tup"] += row["n_dead_tup"] or 0
 
-            # Take the oldest (most stale) analyze/vacuum time across tables in the space
             last_a = row["last_analyze"] or row["last_autoanalyze"]
             if last_a is not None:
                 if entry["last_analyze"] is None or last_a < entry["last_analyze"]:
@@ -209,12 +260,21 @@ class MaintenanceJob:
             if mods < ANALYZE_MOD_THRESHOLD and minutes_since < ANALYZE_STALENESS_MINUTES:
                 continue
 
-            # Score: mods weighted by staleness
-            score = mods * (1.0 + minutes_since / 60.0)
+            # Score: mods weighted by staleness.  When mods == 0 but
+            # last_analyze is None (never analyzed), use staleness alone
+            # so the space is still eligible.
+            if mods == 0:
+                score = minutes_since   # inf when never analyzed
+            else:
+                score = mods * (1.0 + minutes_since / 60.0)
             if score > best_score:
                 best_score = score
                 best_space = sid
 
+        if best_space:
+            logger.info("MaintenanceJob: ANALYZE pick → %s (score=%.1f)", best_space, best_score)
+        else:
+            logger.info("MaintenanceJob: all spaces fresh for ANALYZE, skipping")
         return best_space
 
     def _pick_worst_for_vacuum(self, stats: Dict[str, Dict]) -> Optional[str]:
@@ -234,12 +294,20 @@ class MaintenanceJob:
             if dead < VACUUM_DEAD_THRESHOLD and minutes_since < VACUUM_STALENESS_MINUTES:
                 continue
 
-            # Score: dead tuples weighted by staleness
-            score = dead * (1.0 + minutes_since / 60.0)
+            # Score: dead tuples weighted by staleness.  When dead == 0
+            # but last_vacuum is None (never vacuumed), use staleness alone.
+            if dead == 0:
+                score = minutes_since   # inf when never vacuumed
+            else:
+                score = dead * (1.0 + minutes_since / 60.0)
             if score > best_score:
                 best_score = score
                 best_space = sid
 
+        if best_space:
+            logger.info("MaintenanceJob: VACUUM pick → %s (score=%.1f)", best_space, best_score)
+        else:
+            logger.info("MaintenanceJob: all spaces fresh for VACUUM, skipping")
         return best_space
 
     # ------------------------------------------------------------------
@@ -247,7 +315,12 @@ class MaintenanceJob:
     # ------------------------------------------------------------------
 
     async def _run_analyze(self, space_id: str) -> Dict:
-        """Run ANALYZE on space tables using autocommit connection."""
+        """Run ANALYZE on space tables.
+
+        When *postgresql_config* is available, the work runs in a background
+        thread via a dedicated psycopg connection (autocommit=True) so the
+        event loop is never blocked.
+        """
         process_id = None
         if self._tracker:
             process_id = await self._tracker.create_process(
@@ -256,19 +329,11 @@ class MaintenanceJob:
             await self._tracker.mark_running(process_id, self._instance_id)
 
         tables = self._space_tables(space_id)
-        analyzed = 0
         try:
-            # ANALYZE must run outside a transaction (autocommit)
-            conn = await self._pool.acquire()
-            try:
-                for table in tables:
-                    try:
-                        await conn.execute(f"ANALYZE {table}")
-                        analyzed += 1
-                    except Exception as e:
-                        logger.warning("ANALYZE %s failed: %s", table, e)
-            finally:
-                await self._pool.release(conn)
+            if self._pg_config:
+                analyzed = await asyncio.to_thread(self._sync_run_tables, "ANALYZE", tables)
+            else:
+                analyzed = await self._async_run_tables("ANALYZE", tables)
 
             result = {"space_id": space_id, "tables_analyzed": analyzed}
             if self._tracker and process_id:
@@ -283,7 +348,12 @@ class MaintenanceJob:
             return {"space_id": space_id, "error": str(e)}
 
     async def _run_vacuum(self, space_id: str) -> Dict:
-        """Run VACUUM on space tables using autocommit connection."""
+        """Run VACUUM on space tables.
+
+        When *postgresql_config* is available, the work runs in a background
+        thread via a dedicated psycopg connection (autocommit=True) so the
+        event loop is never blocked.
+        """
         process_id = None
         if self._tracker:
             process_id = await self._tracker.create_process(
@@ -292,18 +362,11 @@ class MaintenanceJob:
             await self._tracker.mark_running(process_id, self._instance_id)
 
         tables = self._space_tables(space_id)
-        vacuumed = 0
         try:
-            conn = await self._pool.acquire()
-            try:
-                for table in tables:
-                    try:
-                        await conn.execute(f"VACUUM {table}")
-                        vacuumed += 1
-                    except Exception as e:
-                        logger.warning("VACUUM %s failed: %s", table, e)
-            finally:
-                await self._pool.release(conn)
+            if self._pg_config:
+                vacuumed = await asyncio.to_thread(self._sync_run_tables, "VACUUM", tables)
+            else:
+                vacuumed = await self._async_run_tables("VACUUM", tables)
 
             result = {"space_id": space_id, "tables_vacuumed": vacuumed}
             if self._tracker and process_id:
@@ -349,6 +412,73 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("Stats rebuild failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Sync / async table operation helpers
+    # ------------------------------------------------------------------
+
+    def _make_sync_connection(self):
+        """Create a short-lived psycopg sync connection with autocommit.
+
+        Used by thread-offloaded helpers so ANALYZE / VACUUM never touch the
+        asyncpg pool or the event loop.
+        """
+        import psycopg
+        cfg = self._pg_config
+        assert cfg is not None, "_make_sync_connection requires postgresql_config"
+        return psycopg.connect(
+            host=cfg.get('host', 'localhost'),
+            port=cfg.get('port', 5432),
+            dbname=cfg.get('database', 'vitalgraph'),
+            user=cfg.get('username', 'vitalgraph_user'),
+            password=cfg.get('password', 'vitalgraph_pass'),
+            autocommit=True,
+        )
+
+    _SQL_COMMANDS = {"ANALYZE": "ANALYZE", "VACUUM": "VACUUM"}
+
+    def _sync_run_tables(self, command: str, tables: List[str]) -> int:
+        """Run *command* (ANALYZE | VACUUM) on each table via psycopg sync.
+
+        Runs in a background thread — safe to call via asyncio.to_thread().
+        """
+        from psycopg import sql as psql
+        verb = self._SQL_COMMANDS.get(command)
+        if verb is None:
+            raise ValueError(f"Unsupported maintenance command: {command}")
+        conn = self._make_sync_connection()
+        completed = 0
+        try:
+            for table in tables:
+                try:
+                    stmt = psql.SQL("ANALYZE {}") if verb == "ANALYZE" else psql.SQL("VACUUM {}")
+                    conn.execute(stmt.format(psql.Identifier(table)))
+                    completed += 1
+                except Exception as e:
+                    logger.warning("%s %s failed: %s", command, table, e)
+        finally:
+            conn.close()
+        return completed
+
+    async def _async_run_tables(self, command: str, tables: List[str]) -> int:
+        """Fallback: run *command* on each table via the asyncpg pool.
+
+        Used when no *postgresql_config* was provided.  Inserts explicit
+        ``asyncio.sleep(0)`` between operations to yield the event loop.
+        """
+        conn = await self._pool.acquire()
+        completed = 0
+        try:
+            for table in tables:
+                try:
+                    await conn.execute(f"{command} {table}")
+                    completed += 1
+                except Exception as e:
+                    logger.warning("%s %s failed: %s", command, table, e)
+                await asyncio.sleep(0)  # yield to event loop between tables
+        finally:
+            await self._pool.release(conn)
+        return completed
 
     # ------------------------------------------------------------------
     # Cleanup

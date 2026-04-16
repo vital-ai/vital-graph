@@ -131,7 +131,7 @@ class DedupMixin:
             return []
 
         exclude_ids = {entity.get('entity_id')}
-        candidate_ids = self.dedup_index.get_candidate_ids(entity)
+        candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
         if not candidate_ids:
             return []
 
@@ -199,15 +199,15 @@ class DedupMixin:
                 return
 
             if action == 'remove':
-                self.dedup_index.remove_entity(entity_id)
+                await self.dedup_index.async_remove_entity(entity_id)
                 logger.debug(f"Dedup sync: removed {entity_id}")
             elif action == 'add':
                 entity = await self.get_entity(entity_id)
                 if entity:
-                    self.dedup_index.add_entity(entity_id, entity)
+                    await self.dedup_index.async_add_entity(entity_id, entity)
                     logger.debug(f"Dedup sync: added/updated {entity_id}")
                 else:
                     # Entity may have been deleted between notify and handler
-                    self.dedup_index.remove_entity(entity_id)
+                    await self.dedup_index.async_remove_entity(entity_id)
         except Exception as e:
             logger.warning(f"Dedup sync error for {data}: {e}")

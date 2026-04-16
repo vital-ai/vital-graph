@@ -15,14 +15,14 @@ from pydantic import BaseModel, Field
 class IdentifierCreateRequest(BaseModel):
     identifier_namespace: str = Field(..., description="Namespace/system, e.g. 'DUNS', 'EIN', 'CRM'")
     identifier_value: str = Field(..., description="External ID value")
-    is_primary: bool = Field(False, description="Whether this is the preferred ID in this namespace")
+    is_primary: bool = Field(default=False, description="Whether this is the preferred ID in this namespace")
     created_by: Optional[str] = None
     notes: Optional[str] = None
 
 
 class AliasCreateRequest(BaseModel):
     alias_name: str
-    alias_type: str = Field('aka', description="aka, dba, former, abbreviation, trade_name")
+    alias_type: str = Field(default='aka', description="aka, dba, former, abbreviation, trade_name")
     is_primary: bool = False
     created_by: Optional[str] = None
     notes: Optional[str] = None
@@ -38,14 +38,14 @@ class LocationCreateRequest(BaseModel):
     admin_area_2: Optional[str] = None
     admin_area_1: Optional[str] = None
     country: Optional[str] = None
-    country_code: Optional[str] = Field(None, max_length=2)
+    country_code: Optional[str] = Field(default=None, max_length=2)
     postal_code: Optional[str] = None
     formatted_address: Optional[str] = None
-    latitude: Optional[float] = Field(None, ge=-90, le=90)
-    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     timezone: Optional[str] = None
     google_place_id: Optional[str] = None
-    external_location_id: Optional[str] = Field(None, max_length=50)
+    external_location_id: Optional[str] = Field(default=None, max_length=50)
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     is_primary: bool = False
@@ -61,14 +61,14 @@ class LocationUpdateRequest(BaseModel):
     admin_area_2: Optional[str] = None
     admin_area_1: Optional[str] = None
     country: Optional[str] = None
-    country_code: Optional[str] = Field(None, max_length=2)
+    country_code: Optional[str] = Field(default=None, max_length=2)
     postal_code: Optional[str] = None
     formatted_address: Optional[str] = None
-    latitude: Optional[float] = Field(None, ge=-90, le=90)
-    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     timezone: Optional[str] = None
     google_place_id: Optional[str] = None
-    external_location_id: Optional[str] = Field(None, max_length=50)
+    external_location_id: Optional[str] = Field(default=None, max_length=50)
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     is_primary: Optional[bool] = None
@@ -84,8 +84,8 @@ class EntityCreateRequest(BaseModel):
     region: Optional[str] = None
     locality: Optional[str] = None
     website: Optional[str] = None
-    latitude: Optional[float] = Field(None, ge=-90, le=90)
-    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     metadata: Optional[Dict[str, Any]] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
@@ -101,8 +101,8 @@ class EntityUpdateRequest(BaseModel):
     region: Optional[str] = None
     locality: Optional[str] = None
     website: Optional[str] = None
-    latitude: Optional[float] = Field(None, ge=-90, le=90)
-    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
     metadata: Optional[Dict[str, Any]] = None
     verified: Optional[bool] = None
     verified_by: Optional[str] = None

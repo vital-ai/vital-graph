@@ -9,7 +9,7 @@ details and provides a consistent API for KG endpoint implementations.
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Tuple, Union, cast
 from dataclasses import dataclass
 
 # VitalSigns imports
@@ -476,10 +476,10 @@ class FusekiPostgreSQLBackendAdapter(KGBackendInterface):
             vs = VitalSigns()
             
             # Use VitalSigns from_triples_list to convert all triples at once
-            objects = await asyncio.to_thread(vs.from_triples_list, triples)
+            objects = await asyncio.to_thread(vs.from_triples_list, (t for t in triples))
             
             self.logger.debug(f"🔍 Converted {len(triples)} triples into {len(objects)} VitalSigns objects")
-            return objects
+            return cast(List[GraphObject], objects)
             
         except Exception as e:
             import traceback
@@ -689,6 +689,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         self.backend = backend_impl
         self.logger = logging.getLogger(f"{__name__}.SparqlSQLBackendAdapter")
         self.retriever = GraphObjectRetriever(backend_impl)
+        # PostgreSQL config for thread-offloaded ANALYZE (avoids event loop stalls)
+        self._pg_config = getattr(backend_impl, 'postgresql_config', None)
 
     # ------------------------------------------------------------------
     # store_objects
@@ -737,10 +739,14 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                 else:
                     from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
                     t = SparqlSQLSchema.get_table_names(space_id)
-                    async with self.backend.db_impl.connection_pool.acquire() as conn:
-                        for tbl in (t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
-                                    t['rdf_pred_stats'], t['rdf_stats'], t['datatype']):
-                            await conn.execute(f"ANALYZE {tbl}")
+                    tables = [t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
+                              t['rdf_pred_stats'], t['rdf_stats'], t['datatype']]
+                    if self._pg_config:
+                        await asyncio.to_thread(self._sync_analyze_tables, tables)
+                    else:
+                        async with self.backend.db_impl.connection_pool.acquire() as conn:
+                            for tbl in tables:
+                                await conn.execute(f"ANALYZE {tbl}")
                     set_last_analyze_time(space_id)
                     _t2a = _time.monotonic()
                     self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
@@ -757,6 +763,41 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except Exception as e:
             self.logger.error("store_objects failed: %s", e)
             return BackendOperationResult(success=False, message=str(e), error=str(e))
+
+    # ------------------------------------------------------------------
+    # Thread-offloaded ANALYZE helper
+    # ------------------------------------------------------------------
+
+    def _sync_analyze_tables(self, tables: List[str]) -> int:
+        """Run ANALYZE on each table via a short-lived psycopg sync connection.
+
+        Designed to be called via ``asyncio.to_thread()`` so the event loop
+        is never blocked.  Mirrors MaintenanceJob._sync_run_tables().
+        """
+        import psycopg
+        from psycopg import sql as psql
+
+        cfg = self._pg_config
+        assert cfg is not None, "_sync_analyze_tables requires _pg_config"
+        conn = psycopg.connect(
+            host=cfg.get('host', 'localhost'),
+            port=cfg.get('port', 5432),
+            dbname=cfg.get('database', 'vitalgraph'),
+            user=cfg.get('username', 'vitalgraph_user'),
+            password=cfg.get('password', 'vitalgraph_pass'),
+            autocommit=True,
+        )
+        completed = 0
+        try:
+            for table in tables:
+                try:
+                    conn.execute(psql.SQL("ANALYZE {}").format(psql.Identifier(table)))
+                    completed += 1
+                except Exception as e:
+                    self.logger.warning("ANALYZE %s failed: %s", table, e)
+        finally:
+            conn.close()
+        return completed
 
     # ------------------------------------------------------------------
     # object_exists
@@ -967,8 +1008,8 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             if not triples:
                 return []
             vs = VitalSigns()
-            objects = await asyncio.to_thread(vs.from_triples_list, triples)
-            return objects
+            objects = await asyncio.to_thread(vs.from_triples_list, (t for t in triples))
+            return cast(List[GraphObject], objects)
         except Exception as e:
             self.logger.error("_triples_to_vitalsigns failed: %s", e)
             return []

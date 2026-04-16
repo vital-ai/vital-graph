@@ -72,7 +72,7 @@ class _SparqlSQLGraphsAdapter:
         return graphs
 
     async def get_graph(self, space_id: str, graph_uri: str) -> Optional[Dict[str, Any]]:
-        rows = await self._impl.db_impl.execute_query(
+        rows = await self._impl._db.execute_query(
             "SELECT graph_uri, graph_name, created_time FROM graph "
             "WHERE space_id = $1 AND graph_uri = $2",
             [space_id, graph_uri],
@@ -99,7 +99,7 @@ class _SparqlSQLGraphsAdapter:
         """Clear all quads for a graph but keep the graph record."""
         try:
             t = self._impl.schema.get_table_names(space_id)
-            async with self._impl.db_impl.connection_pool.acquire() as conn:
+            async with self._impl._db._pool.acquire() as conn:
                 ctx_uuid = await conn.fetchval(
                     f"SELECT term_uuid FROM {t['term']} "
                     f"WHERE term_text = $1 AND term_type = 'U'",
@@ -172,7 +172,7 @@ class _SparqlSQLCoreAdapter:
         self._impl = space_impl
 
     async def create_transaction(self, space_impl=None) -> _SparqlSQLTransaction:
-        pool = self._impl.db_impl.connection_pool
+        pool = self._impl._db._pool
         conn = await pool.acquire()
         tr = conn.transaction()
         await tr.start()
@@ -203,7 +203,7 @@ class _SparqlSQLDbOpsAdapter:
 
     async def remove_quads_by_subject_uris(self, space_id: str,
                                            subject_uris: list,
-                                           graph_id: str = None,
+                                           graph_id: Optional[str] = None,
                                            transaction=None) -> int:
         """Remove all quads for the given subject URIs."""
         if not subject_uris:
@@ -212,7 +212,7 @@ class _SparqlSQLDbOpsAdapter:
             graph_id = "main"
         t = self._impl.schema.get_table_names(space_id)
         removed = 0
-        async with self._impl.db_impl.connection_pool.acquire() as conn:
+        async with self._impl._db._pool.acquire() as conn:
             for uri in subject_uris:
                 s_uuid = _generate_term_uuid(uri, 'U')
                 result = await conn.execute(
@@ -268,6 +268,13 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         self._sidecar_client = None
 
         logger.info("SparqlSQLSpaceImpl initialized (sidecar=%s)", self.sidecar_url)
+
+    @property
+    def _db(self) -> SparqlSQLDbImpl:
+        """Return db_impl, raising if not connected."""
+        if self.db_impl is None:
+            raise RuntimeError("SparqlSQLSpaceImpl not connected — call connect() first")
+        return self.db_impl
 
     # ==================================================================
     # Connection lifecycle
@@ -331,7 +338,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         """Yield an asyncpg connection from the pool."""
         if not self.connected or not self.db_impl or not self.db_impl.connection_pool:
             raise RuntimeError("SparqlSQLSpaceImpl not connected")
-        async with self.db_impl.connection_pool.acquire() as conn:
+        async with self._db._pool.acquire() as conn:
             yield conn
 
     # ==================================================================
@@ -340,7 +347,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def create_space_storage(self, space_id: str) -> bool:
         try:
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 await SparqlSQLSchema.create_space(conn, space_id)
             return True
         except Exception as e:
@@ -349,7 +356,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def delete_space_storage(self, space_id: str) -> bool:
         try:
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 await SparqlSQLSchema.drop_space(conn, space_id)
                 # Remove graph records
                 await conn.execute(
@@ -366,7 +373,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def space_exists(self, space_id: str) -> bool:
         try:
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 return await SparqlSQLSchema.space_tables_exist(conn, space_id)
         except Exception as e:
             logger.error("space_exists(%s) failed: %s", space_id, e)
@@ -375,7 +382,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def get_space_metadata(self, space_id: str) -> Optional[Dict[str, Any]]:
         """Fetch a single space row from the space table, or None if not found."""
         try:
-            rows = await self.db_impl.execute_query(
+            rows = await self._db.execute_query(
                 "SELECT space_id, space_name, space_description, tenant, update_time "
                 "FROM space WHERE space_id = $1",
                 [space_id],
@@ -388,7 +395,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def list_spaces(self) -> List[Dict[str, Any]]:
         """List all spaces from PostgreSQL admin tables."""
         try:
-            results = await self.db_impl.execute_query(
+            results = await self._db.execute_query(
                 "SELECT * FROM space ORDER BY space_id"
             )
             return results
@@ -399,7 +406,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def get_space_info(self, space_id: str) -> Dict[str, Any]:
         try:
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 quad_count = await conn.fetchval(
                     f"SELECT COUNT(*) FROM {t['rdf_quad']}"
                 )
@@ -407,7 +414,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     f"SELECT COUNT(*) FROM {t['term']}"
                 )
             # Graph records
-            graph_rows = await self.db_impl.execute_query(
+            graph_rows = await self._db.execute_query(
                 "SELECT graph_uri, graph_name FROM graph WHERE space_id = $1",
                 [space_id],
             )
@@ -428,7 +435,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def create_space_metadata(self, space_id: str, metadata: Dict[str, Any]) -> bool:
         try:
-            await self.db_impl.execute_query(
+            await self._db.execute_query(
                 """INSERT INTO space (space_id, space_name, space_description, tenant, update_time)
                    VALUES ($1, $2, $3, $4, NOW())
                    ON CONFLICT (space_id) DO UPDATE SET
@@ -471,7 +478,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             params.append(space_id)
 
             sql = f"UPDATE space SET {', '.join(sets)} WHERE space_id = ${idx}"
-            await self.db_impl.execute_query(sql, params)
+            await self._db.execute_query(sql, params)
             return True
         except Exception as e:
             logger.error("update_space_metadata(%s) failed: %s", space_id, e)
@@ -495,7 +502,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         return list(graph_uris)
 
     async def _ensure_graphs_registered(
-        self, space_id: str, quads: List[Tuple[Any, ...]],
+        self, space_id: str, quads: list,
     ) -> None:
         """Auto-register every graph URI found in *quads* that is not yet
         in the ``graph`` table.  This replicates the side-effect that the
@@ -505,7 +512,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         if not graph_uris:
             return
         try:
-            existing = await self.db_impl.execute_query(
+            existing = await self._db.execute_query(
                 "SELECT graph_uri FROM graph WHERE space_id = $1",
                 [space_id],
             )
@@ -513,7 +520,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             for uri in graph_uris:
                 if uri not in existing_set:
                     graph_name = uri.rsplit('/', 1)[-1]
-                    await self.db_impl.execute_query(
+                    await self._db.execute_query(
                         """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
                            VALUES ($1, $2, $3, $4)
                            ON CONFLICT (space_id, graph_uri) DO NOTHING""",
@@ -532,7 +539,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         try:
             if graph_name is None:
                 graph_name = graph_uri.rsplit('/', 1)[-1]
-            await self.db_impl.execute_query(
+            await self._db.execute_query(
                 """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
                    VALUES ($1, $2, $3, $4)""",
                 [space_id, graph_uri, graph_name, datetime.now()],
@@ -555,7 +562,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         try:
             # Remove quads for this graph
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 ctx_uuid = await conn.fetchval(
                     f"SELECT term_uuid FROM {t['term']} "
                     f"WHERE term_text = $1 AND term_type = 'U'",
@@ -567,7 +574,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         ctx_uuid,
                     )
             # Remove graph record
-            await self.db_impl.execute_query(
+            await self._db.execute_query(
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
                 [space_id, graph_uri],
             )
@@ -587,7 +594,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def list_graphs(self, space_id: str) -> List[Dict[str, Any]]:
         try:
-            return await self.db_impl.execute_query(
+            return await self._db.execute_query(
                 "SELECT graph_uri, graph_name, created_time FROM graph "
                 "WHERE space_id = $1 ORDER BY graph_uri",
                 [space_id],
@@ -606,7 +613,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         try:
             term_uuid = _generate_term_uuid(term_text, term_type, lang, datatype_id)
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 await conn.execute(
                     f"INSERT INTO {t['term']} "
                     f"(term_uuid, term_text, term_type, lang, datatype_id) "
@@ -630,7 +637,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         try:
             term_uuid = _generate_term_uuid(term_text, term_type, lang, datatype_id)
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 await conn.execute(
                     f"DELETE FROM {t['term']} WHERE term_uuid = $1", term_uuid,
                 )
@@ -648,7 +655,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             await self._ensure_graphs_registered(space_id, [quad])
             s, p, o, g = quad
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 s_uuid = await self._ensure_term(conn, t, s)
                 p_uuid = await self._ensure_term(conn, t, p)
                 o_uuid = await self._ensure_term(conn, t, o)
@@ -671,7 +678,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             p_uuid = _generate_term_uuid(p, 'U')
             o_uuid = _generate_term_uuid(o, self._infer_type(o))
             g_uuid = _generate_term_uuid(g, 'U')
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 await conn.execute(
                     f"DELETE FROM {t['rdf_quad']} "
                     f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
@@ -690,7 +697,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             p_uuid = _generate_term_uuid(p, 'U')
             o_uuid = _generate_term_uuid(o, self._infer_type(o))
             g_uuid = _generate_term_uuid(g, 'U')
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 count = await conn.fetchval(
                     f"SELECT COUNT(*) FROM {t['rdf_quad']} "
                     f"WHERE subject_uuid = $1 AND predicate_uuid = $2 "
@@ -706,7 +713,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                   graph_uri: Optional[str] = None) -> int:
         try:
             t = self.schema.get_table_names(space_id)
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 if graph_uri:
                     g_uuid = _generate_term_uuid(graph_uri, 'U')
                     return await conn.fetchval(
@@ -749,7 +756,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             if connection:
                 await _do(connection)
             else:
-                async with self.db_impl.connection_pool.acquire() as conn:
+                async with self._db._pool.acquire() as conn:
                     await _do(conn)
 
             return inserted
@@ -913,15 +920,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             if connection:
                 count = await _do_bulk(connection)
             else:
-                async with self.db_impl.connection_pool.acquire() as conn:
+                async with self._db._pool.acquire() as conn:
                     async with conn.transaction():
                         count = await _do_bulk(conn)
 
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
-            async with self.db_impl.connection_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id)
+            async with self._db._pool.acquire() as conn:
+                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
 
         except Exception as e:
@@ -944,7 +951,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Graph context UUID
             g_uuid = _generate_term_uuid(graph_id, 'U')
 
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 rows = await conn.fetch(
                     f"SELECT DISTINCT t.term_text "
                     f"FROM {t['rdf_quad']} q "
@@ -977,7 +984,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Object UUID for the entity URI value
             entity_uuid = _generate_term_uuid(entity_uri, 'U')
 
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 async with conn.transaction():
                     # Step 1: Find all subject UUIDs with hasKGGraphURI = entity_uri
                     subject_rows = await conn.fetch(
@@ -1023,8 +1030,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, deleted)
-            async with self.db_impl.connection_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id)
+            async with self._db._pool.acquire() as conn:
+                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return deleted
         except Exception as e:
             logger.error("delete_entity_graph_bulk(%s, %s) failed: %s", space_id, entity_uri, e)
@@ -1111,15 +1118,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             if connection:
                 count = await _do_bulk(connection)
             else:
-                async with self.db_impl.connection_pool.acquire() as conn:
+                async with self._db._pool.acquire() as conn:
                     async with conn.transaction():
                         count = await _do_bulk(conn)
 
             # Track row changes for auto-ANALYZE (outside transaction)
             from .auto_analyze import record_changes, maybe_analyze
             record_changes(space_id, count)
-            async with self.db_impl.connection_pool.acquire() as conn:
-                await maybe_analyze(conn, space_id)
+            async with self._db._pool.acquire() as conn:
+                await maybe_analyze(conn, space_id, pg_config=self.postgresql_config)
             return count
         except Exception as e:
             logger.error("remove_rdf_quads_batch_bulk(%s) failed: %s", space_id, e)
@@ -1130,7 +1137,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         try:
             t = self.schema.get_table_names(space_id)
             removed = 0
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 for s, p, o, g in quads:
                     s_uuid = _generate_term_uuid(str(s), 'U')
                     p_uuid = _generate_term_uuid(str(p), 'U')
@@ -1191,7 +1198,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             f"WHERE {where_sql}"
         )
 
-        async with self.db_impl.connection_pool.acquire() as conn:
+        async with self._db._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
             for row in rows:
                 yield (row['s'], row['p'], row['o'], row['g'])
@@ -1245,7 +1252,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 return {'results': {'bindings': []}, 'success': False, 'error': cr.error}
 
             t_pre_acquire = _time.monotonic()
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 t_acquired = _time.monotonic()
                 gen = await generate_sql(cr, space_id, conn=conn)
                 sql = gen.sql
@@ -1364,7 +1371,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 logger.error("SPARQL update compile error: %s", cr.error)
                 return False
 
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 gen = await generate_sql(cr, space_id, conn=conn)
                 sql = gen.sql
                 if sql:
@@ -1400,7 +1407,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def drop_indexes_for_bulk_load(self, space_id: str) -> bool:
         try:
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 for stmt in self.schema.drop_space_indexes_sql(space_id):
                     await conn.execute(stmt)
             return True
@@ -1411,7 +1418,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     async def recreate_indexes_after_bulk_load(self, space_id: str,
                                                 concurrent: bool = True) -> bool:
         try:
-            async with self.db_impl.connection_pool.acquire() as conn:
+            async with self._db._pool.acquire() as conn:
                 for stmt in self.schema.create_space_indexes_sql(space_id):
                     if concurrent:
                         stmt = stmt.replace(

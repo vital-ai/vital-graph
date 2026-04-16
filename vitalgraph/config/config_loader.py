@@ -199,6 +199,10 @@ class VitalGraphConfig:
                     'use_ssl': self._get_profile_env('STORAGE_USE_SSL', 'true').lower() == 'true'
                 }
             },
+            'maintenance': {
+                'enabled': self._get_profile_env('MAINTENANCE_ENABLED', 'true').lower() == 'true',
+                'interval_seconds': int(self._get_profile_env('MAINTENANCE_INTERVAL_SECONDS', '300')),
+            },
             'app': {
                 'log_level': self._get_profile_env('LOG_LEVEL', 'INFO')
             }

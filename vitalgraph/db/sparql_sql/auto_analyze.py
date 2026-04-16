@@ -10,9 +10,10 @@ intervention or periodic cron jobs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +32,50 @@ def record_changes(space_id: str, row_count: int) -> None:
     _change_counts[space_id] = _change_counts.get(space_id, 0) + row_count
 
 
+def _sync_analyze(tables: List[str], pg_config: Dict[str, Any]) -> int:
+    """Run ANALYZE on tables via a short-lived psycopg sync connection.
+
+    Designed to be called via ``asyncio.to_thread()`` so the event loop
+    is never blocked.
+    """
+    import psycopg
+    from psycopg import sql as psql
+
+    conn = psycopg.connect(
+        host=pg_config.get('host', 'localhost'),
+        port=pg_config.get('port', 5432),
+        dbname=pg_config.get('database', 'vitalgraph'),
+        user=pg_config.get('username', 'vitalgraph_user'),
+        password=pg_config.get('password', 'vitalgraph_pass'),
+        autocommit=True,
+    )
+    completed = 0
+    try:
+        for table in tables:
+            try:
+                conn.execute(psql.SQL("ANALYZE {}").format(psql.Identifier(table)))
+                completed += 1
+            except Exception as e:
+                logger.warning("ANALYZE %s failed: %s", table, e)
+    finally:
+        conn.close()
+    return completed
+
+
 async def maybe_analyze(
     conn,
     space_id: str,
     threshold: int = DEFAULT_ANALYZE_THRESHOLD,
+    *,
+    pg_config: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Run ANALYZE on all per-space tables if the change count exceeds the threshold.
 
     Returns True if ANALYZE was run, False otherwise.
-    Must be called with a connection NOT inside a transaction (ANALYZE
-    cannot run inside a transaction in some configurations).
+
+    When *pg_config* is provided, ANALYZE runs in a background thread via
+    a psycopg sync connection so the asyncio event loop is never blocked.
+    Otherwise falls back to the provided asyncpg *conn*.
     """
     count = _change_counts.get(space_id, 0)
     if count < threshold:
@@ -56,8 +91,11 @@ async def maybe_analyze(
         f"{space_id}_datatype",
     ]
     try:
-        for tbl in tables:
-            await conn.execute(f"ANALYZE {tbl}")
+        if pg_config:
+            await asyncio.to_thread(_sync_analyze, tables, pg_config)
+        else:
+            for tbl in tables:
+                await conn.execute(f"ANALYZE {tbl}")
         _change_counts[space_id] = 0
         _last_analyze_time[space_id] = time.monotonic()
         logger.debug("auto_analyze(%s): ANALYZE %d tables after %d row changes", space_id, len(tables), count)

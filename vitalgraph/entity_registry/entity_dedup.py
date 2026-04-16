@@ -14,6 +14,7 @@ import hashlib
 import logging
 import os
 import pickle
+import threading
 import time as _time_mod
 import uuid
 from typing import Any, Dict, List, Optional, Set, Union
@@ -163,6 +164,11 @@ class EntityDedupIndex:
         self._entity_cache: Dict[str, Dict[str, Any]] = {}
 
         self._initialized = False
+
+        # Serialises add_entity / remove_entity across thread-pool workers
+        # so _entity_cache (plain dict) is never mutated concurrently.
+        # get_candidate_ids is read-only and runs without this lock.
+        self._mutation_lock = threading.Lock()
 
         # Distributed lock state (Redis / MemoryDB only)
         self._redis_client: Optional[Union[redis_lib.Redis, redis_lib.RedisCluster]] = None
@@ -687,6 +693,11 @@ class EntityDedupIndex:
         Args:
             batch: List of (entity_id, entity_dict) tuples.
         """
+        with self._mutation_lock:
+            self._bulk_insert_entities_unlocked(batch)
+
+    def _bulk_insert_entities_unlocked(self, batch: List[tuple]):
+        """Inner bulk insert — caller must hold _mutation_lock."""
         # Phase 1: Pre-compute all minhashes (pure CPU, no Redis)
         lsh_entries = []       # [(pickled_key, minhash), ...]
         phonetic_entries = []  # [(pickled_key, minhash), ...]
@@ -848,6 +859,18 @@ class EntityDedupIndex:
             _check_duplication: If False, skip per-key HEXISTS checks (use during
                 bulk init from a clean index to avoid individual round-trips).
         """
+        with self._mutation_lock:
+            self._add_entity_unlocked(
+                entity_id, entity,
+                _lsh_session=_lsh_session,
+                _phonetic_session=_phonetic_session,
+                _check_duplication=_check_duplication,
+            )
+
+    def _add_entity_unlocked(self, entity_id: str, entity: Dict[str, Any],
+                             _lsh_session=None, _phonetic_session=None,
+                             _check_duplication=True):
+        """Inner add_entity logic — caller must hold _mutation_lock."""
         lsh_target = _lsh_session if _lsh_session is not None else self.lsh
         phonetic_target = _phonetic_session if _phonetic_session is not None else self.phonetic_lsh
 
@@ -921,19 +944,20 @@ class EntityDedupIndex:
 
     def remove_entity(self, entity_id: str):
         """Remove an entity from all indexes (primary LSH, phonetic LSH)."""
-        cached = self._entity_cache.get(entity_id)
-        if cached:
-            all_names = [cached['primary_name']] + (cached.get('alias_names') or [])
-            self._remove_from_phonetic_lsh(entity_id, len(all_names))
-        self._remove_from_lsh(entity_id)
-        self._entity_cache.pop(entity_id, None)
-        # Remove dedup hash from Redis
-        client = self._get_redis_client()
-        if client:
-            try:
-                client.hdel(self._dedup_hash_key(), entity_id)  # type: ignore[arg-type]
-            except Exception:
-                pass
+        with self._mutation_lock:
+            cached = self._entity_cache.get(entity_id)
+            if cached:
+                all_names = [cached['primary_name']] + (cached.get('alias_names') or [])
+                self._remove_from_phonetic_lsh(entity_id, len(all_names))
+            self._remove_from_lsh(entity_id)
+            self._entity_cache.pop(entity_id, None)
+            # Remove dedup hash from Redis
+            client = self._get_redis_client()
+            if client:
+                try:
+                    client.hdel(self._dedup_hash_key(), entity_id)  # type: ignore[arg-type]
+                except Exception:
+                    pass
 
     def _remove_from_lsh(self, entity_id: str):
         """Remove all LSH entries for an entity (one per name variant)."""
@@ -1199,6 +1223,24 @@ class EntityDedupIndex:
             'locality': locality,
         }
         return self.find_similar(entity, limit=limit, min_score=min_score, type_key=type_key)
+
+    # ------------------------------------------------------------------
+    # Async wrappers (thread-offloaded to avoid event loop stalls)
+    # ------------------------------------------------------------------
+
+    async def async_add_entity(self, entity_id: str, entity: Dict[str, Any]):
+        """Thread-offloaded add_entity for use from async code."""
+        await asyncio.to_thread(self.add_entity, entity_id, entity)
+
+    async def async_remove_entity(self, entity_id: str):
+        """Thread-offloaded remove_entity for use from async code."""
+        await asyncio.to_thread(self.remove_entity, entity_id)
+
+    async def async_get_candidate_ids(
+        self, entity: Dict[str, Any], query_names: Optional[List[str]] = None,
+    ) -> set:
+        """Thread-offloaded get_candidate_ids for use from async code."""
+        return await asyncio.to_thread(self.get_candidate_ids, entity, query_names)
 
     # ------------------------------------------------------------------
     # Internal
