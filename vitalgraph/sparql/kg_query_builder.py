@@ -544,11 +544,22 @@ class KGQueryCriteriaBuilder:
         # Build WHERE clauses using the same logic as the main query
         where_clauses = []
         
-        # Entity type filter
-        if criteria.entity_type:
-            where_clauses.append(f"?entity a <{criteria.entity_type}> .")
-        else:
-            where_clauses.append("?entity a haley:KGEntity .")
+        # Entity type filter — must match build_entity_query_sparql logic
+        # Use vitaltype UNION for base entity discovery, then hasKGEntityType for specific types
+        entity_type_clause = """
+        {
+            ?entity vital-core:vitaltype haley:KGEntity .
+        } UNION {
+            ?entity vital-core:vitaltype haley:KGNewsEntity .
+        } UNION {
+            ?entity vital-core:vitaltype haley:KGProductEntity .
+        } UNION {
+            ?entity vital-core:vitaltype haley:KGWebEntity .
+        }"""
+        where_clauses.append(entity_type_clause)
+        
+        if criteria.entity_type and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity":
+            where_clauses.append(f"?entity haley:hasKGEntityType <{criteria.entity_type}> .")
         
         # Search string filter
         if criteria.search_string:
