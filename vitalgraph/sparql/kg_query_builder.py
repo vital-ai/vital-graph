@@ -292,8 +292,8 @@ class KGQueryCriteriaBuilder:
         Returns:
             SPARQL query string
         """
-        # Build WHERE clauses - start with entity type selection
-        entity_type_clause = """
+        # Build WHERE clauses - start with base class selection (vitaltype)
+        class_clause = """
         {
             ?entity vital-core:vitaltype haley:KGEntity .
         } UNION {
@@ -349,11 +349,11 @@ class KGQueryCriteriaBuilder:
                     filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
                     filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{filter_criterion.value}\")))")
         
-        # Combine entity type clause with filters
+        # Combine class clause with filters
         if filter_clauses:
-            where_clauses = [entity_type_clause] + filter_clauses
+            where_clauses = [class_clause] + filter_clauses
         else:
-            where_clauses = [entity_type_clause]
+            where_clauses = [class_clause]
         
         # Add frame criteria filters (entity -> frame -> slot paths)
         # Each FrameCriteria represents a separate path from entity through frame to slots
@@ -544,9 +544,8 @@ class KGQueryCriteriaBuilder:
         # Build WHERE clauses using the same logic as the main query
         where_clauses = []
         
-        # Entity type filter — must match build_entity_query_sparql logic
-        # Use vitaltype UNION for base entity discovery, then hasKGEntityType for specific types
-        entity_type_clause = """
+        # Base class filter — restrict to KGEntity class variants via vitaltype
+        class_clause = """
         {
             ?entity vital-core:vitaltype haley:KGEntity .
         } UNION {
@@ -556,8 +555,9 @@ class KGQueryCriteriaBuilder:
         } UNION {
             ?entity vital-core:vitaltype haley:KGWebEntity .
         }"""
-        where_clauses.append(entity_type_clause)
+        where_clauses.append(class_clause)
         
+        # Entity type filter (hasKGEntityType property)
         if criteria.entity_type and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity":
             where_clauses.append(f"?entity haley:hasKGEntityType <{criteria.entity_type}> .")
         
@@ -1134,8 +1134,8 @@ class KGQueryCriteriaBuilder:
         Returns:
             SPARQL query string with ORDER BY clause
         """
-        # Build WHERE clauses - start with entity type selection
-        entity_type_clause = """
+        # Build WHERE clauses - start with base class selection (vitaltype)
+        class_clause = """
         {
             ?entity vital-core:vitaltype haley:KGEntity .
         } UNION {
@@ -1185,11 +1185,11 @@ class KGQueryCriteriaBuilder:
                     filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
                     filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{filter_criterion.value}\")))")
         
-        # Combine entity type clause with filters
+        # Combine class clause with filters
         if filter_clauses:
-            where_clauses = [entity_type_clause] + filter_clauses
+            where_clauses = [class_clause] + filter_clauses
         else:
-            where_clauses = [entity_type_clause]
+            where_clauses = [class_clause]
         
         # Slot criteria filtering is now handled via frame_criteria with nested slots
         # This method may need refactoring to use the new structure
