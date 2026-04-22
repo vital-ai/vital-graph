@@ -379,7 +379,11 @@ class KGEntityFrameDeleteProcessor:
                 o_lang = triple[5] if len(triple) > 5 else ''
                 
                 if o_type == 'literal':
-                    o_escaped = o.replace('\\', '\\\\').replace('"', '\\"')
+                    o_escaped = (o.replace('\\', '\\\\')
+                                  .replace('"', '\\"')
+                                  .replace('\n', '\\n')
+                                  .replace('\r', '\\r')
+                                  .replace('\t', '\\t'))
                     if o_lang:
                         o_formatted = f'"{o_escaped}"@{o_lang}'
                     elif o_datatype:

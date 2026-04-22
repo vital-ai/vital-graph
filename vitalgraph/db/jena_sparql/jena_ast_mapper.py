@@ -55,8 +55,8 @@ def map_compile_response(data: Dict[str, Any]) -> CompileResult:
     warnings = data.get("warnings", [])
 
     # Parse metadata
-    phases = data.get("phases", {})
-    pq = phases.get("parsedQuery", {})
+    phases = data.get("phases") or {}
+    pq = phases.get("parsedQuery") or {}
     meta = _map_parsed_query_meta(pq)
 
     # Error case
@@ -137,6 +137,9 @@ def _map_parsed_query_meta(pq: Dict[str, Any]) -> ParsedQueryMeta:
 
 def map_node(n: Dict[str, Any]) -> RDFNode:
     """Map a JSON node object to the appropriate Python RDFNode type."""
+    if n is None:
+        logger.warning("map_node called with None — returning placeholder URI")
+        return URINode(value="urn:null")
     ntype = n.get("type", "")
     if ntype == "var":
         return VarNode(name=n["name"])

@@ -1380,7 +1380,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             return True
 
         except Exception as e:
-            logger.error("execute_sparql_update(%s) failed: %s", space_id, e)
+            logger.error("execute_sparql_update(%s) failed: %s", space_id, e,
+                         exc_info=True)
             return False
 
     # ==================================================================
