@@ -279,18 +279,17 @@ class KGQueryCriteriaBuilder:
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         """
     
-    def build_entity_query_sparql(self, criteria: EntityQueryCriteria, graph_id: str, 
-                                 page_size: int, offset: int) -> str:
-        """Build SPARQL query for entity search with criteria.
+    def _build_entity_where_clause(self, criteria: EntityQueryCriteria) -> str:
+        """Build the full WHERE clause body for entity queries.
+        
+        Shared by both paginated queries and count queries so that
+        frame criteria, slot criteria, and all filters are always included.
         
         Args:
             criteria: Entity query criteria
-            graph_id: Graph ID to search in
-            page_size: Number of results per page
-            offset: Offset for pagination
             
         Returns:
-            SPARQL query string
+            WHERE clause body string (without the outer WHERE { } wrapper)
         """
         # Build WHERE clauses - start with base class selection (vitaltype)
         class_clause = """
@@ -500,8 +499,26 @@ class KGQueryCriteriaBuilder:
                     
                     where_clauses.append(" ".join(slot_clauses))
         
-        # Build complete query
+        # Build complete WHERE clause
         where_clause = " ".join(where_clauses)
+        
+        self.logger.debug(f"Built entity WHERE clause with {len(where_clauses)} conditions")
+        return where_clause
+    
+    def build_entity_query_sparql(self, criteria: EntityQueryCriteria, graph_id: str, 
+                                 page_size: int, offset: int) -> str:
+        """Build SPARQL query for entity search with criteria.
+        
+        Args:
+            criteria: Entity query criteria
+            graph_id: Graph ID to search in
+            page_size: Number of results per page
+            offset: Offset for pagination
+            
+        Returns:
+            SPARQL query string
+        """
+        where_clause = self._build_entity_where_clause(criteria)
         
         if graph_id is None:
             # Query default graph
@@ -528,11 +545,14 @@ class KGQueryCriteriaBuilder:
             OFFSET {offset}
             """
         
-        self.logger.debug(f"Built entity criteria query with {len(where_clauses)} conditions")
         return query.strip()
     
     def build_entity_count_query_sparql(self, criteria: EntityQueryCriteria, graph_id: str) -> str:
         """Build SPARQL COUNT query for entity search with criteria.
+        
+        Uses the same full WHERE clause as ``build_entity_query_sparql``
+        (including frame criteria, slot criteria, and all filters) so
+        the count is consistent with the paginated results.
         
         Args:
             criteria: Entity query criteria
@@ -541,53 +561,7 @@ class KGQueryCriteriaBuilder:
         Returns:
             SPARQL COUNT query string
         """
-        # Build WHERE clauses using the same logic as the main query
-        where_clauses = []
-        
-        # Base class filter — restrict to KGEntity class variants via vitaltype
-        class_clause = """
-        {
-            ?entity vital-core:vitaltype haley:KGEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGNewsEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGProductEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGWebEntity .
-        }"""
-        where_clauses.append(class_clause)
-        
-        # Entity type filter (hasKGEntityType property)
-        if criteria.entity_type and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity":
-            where_clauses.append(f"?entity haley:hasKGEntityType <{criteria.entity_type}> .")
-        
-        # Search string filter
-        if criteria.search_string:
-            where_clauses.append(f"""
-            ?entity vital-core:hasName ?name .
-            FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            """)
-        
-        # Additional filters
-        if criteria.filters:
-            for filter_criteria in criteria.filters:
-                if filter_criteria.property_name and filter_criteria.value:
-                    property_uri = self._get_property_uri(filter_criteria.property_name)
-                    if filter_criteria.operator == "equals":
-                        where_clauses.append(f'?entity <{property_uri}> "{filter_criteria.value}" .')
-                    elif filter_criteria.operator == "contains":
-                        where_clauses.append(f"""
-                        ?entity <{property_uri}> ?prop_value .
-                        FILTER(CONTAINS(LCASE(?prop_value), LCASE("{filter_criteria.value}")))
-                        """)
-                    elif filter_criteria.operator == "not_empty":
-                        where_clauses.append(f"""
-                        ?entity <{property_uri}> ?prop_value .
-                        FILTER(?prop_value != "")
-                        """)
-        
-        # Build complete query
-        where_clause = "\n            ".join(where_clauses)
+        where_clause = self._build_entity_where_clause(criteria)
         
         query = f"""
         {self.prefixes}
@@ -599,7 +573,6 @@ class KGQueryCriteriaBuilder:
         }}
         """
         
-        self.logger.debug(f"Built entity count query with {len(where_clauses)} conditions")
         return query.strip()
     
     def build_frame_query_sparql(self, criteria: FrameQueryCriteria, graph_id: str,

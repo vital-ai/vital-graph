@@ -263,9 +263,17 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated frame SPARQL query:\n{sparql_query}")
             
-            # Execute SPARQL query via backend interface
+            # Build count query (same WHERE clause, no LIMIT/OFFSET)
+            count_query = self.query_builder.build_entity_count_query_sparql(
+                entity_criteria, graph_id
+            )
+            
+            # Execute both queries (paginated results + total count)
             t0 = _time.monotonic()
-            results = await backend.execute_sparql_query(space_id, sparql_query)
+            results, count_results = await asyncio.gather(
+                backend.execute_sparql_query(space_id, sparql_query),
+                backend.execute_sparql_query(space_id, count_query),
+            )
             t_query = _time.monotonic()
             
             # Log the final SQL if returned by the backend (fire-and-forget, non-blocking)
@@ -275,6 +283,13 @@ class KGQueriesEndpoint:
                 _pretty = self._pretty_sql
                 asyncio.get_event_loop().run_in_executor(
                     None, lambda: _logger.debug(f"Final SQL ({len(_sql)} chars):\n{_pretty(_sql)}"))
+            
+            # Extract total count from COUNT query
+            total_count = 0
+            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
+                count_bindings = count_results["results"]["bindings"]
+                if count_bindings:
+                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
             
             # Convert results to FrameConnection objects
             # For now, return entities as "connections" where source is the entity
@@ -296,9 +311,7 @@ class KGQueriesEndpoint:
                     )
                     connections.append(connection)
             
-            total_count = len(connections)
-            
-            self.logger.info(f"Frame query: {total_count} results, {(t_query - t0)*1000:.0f}ms")
+            self.logger.info(f"Frame query: {len(connections)} results (total={total_count}), {(t_query - t0)*1000:.0f}ms")
             
             return KGQueryResponse(
                 query_type="frame",

@@ -94,9 +94,19 @@ def query_entities_impl(endpoint_instance, space_id: str, graph_id: str, query_r
         
         endpoint_instance.logger.info(f"Final entity URIs extracted: {entity_uris}")
         
-        # For mock implementation, we'll use the actual count as total_count
-        # In real implementation, this would be a separate COUNT query
-        total_count = len(entity_uris)
+        # Run a separate COUNT query to get the true total (same WHERE clause, no LIMIT/OFFSET)
+        count_query = query_builder.build_entity_count_query_sparql(
+            criteria=sparql_criteria,
+            graph_id=graph_id
+        )
+        count_results = endpoint_instance._execute_sparql_query(space, count_query)
+        total_count = 0
+        if count_results.get("bindings"):
+            count_bindings = count_results["bindings"]
+            if count_bindings:
+                total_count = int(count_bindings[0].get('count', {}).get('value', 0))
+        if total_count == 0:
+            total_count = len(entity_uris)
         
         return EntityQueryResponse(
             entity_uris=entity_uris,
