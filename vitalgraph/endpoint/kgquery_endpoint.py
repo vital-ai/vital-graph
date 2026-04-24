@@ -19,7 +19,9 @@ from ..model.kgqueries_model import (
     KGQueryRequest,
     KGQueryResponse,
     RelationConnection,
-    FrameConnection
+    FrameConnection,
+    EntitySlotRef,
+    FrameQueryResult
 )
 
 
@@ -102,10 +104,10 @@ class KGQueriesEndpoint:
                 pass
             
             # Validate query type
-            if query_type not in ["relation", "frame"]:
+            if query_type not in ["relation", "frame", "entity", "frame_query"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid query_type: {query_type}. Must be 'relation' or 'frame'"
+                    detail=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', or 'frame_query'"
                 )
             
             # Get backend implementation via generic interface
@@ -121,6 +123,10 @@ class KGQueriesEndpoint:
             # Execute appropriate query type
             if query_type == "relation":
                 return await self._execute_relation_query(backend, space_id, graph_id, query_request)
+            elif query_type == "entity":
+                return await self._execute_entity_query(backend, space_id, graph_id, query_request)
+            elif query_type == "frame_query":
+                return await self._execute_frame_query_case(backend, space_id, graph_id, query_request)
             else:  # query_type == "frame"
                 return await self._execute_frame_query(backend, space_id, graph_id, query_request)
                 
@@ -190,6 +196,110 @@ class KGQueriesEndpoint:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to execute relation query: {str(e)}"
+            )
+    
+    async def _execute_entity_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
+        """Execute entity query — return matching entity URIs with correct total count."""
+        try:
+            from ..sparql.kg_query_builder import EntityQueryCriteria as BuilderEntityQueryCriteria
+            from ..sparql.kg_query_builder import FrameCriteria as BuilderFrameCriteria
+            from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
+            
+            criteria = query_request.criteria
+            
+            # Reuse the same frame criteria conversion as the frame query path
+            def convert_frame_criteria(frame_crit):
+                builder_slots = None
+                if frame_crit.slot_criteria:
+                    builder_slots = [
+                        BuilderSlotCriteria(
+                            slot_type=s.slot_type,
+                            slot_class_uri=s.slot_class_uri,
+                            value=s.value,
+                            comparator=s.comparator or ("eq" if s.value else None)
+                        ) for s in frame_crit.slot_criteria
+                    ]
+                builder_nested = None
+                if frame_crit.frame_criteria:
+                    builder_nested = [convert_frame_criteria(fc) for fc in frame_crit.frame_criteria]
+                return BuilderFrameCriteria(
+                    frame_type=frame_crit.frame_type,
+                    negate=getattr(frame_crit, 'negate', False),
+                    slot_criteria=builder_slots,
+                    frame_criteria=builder_nested
+                )
+            
+            builder_frame_criteria = None
+            if criteria.frame_criteria:
+                builder_frame_criteria = [convert_frame_criteria(fc) for fc in criteria.frame_criteria]
+            
+            use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
+            
+            entity_criteria = BuilderEntityQueryCriteria(
+                entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
+                entity_uris=criteria.source_entity_uris,
+                frame_criteria=builder_frame_criteria,
+                use_edge_pattern=use_edge_pattern
+            )
+            
+            # Build paginated query + count query
+            sparql_query = self.query_builder.build_entity_query_sparql(
+                entity_criteria, graph_id,
+                query_request.page_size, query_request.offset
+            )
+            count_query = self.query_builder.build_entity_count_query_sparql(
+                entity_criteria, graph_id
+            )
+            
+            self.logger.info(f"Generated entity SPARQL query:\n{sparql_query}")
+            
+            # Execute both in parallel
+            t0 = _time.monotonic()
+            results, count_results = await asyncio.gather(
+                backend.execute_sparql_query(space_id, sparql_query),
+                backend.execute_sparql_query(space_id, count_query),
+            )
+            t_query = _time.monotonic()
+            
+            # Extract total count
+            total_count = 0
+            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
+                count_bindings = count_results["results"]["bindings"]
+                if count_bindings:
+                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
+            
+            # Extract entity URIs
+            entity_uris = []
+            if results and results.get("results") and results["results"].get("bindings"):
+                for binding in results["results"]["bindings"]:
+                    uri = binding.get('entity', {}).get('value', '')
+                    if uri:
+                        entity_uris.append(uri)
+            
+            self.logger.info(f"Entity query: {len(entity_uris)} results (total={total_count}), {(t_query - t0)*1000:.0f}ms")
+            
+            # Optionally fetch entity graphs
+            entity_graphs = None
+            if query_request.include_entity_graph and entity_uris:
+                t_eg0 = _time.monotonic()
+                entity_graphs = await self._fetch_entity_graphs(backend, space_id, graph_id, entity_uris)
+                t_eg = _time.monotonic()
+                self.logger.info(f"Entity graph fetch: {len(entity_uris)} entities, {(t_eg - t_eg0)*1000:.0f}ms")
+            
+            return KGQueryResponse(
+                query_type="entity",
+                entity_uris=entity_uris,
+                entity_graphs=entity_graphs,
+                total_count=total_count,
+                page_size=query_request.page_size,
+                offset=query_request.offset
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error executing entity query: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to execute entity query: {str(e)}"
             )
     
     async def _execute_frame_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
@@ -328,6 +438,350 @@ class KGQueriesEndpoint:
                 status_code=500,
                 detail=f"Failed to execute frame query: {str(e)}"
             )
+
+
+    async def _execute_frame_query_case(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
+        """Execute frame_query — find frames matching criteria, return frame URIs + entity slot refs."""
+        try:
+            from ..sparql.kg_query_builder import FrameQueryCriteria as BuilderFrameQueryCriteria
+            from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
+            
+            criteria = query_request.criteria
+            
+            # Convert slot criteria from request model to builder model
+            builder_slot_criteria = None
+            if criteria.frame_criteria and len(criteria.frame_criteria) > 0:
+                fc = criteria.frame_criteria[0]  # Top-level frame criteria
+                if fc.slot_criteria:
+                    builder_slot_criteria = [
+                        BuilderSlotCriteria(
+                            slot_type=s.slot_type,
+                            slot_class_uri=s.slot_class_uri,
+                            value=s.value,
+                            comparator=s.comparator or ("eq" if s.value else None)
+                        ) for s in fc.slot_criteria
+                    ]
+            
+            # Get frame_type from frame_criteria if provided
+            frame_type = None
+            if criteria.frame_criteria and len(criteria.frame_criteria) > 0:
+                frame_type = criteria.frame_criteria[0].frame_type
+            
+            # Build frame query criteria
+            frame_query_criteria = BuilderFrameQueryCriteria(
+                frame_type=frame_type,
+                entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
+                slot_criteria=builder_slot_criteria
+            )
+            
+            # Build paginated SPARQL query for frames
+            sparql_query = self.query_builder.build_frame_query_sparql(
+                frame_query_criteria, graph_id,
+                query_request.page_size, query_request.offset
+            )
+            
+            # Build count query for frames
+            count_query = self._build_frame_count_query(
+                frame_query_criteria, graph_id
+            )
+            
+            self.logger.info(f"Generated frame_query SPARQL:\n{sparql_query}")
+            
+            # Execute both in parallel
+            t0 = _time.monotonic()
+            results, count_results = await asyncio.gather(
+                backend.execute_sparql_query(space_id, sparql_query),
+                backend.execute_sparql_query(space_id, count_query),
+            )
+            t_query = _time.monotonic()
+            
+            # Extract total count
+            total_count = 0
+            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
+                count_bindings = count_results["results"]["bindings"]
+                if count_bindings:
+                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
+            
+            # Extract frame URIs
+            frame_uris = []
+            if results and results.get("results") and results["results"].get("bindings"):
+                for binding in results["results"]["bindings"]:
+                    uri = binding.get('frame', {}).get('value', '')
+                    if uri:
+                        frame_uris.append(uri)
+            
+            # For each frame, fetch entity slot refs (includes frame_type)
+            frame_results = []
+            if frame_uris:
+                entity_refs_query = self._build_entity_slot_refs_query(frame_uris, graph_id)
+                self.logger.info(f"Fetching entity slot refs for {len(frame_uris)} frames")
+                refs_results = await backend.execute_sparql_query(space_id, entity_refs_query)
+                
+                # Group entity refs and frame types by frame URI
+                refs_by_frame: Dict[str, List[EntitySlotRef]] = {uri: [] for uri in frame_uris}
+                frame_types: Dict[str, str] = {}
+                if refs_results and refs_results.get("results") and refs_results["results"].get("bindings"):
+                    for binding in refs_results["results"]["bindings"]:
+                        f_uri = binding.get('frame', {}).get('value', '')
+                        slot_type = binding.get('slot_type', {}).get('value', '')
+                        entity_uri = binding.get('entity_ref', {}).get('value', '')
+                        ft = binding.get('frame_type', {}).get('value', '')
+                        if f_uri and ft and f_uri not in frame_types:
+                            frame_types[f_uri] = ft
+                        if f_uri in refs_by_frame and entity_uri:
+                            refs_by_frame[f_uri].append(EntitySlotRef(
+                                slot_type_uri=slot_type,
+                                entity_uri=entity_uri
+                            ))
+                
+                for uri in frame_uris:
+                    frame_results.append(FrameQueryResult(
+                        frame_uri=uri,
+                        frame_type_uri=frame_types.get(uri, ""),
+                        entity_refs=refs_by_frame.get(uri, []),
+                        frame_graph=None  # TODO: implement include_frame_graph
+                    ))
+            
+            self.logger.info(f"Frame query: {len(frame_results)} frames (total={total_count}), {(t_query - t0)*1000:.0f}ms")
+            
+            return KGQueryResponse(
+                query_type="frame_query",
+                frame_results=frame_results,
+                total_count=total_count,
+                page_size=query_request.page_size,
+                offset=query_request.offset
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error executing frame_query: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to execute frame query: {str(e)}"
+            )
+    
+    def _build_frame_count_query(self, criteria, graph_id: str) -> str:
+        """Build a COUNT query for frames matching criteria (mirrors build_frame_query_sparql WHERE clause)."""
+        # Build the same WHERE clauses as build_frame_query_sparql but wrap in COUNT
+        where_clauses = ["?frame rdf:type haley:KGFrame ."]
+        
+        if criteria.frame_type:
+            where_clauses.append(f"?frame haley:hasKGFrameType <{criteria.frame_type}> .")
+        
+        if criteria.search_string:
+            where_clauses.append(f"""
+            {{
+                ?frame rdfs:label ?label .
+                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
+            }} UNION {{
+                ?frame vital-core:name ?name .
+                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
+            }}
+            """)
+        
+        if criteria.entity_type:
+            where_clauses.append(f"""
+            ?entity haley:hasFrame ?frame .
+            ?entity vital-core:vitaltype <{criteria.entity_type}> .
+            """)
+        
+        if criteria.slot_criteria:
+            for i, slot_criterion in enumerate(criteria.slot_criteria):
+                slot_var = f"slot_{i}"
+                if slot_criterion.comparator == "not_exists":
+                    inner = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
+                    if slot_criterion.slot_type:
+                        inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                    where_clauses.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
+                else:
+                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
+                    if slot_criterion.slot_type:
+                        slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
+                    if slot_criterion.value is not None and slot_criterion.comparator:
+                        value_clause = self.query_builder._build_value_filter(
+                            slot_var, slot_criterion.value, slot_criterion.comparator,
+                            slot_criterion.slot_class_uri, slot_criterion.slot_type, f"val_frame_{i}"
+                        )
+                        slot_clauses.append(value_clause)
+                    where_clauses.append(" ".join(slot_clauses))
+        
+        where_clause = " ".join(where_clauses)
+        
+        if graph_id is None:
+            return f"""
+            {self.query_builder.prefixes}
+            SELECT (COUNT(DISTINCT ?frame) AS ?count) WHERE {{
+                {where_clause}
+            }}
+            """.strip()
+        else:
+            return f"""
+            {self.query_builder.prefixes}
+            SELECT (COUNT(DISTINCT ?frame) AS ?count) WHERE {{
+                GRAPH <{graph_id}> {{
+                    {where_clause}
+                }}
+            }}
+            """.strip()
+    
+    async def _fetch_entity_graphs(
+        self, backend, space_id: str, graph_id: str, entity_uris: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Fetch complete entity graphs for a list of entity URIs in a single batched query.
+        
+        Uses hasKGGraphURI to find all objects (frames, slots, edges) belonging to each entity.
+        Returns property maps grouped by entity URI — no rdflib dependency.
+        """
+        values_clause = " ".join(f"<{uri}>" for uri in entity_uris)
+        
+        query = f"""
+            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            
+            SELECT ?entity_uri ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?entity_uri {{ {values_clause} }}
+                    {{
+                        ?entity_uri ?p ?o .
+                        BIND(?entity_uri AS ?s)
+                    }}
+                    UNION
+                    {{
+                        ?s haley:hasKGGraphURI ?entity_uri .
+                        FILTER(?s != ?entity_uri)
+                        ?s ?p ?o .
+                    }}
+                }}
+            }}
+        """.strip()
+        
+        results = await backend.execute_sparql_query(space_id, query)
+        
+        # Unwrap SPARQL JSON results
+        bindings = []
+        if isinstance(results, dict):
+            bindings = results.get('results', {}).get('bindings', [])
+        
+        if not bindings:
+            return {uri: [] for uri in entity_uris}
+        
+        # Group bindings by entity_uri, then by subject within each entity graph
+        _RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+        _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
+        _URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
+        _XSD = 'http://www.w3.org/2001/XMLSchema#'
+        
+        # entity_uri -> {subject_uri -> {type_uri, properties}}
+        by_entity: Dict[str, Dict[str, Dict]] = {uri: {} for uri in entity_uris}
+        
+        for b in bindings:
+            e_uri = b.get('entity_uri', {}).get('value', '')
+            s = b.get('s', {}).get('value', '')
+            p = b.get('p', {}).get('value', '')
+            o_data = b.get('o', {})
+            o_val = o_data.get('value')
+            if not (e_uri and s and p and o_val is not None):
+                continue
+            
+            if e_uri not in by_entity:
+                continue
+            
+            subjects = by_entity[e_uri]
+            if s not in subjects:
+                subjects[s] = {'type_uri': None, 'properties': {}}
+            
+            # Handle type predicates
+            if p in (_RDF_TYPE, _VITALTYPE):
+                subjects[s]['type_uri'] = o_val
+                continue
+            if p == _URI_PROP:
+                continue
+            
+            # Convert literal values
+            o_type = o_data.get('type', 'literal')
+            if o_type == 'uri':
+                value = o_val
+            else:
+                dt = o_data.get('datatype', '')
+                if dt.startswith(_XSD):
+                    local = dt[len(_XSD):]
+                    if local in ('integer', 'int', 'long'):
+                        value = int(o_val)
+                    elif local in ('float', 'double', 'decimal'):
+                        value = float(o_val)
+                    elif local == 'boolean':
+                        value = o_val.lower() in ('true', '1')
+                    else:
+                        value = o_val
+                else:
+                    value = o_val
+            
+            props = subjects[s]['properties']
+            if p in props:
+                existing = props[p]
+                if isinstance(existing, list):
+                    existing.append(value)
+                else:
+                    props[p] = [existing, value]
+            else:
+                props[p] = value
+        
+        # Convert to response format: {entity_uri: [{uri, type, properties}, ...]}
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for e_uri in entity_uris:
+            objects = []
+            for s_uri, data in by_entity.get(e_uri, {}).items():
+                if data['type_uri']:
+                    objects.append({
+                        'uri': s_uri,
+                        'type': data['type_uri'],
+                        'properties': data['properties']
+                    })
+            result[e_uri] = objects
+        
+        return result
+    
+    def _build_entity_slot_refs_query(self, frame_uris: List[str], graph_id: str) -> str:
+        """Build SPARQL to fetch entity slot refs for a list of frames."""
+        values_clause = " ".join(f"<{uri}>" for uri in frame_uris)
+        
+        slot_to_frame = """
+                ?slot_edge vital-core:hasEdgeSource ?frame .
+                ?slot_edge vital-core:hasEdgeDestination ?slot ."""
+        
+        if graph_id is None:
+            return f"""
+            {self.query_builder.prefixes}
+            SELECT ?frame ?frame_type ?slot_type ?entity_ref WHERE {{
+                VALUES ?frame {{ {values_clause} }}
+                OPTIONAL {{ ?frame haley:hasKGFrameType ?frame_type . }}
+                {slot_to_frame}
+                ?slot haley:hasKGSlotType ?slot_type .
+                {{
+                    ?slot haley:hasEntitySlotValue ?entity_ref .
+                }} UNION {{
+                    ?slot haley:hasUriSlotValue ?entity_ref .
+                }}
+            }}
+            ORDER BY ?frame ?slot_type
+            """.strip()
+        else:
+            return f"""
+            {self.query_builder.prefixes}
+            SELECT ?frame ?frame_type ?slot_type ?entity_ref WHERE {{
+                GRAPH <{graph_id}> {{
+                    VALUES ?frame {{ {values_clause} }}
+                    OPTIONAL {{ ?frame haley:hasKGFrameType ?frame_type . }}
+                    {slot_to_frame}
+                    ?slot haley:hasKGSlotType ?slot_type .
+                    {{
+                        ?slot haley:hasEntitySlotValue ?entity_ref .
+                    }} UNION {{
+                        ?slot haley:hasUriSlotValue ?entity_ref .
+                    }}
+                }}
+            }}
+            ORDER BY ?frame ?slot_type
+            """.strip()
 
 
 def create_kgqueries_router(space_manager, auth_dependency) -> APIRouter:

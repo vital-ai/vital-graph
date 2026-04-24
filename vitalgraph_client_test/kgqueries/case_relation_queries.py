@@ -57,8 +57,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} MakesProduct relations (expected 6)")
                 if count == 6:
                     results["tests_passed"] += 1
@@ -92,8 +92,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} relations from TechCorp (expected 3-4)")
                 if count >= 3:
                     results["tests_passed"] += 1
@@ -127,8 +127,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} CompetitorOf relations (expected 4)")
                 if count == 4:
                     results["tests_passed"] += 1
@@ -178,8 +178,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} MakesProduct relations from Technology companies")
                 results["tests_passed"] += 1
             else:
@@ -218,8 +218,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} relations from large companies (employees > 500)")
                 results["tests_passed"] += 1
             else:
@@ -262,8 +262,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} CompetitorOf relations between large companies")
                 results["tests_passed"] += 1
             else:
@@ -302,8 +302,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} relations from companies in 'San' cities")
                 results["tests_passed"] += 1
             else:
@@ -350,8 +350,8 @@ class RelationQueriesTester:
                 offset=0
             )
             
-            if response and response.relation_connections:
-                count = len(response.relation_connections)
+            if response and response.connections:
+                count = len(response.connections)
                 logger.info(f"   ✅ Found {count} MakesProduct from large Technology companies")
                 results["tests_passed"] += 1
             else:

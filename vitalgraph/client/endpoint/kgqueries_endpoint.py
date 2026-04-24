@@ -12,9 +12,12 @@ from ..utils.client_utils import VitalGraphClientError, validate_required_params
 from ...model.kgqueries_model import (
     KGQueryRequest,
     KGQueryResponse,
-    KGQueryCriteria
+    KGQueryCriteria,
+    FrameQueryResponse,
+    KGEntityQueryResponse,
+    RelationQueryResponse,
 )
-from ...model.kgentities_model import EntityQueryCriteria
+from ...model.kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,9 @@ class KGQueriesEndpoint(BaseEndpoint):
         graph_id: str,
         criteria: KGQueryCriteria,
         page_size: int = 10,
-        offset: int = 0
+        offset: int = 0,
+        include_frame_graph: bool = False,
+        include_entity_graph: bool = False
     ) -> KGQueryResponse:
         """
         Query entity-to-entity connections based on criteria.
@@ -64,7 +69,9 @@ class KGQueriesEndpoint(BaseEndpoint):
             request_body = KGQueryRequest(
                 criteria=criteria,
                 page_size=page_size,
-                offset=offset
+                offset=offset,
+                include_frame_graph=include_frame_graph,
+                include_entity_graph=include_entity_graph
             )
             
             # Log complete request for debugging
@@ -164,7 +171,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         exclude_self_connections: bool = True,
         page_size: int = 10,
         offset: int = 0
-    ) -> KGQueryResponse:
+    ) -> RelationQueryResponse:
         """
         Convenience method for querying relation-based connections.
         
@@ -205,10 +212,125 @@ class KGQueriesEndpoint(BaseEndpoint):
             exclude_self_connections=exclude_self_connections
         )
         
-        return await self.query_connections(
+        raw = await self.query_connections(
             space_id=space_id,
             graph_id=graph_id,
             criteria=criteria,
             page_size=page_size,
             offset=offset
         )
+        return RelationQueryResponse.from_raw(raw)
+    
+    async def query_frames(
+        self,
+        space_id: str,
+        graph_id: str,
+        frame_type: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        slot_criteria: Optional[List[SlotCriteria]] = None,
+        include_frame_graph: bool = False,
+        page_size: int = 10,
+        offset: int = 0
+    ) -> FrameQueryResponse:
+        """
+        Query frames matching criteria. Returns frame URIs + entity slot refs.
+        
+        This is Case 1 (frame as top-most object): find frames where entity slots
+        point to specific entities, with optional detail slot filtering.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_type: Optional frame type URI to filter by
+            entity_type: Optional entity type URI (frames must belong to entity of this type)
+            slot_criteria: Optional list of SlotCriteria for filtering by slot values
+            include_frame_graph: Include structured frame graph data in results (default: False)
+            page_size: Number of results per page (default: 10)
+            offset: Offset for pagination (default: 0)
+            
+        Returns:
+            KGQueryResponse with frame_results (List[FrameQueryResult])
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        source_entity_criteria = None
+        if entity_type:
+            source_entity_criteria = EntityQueryCriteria(entity_type=entity_type)
+        
+        # Build frame_criteria from the slot_criteria and frame_type
+        frame_criteria = None
+        if frame_type or slot_criteria:
+            frame_criteria = [FrameCriteria(
+                frame_type=frame_type,
+                slot_criteria=slot_criteria
+            )]
+        
+        criteria = KGQueryCriteria(
+            query_type="frame_query",
+            source_entity_criteria=source_entity_criteria,
+            frame_criteria=frame_criteria
+        )
+        
+        raw = await self.query_connections(
+            space_id=space_id,
+            graph_id=graph_id,
+            criteria=criteria,
+            page_size=page_size,
+            offset=offset,
+            include_frame_graph=include_frame_graph
+        )
+        return FrameQueryResponse.from_raw(raw)
+    
+    async def query_entities(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_type: Optional[str] = None,
+        entity_uris: Optional[List[str]] = None,
+        frame_criteria: Optional[List[FrameCriteria]] = None,
+        query_mode: str = "edge",
+        include_entity_graph: bool = False,
+        page_size: int = 10,
+        offset: int = 0
+    ) -> KGEntityQueryResponse:
+        """
+        Query entities matching criteria. Returns entity URIs with correct total count.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_type: Optional entity type URI to filter by
+            entity_uris: Optional list of specific entity URIs to filter
+            frame_criteria: Optional list of FrameCriteria for filtering by frames/slots
+            query_mode: Query mode: 'edge' or 'direct' (default: 'edge')
+            page_size: Number of results per page (default: 10)
+            offset: Offset for pagination (default: 0)
+            
+        Returns:
+            KGQueryResponse with entity_uris and total_count
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        source_entity_criteria = None
+        if entity_type:
+            source_entity_criteria = EntityQueryCriteria(entity_type=entity_type)
+        
+        criteria = KGQueryCriteria(
+            query_type="entity",
+            query_mode=query_mode,
+            source_entity_uris=entity_uris,
+            source_entity_criteria=source_entity_criteria,
+            frame_criteria=frame_criteria
+        )
+        
+        raw = await self.query_connections(
+            space_id=space_id,
+            graph_id=graph_id,
+            criteria=criteria,
+            page_size=page_size,
+            offset=offset,
+            include_entity_graph=include_entity_graph
+        )
+        return KGEntityQueryResponse.from_raw(raw)

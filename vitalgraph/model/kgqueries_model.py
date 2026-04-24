@@ -1,7 +1,7 @@
 """KG Queries Model Classes
 
 Pydantic models for KG entity-to-entity query operations.
-Single endpoint with query criteria that specifies relation or frame query type.
+Single endpoint with query criteria that specifies relation, frame, or entity query type.
 """
 
 from typing import Dict, List, Optional, Any, Union
@@ -15,7 +15,7 @@ class KGQueryCriteria(BaseModel):
     """Criteria for KG entity-to-entity queries."""
     
     # Query type specification
-    query_type: str = Field(..., description="Query type: 'relation' or 'frame'")
+    query_type: str = Field(..., description="Query type: 'relation', 'frame', 'entity', or 'frame_query'")
     
     # Query mode specification (for frame queries)
     query_mode: str = Field("edge", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
@@ -48,6 +48,8 @@ class KGQueryRequest(BaseModel):
     criteria: KGQueryCriteria = Field(..., description="Query criteria")
     page_size: int = Field(10, description="Number of results per page", ge=1, le=100)
     offset: int = Field(0, description="Offset for pagination", ge=0)
+    include_frame_graph: bool = Field(False, description="When True, include structured frame graph data in frame_query results")
+    include_entity_graph: bool = Field(False, description="When True, include structured entity graph data in entity query results")
 
 
 class RelationConnection(BaseModel):
@@ -66,11 +68,84 @@ class FrameConnection(BaseModel):
     frame_type_uri: str = Field(..., description="Frame type URI")
 
 
+class EntitySlotRef(BaseModel):
+    """An entity reference from a frame's entity slot, including the slot's role."""
+    slot_type_uri: str = Field(..., description="Slot type URI identifying the role (e.g. PersonSlot, CompanySlot)")
+    entity_uri: str = Field(..., description="Entity URI referenced by the slot")
+
+
+class FrameQueryResult(BaseModel):
+    """A single frame result from a frame_query, with connected entity references."""
+    frame_uri: str = Field(..., description="URI of the matching frame")
+    frame_type_uri: str = Field(..., description="Frame type URI")
+    entity_refs: List[EntitySlotRef] = Field(default_factory=list, description="Entities connected via entity slots, with their slot roles")
+    frame_graph: Optional[Any] = Field(None, description="Structured frame graph data (when include_frame_graph=True)")
+
+
 class KGQueryResponse(BasePaginatedResponse):
     """Response model for KG queries."""
-    query_type: str = Field(..., description="Query type that was executed: 'relation' or 'frame'")
+    query_type: str = Field(..., description="Query type that was executed: 'relation', 'frame', 'entity', or 'frame_query'")
+    # Case 1 (frame_query)
+    frame_results: Optional[List[FrameQueryResult]] = Field(None, description="Frame query results with entity refs (when query_type='frame_query')")
+    # Case 2 (entity)
+    entity_uris: Optional[List[str]] = Field(None, description="Matching entity URIs (when query_type='entity')")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs keyed by entity URI (when include_entity_graph=True)")
+    # Case 3 (relation)
     relation_connections: Optional[List[RelationConnection]] = Field(None, description="Relation connections (when query_type='relation')")
+    # Legacy (query_type='frame' — unchanged)
     frame_connections: Optional[List[FrameConnection]] = Field(None, description="Frame connections (when query_type='frame')")
+
+
+
+# ── Strongly-typed client response models (Phase 2b) ──
+# These wrap KGQueryResponse for each query_type so client code gets
+# the right fields without checking query_type or Optional branches.
+
+class FrameQueryResponse(BasePaginatedResponse):
+    """Typed response from query_frames() — Case 1 (frame as top-most object)."""
+    results: List[FrameQueryResult] = Field(default_factory=list, description="Frame results with entity refs")
+
+    @classmethod
+    def from_raw(cls, raw: 'KGQueryResponse') -> 'FrameQueryResponse':
+        return cls(
+            results=raw.frame_results or [],
+            total_count=raw.total_count,
+            page_size=raw.page_size,
+            offset=raw.offset,
+        )
+
+
+class KGEntityQueryResponse(BasePaginatedResponse):
+    """Typed response from query_entities() — Case 2 (entity as top-most object).
+    
+    Named KGEntityQueryResponse to avoid collision with kgentities_model.EntityQueryResponse.
+    """
+    entity_uris: List[str] = Field(default_factory=list, description="Matching entity URIs")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs keyed by URI (when include_entity_graph=True)")
+
+    @classmethod
+    def from_raw(cls, raw: 'KGQueryResponse') -> 'KGEntityQueryResponse':
+        return cls(
+            entity_uris=raw.entity_uris or [],
+            entity_graphs=raw.entity_graphs,
+            total_count=raw.total_count,
+            page_size=raw.page_size,
+            offset=raw.offset,
+        )
+
+
+class RelationQueryResponse(BasePaginatedResponse):
+    """Typed response from query_relation_connections() — Case 3 (relation edge as top-most object)."""
+    connections: List[RelationConnection] = Field(default_factory=list, description="Relation connections")
+
+    @classmethod
+    def from_raw(cls, raw: 'KGQueryResponse') -> 'RelationQueryResponse':
+        return cls(
+            connections=raw.relation_connections or [],
+            total_count=raw.total_count,
+            page_size=raw.page_size,
+            offset=raw.offset,
+        )
 
 
 # Optional: Statistics and utility models

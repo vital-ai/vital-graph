@@ -156,8 +156,13 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         Returns:
             EntityQueryResponse containing list of matching entity URIs and pagination info
         """
-        from vitalgraph.kg.kgentity_query_endpoint_impl import query_entities_impl
-        return query_entities_impl(self, space_id, graph_id, query_request)
+        self._log_method_call("query_entities", space_id=space_id, graph_id=graph_id, query_request=query_request)
+        return EntityQueryResponse(
+            entity_uris=[],
+            total_count=0,
+            page_size=query_request.page_size,
+            offset=query_request.offset
+        )
     
     def list_kgentities_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
                                    search: Optional[str] = None, include_entity_graphs: bool = False) -> EntitiesGraphResponse:

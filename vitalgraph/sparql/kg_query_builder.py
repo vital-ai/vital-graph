@@ -160,7 +160,8 @@ class KGGraphSeparationQueryBuilder:
         query = f"""
         {self.prefixes}
         SELECT DISTINCT ?slot ?predicate ?object WHERE {{
-            ?slot haley:kGFrameSlotFrame <{frame_uri}> .
+            ?slot_edge vital-core:hasEdgeSource <{frame_uri}> .
+            ?slot_edge vital-core:hasEdgeDestination ?slot .
             ?slot ?predicate ?object .
         }}
         """
@@ -212,7 +213,8 @@ class KGGraphSeparationQueryBuilder:
             }} UNION {{
                 # Slot triples
                 <{entity_uri}> haley:hasFrame ?frame .
-                ?slot haley:kGFrameSlotFrame ?frame .
+                ?slot_edge vital-core:hasEdgeSource ?frame .
+                ?slot_edge vital-core:hasEdgeDestination ?slot .
                 ?slot ?predicate ?object .
                 BIND(?slot as ?subject)
             }} UNION {{
@@ -246,7 +248,8 @@ class KGGraphSeparationQueryBuilder:
                 BIND(<{frame_uri}> as ?subject)
             }} UNION {{
                 # Slot triples
-                ?slot haley:kGFrameSlotFrame <{frame_uri}> .
+                ?slot_edge vital-core:hasEdgeSource <{frame_uri}> .
+                ?slot_edge vital-core:hasEdgeDestination ?slot .
                 ?slot ?predicate ?object .
                 BIND(?slot as ?subject)
             }} UNION {{
@@ -591,7 +594,9 @@ class KGQueryCriteriaBuilder:
         # Build WHERE clauses based on criteria
         where_clauses = ["?frame rdf:type haley:KGFrame ."]
         
-        # Frame type filtering is now handled via frame_criteria
+        # Filter by specific frame type if provided
+        if criteria.frame_type:
+            where_clauses.append(f"?frame haley:hasKGFrameType <{criteria.frame_type}> .")
         
         # Add search string filter
         if criteria.search_string:
@@ -618,20 +623,20 @@ class KGQueryCriteriaBuilder:
                 slot_var = f"slot_{i}"
                 
                 if slot_criterion.comparator == "not_exists":
-                    inner = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    inner = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     if slot_criterion.slot_type:
                         inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     if slot_criterion.value is not None:
                         self.logger.warning("not_exists comparator ignores the provided value — only checks slot presence")
                     where_clauses.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
                 elif slot_criterion.comparator == "is_empty":
-                    slot_clauses = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     slot_clauses.append(self._build_empty_value_pattern(slot_var, slot_criterion, f"val_frame_{i}"))
                     where_clauses.append(" ".join(slot_clauses))
                 else:
-                    slot_clauses = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
@@ -1285,20 +1290,20 @@ class KGQueryCriteriaBuilder:
                 slot_var = f"slot_{i}"
                 
                 if slot_criterion.comparator == "not_exists":
-                    inner = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    inner = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     if slot_criterion.slot_type:
                         inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     if slot_criterion.value is not None:
                         self.logger.warning("not_exists comparator ignores the provided value — only checks slot presence")
                     where_clauses.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
                 elif slot_criterion.comparator == "is_empty":
-                    slot_clauses = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
                     slot_clauses.append(self._build_empty_value_pattern(slot_var, slot_criterion, f"val_frame_{i}"))
                     where_clauses.append(" ".join(slot_clauses))
                 else:
-                    slot_clauses = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                     
                     if slot_criterion.slot_type:
                         slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
@@ -1500,7 +1505,7 @@ class KGQueryCriteriaBuilder:
                 # Sort by slot value in frame
                 slot_var = f"sort_slot_{i}"
                 
-                clauses = [f"?{slot_var} haley:kGFrameSlotFrame ?frame ."]
+                clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
                 
                 if sort_criterion.slot_type:
                     clauses.append(f"?{slot_var} haley:hasKGSlotType <{sort_criterion.slot_type}> .")

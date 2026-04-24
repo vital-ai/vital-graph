@@ -194,7 +194,7 @@ async def main():
         logger.info("  STEP 4: Frame-Based Entity Queries")
         logger.info("=" * 80)
         
-        frame_tester = FrameQueriesTester(client, query_mode="direct")
+        frame_tester = FrameQueriesTester(client, query_mode="edge")
         frame_results = await frame_tester.run_tests(space_id, graph_id, organization_uris, event_uris)
         all_results.append(frame_results)
         

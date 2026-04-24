@@ -145,16 +145,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} MakesProduct relations")
                 return {'name': 'Find MakesProduct Relations', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 MakesProduct relations")
                 return {'name': 'Find MakesProduct Relations', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Find MakesProduct Relations', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -186,16 +183,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} relations from TechCorp Industries")
                 return {'name': 'Find Relations from Organization', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 relations from TechCorp")
                 return {'name': 'Find Relations from Organization', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Find Relations from Organization', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -224,16 +218,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} CompetitorOf relations")
                 return {'name': 'Find CompetitorOf Relations', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 CompetitorOf relations")
                 return {'name': 'Find CompetitorOf Relations', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Find CompetitorOf Relations', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -262,16 +253,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} PartnerWith relations")
                 return {'name': 'Find PartnerWith Relations', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 PartnerWith relations")
                 return {'name': 'Find PartnerWith Relations', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Find PartnerWith Relations', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -300,16 +288,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} Supplies relations")
                 return {'name': 'Find Supplies Relations', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 Supplies relations")
                 return {'name': 'Find Supplies Relations', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Find Supplies Relations', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -338,16 +323,13 @@ class KGQueryRelationQueriesTester:
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
             
-            if response.query_type == "relation" and response.relation_connections:
-                found_count = len(response.relation_connections)
+            if response.connections:
+                found_count = len(response.connections)
                 logger.info(f"     ✅ Found {found_count} outgoing relations")
                 return {'name': 'Filter by Direction (Outgoing)', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
-            elif response.query_type == "relation":
+            else:
                 logger.info(f"     ✅ Query succeeded but found 0 outgoing relations")
                 return {'name': 'Filter by Direction (Outgoing)', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-            else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Filter by Direction (Outgoing)', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
@@ -370,13 +352,9 @@ class KGQueryRelationQueriesTester:
             elapsed = time.time() - start_time
             
             logger.info(f"     ⏱️  KGQuery execution time (page 1): {elapsed:.3f}s")
-            logger.info(f"KGQuery Response: query_type={response1.query_type}, total_count={response1.total_count}")
+            logger.info(f"KGQuery Response: total_count={response1.total_count}")
             
-            if response1.query_type != "relation":
-                logger.error(f"     ❌ First page query returned wrong type")
-                return {'passed': False, 'error': 'First page returned wrong query type'}
-            
-            page1_count = len(response1.relation_connections) if response1.relation_connections else 0
+            page1_count = len(response1.connections) if response1.connections else 0
             
             # Second page
             start_time = time.time()
@@ -389,13 +367,9 @@ class KGQueryRelationQueriesTester:
             elapsed = time.time() - start_time
             
             logger.info(f"     ⏱️  KGQuery execution time (page 2): {elapsed:.3f}s")
-            logger.info(f"KGQuery Response: query_type={response2.query_type}, total_count={response2.total_count}")
+            logger.info(f"KGQuery Response: total_count={response2.total_count}")
             
-            if response2.query_type != "relation":
-                logger.error(f"     ❌ Second page query returned wrong type")
-                return {'passed': False, 'error': 'Second page returned wrong query type'}
-            
-            page2_count = len(response2.relation_connections) if response2.relation_connections else 0
+            page2_count = len(response2.connections) if response2.connections else 0
             
             logger.info(f"     ✅ Page 1: {page1_count} results, Page 2: {page2_count} results")
             return {'name': 'Pagination Test', 'passed': True, 'page1_count': page1_count, 'page2_count': page2_count, 'elapsed_time': elapsed}
@@ -421,19 +395,15 @@ class KGQueryRelationQueriesTester:
             elapsed = time.time() - start_time
             
             logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
-            logger.info(f"KGQuery Response: query_type={response.query_type}, total_count={response.total_count}")
+            logger.info(f"KGQuery Response: total_count={response.total_count}")
             
-            if response.query_type == "relation":
-                found_count = len(response.relation_connections) if response.relation_connections else 0
-                if found_count == 0:
-                    logger.info(f"     ✅ Correctly returned 0 results for non-existent relation type")
-                    return {'name': 'Empty Results Query', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
-                else:
-                    logger.warning(f"     ⚠️  Expected 0 results but found {found_count}")
-                    return {'name': 'Empty Results Query', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}  # Still pass, just unexpected
+            found_count = len(response.connections) if response.connections else 0
+            if found_count == 0:
+                logger.info(f"     ✅ Correctly returned 0 results for non-existent relation type")
+                return {'name': 'Empty Results Query', 'passed': True, 'found_count': 0, 'elapsed_time': elapsed}
             else:
-                logger.error(f"     ❌ Query failed or wrong query type")
-                return {'name': 'Empty Results Query', 'passed': False, 'error': 'Query failed or wrong query type', 'elapsed_time': elapsed}
+                logger.warning(f"     ⚠️  Expected 0 results but found {found_count}")
+                return {'name': 'Empty Results Query', 'passed': True, 'found_count': found_count, 'elapsed_time': elapsed}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
