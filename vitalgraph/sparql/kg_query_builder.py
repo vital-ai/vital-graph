@@ -40,11 +40,16 @@ class SlotCriteria:
 
 @dataclass
 class SortCriteria:
-    """Criteria for sorting in KG queries."""
-    sort_type: str  # "frame_slot" | "entity_frame_slot" | "property"
-    slot_type: Optional[str] = None  # Slot type URI for sorting (required for frame_slot and entity_frame_slot)
-    frame_type: Optional[str] = None  # Required for entity_frame_slot sorting
-    property_uri: Optional[str] = None  # Property URI for property-based sorting
+    """Criteria for sorting in KG queries.
+    
+    frame_path is an ordered list of frame type URIs from the anchor
+    (entity/frame) to the slot's parent frame, disambiguating the same
+    slot type under different frame hierarchies.
+    """
+    sort_type: str  # "entity_frame_slot" | "frame_slot" | "source_frame_slot" | "destination_frame_slot"
+    slot_type: str  # Slot type URI to sort by
+    slot_class_uri: str  # Slot class URI (e.g. KGTextSlot) — determines value property
+    frame_path: Optional[List[str]] = None  # Ordered frame type URIs from anchor to slot's parent frame
     sort_order: str = "asc"  # "asc" | "desc"
     priority: int = 1  # 1=primary, 2=secondary, 3=tertiary, etc.
 
@@ -425,7 +430,11 @@ class KGQueryCriteriaBuilder:
                                 value_clause = self._build_value_filter(slot_var, slot_criterion.value, slot_criterion.comparator, slot_criterion.slot_class_uri, slot_criterion.slot_type, f"val_{i}_{j}")
                                 frame_clauses.append(value_clause)
                             elif slot_criterion.comparator == "exists":
-                                frame_clauses.append(f"?{slot_var} ?slot_pred_{i}_{j} ?slot_val_{i}_{j} .")
+                                # Slot existence is already guaranteed by the edge/direct
+                                # connection pattern above + optional slot_type filter.
+                                # No extra triple needed — adding ?slot ?pred ?val would
+                                # create a cross-product across all slot properties.
+                                pass
                 
                 # Handle hierarchical frame structures (parent -> child frames)
                 if frame_criterion.frame_criteria:
@@ -498,7 +507,9 @@ class KGQueryCriteriaBuilder:
                         value_clause = self._build_value_filter(slot_var, slot_criterion.value, slot_criterion.comparator, slot_criterion.slot_class_uri, slot_criterion.slot_type, f"val_entity_{i}")
                         slot_clauses.append(value_clause)
                     elif slot_criterion.comparator == "exists":
-                        slot_clauses.append(f"?{slot_var} ?slot_pred_{i} ?slot_val_{i} .")
+                        # Slot existence is already guaranteed by the edge/direct
+                        # connection pattern above + optional slot_type filter.
+                        pass
                     
                     where_clauses.append(" ".join(slot_clauses))
         
@@ -523,14 +534,28 @@ class KGQueryCriteriaBuilder:
         """
         where_clause = self._build_entity_where_clause(criteria)
         
+        # Build sort bindings if sort_criteria provided
+        sort_extra_where = ""
+        select_extra = ""
+        order_by = "ORDER BY ?entity"
+        if criteria.sort_criteria:
+            sort_patterns, sort_vars, order_by_clause = self._build_sort_bindings(
+                criteria.sort_criteria, anchor_var="entity",
+                use_edge_pattern=criteria.use_edge_pattern
+            )
+            if sort_patterns:
+                sort_extra_where = " " + " ".join(sort_patterns)
+                select_extra = " " + " ".join(sort_vars)
+                order_by = order_by_clause
+        
         if graph_id is None:
             # Query default graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?entity WHERE {{
-                {where_clause}
+            SELECT DISTINCT ?entity{select_extra} WHERE {{
+                {where_clause}{sort_extra_where}
             }}
-            ORDER BY ?entity
+            {order_by}
             LIMIT {page_size}
             OFFSET {offset}
             """
@@ -538,12 +563,12 @@ class KGQueryCriteriaBuilder:
             # Query named graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?entity WHERE {{
+            SELECT DISTINCT ?entity{select_extra} WHERE {{
                 GRAPH <{graph_id}> {{
-                    {where_clause}
+                    {where_clause}{sort_extra_where}
                 }}
             }}
-            ORDER BY ?entity
+            {order_by}
             LIMIT {page_size}
             OFFSET {offset}
             """
@@ -652,14 +677,28 @@ class KGQueryCriteriaBuilder:
         # Build complete query
         where_clause = " ".join(where_clauses)
         
+        # Build sort bindings if sort_criteria provided
+        sort_extra_where = ""
+        select_extra = ""
+        order_by = "ORDER BY ?frame"
+        if criteria.sort_criteria:
+            sort_patterns, sort_vars, order_by_clause = self._build_sort_bindings(
+                criteria.sort_criteria, anchor_var="frame",
+                use_edge_pattern=True
+            )
+            if sort_patterns:
+                sort_extra_where = " " + " ".join(sort_patterns)
+                select_extra = " " + " ".join(sort_vars)
+                order_by = order_by_clause
+        
         if graph_id is None:
             # Query default graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?frame WHERE {{
-                {where_clause}
+            SELECT DISTINCT ?frame{select_extra} WHERE {{
+                {where_clause}{sort_extra_where}
             }}
-            ORDER BY ?frame
+            {order_by}
             LIMIT {page_size}
             OFFSET {offset}
             """
@@ -667,12 +706,12 @@ class KGQueryCriteriaBuilder:
             # Query named graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?frame WHERE {{
+            SELECT DISTINCT ?frame{select_extra} WHERE {{
                 GRAPH <{graph_id}> {{
-                    {where_clause}
+                    {where_clause}{sort_extra_where}
                 }}
             }}
-            ORDER BY ?frame
+            {order_by}
             LIMIT {page_size}
             OFFSET {offset}
             """
@@ -923,7 +962,9 @@ class KGQueryCriteriaBuilder:
                             value_clause = self._build_value_filter(slot_var, slot_criterion.value, slot_criterion.comparator, slot_criterion.slot_class_uri, slot_criterion.slot_type, f"val_{frame_index_prefix}_{i}_{j}")
                             frame_patterns.append(value_clause)
                         elif slot_criterion.comparator == "exists":
-                            frame_patterns.append(f"?{slot_var} ?slot_pred_{frame_index_prefix}_{i}_{j} ?slot_val_{frame_index_prefix}_{i}_{j} .")
+                            # Slot existence is already guaranteed by the edge/direct
+                            # connection pattern above + optional slot_type filter.
+                            pass
             
             # Recursively process nested child frames
             if frame_criterion.frame_criteria:
@@ -944,6 +985,112 @@ class KGQueryCriteriaBuilder:
                 patterns.extend(frame_patterns)
         
         return patterns
+    
+    def _build_sort_bindings(self, sort_criteria: List[SortCriteria],
+                             anchor_var: str = "entity",
+                             use_edge_pattern: bool = True) -> tuple[List[str], List[str], str]:
+        """Build SPARQL patterns for sort criteria by walking frame_path to the slot.
+        
+        Args:
+            sort_criteria: List of sort criteria to apply
+            anchor_var: The root variable to attach frames to (e.g. "entity", "frame",
+                        "source_entity", "destination_entity")
+            use_edge_pattern: If True, use Edge_hasEntityKGFrame / Edge_hasKGSlot / Edge_hasKGFrame
+            
+        Returns:
+            Tuple of (where_patterns, select_vars, order_by_clause)
+              - where_patterns: SPARQL triple patterns to add to WHERE clause
+              - select_vars: variables to add to SELECT (e.g. ["?sort_val_0"])
+              - order_by_clause: ORDER BY string (e.g. "ORDER BY DESC(?sort_val_0) ASC(?sort_val_1)")
+        """
+        if not sort_criteria:
+            return [], [], ""
+        
+        # Sort by priority to ensure correct order
+        sorted_criteria = sorted(sort_criteria, key=lambda x: x.priority)
+        
+        patterns = []
+        select_vars = []
+        order_terms = []
+        
+        for idx, sc in enumerate(sorted_criteria):
+            sort_val_var = f"sort_val_{idx}"
+            select_vars.append(f"?{sort_val_var}")
+            
+            frame_path = sc.frame_path or []
+            value_property = self._get_slot_value_property(slot_class_uri=sc.slot_class_uri)
+            
+            if not frame_path:
+                # No frame path — slot is directly on the anchor (for frame_slot sort_type)
+                slot_var = f"sort_slot_{idx}"
+                slot_edge_var = f"sort_slot_edge_{idx}"
+                if use_edge_pattern:
+                    patterns.extend([
+                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{anchor_var} .",
+                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
+                    ])
+                else:
+                    patterns.append(f"?{anchor_var} vg-direct:hasSlot ?{slot_var} .")
+                patterns.append(f"?{slot_var} haley:hasKGSlotType <{sc.slot_type}> .")
+                patterns.append(f"?{slot_var} {value_property} ?{sort_val_var} .")
+            else:
+                # Walk the frame path from anchor
+                prev_var = anchor_var
+                for depth, frame_type_uri in enumerate(frame_path):
+                    frame_var = f"sort_frame_{idx}_{depth}"
+                    frame_edge_var = f"sort_frame_edge_{idx}_{depth}"
+                    
+                    if depth == 0:
+                        # First frame is attached to the anchor via Edge_hasEntityKGFrame
+                        if use_edge_pattern:
+                            patterns.extend([
+                                f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
+                                f"?{frame_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
+                                f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
+                            ])
+                        else:
+                            patterns.append(f"?{prev_var} vg-direct:hasEntityFrame ?{frame_var} .")
+                    else:
+                        # Subsequent frames are child frames via Edge_hasKGFrame
+                        if use_edge_pattern:
+                            patterns.extend([
+                                f"?{frame_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .",
+                                f"?{frame_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
+                                f"?{frame_edge_var} vital-core:hasEdgeDestination ?{frame_var} .",
+                            ])
+                        else:
+                            patterns.append(f"?{prev_var} vg-direct:hasFrame ?{frame_var} .")
+                    
+                    patterns.append(f"?{frame_var} haley:hasKGFrameType <{frame_type_uri}> .")
+                    prev_var = frame_var
+                
+                # Now attach the slot to the last frame in the path
+                slot_var = f"sort_slot_{idx}"
+                slot_edge_var = f"sort_slot_edge_{idx}"
+                if use_edge_pattern:
+                    patterns.extend([
+                        f"?{slot_edge_var} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
+                        f"?{slot_edge_var} vital-core:hasEdgeSource ?{prev_var} .",
+                        f"?{slot_edge_var} vital-core:hasEdgeDestination ?{slot_var} .",
+                    ])
+                else:
+                    patterns.append(f"?{prev_var} vg-direct:hasSlot ?{slot_var} .")
+                patterns.append(f"?{slot_var} haley:hasKGSlotType <{sc.slot_type}> .")
+                patterns.append(f"?{slot_var} {value_property} ?{sort_val_var} .")
+            
+            # Build ORDER BY term
+            if sc.sort_order.lower() == "desc":
+                order_terms.append(f"DESC(?{sort_val_var})")
+            else:
+                order_terms.append(f"ASC(?{sort_val_var})")
+        
+        # Add tiebreaker on anchor variable for deterministic pagination
+        if order_terms:
+            order_by_clause = f"ORDER BY {' '.join(order_terms)} ?{anchor_var}"
+        else:
+            order_by_clause = ""
+        return patterns, select_vars, order_by_clause
     
     def _build_value_filter(self, var_name: str, value: Any, comparator: str, slot_class_uri: Optional[str] = None, slot_type: Optional[str] = None, value_var: str = "val") -> str:
         """Build SPARQL filter clause for value comparison.
@@ -1098,488 +1245,6 @@ class KGQueryCriteriaBuilder:
             clauses.append(frame_block)
         
         return clauses
-    
-    def build_entity_query_sparql_with_sorting(self, criteria: EntityQueryCriteria, graph_id: str,
-                                             page_size: int, offset: int) -> str:
-        """Build SPARQL query for entity search with criteria and sorting.
-        
-        Args:
-            criteria: Entity query criteria (including sort_criteria)
-            graph_id: Graph ID to search in
-            page_size: Number of results per page
-            offset: Offset for pagination
-            
-        Returns:
-            SPARQL query string with ORDER BY clause
-        """
-        # Build WHERE clauses - start with base class selection (vitaltype)
-        class_clause = """
-        {
-            ?entity vital-core:vitaltype haley:KGEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGNewsEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGProductEntity .
-        } UNION {
-            ?entity vital-core:vitaltype haley:KGWebEntity .
-        }"""
-        
-        # Collect all additional filters
-        filter_clauses = []
-        sort_variables = []
-        
-        # Add entity type filter - use hasKGEntityType for specific entity types
-        if criteria.entity_type and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity":
-            filter_clauses.append(f"?entity haley:hasKGEntityType <{criteria.entity_type}> .")
-        
-        # Add search string filter
-        if criteria.search_string:
-            filter_clauses.append(f"""{{
-                ?entity rdfs:label ?label .
-                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
-            }} UNION {{
-                ?entity vital-core:hasName ?name .
-                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            }}""")
-        
-        # Add property-based filters
-        if criteria.filters:
-            for i, filter_criterion in enumerate(criteria.filters):
-                filter_var = f"filter_value_{i}"
-                property_uri = self._get_property_uri(filter_criterion.property_name)
-                
-                if filter_criterion.operator == "exists":
-                    filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
-                elif filter_criterion.operator == "equals":
-                    # For rdf:type comparisons, use URI reference instead of string literal
-                    if property_uri == "http://www.w3.org/1999/02/22-rdf-syntax-ns#type":
-                        filter_clauses.append(f"?entity <{property_uri}> <{filter_criterion.value}> .")
-                    else:
-                        filter_clauses.append(f"?entity <{property_uri}> \"{filter_criterion.value}\" .")
-                elif filter_criterion.operator == "not_equals":
-                    filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
-                    filter_clauses.append(f"FILTER(?{filter_var} != \"{filter_criterion.value}\")")
-                elif filter_criterion.operator == "contains":
-                    filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
-                    filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{filter_criterion.value}\")))")
-        
-        # Combine class clause with filters
-        if filter_clauses:
-            where_clauses = [class_clause] + filter_clauses
-        else:
-            where_clauses = [class_clause]
-        
-        # Slot criteria filtering is now handled via frame_criteria with nested slots
-        # This method may need refactoring to use the new structure
-        
-        # Add sorting clauses and collect sort variables
-        # For multi-frame queries, reuse existing slot variables for sorting
-        if criteria.sort_criteria:
-            # Map sort criteria to existing slot variables from slot_criteria
-            for sort_criterion in criteria.sort_criteria:
-                if sort_criterion.sort_type == "entity_frame_slot":
-                    # Find matching slot criteria variable
-                    found_matching_slot = False
-                    for i, slot_criterion in enumerate(criteria.slot_criteria or []):
-                        if (getattr(slot_criterion, 'frame_type', None) == sort_criterion.frame_type and 
-                            slot_criterion.slot_type == sort_criterion.slot_type):
-                            # Use the same variable naming pattern as _build_grouped_slot_criteria
-                            frame_type_key = sort_criterion.frame_type.split('#')[-1] if sort_criterion.frame_type else 'default'
-                            sort_var = f"?val_slot_{frame_type_key}_{i}"
-                            sort_variables.append(sort_var)
-                            found_matching_slot = True
-                            break
-                    
-                    # If no matching slot criteria found, we need to add the sort variable anyway
-                    # This handles cases where we want to sort by a slot that's not used for filtering
-                    if not found_matching_slot:
-                        frame_type_key = sort_criterion.frame_type.split('#')[-1] if sort_criterion.frame_type else 'default'
-                        # Use a unique index for sort-only variables
-                        sort_index = len(criteria.slot_criteria or []) + len(sort_variables)
-                        sort_var = f"?val_slot_{frame_type_key}_{sort_index}"
-                        sort_variables.append(sort_var)
-                        
-                        # Add the necessary WHERE clauses for this sort variable
-                        slot_type_key = sort_criterion.slot_type.split('#')[-1] if sort_criterion.slot_type else 'slot'
-                        where_clauses.extend([
-                            f"?frame_edge_{frame_type_key} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .",
-                            f"?frame_edge_{frame_type_key} vital-core:hasEdgeSource ?entity .",
-                            f"?frame_edge_{frame_type_key} vital-core:hasEdgeDestination ?frame_{frame_type_key} .",
-                            f"?frame_{frame_type_key} haley:hasKGFrameType <{sort_criterion.frame_type}> .",
-                            f"?slot_edge_{frame_type_key}_{sort_index} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .",
-                            f"?slot_edge_{frame_type_key}_{sort_index} vital-core:hasEdgeSource ?frame_{frame_type_key} .",
-                            f"?slot_edge_{frame_type_key}_{sort_index} vital-core:hasEdgeDestination ?slot_{frame_type_key}_{sort_index} .",
-                            f"?slot_{frame_type_key}_{sort_index} haley:hasKGSlotType <{sort_criterion.slot_type}> .",
-                            f"?slot_{frame_type_key}_{sort_index} haley:hasDoubleSlotValue {sort_var} ."
-                        ])
-        
-        # Build ORDER BY clause using the actual sort variables
-        order_by_clause = self._generate_order_by_clause_with_variables(criteria.sort_criteria or [], sort_variables)
-        
-        # Build complete query - join clauses with proper spacing
-        where_clause = "\n                ".join(where_clauses)
-        
-        # Build complete query with conditional GRAPH clause
-        if graph_id is not None:
-            query = f"""
-        {self.prefixes}
-        SELECT DISTINCT ?entity {' '.join(sort_variables)} WHERE {{
-            GRAPH <{graph_id}> {{
-                {where_clause}
-            }}
-        }}
-        {order_by_clause}
-        LIMIT {page_size}
-        OFFSET {offset}
-        """
-        else:
-            query = f"""
-        {self.prefixes}
-        SELECT DISTINCT ?entity {' '.join(sort_variables)} WHERE {{
-            {where_clause}
-        }}
-        {order_by_clause}
-        LIMIT {page_size}
-        OFFSET {offset}
-        """
-        
-        self.logger.debug(f"Built entity criteria query with sorting: {len(where_clauses)} conditions, {len(criteria.sort_criteria or [])} sort criteria")
-        return query.strip()
-    
-    def build_frame_query_sparql_with_sorting(self, criteria: FrameQueryCriteria, graph_id: str,
-                                            page_size: int, offset: int) -> str:
-        """Build SPARQL query for frame search with criteria and sorting.
-        
-        Args:
-            criteria: Frame query criteria (including sort_criteria)
-            graph_id: Graph ID to search in
-            page_size: Number of results per page
-            offset: Offset for pagination
-            
-        Returns:
-            SPARQL query string with ORDER BY clause
-        """
-        # Build WHERE clauses based on criteria (reuse existing logic)
-        where_clauses = ["?frame rdf:type haley:KGFrame ."]
-        sort_variables = []
-        
-        # Frame type filtering is now handled via frame_criteria
-        
-        # Add search string filter
-        if criteria.search_string:
-            where_clauses.append(f"""
-            {{
-                ?frame rdfs:label ?label .
-                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
-            }} UNION {{
-                ?frame vital-core:name ?name .
-                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            }}
-            """)
-        
-        # Add entity type filter
-        if criteria.entity_type:
-            where_clauses.append(f"""
-            ?entity haley:hasFrame ?frame .
-            ?entity vital-core:vitaltype <{criteria.entity_type}> .
-            """)
-        
-        # Add slot criteria filters
-        if criteria.slot_criteria:
-            for i, slot_criterion in enumerate(criteria.slot_criteria):
-                slot_var = f"slot_{i}"
-                
-                if slot_criterion.comparator == "not_exists":
-                    inner = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
-                    if slot_criterion.slot_type:
-                        inner.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
-                    if slot_criterion.value is not None:
-                        self.logger.warning("not_exists comparator ignores the provided value — only checks slot presence")
-                    where_clauses.append(f"FILTER NOT EXISTS {{ {' '.join(inner)} }}")
-                elif slot_criterion.comparator == "is_empty":
-                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
-                    if slot_criterion.slot_type:
-                        slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
-                    slot_clauses.append(self._build_empty_value_pattern(slot_var, slot_criterion, f"val_frame_{i}"))
-                    where_clauses.append(" ".join(slot_clauses))
-                else:
-                    slot_clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
-                    
-                    if slot_criterion.slot_type:
-                        slot_clauses.append(f"?{slot_var} haley:hasKGSlotType <{slot_criterion.slot_type}> .")
-                    
-                    if slot_criterion.value is not None and slot_criterion.comparator:
-                        value_clause = self._build_value_filter(slot_var, slot_criterion.value, slot_criterion.comparator, slot_criterion.slot_class_uri, slot_criterion.slot_type, f"val_frame_{i}")
-                        slot_clauses.append(value_clause)
-                    elif slot_criterion.comparator == "exists":
-                        slot_clauses.append(f"?{slot_var} ?slot_pred_{i} ?slot_val_{i} .")
-                    
-                    where_clauses.append(" ".join(slot_clauses))
-        
-        # Add sorting clauses and collect sort variables
-        if criteria.sort_criteria:
-            sort_clauses, sort_vars = self._build_frame_sorting_clauses(criteria.sort_criteria)
-            where_clauses.extend(sort_clauses)
-            sort_variables.extend(sort_vars)
-        
-        # Build complete query
-        where_clause = " ".join(where_clauses)
-        
-        # Build ORDER BY clause
-        order_by_clause = self._generate_order_by_clause(criteria.sort_criteria or [])
-        
-        if graph_id is None:
-            # Query default graph
-            query = f"""
-            {self.prefixes}
-            SELECT DISTINCT ?frame {' '.join(sort_variables)} WHERE {{
-                {where_clause}
-            }}
-            {order_by_clause}
-            LIMIT {page_size}
-            OFFSET {offset}
-            """
-        else:
-            # Query named graph
-            query = f"""
-            {self.prefixes}
-            SELECT DISTINCT ?frame {' '.join(sort_variables)} WHERE {{
-                GRAPH <{graph_id}> {{
-                    {where_clause}
-                }}
-            }}
-            {order_by_clause}
-            LIMIT {page_size}
-            OFFSET {offset}
-            """
-        
-        self.logger.debug(f"Built frame criteria query with sorting: {len(where_clauses)} conditions")
-        return query.strip()
-
-    def _build_sorting_clauses(self, sort_criteria, existing_slot_criteria=None):
-        """Build SPARQL WHERE clauses for sort criteria.
-        
-        Args:
-            sort_criteria: List of sort criteria
-            existing_slot_criteria: Optional existing slot criteria for variable reuse
-            
-        Returns:
-            Tuple of (where_clauses, sort_variables)
-        """
-        where_clauses = []
-        sort_variables = []
-        
-        # Build a map of existing frame types and slot types to their variables
-        existing_frames = {}
-        existing_slots = {}
-        if existing_slot_criteria:
-            from collections import defaultdict
-            frame_groups = defaultdict(list)
-            
-            for i, criterion in enumerate(existing_slot_criteria):
-                frame_type = getattr(criterion, 'frame_type', None)
-                if frame_type:
-                    frame_groups[frame_type].append((i, criterion))
-            
-            for frame_type, criteria_list in frame_groups.items():
-                frame_type_key = frame_type.split('#')[-1] if frame_type else 'default'
-                existing_frames[frame_type] = f"frame_{frame_type_key}"
-                
-                # Also map slot types to their variables and value variables for reuse
-                for i, criterion in criteria_list:
-                    slot_type = getattr(criterion, 'slot_type', None)
-                    if slot_type:
-                        slot_key = f"{frame_type}#{slot_type}"
-                        existing_slots[slot_key] = {
-                            'slot_var': f"slot_{frame_type_key}_{i}",
-                            'value_var': f"val_slot_{frame_type_key}_{i}"
-                        }
-        
-        for i, sort_criterion in enumerate(sort_criteria):
-            sort_var = f"sort_val_{i}"
-            sort_variables.append(f"?{sort_var}")
-            
-            if sort_criterion.sort_type == "entity_frame_slot":
-                # Check if we can reuse an existing slot variable (frame + slot type match)
-                slot_key = f"{sort_criterion.frame_type}#{sort_criterion.slot_type}"
-                if slot_key in existing_slots:
-                    # Reuse existing slot and value variables completely - no new clauses needed!
-                    slot_info = existing_slots[slot_key]
-                    existing_value_var = slot_info['value_var']
-                    
-                    # Update the sort variable to point to the existing value variable
-                    sort_variables[-1] = f"?{existing_value_var}"  # Replace the sort_val_i with existing value
-                    clauses = []  # No additional clauses needed
-                
-                # Check if we can reuse an existing frame variable (but need new slot)
-                elif sort_criterion.frame_type and sort_criterion.frame_type in existing_frames:
-                    # Reuse existing frame variable
-                    frame_var = existing_frames[sort_criterion.frame_type]
-                    slot_var = f"sort_slot_{i}"
-                    
-                    # Only need slot connection clauses since frame already exists
-                    clauses = [
-                        f'?sort_slot_edge_{i} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .',
-                        f"?sort_slot_edge_{i} vital-core:hasEdgeSource ?{frame_var} .",
-                        f"?sort_slot_edge_{i} vital-core:hasEdgeDestination ?{slot_var} ."
-                    ]
-                    
-                    if sort_criterion.slot_type:
-                        clauses.append(f"?{slot_var} haley:hasKGSlotType <{sort_criterion.slot_type}> .")
-                    
-                    # Choose the correct property based on slot type
-                    if sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGTextSlot":
-                        clauses.append(f"?{slot_var} haley:hasTextSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                        clauses.append(f"?{slot_var} haley:hasDoubleSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot":
-                        clauses.append(f"?{slot_var} haley:hasDateTimeSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                        clauses.append(f"?{slot_var} haley:hasIntegerSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot":
-                        clauses.append(f"?{slot_var} haley:hasBooleanSlotValue ?{sort_var} .")
-                    else:
-                        # Default to text slot value
-                        clauses.append(f"?{slot_var} haley:hasTextSlotValue ?{sort_var} .")
-                else:
-                    # Create new frame variables
-                    frame_var = f"sort_frame_{i}"
-                    slot_var = f"sort_slot_{i}"
-                    
-                    clauses = [
-                        f'?sort_frame_edge_{i} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .',
-                        f"?sort_frame_edge_{i} vital-core:hasEdgeSource ?entity .",
-                        f"?sort_frame_edge_{i} vital-core:hasEdgeDestination ?{frame_var} .",
-                        f'?sort_slot_edge_{i} vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .',
-                        f"?sort_slot_edge_{i} vital-core:hasEdgeSource ?{frame_var} .",
-                        f"?sort_slot_edge_{i} vital-core:hasEdgeDestination ?{slot_var} ."
-                    ]
-                    
-                    if sort_criterion.frame_type:
-                        clauses.append(f"?{frame_var} haley:hasKGFrameType <{sort_criterion.frame_type}> .")
-                    
-                    if sort_criterion.slot_type:
-                        clauses.append(f"?{slot_var} haley:hasKGSlotType <{sort_criterion.slot_type}> .")
-                    
-                    # Choose the correct property based on slot type
-                    if sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGTextSlot":
-                        clauses.append(f"?{slot_var} haley:hasTextSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                        clauses.append(f"?{slot_var} haley:hasDoubleSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot":
-                        clauses.append(f"?{slot_var} haley:hasDateTimeSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                        clauses.append(f"?{slot_var} haley:hasIntegerSlotValue ?{sort_var} .")
-                    elif sort_criterion.slot_type == "http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot":
-                        clauses.append(f"?{slot_var} haley:hasBooleanSlotValue ?{sort_var} .")
-                    else:
-                        # Default to text slot value
-                        clauses.append(f"?{slot_var} haley:hasTextSlotValue ?{sort_var} .")
-                
-                where_clauses.append(" ".join(clauses))
-                
-            elif sort_criterion.sort_type == "property":
-                # Sort by direct property value
-                if sort_criterion.property_uri:
-                    where_clauses.append(f"?entity <{sort_criterion.property_uri}> ?{sort_var} .")
-                
-        return where_clauses, sort_variables
-    
-    def _build_frame_sorting_clauses(self, sort_criteria: List[SortCriteria]) -> tuple[List[str], List[str]]:
-        """Build SPARQL clauses for frame sorting.
-        
-        Args:
-            sort_criteria: List of sort criteria
-            
-        Returns:
-            Tuple of (where_clauses, sort_variables)
-        """
-        where_clauses = []
-        sort_variables = []
-        
-        for i, sort_criterion in enumerate(sort_criteria):
-            sort_var = f"sort_val_{i}"
-            sort_variables.append(f"?{sort_var}")
-            
-            if sort_criterion.sort_type == "frame_slot":
-                # Sort by slot value in frame
-                slot_var = f"sort_slot_{i}"
-                
-                clauses = [f"?{slot_var}_edge vital-core:hasEdgeSource ?frame . ?{slot_var}_edge vital-core:hasEdgeDestination ?{slot_var} ."]
-                
-                if sort_criterion.slot_type:
-                    clauses.append(f"?{slot_var} haley:hasKGSlotType <{sort_criterion.slot_type}> .")
-                
-                clauses.append(f"?{slot_var} haley:hasTextSlotValue ?{sort_var} .")
-                
-                where_clauses.append(" ".join(clauses))
-                
-            elif sort_criterion.sort_type == "property":
-                # Sort by direct property value
-                if sort_criterion.property_uri:
-                    where_clauses.append(f"?frame <{sort_criterion.property_uri}> ?{sort_var} .")
-                
-        return where_clauses, sort_variables
-    
-    def _generate_order_by_clause(self, sort_criteria: List[SortCriteria]) -> str:
-        """Generate ORDER BY clause for multi-level sorting.
-        
-        Args:
-            sort_criteria: List of sort criteria
-            
-        Returns:
-            SPARQL ORDER BY clause
-        """
-        if not sort_criteria:
-            return ""  # No ORDER BY if no sort criteria
-        
-        # Sort by priority to ensure correct order
-        sorted_criteria = sorted(sort_criteria, key=lambda x: x.priority)
-        
-        order_terms = []
-        for i, sort_criterion in enumerate(sorted_criteria):
-            sort_var = f"sort_val_{i}"
-            
-            if sort_criterion.sort_order.lower() == "desc":
-                order_terms.append(f"DESC(?{sort_var})")
-            else:
-                order_terms.append(f"ASC(?{sort_var})")
-        
-        if order_terms:
-            return f"ORDER BY {' '.join(order_terms)}"
-        else:
-            return ""
-    
-    def _generate_order_by_clause_with_variables(self, sort_criteria: List[SortCriteria], sort_variables: List[str]) -> str:
-        """Generate ORDER BY clause using actual variable names.
-        
-        Args:
-            sort_criteria: List of sort criteria
-            sort_variables: List of actual variable names (with ? prefix)
-            
-        Returns:
-            SPARQL ORDER BY clause
-        """
-        if not sort_criteria or not sort_variables:
-            return ""  # No ORDER BY if no sort criteria
-        
-        # Sort by priority to ensure correct order
-        sorted_criteria = sorted(sort_criteria, key=lambda x: x.priority)
-        
-        order_terms = []
-        for i, sort_criterion in enumerate(sorted_criteria):
-            if i < len(sort_variables):
-                sort_var = sort_variables[i]  # Already has ? prefix
-                
-                if sort_criterion.sort_order.lower() == "desc":
-                    order_terms.append(f"DESC({sort_var})")
-                else:
-                    order_terms.append(f"ASC({sort_var})")
-        
-        if order_terms:
-            return f"ORDER BY {' '.join(order_terms)}"
-        else:
-            return ""
     
     def _get_property_uri(self, property_name: str) -> str:
         """Convert property name to full URI."""

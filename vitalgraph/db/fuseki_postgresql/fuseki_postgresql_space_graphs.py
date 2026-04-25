@@ -68,7 +68,7 @@ class FusekiPostgreSQLSpaceGraphs:
                 if signal_manager:
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
                     await signal_manager.notify_graphs_changed(SIGNAL_TYPE_CREATED)
-                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED)
+                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED, space_id=space_id)
                     self.logger.debug(f"Sent notifications for graph creation: {graph_uri}")
                 else:
                     self.logger.warning("No SignalManager available for notifications")
@@ -114,7 +114,7 @@ class FusekiPostgreSQLSpaceGraphs:
                 if signal_manager:
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
                     await signal_manager.notify_graphs_changed(SIGNAL_TYPE_DELETED)
-                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED)
+                    await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED, space_id=space_id)
                     self.logger.debug(f"Sent notifications for graph deletion: {graph_uri}")
                 else:
                     self.logger.warning("No SignalManager available for notifications")
@@ -154,7 +154,7 @@ class FusekiPostgreSQLSpaceGraphs:
                     if signal_manager:
                         from vitalgraph.signal.signal_manager import SIGNAL_TYPE_UPDATED
                         await signal_manager.notify_graphs_changed(SIGNAL_TYPE_UPDATED)
-                        await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED)
+                        await signal_manager.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED, space_id=space_id)
                         self.logger.debug(f"Sent notifications for graph clear: {graph_uri}")
                     else:
                         self.logger.warning("No SignalManager available for notifications")

@@ -1651,7 +1651,6 @@ class KGFramesEndpoint:
                     message=result.message,
                     created_count=0,
                     created_uris=[],
-                    fuseki_success=result.fuseki_success
                 )
             
             created_uris = [str(uri) for uri in result.created_uris]
@@ -1671,7 +1670,6 @@ class KGFramesEndpoint:
                 created_count=len(created_uris),
                 created_uris=created_uris,
                 slots_created=slots_count,
-                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:
@@ -1718,7 +1716,6 @@ class KGFramesEndpoint:
                 success=False,
                 message=result.message,
                 updated_uri="",
-                fuseki_success=result.fuseki_success
             )
             
             updated_uris = result.created_uris
@@ -1729,7 +1726,6 @@ class KGFramesEndpoint:
                 updated_uri=updated_uris[0] if updated_uris else "unknown",
                 updated_count=len(updated_uris),
                 frames_updated=len(updated_uris),
-                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:
@@ -1776,7 +1772,6 @@ class KGFramesEndpoint:
                     message=result.message,
                     created_count=0,
                     created_uris=[],
-                    fuseki_success=result.fuseki_success
                 )
             
             upserted_uris = result.created_uris
@@ -1786,7 +1781,6 @@ class KGFramesEndpoint:
                 message=f"Successfully upserted {len(upserted_uris)} frames",
                 created_count=len(upserted_uris),
                 created_uris=upserted_uris,
-                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:

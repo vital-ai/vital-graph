@@ -18,6 +18,7 @@ CHANNEL_GRAPH = "vitalgraph_graph"
 CHANNEL_ENTITY_DEDUP = "vitalgraph_entity_dedup"
 CHANNEL_PROCESS = "vitalgraph_process"
 CHANNEL_CACHE_INVALIDATE = "vitalgraph_cache_invalidate"
+CHANNEL_ENTITY_GRAPH = "vitalgraph_entity_graph"
 
 # Signal types
 SIGNAL_TYPE_CREATED = "created"
@@ -59,6 +60,7 @@ class SignalManager:
             CHANNEL_ENTITY_DEDUP: [],
             CHANNEL_PROCESS: [],
             CHANNEL_CACHE_INVALIDATE: [],
+            CHANNEL_ENTITY_GRAPH: [],
         }
         
         # Set of channels we're currently listening to
@@ -429,20 +431,44 @@ class SignalManager:
         })
         await self._send_notification(CHANNEL_SPACE, payload)
     
-    async def notify_graph_changed(self, graph_uri: str, signal_type: str = SIGNAL_TYPE_UPDATED):
+    async def notify_graph_changed(self, graph_uri: str, signal_type: str, space_id: str):
         """
         Send notification that a specific graph has changed.
         
         Args:
             graph_uri: URI of the graph that changed
             signal_type: Type of change (created, updated, deleted)
+            space_id: Space identifier
         """
         payload = json.dumps({
             "type": signal_type,
             "graph_uri": graph_uri,
+            "space_id": space_id,
             "timestamp": str(asyncio.get_event_loop().time())
         })
         await self._send_notification(CHANNEL_GRAPH, payload)
+
+    async def notify_entity_graph_changed(
+        self, space_id: str, graph_id: str, entity_uri: str,
+        signal_type: str = SIGNAL_TYPE_UPDATED
+    ):
+        """
+        Send notification that an entity graph has changed.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            entity_uri: URI of the entity whose graph changed (empty string for graph-wide)
+            signal_type: Type of change (updated, deleted)
+        """
+        payload = json.dumps({
+            "type": signal_type,
+            "space_id": space_id,
+            "graph_id": graph_id,
+            "entity_uri": entity_uri,
+            "timestamp": str(asyncio.get_event_loop().time()),
+        })
+        await self._send_notification(CHANNEL_ENTITY_GRAPH, payload)
 
     async def notify_cache_invalidate(self, cache_type: str, space_id: str):
         """

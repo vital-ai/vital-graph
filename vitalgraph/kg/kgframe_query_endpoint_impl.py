@@ -49,22 +49,13 @@ def query_frames_impl(endpoint_instance, space_id: str, graph_id: str, query_req
         # Initialize enhanced query builder
         query_builder = KGQueryCriteriaBuilder()
         
-        # Build SPARQL query with sorting support
-        if sparql_criteria.sort_criteria:
-            sparql_query = query_builder.build_frame_query_sparql_with_sorting(
-                criteria=sparql_criteria,
-                graph_id=graph_id,
-                page_size=query_request.page_size,
-                offset=query_request.offset
-            )
-        else:
-            # Use existing method for backward compatibility
-            sparql_query = query_builder.build_frame_query_sparql(
-                criteria=sparql_criteria,
-                graph_id=graph_id,
-                page_size=query_request.page_size,
-                offset=query_request.offset
-            )
+        # Build SPARQL query (sorting is handled automatically when sort_criteria is set)
+        sparql_query = query_builder.build_frame_query_sparql(
+            criteria=sparql_criteria,
+            graph_id=graph_id,
+            page_size=query_request.page_size,
+            offset=query_request.offset
+        )
         
         endpoint_instance.logger.debug(f"Generated SPARQL query with sorting: {sparql_query}")
         
@@ -128,8 +119,8 @@ def _convert_to_sparql_criteria(pydantic_criteria) -> SparqlFrameQueryCriteria:
             SparqlSortCriteria(
                 sort_type=sort.sort_type,
                 slot_type=sort.slot_type,
-                frame_type=sort.frame_type,
-                property_uri=sort.property_uri,
+                slot_class_uri=sort.slot_class_uri,
+                frame_path=sort.frame_path or [],
                 sort_order=sort.sort_order,
                 priority=sort.priority
             )

@@ -23,16 +23,32 @@ class KGConnectionQueryBuilder:
         self.prefixes = """
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
+        PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         """
     
-    def build_relation_query(self, criteria: KGQueryCriteria, graph_id: str) -> str:
-        """Build SPARQL query for relation-based entity connections."""
+    def build_relation_query(self, criteria: KGQueryCriteria, graph_id: str,
+                             sort_patterns: Optional[List[str]] = None,
+                             sort_select_vars: Optional[List[str]] = None,
+                             order_by_clause: Optional[str] = None) -> str:
+        """Build SPARQL query for relation-based entity connections.
+        
+        Args:
+            criteria: KGQueryCriteria with relation query parameters
+            graph_id: Graph ID to search in
+            sort_patterns: Optional SPARQL triple patterns for sort bindings
+            sort_select_vars: Optional SELECT variables for sort values (e.g. ["?sort_val_0"])
+            order_by_clause: Optional ORDER BY clause (e.g. "ORDER BY DESC(?sort_val_0)")
+        """
         self.logger.info("Building relation connection query")
         
-        select_clause = "SELECT DISTINCT ?source_entity ?destination_entity ?relation_edge ?relation_type"
+        select_extra = ""
+        if sort_select_vars:
+            select_extra = " " + " ".join(sort_select_vars)
+        select_clause = f"SELECT DISTINCT ?source_entity ?destination_entity ?relation_edge ?relation_type{select_extra}"
+        
         source_patterns = self._build_source_entity_patterns(criteria.source_entity_criteria, criteria.source_entity_uris)
         relation_patterns = self._build_relation_connection_patterns(criteria)
         dest_patterns = self._build_destination_entity_patterns(criteria.destination_entity_criteria, criteria.destination_entity_uris)
@@ -50,8 +66,12 @@ class KGConnectionQueryBuilder:
         if dest_frame_patterns:
             where_patterns.append(dest_frame_patterns)
         where_patterns.append(filter_clause)
+        if sort_patterns:
+            where_patterns.extend(sort_patterns)
         
         where_clause = "\n                ".join(p for p in where_patterns if p)
+        
+        effective_order_by = order_by_clause or "ORDER BY ?source_entity ?destination_entity"
         
         query = f"""
         {self.prefixes}
@@ -61,7 +81,7 @@ class KGConnectionQueryBuilder:
                 {where_clause}
             }}
         }}
-        ORDER BY ?source_entity ?destination_entity
+        {effective_order_by}
         """
         
         return query.strip()

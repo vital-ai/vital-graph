@@ -631,6 +631,28 @@ class VitalGraphClient(VitalGraphClientInterface):
         """Detailed string representation of the client."""
         return self.__str__()
     
+    # ------------------------------------------------------------------
+    # Health / diagnostics (unauthenticated)
+    # ------------------------------------------------------------------
+
+    async def health(self) -> Dict[str, Any]:
+        """Check service health via GET /health (no auth required)."""
+        if not self.async_session or not self.config:
+            raise VitalGraphClientError("Client is not open")
+        url = f"{self.config.get_server_url()}/health"
+        resp = await self.async_session.get(url)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def cache_stats(self) -> Dict[str, Any]:
+        """Fetch entity graph cache statistics via GET /health/cache (no auth required)."""
+        if not self.async_session or not self.config:
+            raise VitalGraphClientError("Client is not open")
+        url = f"{self.config.get_server_url()}/health/cache"
+        resp = await self.async_session.get(url)
+        resp.raise_for_status()
+        return resp.json()
+
     # Space CRUD Methods - Delegated to SpacesEndpoint
     
     async def list_spaces(self, tenant: Optional[str] = None) -> 'SpacesListResponse':

@@ -110,6 +110,12 @@ class _SparqlSQLGraphsAdapter:
                         f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
                         ctx_uuid,
                     )
+            # Invalidate entity graph cache (local, synchronous)
+            try:
+                from ...cache.entity_graph_cache import _entity_graph_cache
+                _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+            except Exception:
+                pass
             # Notify other instances of graph clear
             try:
                 sm = self._impl._signal_manager or (
@@ -117,7 +123,7 @@ class _SparqlSQLGraphsAdapter:
                 if sm:
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_UPDATED
                     await sm.notify_graphs_changed(SIGNAL_TYPE_UPDATED)
-                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_UPDATED, space_id=space_id)
             except Exception as ne:
                 logger.debug("Graph clear notify failed (non-critical): %s", ne)
             return True
@@ -550,7 +556,7 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 if sm:
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_CREATED
                     await sm.notify_graphs_changed(SIGNAL_TYPE_CREATED)
-                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_CREATED, space_id=space_id)
             except Exception as ne:
                 logger.debug("Graph creation notify failed (non-critical): %s", ne)
             return True
@@ -578,13 +584,19 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
                 [space_id, graph_uri],
             )
+            # Invalidate entity graph cache (local, synchronous)
+            try:
+                from ...cache.entity_graph_cache import _entity_graph_cache
+                _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+            except Exception:
+                pass
             # Notify other instances of graph deletion
             try:
                 sm = self._signal_manager or (self.db_impl.get_signal_manager() if self.db_impl else None)
                 if sm:
                     from vitalgraph.signal.signal_manager import SIGNAL_TYPE_DELETED
                     await sm.notify_graphs_changed(SIGNAL_TYPE_DELETED)
-                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED)
+                    await sm.notify_graph_changed(graph_uri, SIGNAL_TYPE_DELETED, space_id=space_id)
             except Exception as ne:
                 logger.debug("Graph deletion notify failed (non-critical): %s", ne)
             return True
@@ -1376,6 +1388,26 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 sql = gen.sql
                 if sql:
                     await conn.execute(sql)
+
+            # Invalidate entity graph cache entries affected by this update
+            try:
+                from ...cache.entity_graph_cache import _entity_graph_cache
+                targets = _entity_graph_cache.collect_invalidation_targets(
+                    cr.update_ops, space_id,
+                )
+                if targets:
+                    sm = self._signal_manager or (
+                        self.db_impl.get_signal_manager() if self.db_impl else None)
+                    for graph_id, entity_uri in targets:
+                        _entity_graph_cache.invalidate(space_id, graph_id, entity_uri)
+                        if sm:
+                            await sm.notify_entity_graph_changed(
+                                space_id, graph_id, entity_uri)
+                    logger.debug(
+                        "Entity graph cache: invalidated %d entries after SPARQL UPDATE",
+                        len(targets))
+            except Exception as ce:
+                logger.debug("Entity graph cache invalidation after SPARQL UPDATE failed (non-critical): %s", ce)
 
             return True
 

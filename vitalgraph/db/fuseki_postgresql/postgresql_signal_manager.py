@@ -243,7 +243,8 @@ class PostgreSQLSignalManager(SignalManagerInterface):
         
         logger.info(f"🔔 Graphs changed notification sent: {signal_type}")
     
-    async def notify_graph_changed(self, graph_uri: str, signal_type: str) -> None:
+    async def notify_graph_changed(self, graph_uri: str, signal_type: str,
+                                    space_id: str) -> None:
         """Notify that a specific graph has changed."""
         if self.closed:
             return
@@ -251,6 +252,7 @@ class PostgreSQLSignalManager(SignalManagerInterface):
         await self._emit_signal('graph_changed', {
             'graph_uri': graph_uri,
             'signal_type': signal_type,
+            'space_id': space_id,
             'event_type': 'graph_changed',
             'timestamp': asyncio.get_event_loop().time()
         })

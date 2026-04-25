@@ -842,7 +842,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 metadata={'object_types': count_object_types(created_objects)},
-                fuseki_success=response_data.get('fuseki_success')
             )
             
         except VitalGraphClientError:
@@ -925,7 +924,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 metadata={'object_types': count_object_types(updated_objects)},
-                fuseki_success=response_data.get('fuseki_success')
             )
             
         except VitalGraphClientError:
@@ -1008,7 +1006,6 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
                 metadata={'entity_uri': entity_uri},
-                fuseki_success=response_data.get('fuseki_success')
             )
             
         except VitalGraphClientError as e:

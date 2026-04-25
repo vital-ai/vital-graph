@@ -38,7 +38,6 @@ class VitalGraphResponse(BaseModel):
     message: Optional[str] = Field(default=None, description="Human-readable status message")
     
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Response metadata")
-    fuseki_success: Optional[bool] = Field(default=None, description="Whether the Fuseki index was updated successfully. True means success. False means Fuseki sync failed.")
     
     @property
     def is_success(self) -> bool:

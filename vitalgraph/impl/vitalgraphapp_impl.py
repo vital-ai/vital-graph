@@ -400,6 +400,46 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"Cache invalidation signal registration failed (non-critical): {e}")
 
+                    # Register entity graph cache invalidation for cross-instance sync
+                    try:
+                        signal_manager = self.vital_graph_impl.signal_manager
+                        if signal_manager is None:
+                            signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                        if signal_manager:
+                            from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_GRAPH, CHANNEL_GRAPH, CHANNEL_SPACE
+                            from vitalgraph.cache.entity_graph_cache import _entity_graph_cache
+
+                            async def _handle_entity_graph_signal(data: dict):
+                                space_id = data.get("space_id", "")
+                                graph_id = data.get("graph_id", "")
+                                entity_uri = data.get("entity_uri", "")
+                                if space_id and graph_id and entity_uri:
+                                    _entity_graph_cache.invalidate(space_id, graph_id, entity_uri)
+                                elif space_id and graph_id:
+                                    _entity_graph_cache.invalidate_graph(space_id, graph_id)
+
+                            async def _handle_graph_entity_cache(data: dict):
+                                signal_type = data.get("type", "")
+                                graph_uri = data.get("graph_uri", "")
+                                space_id = data.get("space_id", "")
+                                if signal_type in ("deleted", "updated") and space_id and graph_uri:
+                                    _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+
+                            async def _handle_space_entity_cache(data: dict):
+                                signal_type = data.get("type", "")
+                                space_id = data.get("space_id", "")
+                                if signal_type == "deleted" and space_id:
+                                    _entity_graph_cache.invalidate_space(space_id)
+
+                            signal_manager.register_callback(CHANNEL_ENTITY_GRAPH, _handle_entity_graph_signal)
+                            signal_manager.register_callback(CHANNEL_GRAPH, _handle_graph_entity_cache)
+                            signal_manager.register_callback(CHANNEL_SPACE, _handle_space_entity_cache)
+                            self.logger.info("✅ Entity graph cache cross-instance sync registered on CHANNEL_ENTITY_GRAPH/GRAPH/SPACE")
+                        else:
+                            self.logger.warning("Entity graph cache signal sync skipped — signal_manager not available")
+                    except Exception as e:
+                        self.logger.warning(f"Entity graph cache signal registration failed (non-critical): {e}")
+
                     # Start the NOTIFY listener so cross-instance signals are received
                     try:
                         signal_manager = self.vital_graph_impl.signal_manager
@@ -620,6 +660,13 @@ class VitalGraphAppImpl:
             description="Check if the service is running"
         )(self.health)
         
+        self.app.get(
+            "/health/cache",
+            tags=["Health"],
+            summary="Cache Stats",
+            description="Return entity graph cache statistics"
+        )(self.cache_stats)
+        
         # Authentication routes
         self.app.post(
             "/api/login",
@@ -720,6 +767,11 @@ class VitalGraphAppImpl:
     async def health(self):
         """Health check endpoint - delegates to API class"""
         return await self.api.health()
+
+    async def cache_stats(self):
+        """Return entity graph cache statistics."""
+        from vitalgraph.cache.entity_graph_cache import _entity_graph_cache
+        return {"entity_graph_cache": _entity_graph_cache.stats}
     
     async def serve_frontend(self):
         """Serve the built React app's index.html"""

@@ -70,11 +70,22 @@ class FrameCriteria(BaseModel):
 
 
 class SortCriteria(BaseModel):
-    """Criteria for sorting in KG queries."""
-    sort_type: str = Field(..., description="Sort type: frame_slot, entity_frame_slot, or property")
-    slot_type: Optional[str] = Field(None, description="Slot type URI for sorting (required for frame_slot and entity_frame_slot)")
-    frame_type: Optional[str] = Field(None, description="Frame type URI (required for entity_frame_slot sorting)")
-    property_uri: Optional[str] = Field(None, description="Property URI for property-based sorting")
+    """Criteria for sorting in KG queries.
+    
+    sort_type values:
+      - entity_frame_slot: Sort entities by a slot value (Case 2)
+      - frame_slot: Sort frames by a slot value (Case 1)
+      - source_frame_slot: Sort relations by source entity's slot value (Case 3)
+      - destination_frame_slot: Sort relations by destination entity's slot value (Case 3)
+    
+    frame_path is an ordered list of frame type URIs from the anchor (entity/frame)
+    to the slot's parent frame. This disambiguates when the same slot type appears
+    under different frame hierarchies.
+    """
+    sort_type: str = Field(..., description="Sort type: entity_frame_slot, frame_slot, source_frame_slot, or destination_frame_slot")
+    frame_path: List[str] = Field(default_factory=list, description="Ordered frame type URIs from anchor to the slot's parent frame")
+    slot_type: str = Field(..., description="Slot type URI to sort by")
+    slot_class_uri: str = Field(..., description="Slot class URI (e.g. KGTextSlot, KGDoubleSlot) — determines value property")
     sort_order: str = Field("asc", description="Sort order: asc or desc")
     priority: int = Field(1, description="Sort priority: 1=primary, 2=secondary, 3=tertiary, etc.")
 

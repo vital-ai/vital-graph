@@ -17,7 +17,7 @@ from ...model.kgqueries_model import (
     KGEntityQueryResponse,
     RelationQueryResponse,
 )
-from ...model.kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria
+from ...model.kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         direction: str = "outgoing",
         source_frame_criteria: Optional[List] = None,
         destination_frame_criteria: Optional[List] = None,
+        sort_criteria: Optional[List[SortCriteria]] = None,
         exclude_self_connections: bool = True,
         page_size: int = 10,
         offset: int = 0
@@ -209,6 +210,7 @@ class KGQueriesEndpoint(BaseEndpoint):
             direction=direction,
             source_frame_criteria=source_frame_criteria,
             destination_frame_criteria=destination_frame_criteria,
+            sort_criteria=sort_criteria,
             exclude_self_connections=exclude_self_connections
         )
         
@@ -228,6 +230,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         frame_type: Optional[str] = None,
         entity_type: Optional[str] = None,
         slot_criteria: Optional[List[SlotCriteria]] = None,
+        sort_criteria: Optional[List[SortCriteria]] = None,
         include_frame_graph: bool = False,
         page_size: int = 10,
         offset: int = 0
@@ -269,7 +272,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         criteria = KGQueryCriteria(
             query_type="frame_query",
             source_entity_criteria=source_entity_criteria,
-            frame_criteria=frame_criteria
+            frame_criteria=frame_criteria,
+            sort_criteria=sort_criteria
         )
         
         raw = await self.query_connections(
@@ -289,6 +293,7 @@ class KGQueriesEndpoint(BaseEndpoint):
         entity_type: Optional[str] = None,
         entity_uris: Optional[List[str]] = None,
         frame_criteria: Optional[List[FrameCriteria]] = None,
+        sort_criteria: Optional[List[SortCriteria]] = None,
         query_mode: str = "edge",
         include_entity_graph: bool = False,
         page_size: int = 10,
@@ -322,7 +327,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             query_mode=query_mode,
             source_entity_uris=entity_uris,
             source_entity_criteria=source_entity_criteria,
-            frame_criteria=frame_criteria
+            frame_criteria=frame_criteria,
+            sort_criteria=sort_criteria
         )
         
         raw = await self.query_connections(

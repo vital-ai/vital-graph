@@ -28,6 +28,7 @@ from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, Fra
 # Import VitalSigns integration patterns from mock
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from ..sparql.graph_validation import EntityGraphValidator
+from ..cache.entity_graph_cache import _entity_graph_cache
 
 # Import new kg_impl implementation
 from ..kg_impl.kg_backend_utils import create_backend_adapter
@@ -82,6 +83,28 @@ class KGEntitiesEndpoint:
         
         self._setup_routes()
     
+    async def _invalidate_entity_cache(self, space_id: str, graph_id: str, entity_uri: str,
+                                       signal_type: str = "updated") -> None:
+        """Invalidate local entity graph cache and send cross-instance NOTIFY.
+        
+        Failures are logged but never propagated — cache invalidation must not
+        break the write path.
+        """
+        _effective_graph = graph_id or "default"
+        try:
+            _entity_graph_cache.invalidate(space_id, _effective_graph, entity_uri)
+        except Exception as e:
+            self.logger.warning(f"Entity graph cache local invalidation failed: {e}")
+        try:
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if space_record:
+                backend = space_record.space_impl.get_db_space_impl()
+                sm = getattr(backend, 'get_signal_manager', lambda: None)() if backend else None
+                if sm:
+                    await sm.notify_entity_graph_changed(space_id, _effective_graph, entity_uri, signal_type)
+        except Exception as e:
+            self.logger.debug(f"Entity graph cache NOTIFY failed (non-critical): {e}")
+
     def _setup_routes(self):
         """Setup FastAPI routes for KG entities management."""
         
@@ -332,12 +355,24 @@ class KGEntitiesEndpoint:
         try:
             import time as _time
             t0 = _time.monotonic()
+            _effective_graph = graph_id or "default"
             if uri:
                 self.logger.debug(f"Getting KGEntity {uri} from space {space_id}, graph {graph_id}")
             elif reference_id:
                 self.logger.debug(f"Getting KGEntity by reference ID '{reference_id}' from space {space_id}, graph {graph_id}")
             else:
                 raise ValueError("Either uri or reference_id must be provided")
+            
+            # Cache hit path — only for URI-based lookups with include_entity_graph
+            if include_entity_graph and uri:
+                cached_quads = _entity_graph_cache.get(space_id, _effective_graph, uri)
+                if cached_quads is not None:
+                    t_cache = _time.monotonic()
+                    self.logger.info(
+                        "GET_ENTITY cache HIT: %.0fms (%d quads, entity=%s)",
+                        (t_cache - t0) * 1000, len(cached_quads), uri,
+                    )
+                    return QuadResultsResponse(results=cached_quads, total_count=len(cached_quads))
             
             # Get backend implementation
             space_record = await self.space_manager.get_space_or_load(space_id)
@@ -359,7 +394,7 @@ class KGEntitiesEndpoint:
             # Get entity using kg_impl
             graph_objects = await get_processor.get_entity(
                 space_id=space_id,
-                graph_id=graph_id or "default",
+                graph_id=_effective_graph,
                 entity_uri=uri,
                 reference_id=reference_id,
                 include_entity_graph=include_entity_graph,
@@ -371,6 +406,11 @@ class KGEntitiesEndpoint:
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects or [], graph_id)
             t_quads = _time.monotonic()
+            
+            # Cache the result for entity graph lookups
+            if include_entity_graph and uri and quads:
+                _entity_graph_cache.put(space_id, _effective_graph, uri, quads)
+            
             resp = QuadResultsResponse(
                 results=quads,
                 total_count=len(graph_objects) if graph_objects else 0,
@@ -420,34 +460,51 @@ class KGEntitiesEndpoint:
             backend_adapter = create_backend_adapter(backend)
             get_processor = KGEntityGetProcessor(logger=self.logger)
             
-            # Fetch all entities concurrently, collecting GraphObjects
-            async def _fetch_objects(identifier):
+            _effective_graph = graph_id or "default"
+            
+            # Fetch all entities concurrently, collecting quads
+            # For URI-based lookups with include_entity_graph, check cache per entity
+            async def _fetch_quads(identifier):
                 try:
-                    uri = None if use_reference_ids else identifier
-                    ref_id = identifier if use_reference_ids else None
+                    _uri = None if use_reference_ids else identifier
+                    _ref_id = identifier if use_reference_ids else None
+                    
+                    # Cache hit path (URI-based only)
+                    if include_entity_graph and _uri:
+                        cached = _entity_graph_cache.get(space_id, _effective_graph, _uri)
+                        if cached is not None:
+                            return cached, len(cached)
+                    
                     objs = await get_processor.get_entity(
                         space_id=space_id,
-                        graph_id=graph_id or "default",
-                        entity_uri=uri,
-                        reference_id=ref_id,
+                        graph_id=_effective_graph,
+                        entity_uri=_uri,
+                        reference_id=_ref_id,
                         include_entity_graph=include_entity_graph,
                         backend_adapter=backend_adapter
                     )
-                    return objs or []
+                    q = await asyncio.to_thread(graphobjects_to_quad_list, objs or [], graph_id)
+                    
+                    # Cache the result for entity graph lookups
+                    if include_entity_graph and _uri and q:
+                        _entity_graph_cache.put(space_id, _effective_graph, _uri, q)
+                    
+                    return q, len(objs) if objs else 0
                 except Exception as e:
                     self.logger.warning(f"Failed to get entity {identifier}: {e}")
-                    return []
+                    return [], 0
             
-            results = await asyncio.gather(*[_fetch_objects(ident) for ident in identifiers])
+            results = await asyncio.gather(*[_fetch_quads(ident) for ident in identifiers])
             
-            all_objects = []
-            for objs in results:
-                all_objects.extend(objs)
+            all_quads = []
+            total_obj_count = 0
+            for q, count in results:
+                all_quads.extend(q)
+                total_obj_count += count
             
-            quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
-                results=quads,
-                total_count=len(all_objects),
+                results=all_quads,
+                total_count=total_obj_count,
                 page_size=len(identifiers),
                 offset=0,
             )
@@ -536,6 +593,11 @@ class KGEntitiesEndpoint:
             )
             _t_endpoint_end = _time.monotonic()
             self.logger.info(f"⏱️  ENDPOINT total: {_t_endpoint_end - _t_endpoint_start:.3f}s")
+            # Invalidate entity graph cache for affected entities
+            for _ent in entity_objects:
+                _ent_uri = str(_ent.URI) if hasattr(_ent, 'URI') and _ent.URI else None
+                if _ent_uri:
+                    await self._invalidate_entity_cache(space_id, graph_id, _ent_uri)
             return _result
 
         except Exception as e:
@@ -631,6 +693,9 @@ class KGEntitiesEndpoint:
                     backend_adapter, space_id, graph_id, entity_updates
                 )
             
+            # Invalidate entity graph cache for all affected entities
+            for _eu in entity_uris:
+                await self._invalidate_entity_cache(space_id, graph_id, _eu)
             return result
             
         except Exception as e:
@@ -746,6 +811,10 @@ class KGEntitiesEndpoint:
             # Always return response with actual deletion results
             self.logger.debug(f"Deletion result - {deletion_type}: {uri}, success: {success}, deleted_count: {deleted_count}")
             
+            # Invalidate entity graph cache after successful deletion
+            if success:
+                await self._invalidate_entity_cache(space_id, graph_id, uri, "deleted")
+            
             return EntityDeleteResponse(
                 message=f"Successfully deleted KG {deletion_type} '{str(uri)}' from graph '{graph_id}' in space '{space_id}' ({deleted_count} objects)" if success else f"Failed to delete KGEntity '{str(uri)}'",
                 deleted_count=deleted_count,
@@ -842,6 +911,10 @@ class KGEntitiesEndpoint:
             
             deleted_uris_list = [str(u) for u, ok in zip(uris, results) if ok]
             deleted_count = len(deleted_uris_list)
+            
+            # Invalidate entity graph cache for all successfully deleted entities
+            for _del_uri in deleted_uris_list:
+                await self._invalidate_entity_cache(space_id, graph_id, _del_uri, "deleted")
             
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
@@ -1051,13 +1124,16 @@ class KGEntitiesEndpoint:
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
                 
+                # Invalidate entity graph cache (frame write changes the entity graph)
+                if entity_uri:
+                    await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+                
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
                     success=True,
                     message=f"Successfully created {len(result.created_uris)} frames",
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
-                    fuseki_success=result.fuseki_success
                 )
             else:
                 # Handle processor failure
@@ -1067,7 +1143,6 @@ class KGEntitiesEndpoint:
                     message=result.message,
                     created_count=0,
                     created_uris=[],
-                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -1078,7 +1153,6 @@ class KGEntitiesEndpoint:
                 message=f"Failed to create/update frames: {str(e)}",
                 created_count=0,
                 created_uris=[],
-                fuseki_success=False
             )
         finally:
             if _lock_ctx is not None:
@@ -1147,6 +1221,10 @@ class KGEntitiesEndpoint:
             delete_result = await sparql_processor.delete_frame(space_id, graph_id, uri)
             
             self.logger.debug(f"Successfully deleted frame {uri} and {delete_result['deleted_count']} related objects")
+            
+            # Invalidate entity graph cache if we identified the owning entity
+            if delete_result.get('deleted_count', 0) > 0 and entity_uri:
+                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
             
             # Return response in expected format
             class FrameDeleteResponse:
@@ -1315,13 +1393,14 @@ class KGEntitiesEndpoint:
             
             # Convert CreateFrameResult to FrameCreateResponse
             if result.success:
+                # Invalidate entity graph cache (frame creation changes the entity graph)
+                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
                 return FrameCreateResponse(
                     success=True,
                     message=result.message,
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
                     slots_created=0,
-                    fuseki_success=result.fuseki_success
                 )
             else:
                 return FrameCreateResponse(
@@ -1330,7 +1409,6 @@ class KGEntitiesEndpoint:
                     created_count=0,
                     created_uris=[],
                     slots_created=0,
-                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -1425,6 +1503,10 @@ class KGEntitiesEndpoint:
             # Execute frame deletion
             result = await processor.delete_frames(space_id, full_graph_uri, entity_uri, frame_uris)
             
+            # Invalidate entity graph cache (frame deletion changes the entity graph)
+            if result.deleted_frame_uris:
+                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+            
             # Convert to response model
             from ..model.kgframes_model import FrameDeleteResponse
             
@@ -1432,7 +1514,6 @@ class KGEntitiesEndpoint:
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
                 deleted_uris=result.deleted_frame_uris,
-                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:
@@ -1716,12 +1797,6 @@ class KGEntitiesEndpoint:
             successful_updates = [r for r in update_results if r.success]
             failed_updates = [r for r in update_results if not r.success]
             
-            # Aggregate fuseki_success: False if any result has fuseki_success=False
-            any_fuseki_failure = any(
-                getattr(r, 'fuseki_success', None) is False for r in update_results
-            )
-            aggregated_fuseki_success = False if any_fuseki_failure else True
-            
             if successful_updates:
                 success_messages = [r.message for r in successful_updates]
                 failure_messages = [r.message for r in failed_updates] if failed_updates else []
@@ -1730,12 +1805,14 @@ class KGEntitiesEndpoint:
                 if failure_messages:
                     message += f", {len(failed_updates)} frame(s) failed: {'; '.join(failure_messages)}"
                 
+                # Invalidate entity graph cache (frame update changes the entity graph)
+                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+                
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
                     message=message,
                     updated_uri=entity_uri,
                     updated_count=len(successful_updates),
-                    fuseki_success=aggregated_fuseki_success
                 )
             else:
                 error_messages = [r.message for r in failed_updates]
@@ -1744,7 +1821,6 @@ class KGEntitiesEndpoint:
                     message=f"All frame updates failed: {'; '.join(error_messages)}",
                     updated_uri="",
                     updated_count=0,
-                    fuseki_success=aggregated_fuseki_success
                 )
             
         except Exception as e:
@@ -2097,14 +2173,12 @@ class KGEntitiesEndpoint:
                 return FrameUpdateResponse(
                     message=result.message,
                     updated_uri=entity_uri,
-                    fuseki_success=result.fuseki_success
                 )
             else:
                 self.logger.warning(f"⚠️ Frame update failed for entity {entity_uri}: {result.message}")
                 return FrameUpdateResponse(
                     message=f"Frame update failed: {result.message}",
                     updated_uri=entity_uri,
-                    fuseki_success=result.fuseki_success
                 )
             
         except Exception as e:
@@ -2162,7 +2236,6 @@ class KGEntitiesEndpoint:
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
                 deleted_uris=result.deleted_frame_uris,
-                fuseki_success=result.fuseki_success
             )
             
         except Exception as e:

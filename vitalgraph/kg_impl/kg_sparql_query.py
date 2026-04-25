@@ -67,8 +67,8 @@ class KGSparqlQueryProcessor:
                     sparql_sort_criteria.append(SparqlSortCriteria(
                         sort_type=sort_criterion.sort_type,
                         slot_type=sort_criterion.slot_type,
-                        frame_type=sort_criterion.frame_type,
-                        property_uri=sort_criterion.property_uri,
+                        slot_class_uri=sort_criterion.slot_class_uri,
+                        frame_path=sort_criterion.frame_path or [],
                         sort_order=sort_criterion.sort_order,
                         priority=sort_criterion.priority
                     ))
@@ -131,22 +131,13 @@ class KGSparqlQueryProcessor:
             from ..sparql.kg_query_builder import KGQueryCriteriaBuilder
             query_builder = KGQueryCriteriaBuilder()
             
-            # Build SPARQL query with sorting support
-            if hasattr(sparql_criteria, 'sort_criteria') and sparql_criteria.sort_criteria:
-                sparql_query = query_builder.build_entity_query_sparql_with_sorting(
-                    criteria=sparql_criteria,
-                    graph_id=graph_id,
-                    page_size=query_request.page_size,
-                    offset=query_request.offset
-                )
-            else:
-                # Use existing method for backward compatibility
-                sparql_query = query_builder.build_entity_query_sparql(
-                    criteria=sparql_criteria,
-                    graph_id=graph_id,
-                    page_size=query_request.page_size,
-                    offset=query_request.offset
-                )
+            # Build SPARQL query (sorting is handled automatically when sort_criteria is set)
+            sparql_query = query_builder.build_entity_query_sparql(
+                criteria=sparql_criteria,
+                graph_id=graph_id,
+                page_size=query_request.page_size,
+                offset=query_request.offset
+            )
             
             self.logger.info(f"Generated SPARQL query: {sparql_query}")
             

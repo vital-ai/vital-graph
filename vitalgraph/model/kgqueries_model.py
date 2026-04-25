@@ -7,7 +7,7 @@ Single endpoint with query criteria that specifies relation, frame, or entity qu
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria
+from .kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria
 from .api_model import BasePaginatedResponse
 
 
@@ -38,6 +38,9 @@ class KGQueryCriteria(BaseModel):
     
     # Frame-specific criteria (only used when query_type="frame")
     frame_criteria: Optional[List[FrameCriteria]] = Field(None, description="Frame criteria with nested slot criteria (entity->frame->slot paths)")
+    
+    # Sorting
+    sort_criteria: Optional[List[SortCriteria]] = Field(None, description="Multi-level sorting criteria (sort by slot values)")
     
     # Query constraints
     exclude_self_connections: bool = Field(True, description="Exclude connections from entity to itself")

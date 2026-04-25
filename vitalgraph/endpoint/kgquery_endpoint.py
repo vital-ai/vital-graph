@@ -23,10 +23,89 @@ from ..model.kgqueries_model import (
     EntitySlotRef,
     FrameQueryResult
 )
+from ..cache.entity_graph_cache import _entity_graph_cache
+
+
+# ---------------------------------------------------------------------------
+# Helpers: convert cached quads → property maps
+# ---------------------------------------------------------------------------
+
+_RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+_VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
+_URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
+_XSD_PREFIX = 'http://www.w3.org/2001/XMLSchema#'
+
+
+def _strip_angles(s: str) -> str:
+    """Remove surrounding angle brackets from an N-Quads URI term."""
+    return s[1:-1] if s.startswith('<') and s.endswith('>') else s
+
+
+def _parse_nquads_object(o: str):
+    """Parse an N-Quads object term into a Python value."""
+    if o.startswith('<') and o.endswith('>'):
+        return o[1:-1]
+    if '^^' in o:
+        val_part, dt_part = o.rsplit('^^', 1)
+        val = val_part.strip('"')
+        dt = dt_part.strip('<>')
+        if dt.startswith(_XSD_PREFIX):
+            local = dt[len(_XSD_PREFIX):]
+            if local in ('integer', 'int', 'long'):
+                try:
+                    return int(val)
+                except ValueError:
+                    return val
+            elif local in ('float', 'double', 'decimal'):
+                try:
+                    return float(val)
+                except ValueError:
+                    return val
+            elif local == 'boolean':
+                return val.lower() in ('true', '1')
+        return val
+    return o.strip('"')
+
+
+def _quads_to_property_maps(quads: List[Dict]) -> List[Dict[str, Any]]:
+    """Convert a list of cached quad dicts to the property-map format
+    used by KGQueryResponse.entity_graphs."""
+    subjects: Dict[str, Dict] = {}
+    for q in quads:
+        s = _strip_angles(q.get('s', ''))
+        p = _strip_angles(q.get('p', ''))
+        o_raw = q.get('o', '')
+        if not (s and p):
+            continue
+        if s not in subjects:
+            subjects[s] = {'type_uri': None, 'properties': {}}
+        if p in (_RDF_TYPE, _VITALTYPE):
+            subjects[s]['type_uri'] = _strip_angles(o_raw)
+            continue
+        if p == _URI_PROP:
+            continue
+        value = _parse_nquads_object(o_raw)
+        props = subjects[s]['properties']
+        if p in props:
+            existing = props[p]
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                props[p] = [existing, value]
+        else:
+            props[p] = value
+    result = []
+    for s_uri, data in subjects.items():
+        if data['type_uri']:
+            result.append({'uri': s_uri, 'type': data['type_uri'], 'properties': data['properties']})
+    return result
 
 
 class KGQueriesEndpoint:
     """REST API endpoint for KG entity-to-entity connection queries."""
+    
+    # Hard cap on query offset to prevent runaway pagination loops
+    _MAX_QUERY_OFFSET = 100_000
     
     def __init__(self, space_manager, auth_dependency):
         """Initialize KG Queries endpoint with space manager and authentication."""
@@ -110,6 +189,16 @@ class KGQueriesEndpoint:
                     detail=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', or 'frame_query'"
                 )
             
+            # Guard against runaway pagination — reject absurd offsets
+            if query_request.offset > self._MAX_QUERY_OFFSET:
+                self.logger.warning(
+                    f"Offset {query_request.offset} exceeds max {self._MAX_QUERY_OFFSET} — "
+                    f"possible runaway pagination (space={space_id}, query_type={query_type})")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Offset {query_request.offset} exceeds maximum allowed ({self._MAX_QUERY_OFFSET})"
+                )
+            
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
@@ -139,12 +228,48 @@ class KGQueriesEndpoint:
                 detail=f"Failed to execute KG query: {str(e)}"
             )
     
+    @staticmethod
+    def _extract_total_count(count_results: dict) -> int:
+        """Extract integer total from a COUNT SPARQL result."""
+        if count_results and count_results.get("results") and count_results["results"].get("bindings"):
+            bindings = count_results["results"]["bindings"]
+            if bindings:
+                return int(bindings[0].get('count', {}).get('value', 0))
+        return 0
+    
     async def _execute_relation_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
         """Execute relation-based query."""
         try:
+            # Build sort bindings for relation queries if sort_criteria provided
+            sort_patterns = None
+            sort_select_vars = None
+            order_by_clause = None
+            if query_request.criteria.sort_criteria:
+                from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
+                builder_sort_criteria = [
+                    BuilderSortCriteria(
+                        sort_type=sc.sort_type,
+                        slot_type=sc.slot_type,
+                        slot_class_uri=sc.slot_class_uri,
+                        frame_path=sc.frame_path or [],
+                        sort_order=sc.sort_order,
+                        priority=sc.priority
+                    ) for sc in query_request.criteria.sort_criteria
+                ]
+                # Determine anchor var from sort_type
+                anchor_var = "source_entity"
+                if builder_sort_criteria and builder_sort_criteria[0].sort_type == "destination_frame_slot":
+                    anchor_var = "destination_entity"
+                sort_patterns, sort_select_vars, order_by_clause = self.query_builder._build_sort_bindings(
+                    builder_sort_criteria, anchor_var=anchor_var
+                )
+            
             # Build SPARQL query for relation connections
             sparql_query = self.connection_query_builder.build_relation_query(
-                query_request.criteria, graph_id
+                query_request.criteria, graph_id,
+                sort_patterns=sort_patterns,
+                sort_select_vars=sort_select_vars,
+                order_by_clause=order_by_clause
             )
             
             self.logger.info(f"Generated relation SPARQL query:\n{sparql_query}")
@@ -204,6 +329,7 @@ class KGQueriesEndpoint:
             from ..sparql.kg_query_builder import EntityQueryCriteria as BuilderEntityQueryCriteria
             from ..sparql.kg_query_builder import FrameCriteria as BuilderFrameCriteria
             from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
+            from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
             
             criteria = query_request.criteria
             
@@ -233,12 +359,27 @@ class KGQueriesEndpoint:
             if criteria.frame_criteria:
                 builder_frame_criteria = [convert_frame_criteria(fc) for fc in criteria.frame_criteria]
             
+            # Convert sort criteria from API model to builder dataclass
+            builder_sort_criteria = None
+            if criteria.sort_criteria:
+                builder_sort_criteria = [
+                    BuilderSortCriteria(
+                        sort_type=sc.sort_type,
+                        slot_type=sc.slot_type,
+                        slot_class_uri=sc.slot_class_uri,
+                        frame_path=sc.frame_path or [],
+                        sort_order=sc.sort_order,
+                        priority=sc.priority
+                    ) for sc in criteria.sort_criteria
+                ]
+            
             use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
             
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,
                 frame_criteria=builder_frame_criteria,
+                sort_criteria=builder_sort_criteria,
                 use_edge_pattern=use_edge_pattern
             )
             
@@ -253,20 +394,35 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated entity SPARQL query:\n{sparql_query}")
             
-            # Execute both in parallel
+            # Count-first short-circuit: when offset > 0 run the cheap count
+            # query first so we can skip the expensive paginated query if the
+            # caller has already paged past the end of the result set.
             t0 = _time.monotonic()
-            results, count_results = await asyncio.gather(
-                backend.execute_sparql_query(space_id, sparql_query),
-                backend.execute_sparql_query(space_id, count_query),
-            )
+            if query_request.offset > 0:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_total_count(count_results)
+                if query_request.offset >= total_count:
+                    t_query = _time.monotonic()
+                    self.logger.info(
+                        f"Entity query short-circuit: offset {query_request.offset} >= total {total_count}, "
+                        f"{(t_query - t0)*1000:.0f}ms (count only)")
+                    return KGQueryResponse(
+                        query_type="entity",
+                        entity_uris=[],
+                        total_count=total_count,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset
+                    )
+                # Offset is valid — now run the paginated query
+                results = await backend.execute_sparql_query(space_id, sparql_query)
+            else:
+                # First page: run both in parallel for lowest latency
+                results, count_results = await asyncio.gather(
+                    backend.execute_sparql_query(space_id, sparql_query),
+                    backend.execute_sparql_query(space_id, count_query),
+                )
+                total_count = self._extract_total_count(count_results)
             t_query = _time.monotonic()
-            
-            # Extract total count
-            total_count = 0
-            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
-                count_bindings = count_results["results"]["bindings"]
-                if count_bindings:
-                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
             
             # Extract entity URIs
             entity_uris = []
@@ -378,28 +534,34 @@ class KGQueriesEndpoint:
                 entity_criteria, graph_id
             )
             
-            # Execute both queries (paginated results + total count)
+            # Count-first short-circuit: when offset > 0 run the cheap count
+            # query first so we can skip the expensive paginated query if the
+            # caller has already paged past the end of the result set.
             t0 = _time.monotonic()
-            results, count_results = await asyncio.gather(
-                backend.execute_sparql_query(space_id, sparql_query),
-                backend.execute_sparql_query(space_id, count_query),
-            )
+            if query_request.offset > 0:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_total_count(count_results)
+                if query_request.offset >= total_count:
+                    t_query = _time.monotonic()
+                    self.logger.info(
+                        f"Frame query short-circuit: offset {query_request.offset} >= total {total_count}, "
+                        f"{(t_query - t0)*1000:.0f}ms (count only)")
+                    return KGQueryResponse(
+                        query_type="frame",
+                        relation_connections=None,
+                        frame_connections=[],
+                        total_count=total_count,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset
+                    )
+                results = await backend.execute_sparql_query(space_id, sparql_query)
+            else:
+                results, count_results = await asyncio.gather(
+                    backend.execute_sparql_query(space_id, sparql_query),
+                    backend.execute_sparql_query(space_id, count_query),
+                )
+                total_count = self._extract_total_count(count_results)
             t_query = _time.monotonic()
-            
-            # Log the final SQL if returned by the backend (fire-and-forget, non-blocking)
-            if results.get('sql') and self.logger.isEnabledFor(logging.DEBUG):
-                _sql = results['sql']
-                _logger = self.logger
-                _pretty = self._pretty_sql
-                asyncio.get_event_loop().run_in_executor(
-                    None, lambda: _logger.debug(f"Final SQL ({len(_sql)} chars):\n{_pretty(_sql)}"))
-            
-            # Extract total count from COUNT query
-            total_count = 0
-            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
-                count_bindings = count_results["results"]["bindings"]
-                if count_bindings:
-                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
             
             # Convert results to FrameConnection objects
             # For now, return entities as "connections" where source is the entity
@@ -445,6 +607,7 @@ class KGQueriesEndpoint:
         try:
             from ..sparql.kg_query_builder import FrameQueryCriteria as BuilderFrameQueryCriteria
             from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
+            from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
             
             criteria = query_request.criteria
             
@@ -467,11 +630,26 @@ class KGQueriesEndpoint:
             if criteria.frame_criteria and len(criteria.frame_criteria) > 0:
                 frame_type = criteria.frame_criteria[0].frame_type
             
+            # Convert sort criteria from API model to builder dataclass
+            builder_sort_criteria = None
+            if criteria.sort_criteria:
+                builder_sort_criteria = [
+                    BuilderSortCriteria(
+                        sort_type=sc.sort_type,
+                        slot_type=sc.slot_type,
+                        slot_class_uri=sc.slot_class_uri,
+                        frame_path=sc.frame_path or [],
+                        sort_order=sc.sort_order,
+                        priority=sc.priority
+                    ) for sc in criteria.sort_criteria
+                ]
+            
             # Build frame query criteria
             frame_query_criteria = BuilderFrameQueryCriteria(
                 frame_type=frame_type,
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
-                slot_criteria=builder_slot_criteria
+                slot_criteria=builder_slot_criteria,
+                sort_criteria=builder_sort_criteria
             )
             
             # Build paginated SPARQL query for frames
@@ -487,20 +665,33 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated frame_query SPARQL:\n{sparql_query}")
             
-            # Execute both in parallel
+            # Count-first short-circuit: when offset > 0 run the cheap count
+            # query first so we can skip the expensive paginated query if the
+            # caller has already paged past the end of the result set.
             t0 = _time.monotonic()
-            results, count_results = await asyncio.gather(
-                backend.execute_sparql_query(space_id, sparql_query),
-                backend.execute_sparql_query(space_id, count_query),
-            )
+            if query_request.offset > 0:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_total_count(count_results)
+                if query_request.offset >= total_count:
+                    t_query = _time.monotonic()
+                    self.logger.info(
+                        f"Frame_query short-circuit: offset {query_request.offset} >= total {total_count}, "
+                        f"{(t_query - t0)*1000:.0f}ms (count only)")
+                    return KGQueryResponse(
+                        query_type="frame_query",
+                        frame_results=[],
+                        total_count=total_count,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset
+                    )
+                results = await backend.execute_sparql_query(space_id, sparql_query)
+            else:
+                results, count_results = await asyncio.gather(
+                    backend.execute_sparql_query(space_id, sparql_query),
+                    backend.execute_sparql_query(space_id, count_query),
+                )
+                total_count = self._extract_total_count(count_results)
             t_query = _time.monotonic()
-            
-            # Extract total count
-            total_count = 0
-            if count_results and count_results.get("results") and count_results["results"].get("bindings"):
-                count_bindings = count_results["results"]["bindings"]
-                if count_bindings:
-                    total_count = int(count_bindings[0].get('count', {}).get('value', 0))
             
             # Extract frame URIs
             frame_uris = []
@@ -626,12 +817,33 @@ class KGQueriesEndpoint:
     async def _fetch_entity_graphs(
         self, backend, space_id: str, graph_id: str, entity_uris: List[str]
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """Fetch complete entity graphs for a list of entity URIs in a single batched query.
+        """Fetch complete entity graphs for a list of entity URIs.
         
-        Uses hasKGGraphURI to find all objects (frames, slots, edges) belonging to each entity.
-        Returns property maps grouped by entity URI — no rdflib dependency.
+        Checks the entity graph cache first; only SPARQL-queries the
+        cache misses.  Freshly fetched results are NOT written back to
+        the quad cache here because this path produces property maps,
+        not quads — the kgentities GET path handles quad caching.
         """
-        values_clause = " ".join(f"<{uri}>" for uri in entity_uris)
+        _effective_graph = graph_id or "default"
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        miss_uris: List[str] = []
+
+        # 1. Check cache per entity URI
+        for uri in entity_uris:
+            cached_quads = _entity_graph_cache.get(space_id, _effective_graph, uri)
+            if cached_quads is not None:
+                result[uri] = _quads_to_property_maps(cached_quads)
+            else:
+                miss_uris.append(uri)
+
+        if not miss_uris:
+            self.logger.info(f"Entity graph fetch: {len(entity_uris)} entities, ALL from cache")
+            return result
+
+        self.logger.info(f"Entity graph fetch: {len(entity_uris)} requested, {len(entity_uris) - len(miss_uris)} cache hits, {len(miss_uris)} misses")
+
+        # 2. SPARQL-query the misses only
+        values_clause = " ".join(f"<{uri}>" for uri in miss_uris)
         
         query = f"""
             PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -656,22 +868,21 @@ class KGQueriesEndpoint:
         
         results = await backend.execute_sparql_query(space_id, query)
         
-        # Unwrap SPARQL JSON results
         bindings = []
         if isinstance(results, dict):
             bindings = results.get('results', {}).get('bindings', [])
         
+        # Initialise empty entries for all miss URIs
+        for uri in miss_uris:
+            if uri not in result:
+                result[uri] = []
+        
         if not bindings:
-            return {uri: [] for uri in entity_uris}
+            return result
         
-        # Group bindings by entity_uri, then by subject within each entity graph
-        _RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
-        _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
-        _URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
+        # 3. Build property maps from SPARQL bindings
         _XSD = 'http://www.w3.org/2001/XMLSchema#'
-        
-        # entity_uri -> {subject_uri -> {type_uri, properties}}
-        by_entity: Dict[str, Dict[str, Dict]] = {uri: {} for uri in entity_uris}
+        by_entity: Dict[str, Dict[str, Dict]] = {uri: {} for uri in miss_uris}
         
         for b in bindings:
             e_uri = b.get('entity_uri', {}).get('value', '')
@@ -681,7 +892,6 @@ class KGQueriesEndpoint:
             o_val = o_data.get('value')
             if not (e_uri and s and p and o_val is not None):
                 continue
-            
             if e_uri not in by_entity:
                 continue
             
@@ -689,14 +899,12 @@ class KGQueriesEndpoint:
             if s not in subjects:
                 subjects[s] = {'type_uri': None, 'properties': {}}
             
-            # Handle type predicates
             if p in (_RDF_TYPE, _VITALTYPE):
                 subjects[s]['type_uri'] = o_val
                 continue
             if p == _URI_PROP:
                 continue
             
-            # Convert literal values
             o_type = o_data.get('type', 'literal')
             if o_type == 'uri':
                 value = o_val
@@ -725,9 +933,7 @@ class KGQueriesEndpoint:
             else:
                 props[p] = value
         
-        # Convert to response format: {entity_uri: [{uri, type, properties}, ...]}
-        result: Dict[str, List[Dict[str, Any]]] = {}
-        for e_uri in entity_uris:
+        for e_uri in miss_uris:
             objects = []
             for s_uri, data in by_entity.get(e_uri, {}).items():
                 if data['type_uri']:
