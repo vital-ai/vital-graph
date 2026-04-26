@@ -1155,6 +1155,8 @@ class KGQueryCriteriaBuilder:
                          (slot_type == "http://vital.ai/ontology/haley-ai-kg#KGEntitySlot")
             if is_uri_slot:
                 escaped_value = f'<{value}>'
+            elif slot_class_uri and slot_class_uri.endswith("KGTextSlot"):
+                escaped_value = f'"{value}"^^xsd:string'
             else:
                 escaped_value = f'"{value}"'
         else:

@@ -870,12 +870,14 @@ class KGQueriesEndpoint:
             SELECT ?frame ?frame_type ?slot_type ?entity_ref WHERE {{
                 VALUES ?frame {{ {values_clause} }}
                 OPTIONAL {{ ?frame haley:hasKGFrameType ?frame_type . }}
-                {slot_to_frame}
-                ?slot haley:hasKGSlotType ?slot_type .
-                {{
-                    ?slot haley:hasEntitySlotValue ?entity_ref .
-                }} UNION {{
-                    ?slot haley:hasUriSlotValue ?entity_ref .
+                OPTIONAL {{
+                    {slot_to_frame}
+                    ?slot haley:hasKGSlotType ?slot_type .
+                    {{
+                        ?slot haley:hasEntitySlotValue ?entity_ref .
+                    }} UNION {{
+                        ?slot haley:hasUriSlotValue ?entity_ref .
+                    }}
                 }}
             }}
             ORDER BY ?frame ?slot_type
@@ -887,12 +889,14 @@ class KGQueriesEndpoint:
                 GRAPH <{graph_id}> {{
                     VALUES ?frame {{ {values_clause} }}
                     OPTIONAL {{ ?frame haley:hasKGFrameType ?frame_type . }}
-                    {slot_to_frame}
-                    ?slot haley:hasKGSlotType ?slot_type .
-                    {{
-                        ?slot haley:hasEntitySlotValue ?entity_ref .
-                    }} UNION {{
-                        ?slot haley:hasUriSlotValue ?entity_ref .
+                    OPTIONAL {{
+                        {slot_to_frame}
+                        ?slot haley:hasKGSlotType ?slot_type .
+                        {{
+                            ?slot haley:hasEntitySlotValue ?entity_ref .
+                        }} UNION {{
+                            ?slot haley:hasUriSlotValue ?entity_ref .
+                        }}
                     }}
                 }}
             }}
