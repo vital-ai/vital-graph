@@ -80,7 +80,9 @@ class KGEntityListProcessor:
                            page_size: int = 10, offset: int = 0,
                            entity_type_uri: Optional[str] = None,
                            search: Optional[str] = None,
-                           include_entity_graph: bool = False) -> ListEntitiesResult:
+                           include_entity_graph: bool = False,
+                           sort_by: Optional[str] = None,
+                           sort_order: str = "asc") -> ListEntitiesResult:
         """
         List KGEntities with filtering and pagination.
 
@@ -91,23 +93,29 @@ class KGEntityListProcessor:
         Graph path (include_entity_graph=True):
           Count + URI query run concurrently, then entity graphs
           fetched in parallel via asyncio.gather.
+
+        sort_by: Optional property URI to sort by (e.g. vital-core:hasName).
+        sort_order: 'asc' or 'desc'.
         """
         try:
             self.logger.debug(
-                "list_entities space=%s graph=%s page=%d off=%d type=%s search=%s graph_mode=%s",
+                "list_entities space=%s graph=%s page=%d off=%d type=%s search=%s graph_mode=%s sort=%s/%s",
                 space_id, graph_id, page_size, offset,
                 entity_type_uri, search, include_entity_graph,
+                sort_by, sort_order,
             )
 
             if not include_entity_graph:
                 return await self._list_entities_fast(
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
+                    sort_by=sort_by, sort_order=sort_order,
                 )
             else:
                 return await self._list_entities_with_graph(
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
+                    sort_by=sort_by, sort_order=sort_order,
                 )
 
         except Exception as e:
@@ -120,17 +128,19 @@ class KGEntityListProcessor:
 
     async def _list_entities_fast(self, space_id, graph_id, page_size,
                                   offset, entity_type_uri, search,
-                                  backend_adapter) -> ListEntitiesResult:
+                                  backend_adapter,
+                                  sort_by=None, sort_order="asc") -> ListEntitiesResult:
         """Single SPARQL query fetches paginated entity properties directly."""
         from collections import defaultdict
 
         # Build the optimized single query
         sparql = self._build_optimized_properties_query(
-            graph_id, page_size, offset, entity_type_uri, search
+            graph_id, page_size, offset, entity_type_uri, search,
+            sort_by=sort_by, sort_order=sort_order,
         )
 
         # Run data query and count query concurrently
-        count_sparql = self._build_count_query(graph_id, entity_type_uri, search)
+        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by)
 
         data_task = backend_adapter.execute_sparql_query(space_id, sparql)
         count_task = backend_adapter.execute_sparql_query(space_id, count_sparql)
@@ -157,15 +167,17 @@ class KGEntityListProcessor:
 
     async def _list_entities_with_graph(self, space_id, graph_id, page_size,
                                         offset, entity_type_uri, search,
-                                        backend_adapter) -> ListEntitiesResult:
+                                        backend_adapter,
+                                        sort_by=None, sort_order="asc") -> ListEntitiesResult:
         """Get entity URIs, then fetch full entity graphs in parallel."""
         from .kgentity_get_impl import KGEntityGetProcessor
 
         # Build URI query (with subclass UNIONs + pagination)
         uri_sparql = self._build_entity_uris_query(
-            graph_id, page_size, offset, entity_type_uri, search
+            graph_id, page_size, offset, entity_type_uri, search,
+            sort_by=sort_by, sort_order=sort_order,
         )
-        count_sparql = self._build_count_query(graph_id, entity_type_uri, search)
+        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by)
 
         # Run URI + count concurrently
         uri_task = backend_adapter.execute_sparql_query(space_id, uri_sparql)
@@ -303,7 +315,9 @@ class KGEntityListProcessor:
 
     def _build_optimized_properties_query(self, graph_id: str, page_size: int,
                                           offset: int, entity_type_uri: Optional[str],
-                                          search: Optional[str]) -> str:
+                                          search: Optional[str],
+                                          sort_by: Optional[str] = None,
+                                          sort_order: str = "asc") -> str:
         """Single query: subquery for paginated entity URIs + property fetch."""
         # Inner subquery type clause
         if entity_type_uri:
@@ -322,18 +336,30 @@ class KGEntityListProcessor:
                 f"\n          FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             )
 
+        # Sort triple + ORDER BY
+        sort_triple = ""
+        order_by = "ORDER BY ?s"
+        if sort_by:
+            sort_triple = f"\n          ?s <{sort_by}> ?sort_val ."
+            direction = "DESC" if sort_order == "desc" else "ASC"
+            order_by = f"ORDER BY {direction}(?sort_val) ?s"
+
+        inner_select = "SELECT DISTINCT ?s WHERE {"
+        if sort_by:
+            inner_select = "SELECT DISTINCT ?s ?sort_val WHERE {"
+
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>\n"
             "SELECT ?s ?p ?o WHERE {\n"
             f"  GRAPH <{graph_id}> {{\n"
             "    {\n"
-            "      SELECT DISTINCT ?s WHERE {\n"
+            f"      {inner_select}\n"
             f"        GRAPH <{graph_id}> {{\n"
-            f"          {type_clause}{search_clause}\n"
+            f"          {type_clause}{search_clause}{sort_triple}\n"
             "        }\n"
             "      }\n"
-            "      ORDER BY ?s\n"
+            f"      {order_by}\n"
             f"      LIMIT {page_size}\n"
             f"      OFFSET {offset}\n"
             "    }\n"
@@ -341,12 +367,14 @@ class KGEntityListProcessor:
             f"    {_MATERIALIZED_FILTER}\n"
             "  }\n"
             "}\n"
-            "ORDER BY ?s ?p"
+            f"ORDER BY {f'{direction}(?sort_val) ?s ?p' if sort_by else '?s ?p'}"
         )
 
     def _build_entity_uris_query(self, graph_id: str, page_size: int,
                                   offset: int, entity_type_uri: Optional[str],
-                                  search: Optional[str]) -> str:
+                                  search: Optional[str],
+                                  sort_by: Optional[str] = None,
+                                  sort_order: str = "asc") -> str:
         """SELECT DISTINCT entity URIs with subclass UNIONs and pagination."""
         if entity_type_uri:
             type_clause = (
@@ -363,15 +391,26 @@ class KGEntityListProcessor:
                 f"\n    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             )
 
+        sort_triple = ""
+        order_by = "ORDER BY ?entity"
+        if sort_by:
+            sort_triple = f"\n    ?entity <{sort_by}> ?sort_val ."
+            direction = "DESC" if sort_order == "desc" else "ASC"
+            order_by = f"ORDER BY {direction}(?sort_val) ?entity"
+
+        select_clause = "SELECT DISTINCT ?entity WHERE {"
+        if sort_by:
+            select_clause = "SELECT DISTINCT ?entity ?sort_val WHERE {"
+
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>\n"
-            "SELECT DISTINCT ?entity WHERE {\n"
+            f"{select_clause}\n"
             f"  GRAPH <{graph_id}> {{\n"
-            f"    {type_clause}{search_clause}\n"
+            f"    {type_clause}{search_clause}{sort_triple}\n"
             "  }\n"
             "}\n"
-            "ORDER BY ?entity\n"
+            f"{order_by}\n"
             f"LIMIT {page_size}\n"
             f"OFFSET {offset}"
         )
@@ -578,8 +617,14 @@ class KGEntityListProcessor:
             return []
     
     def _build_count_query(self, graph_id: str, entity_type_uri: Optional[str], 
-                          search: Optional[str]) -> str:
-        """Build SPARQL count query (with subclass UNIONs)."""
+                          search: Optional[str],
+                          sort_by: Optional[str] = None) -> str:
+        """Build SPARQL count query (with subclass UNIONs).
+        
+        When sort_by is provided the sort triple is included as a required join
+        so that total_count matches the paginated query (entities missing the
+        sort property are excluded from both).
+        """
         # Type clause with all subclasses
         if entity_type_uri:
             type_clause = (
@@ -603,6 +648,10 @@ class KGEntityListProcessor:
                 "    ?entity <http://vital.ai/ontology/vital-core#hasName> ?name .",
                 f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             ])
+
+        # Sort join — required so count matches paginated results
+        if sort_by:
+            query_parts.append(f"    ?entity <{sort_by}> ?sort_val .")
         
         query_parts.extend([
             "  }",

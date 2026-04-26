@@ -41,7 +41,7 @@ class MockKGEntitiesEndpoint(MockBaseEndpoint):
         from .mock_kgrelations_endpoint import MockKGRelationsEndpoint
         self.relations = MockKGRelationsEndpoint(client, space_manager, config=config)
     
-    def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False) -> QuadResponse:
+    def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None, include_entity_graph: bool = False, sort_by: Optional[str] = None, sort_order: str = "asc") -> QuadResponse:
         """
         List KGEntities with pagination and optional search using pyoxigraph SPARQL queries.
         

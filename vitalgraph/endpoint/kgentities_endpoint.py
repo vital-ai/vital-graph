@@ -121,6 +121,8 @@ class KGEntitiesEndpoint:
             id: Optional[str] = Query(None, description="Single reference ID to retrieve"),
             id_list: Optional[str] = Query(None, description="Comma-separated list of reference IDs"),
             include_entity_graph: bool = Query(False, description="If True, include complete entity graphs with frames and slots"),
+            sort_by: Optional[str] = Query(None, description="Property URI to sort by (e.g. vital-core:hasName). Must be one of the allowed sortable properties."),
+            sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
@@ -164,8 +166,21 @@ class KGEntitiesEndpoint:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
                 return await self._get_entities_by_uris(space_id, graph_id, uris, include_entity_graph, current_user)
             
+            # Validate sort_by against allowed properties
+            if sort_by:
+                from ..model.kgentities_model import _ENTITY_SORT_PROPERTIES
+                if sort_by not in _ENTITY_SORT_PROPERTIES:
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"sort_by '{sort_by}' is not a sortable property. Allowed: {', '.join(sorted(_ENTITY_SORT_PROPERTIES))}"
+                    )
+                if sort_order not in ("asc", "desc"):
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=400, detail="sort_order must be 'asc' or 'desc'")
+
             # Handle paginated listing
-            return await self._list_entities(space_id, graph_id, page_size, offset, entity_type_uri, search, include_entity_graph, current_user)
+            return await self._list_entities(space_id, graph_id, page_size, offset, entity_type_uri, search, include_entity_graph, current_user, sort_by=sort_by, sort_order=sort_order)
         
         @self.router.post("/kgentities", response_model=Union[EntityCreateResponse, EntityUpdateResponse], tags=["KG Entities"])
         async def create_or_update_entities(
@@ -288,7 +303,7 @@ class KGEntitiesEndpoint:
             return await self._query_kgentities(space_id, graph_id, query_request, current_user)
         
     
-    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict):
+    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc"):
         """List entities using KGEntityListProcessor."""
         try:
             import time as _time
@@ -319,7 +334,9 @@ class KGEntitiesEndpoint:
                 offset=offset,
                 entity_type_uri=entity_type_uri,
                 search=search,
-                include_entity_graph=include_entity_graph
+                include_entity_graph=include_entity_graph,
+                sort_by=sort_by,
+                sort_order=sort_order,
             )
             t_query = _time.monotonic()
             
@@ -1942,8 +1959,9 @@ class KGEntitiesEndpoint:
                 sparql_sort_criteria.append(SparqlSortCriteria(
                     sort_type=sort_criterion.sort_type,
                     slot_type=sort_criterion.slot_type,
-                    frame_type=sort_criterion.frame_type,
-                    property_uri=sort_criterion.property_uri,
+                    slot_class_uri=sort_criterion.slot_class_uri,
+                    frame_path=sort_criterion.frame_path or [],
+                    property_uri=getattr(sort_criterion, 'property_uri', None),
                     sort_order=sort_criterion.sort_order,
                     priority=sort_criterion.priority
                 ))

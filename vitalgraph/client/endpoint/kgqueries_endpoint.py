@@ -339,4 +339,19 @@ class KGQueriesEndpoint(BaseEndpoint):
             offset=offset,
             include_entity_graph=include_entity_graph
         )
-        return KGEntityQueryResponse.from_raw(raw)
+        response = KGEntityQueryResponse.from_raw(raw)
+        
+        # Hydrate entity_graphs quads → GraphObjects for client consistency
+        if response.entity_graphs:
+            from ..utils.format_helpers import deserialize_response_to_graphobjects, ClientWireFormat
+            hydrated: Dict[str, list] = {}
+            for uri, quads in response.entity_graphs.items():
+                if quads:
+                    hydrated[uri] = deserialize_response_to_graphobjects(
+                        {"results": quads}, ClientWireFormat.JSON_QUADS
+                    )
+                else:
+                    hydrated[uri] = []
+            response.entity_graph_objects = hydrated
+        
+        return response

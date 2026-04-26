@@ -4,7 +4,7 @@ Pydantic models for KG entity operations including entities, frames, and slots.
 """
 
 from typing import Dict, List, Optional, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
@@ -69,6 +69,22 @@ class FrameCriteria(BaseModel):
     frame_criteria: Optional[List['FrameCriteria']] = Field(None, description="Nested frame criteria for hierarchical frame structures (parent→child frames)")
 
 
+# Allowed property URIs for entity_property sort type
+_ENTITY_SORT_PROPERTIES = {
+    "http://vital.ai/ontology/vital-core#hasName",
+    "http://vital.ai/ontology/vital#hasObjectModificationDateTime",
+    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime",
+    "http://vital.ai/ontology/vital-core#hasTimestamp",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType",
+}
+
+_VALID_SORT_TYPES = {
+    "entity_frame_slot", "frame_slot",
+    "source_frame_slot", "destination_frame_slot",
+    "entity_property",
+}
+
+
 class SortCriteria(BaseModel):
     """Criteria for sorting in KG queries.
     
@@ -77,17 +93,47 @@ class SortCriteria(BaseModel):
       - frame_slot: Sort frames by a slot value (Case 1)
       - source_frame_slot: Sort relations by source entity's slot value (Case 3)
       - destination_frame_slot: Sort relations by destination entity's slot value (Case 3)
+      - entity_property: Sort by a direct property on the entity node (e.g. hasName)
     
-    frame_path is an ordered list of frame type URIs from the anchor (entity/frame)
-    to the slot's parent frame. This disambiguates when the same slot type appears
-    under different frame hierarchies.
+    For slot-based sort types, slot_type and slot_class_uri are required.
+    For entity_property, property_uri is required and must be one of the
+    allowed sortable properties.
     """
-    sort_type: str = Field(..., description="Sort type: entity_frame_slot, frame_slot, source_frame_slot, or destination_frame_slot")
+    sort_type: str = Field(..., description="Sort type: entity_frame_slot, frame_slot, source_frame_slot, destination_frame_slot, or entity_property")
     frame_path: List[str] = Field(default_factory=list, description="Ordered frame type URIs from anchor to the slot's parent frame")
-    slot_type: str = Field(..., description="Slot type URI to sort by")
-    slot_class_uri: str = Field(..., description="Slot class URI (e.g. KGTextSlot, KGDoubleSlot) — determines value property")
+    slot_type: Optional[str] = Field(None, description="Slot type URI to sort by (required for slot-based sort types)")
+    slot_class_uri: Optional[str] = Field(None, description="Slot class URI (e.g. KGTextSlot, KGDoubleSlot) — required for slot-based sort types")
+    property_uri: Optional[str] = Field(None, description="Direct property URI — required when sort_type='entity_property'")
     sort_order: str = Field("asc", description="Sort order: asc or desc")
     priority: int = Field(1, description="Sort priority: 1=primary, 2=secondary, 3=tertiary, etc.")
+
+    @model_validator(mode='after')
+    def validate_sort_criteria(self) -> 'SortCriteria':
+        if self.sort_type not in _VALID_SORT_TYPES:
+            raise ValueError(
+                f"Invalid sort_type '{self.sort_type}'. "
+                f"Must be one of: {', '.join(sorted(_VALID_SORT_TYPES))}"
+            )
+        if self.sort_type == "entity_property":
+            if not self.property_uri:
+                raise ValueError(
+                    "property_uri is required when sort_type='entity_property'"
+                )
+            if self.property_uri not in _ENTITY_SORT_PROPERTIES:
+                raise ValueError(
+                    f"property_uri '{self.property_uri}' is not a sortable property. "
+                    f"Allowed: {', '.join(sorted(_ENTITY_SORT_PROPERTIES))}"
+                )
+        else:
+            if not self.slot_type:
+                raise ValueError(
+                    f"slot_type is required when sort_type='{self.sort_type}'"
+                )
+            if not self.slot_class_uri:
+                raise ValueError(
+                    f"slot_class_uri is required when sort_type='{self.sort_type}'"
+                )
+        return self
 
 
 class EntityQueryCriteria(BaseModel):

@@ -97,7 +97,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
         offset: int = 0, 
         entity_type_uri: Optional[str] = None, 
         search: Optional[str] = None, 
-        include_entity_graph: bool = False
+        include_entity_graph: bool = False,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
     ):
         """
         List KGEntities with pagination and optional filtering.
@@ -110,6 +112,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
             entity_type_uri: Optional entity type URI to filter by
             search: Optional search term
             include_entity_graph: If True, include complete entity graphs
+            sort_by: Optional property URI to sort by (e.g. vital-core:hasName)
+            sort_order: Sort direction — 'asc' or 'desc'
             
         Returns:
             PaginatedGraphObjectResponse if include_entity_graph=False
@@ -130,7 +134,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 offset=offset,
                 entity_type_uri=entity_type_uri,
                 search=search,
-                include_entity_graph=include_entity_graph
+                include_entity_graph=include_entity_graph,
+                sort_by=sort_by,
+                sort_order=sort_order if sort_by else None,
             )
             
             response = await self._make_request('GET', url, params=params)

@@ -92,7 +92,7 @@ class KGQueryResponse(BasePaginatedResponse):
     frame_results: Optional[List[FrameQueryResult]] = Field(None, description="Frame query results with entity refs (when query_type='frame_query')")
     # Case 2 (entity)
     entity_uris: Optional[List[str]] = Field(None, description="Matching entity URIs (when query_type='entity')")
-    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs keyed by entity URI (when include_entity_graph=True)")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by entity URI (when include_entity_graph=True)")
     # Case 3 (relation)
     relation_connections: Optional[List[RelationConnection]] = Field(None, description="Relation connections (when query_type='relation')")
     # Legacy (query_type='frame' — unchanged)
@@ -124,7 +124,8 @@ class KGEntityQueryResponse(BasePaginatedResponse):
     Named KGEntityQueryResponse to avoid collision with kgentities_model.EntityQueryResponse.
     """
     entity_uris: List[str] = Field(default_factory=list, description="Matching entity URIs")
-    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs keyed by URI (when include_entity_graph=True)")
+    entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by URI (when include_entity_graph=True)")
+    entity_graph_objects: Optional[Dict[str, List[Any]]] = Field(None, exclude=True, description="Hydrated GraphObjects keyed by URI (populated client-side only)")
 
     @classmethod
     def from_raw(cls, raw: 'KGQueryResponse') -> 'KGEntityQueryResponse':

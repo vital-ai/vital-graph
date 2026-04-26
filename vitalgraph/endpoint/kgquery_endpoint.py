@@ -26,81 +26,6 @@ from ..model.kgqueries_model import (
 from ..cache.entity_graph_cache import _entity_graph_cache
 
 
-# ---------------------------------------------------------------------------
-# Helpers: convert cached quads → property maps
-# ---------------------------------------------------------------------------
-
-_RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
-_VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
-_URI_PROP = 'http://vital.ai/ontology/vital-core#URIProp'
-_XSD_PREFIX = 'http://www.w3.org/2001/XMLSchema#'
-
-
-def _strip_angles(s: str) -> str:
-    """Remove surrounding angle brackets from an N-Quads URI term."""
-    return s[1:-1] if s.startswith('<') and s.endswith('>') else s
-
-
-def _parse_nquads_object(o: str):
-    """Parse an N-Quads object term into a Python value."""
-    if o.startswith('<') and o.endswith('>'):
-        return o[1:-1]
-    if '^^' in o:
-        val_part, dt_part = o.rsplit('^^', 1)
-        val = val_part.strip('"')
-        dt = dt_part.strip('<>')
-        if dt.startswith(_XSD_PREFIX):
-            local = dt[len(_XSD_PREFIX):]
-            if local in ('integer', 'int', 'long'):
-                try:
-                    return int(val)
-                except ValueError:
-                    return val
-            elif local in ('float', 'double', 'decimal'):
-                try:
-                    return float(val)
-                except ValueError:
-                    return val
-            elif local == 'boolean':
-                return val.lower() in ('true', '1')
-        return val
-    return o.strip('"')
-
-
-def _quads_to_property_maps(quads: List[Dict]) -> List[Dict[str, Any]]:
-    """Convert a list of cached quad dicts to the property-map format
-    used by KGQueryResponse.entity_graphs."""
-    subjects: Dict[str, Dict] = {}
-    for q in quads:
-        s = _strip_angles(q.get('s', ''))
-        p = _strip_angles(q.get('p', ''))
-        o_raw = q.get('o', '')
-        if not (s and p):
-            continue
-        if s not in subjects:
-            subjects[s] = {'type_uri': None, 'properties': {}}
-        if p in (_RDF_TYPE, _VITALTYPE):
-            subjects[s]['type_uri'] = _strip_angles(o_raw)
-            continue
-        if p == _URI_PROP:
-            continue
-        value = _parse_nquads_object(o_raw)
-        props = subjects[s]['properties']
-        if p in props:
-            existing = props[p]
-            if isinstance(existing, list):
-                existing.append(value)
-            else:
-                props[p] = [existing, value]
-        else:
-            props[p] = value
-    result = []
-    for s_uri, data in subjects.items():
-        if data['type_uri']:
-            result.append({'uri': s_uri, 'type': data['type_uri'], 'properties': data['properties']})
-    return result
-
-
 class KGQueriesEndpoint:
     """REST API endpoint for KG entity-to-entity connection queries."""
     
@@ -252,6 +177,7 @@ class KGQueriesEndpoint:
                         slot_type=sc.slot_type,
                         slot_class_uri=sc.slot_class_uri,
                         frame_path=sc.frame_path or [],
+                        property_uri=sc.property_uri,
                         sort_order=sc.sort_order,
                         priority=sc.priority
                     ) for sc in query_request.criteria.sort_criteria
@@ -368,6 +294,7 @@ class KGQueriesEndpoint:
                         slot_type=sc.slot_type,
                         slot_class_uri=sc.slot_class_uri,
                         frame_path=sc.frame_path or [],
+                        property_uri=sc.property_uri,
                         sort_order=sc.sort_order,
                         priority=sc.priority
                     ) for sc in criteria.sort_criteria
@@ -639,6 +566,7 @@ class KGQueriesEndpoint:
                         slot_type=sc.slot_type,
                         slot_class_uri=sc.slot_class_uri,
                         frame_path=sc.frame_path or [],
+                        property_uri=sc.property_uri,
                         sort_order=sc.sort_order,
                         priority=sc.priority
                     ) for sc in criteria.sort_criteria
@@ -819,20 +747,23 @@ class KGQueriesEndpoint:
     ) -> Dict[str, List[Dict[str, Any]]]:
         """Fetch complete entity graphs for a list of entity URIs.
         
+        Returns quads in the standard JSON-Quad wire format ({s, p, o, g})
+        — the same format used by the kgentities endpoints.
+        
         Checks the entity graph cache first; only SPARQL-queries the
-        cache misses.  Freshly fetched results are NOT written back to
-        the quad cache here because this path produces property maps,
-        not quads — the kgentities GET path handles quad caching.
+        cache misses.  Freshly fetched results are written back to the
+        quad cache for subsequent requests.
         """
         _effective_graph = graph_id or "default"
+        g_encoded = f"<{graph_id}>" if graph_id else None
         result: Dict[str, List[Dict[str, Any]]] = {}
         miss_uris: List[str] = []
 
-        # 1. Check cache per entity URI
+        # 1. Check cache per entity URI — cache already stores quad dicts
         for uri in entity_uris:
             cached_quads = _entity_graph_cache.get(space_id, _effective_graph, uri)
             if cached_quads is not None:
-                result[uri] = _quads_to_property_maps(cached_quads)
+                result[uri] = cached_quads
             else:
                 miss_uris.append(uri)
 
@@ -880,69 +811,48 @@ class KGQueriesEndpoint:
         if not bindings:
             return result
         
-        # 3. Build property maps from SPARQL bindings
+        # 3. Convert SPARQL bindings → N-Quads-encoded quad dicts
         _XSD = 'http://www.w3.org/2001/XMLSchema#'
-        by_entity: Dict[str, Dict[str, Dict]] = {uri: {} for uri in miss_uris}
         
         for b in bindings:
             e_uri = b.get('entity_uri', {}).get('value', '')
-            s = b.get('s', {}).get('value', '')
-            p = b.get('p', {}).get('value', '')
+            s_val = b.get('s', {}).get('value', '')
+            p_val = b.get('p', {}).get('value', '')
             o_data = b.get('o', {})
             o_val = o_data.get('value')
-            if not (e_uri and s and p and o_val is not None):
+            if not (e_uri and s_val and p_val and o_val is not None):
                 continue
-            if e_uri not in by_entity:
+            if e_uri not in result:
                 continue
             
-            subjects = by_entity[e_uri]
-            if s not in subjects:
-                subjects[s] = {'type_uri': None, 'properties': {}}
-            
-            if p in (_RDF_TYPE, _VITALTYPE):
-                subjects[s]['type_uri'] = o_val
-                continue
-            if p == _URI_PROP:
-                continue
+            # Encode as N-Quads terms (same format as graphobjects_to_quad_list)
+            s_enc = f"<{s_val}>"
+            p_enc = f"<{p_val}>"
             
             o_type = o_data.get('type', 'literal')
             if o_type == 'uri':
-                value = o_val
+                o_enc = f"<{o_val}>"
+            elif o_type == 'bnode':
+                o_enc = f"_:{o_val}"
             else:
+                # Literal — include datatype or language tag
+                escaped = o_val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                lang = o_data.get('xml:lang')
                 dt = o_data.get('datatype', '')
-                if dt.startswith(_XSD):
-                    local = dt[len(_XSD):]
-                    if local in ('integer', 'int', 'long'):
-                        value = int(o_val)
-                    elif local in ('float', 'double', 'decimal'):
-                        value = float(o_val)
-                    elif local == 'boolean':
-                        value = o_val.lower() in ('true', '1')
-                    else:
-                        value = o_val
+                if lang:
+                    o_enc = f'"{escaped}"@{lang}'
+                elif dt and dt != f'{_XSD}string':
+                    o_enc = f'"{escaped}"^^<{dt}>'
                 else:
-                    value = o_val
+                    o_enc = f'"{escaped}"'
             
-            props = subjects[s]['properties']
-            if p in props:
-                existing = props[p]
-                if isinstance(existing, list):
-                    existing.append(value)
-                else:
-                    props[p] = [existing, value]
-            else:
-                props[p] = value
+            result[e_uri].append({'s': s_enc, 'p': p_enc, 'o': o_enc, 'g': g_encoded})
         
-        for e_uri in miss_uris:
-            objects = []
-            for s_uri, data in by_entity.get(e_uri, {}).items():
-                if data['type_uri']:
-                    objects.append({
-                        'uri': s_uri,
-                        'type': data['type_uri'],
-                        'properties': data['properties']
-                    })
-            result[e_uri] = objects
+        # 4. Write freshly fetched quads to cache
+        for uri in miss_uris:
+            quads = result.get(uri, [])
+            if quads:
+                _entity_graph_cache.put(space_id, _effective_graph, uri, quads)
         
         return result
     

@@ -45,11 +45,15 @@ class SortCriteria:
     frame_path is an ordered list of frame type URIs from the anchor
     (entity/frame) to the slot's parent frame, disambiguating the same
     slot type under different frame hierarchies.
+    
+    For entity_property sort_type, only property_uri is used — the sort
+    binds directly to a property on the entity node (e.g. hasName).
     """
-    sort_type: str  # "entity_frame_slot" | "frame_slot" | "source_frame_slot" | "destination_frame_slot"
-    slot_type: str  # Slot type URI to sort by
-    slot_class_uri: str  # Slot class URI (e.g. KGTextSlot) — determines value property
+    sort_type: str  # "entity_frame_slot" | "frame_slot" | "source_frame_slot" | "destination_frame_slot" | "entity_property"
+    slot_type: Optional[str] = None  # Slot type URI to sort by (required for slot-based sort types)
+    slot_class_uri: Optional[str] = None  # Slot class URI (e.g. KGTextSlot) — determines value property
     frame_path: Optional[List[str]] = None  # Ordered frame type URIs from anchor to slot's parent frame
+    property_uri: Optional[str] = None  # Direct property URI — required for entity_property sort_type
     sort_order: str = "asc"  # "asc" | "desc"
     priority: int = 1  # 1=primary, 2=secondary, 3=tertiary, etc.
 
@@ -579,8 +583,9 @@ class KGQueryCriteriaBuilder:
         """Build SPARQL COUNT query for entity search with criteria.
         
         Uses the same full WHERE clause as ``build_entity_query_sparql``
-        (including frame criteria, slot criteria, and all filters) so
-        the count is consistent with the paginated results.
+        (including frame criteria, slot criteria, sort join patterns,
+        and all filters) so the count is consistent with the paginated
+        results.
         
         Args:
             criteria: Entity query criteria
@@ -591,15 +596,35 @@ class KGQueryCriteriaBuilder:
         """
         where_clause = self._build_entity_where_clause(criteria)
         
-        query = f"""
-        {self.prefixes}
+        # Include sort join patterns so that entities lacking the sort
+        # slot are excluded from the count (matching paginated query).
+        sort_extra_where = ""
+        if criteria.sort_criteria:
+            sort_patterns, _sort_vars, _order_by = self._build_sort_bindings(
+                criteria.sort_criteria, anchor_var="entity",
+                use_edge_pattern=criteria.use_edge_pattern
+            )
+            if sort_patterns:
+                sort_extra_where = " " + " ".join(sort_patterns)
         
-        SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {{
-            GRAPH <{graph_id}> {{
-                {where_clause}
+        if graph_id is None:
+            query = f"""
+            {self.prefixes}
+            
+            SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {{
+                {where_clause}{sort_extra_where}
             }}
-        }}
-        """
+            """
+        else:
+            query = f"""
+            {self.prefixes}
+            
+            SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {{
+                GRAPH <{graph_id}> {{
+                    {where_clause}{sort_extra_where}
+                }}
+            }}
+            """
         
         return query.strip()
     
@@ -1016,6 +1041,17 @@ class KGQueryCriteriaBuilder:
         for idx, sc in enumerate(sorted_criteria):
             sort_val_var = f"sort_val_{idx}"
             select_vars.append(f"?{sort_val_var}")
+            
+            # entity_property: single triple on the anchor node
+            if sc.sort_type == "entity_property":
+                if not sc.property_uri:
+                    raise ValueError("property_uri is required for entity_property sort_type")
+                patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{sort_val_var} .")
+                if sc.sort_order.lower() == "desc":
+                    order_terms.append(f"DESC(?{sort_val_var})")
+                else:
+                    order_terms.append(f"ASC(?{sort_val_var})")
+                continue
             
             frame_path = sc.frame_path or []
             value_property = self._get_slot_value_property(slot_class_uri=sc.slot_class_uri)
