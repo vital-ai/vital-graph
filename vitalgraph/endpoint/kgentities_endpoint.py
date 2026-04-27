@@ -93,6 +93,7 @@ class KGEntitiesEndpoint:
         _effective_graph = graph_id or "default"
         try:
             _entity_graph_cache.invalidate(space_id, _effective_graph, entity_uri)
+            self.logger.info(f"🗑️ Entity cache LOCAL invalidation: {entity_uri} ({signal_type})")
         except Exception as e:
             self.logger.warning(f"Entity graph cache local invalidation failed: {e}")
         try:
@@ -102,8 +103,11 @@ class KGEntitiesEndpoint:
                 sm = getattr(backend, 'get_signal_manager', lambda: None)() if backend else None
                 if sm:
                     await sm.notify_entity_graph_changed(space_id, _effective_graph, entity_uri, signal_type)
+                    self.logger.info(f"📡 Entity cache NOTIFY sent: {entity_uri} ({signal_type})")
+                else:
+                    self.logger.warning(f"⚠️ Entity cache NOTIFY skipped — no signal_manager on backend {type(backend).__name__}")
         except Exception as e:
-            self.logger.debug(f"Entity graph cache NOTIFY failed (non-critical): {e}")
+            self.logger.warning(f"⚠️ Entity cache NOTIFY failed: {entity_uri} — {e}")
 
     def _setup_routes(self):
         """Setup FastAPI routes for KG entities management."""

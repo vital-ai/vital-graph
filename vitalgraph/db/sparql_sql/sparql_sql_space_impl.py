@@ -1429,7 +1429,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
         }
 
     def get_signal_manager(self):
-        return self._signal_manager
+        return self._signal_manager or (
+            self.db_impl.get_signal_manager() if self.db_impl else None)
 
     def set_signal_manager(self, signal_manager):
         self._signal_manager = signal_manager

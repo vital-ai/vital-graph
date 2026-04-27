@@ -415,8 +415,10 @@ class VitalGraphAppImpl:
                                 entity_uri = data.get("entity_uri", "")
                                 if space_id and graph_id and entity_uri:
                                     _entity_graph_cache.invalidate(space_id, graph_id, entity_uri)
+                                    self.logger.info(f"📡 Entity cache NOTIFY received — invalidated {entity_uri}")
                                 elif space_id and graph_id:
                                     _entity_graph_cache.invalidate_graph(space_id, graph_id)
+                                    self.logger.info(f"📡 Entity cache NOTIFY received — invalidated graph {graph_id}")
 
                             async def _handle_graph_entity_cache(data: dict):
                                 signal_type = data.get("type", "")
