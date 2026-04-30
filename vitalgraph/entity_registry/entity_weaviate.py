@@ -112,9 +112,17 @@ class EntityWeaviateIndex:
 
         Retries up to 3 times with exponential backoff on transient errors
         (e.g. ConnectTimeout) so long-running jobs aren't killed by blips.
+        Skips reconnect if we just reconnected within the last 30 seconds
+        to avoid double-reconnect during multi-step entity operations.
         """
         if self._needs_reconnect and self._pending_client:
-            import asyncio
+            # Grace period: don't reconnect again if we just did
+            now = time.time()
+            if hasattr(self, '_last_reconnect_time') and (now - self._last_reconnect_time) < 30:
+                self._needs_reconnect = False
+                self._pending_client = None
+                logger.debug("Skipping reconnect — within 30s grace period")
+                return
             import warnings
             old_client = self.client
             self.client = self._pending_client
@@ -134,6 +142,7 @@ class EntityWeaviateIndex:
             self._location_collection = None
             self._needs_reconnect = False
             self._pending_client = None
+            self._last_reconnect_time = time.time()
             logger.info("Weaviate async client reconnected")
             try:
                 with warnings.catch_warnings():
@@ -437,17 +446,17 @@ class EntityWeaviateIndex:
                         uuid=obj_uuid,
                         properties=properties,
                     )
-                    logger.debug(f"Updated entity {entity_id} in Weaviate")
+                    logger.info(f"Updated entity {entity_id} in Weaviate")
                     return True
-            except Exception:
-                pass
+            except Exception as fetch_err:
+                logger.debug(f"fetch_object_by_id for {entity_id} failed: {fetch_err}")
 
             # Insert new
             await self.collection.data.insert(
                 uuid=obj_uuid,
                 properties=properties,
             )
-            logger.debug(f"Inserted entity {entity_id} into Weaviate")
+            logger.info(f"Inserted entity {entity_id} into Weaviate")
             return True
 
         except Exception as e:
@@ -503,7 +512,10 @@ class EntityWeaviateIndex:
     # ------------------------------------------------------------------
 
     async def upsert_location(self, location: dict) -> bool:
-        """Upsert a single location into LocationIndex with cross-ref to EntityIndex.
+        """Upsert a single location into LocationIndex (data only, no cross-refs).
+
+        Cross-references should be set separately after both entity and
+        location objects exist in Weaviate.
 
         Args:
             location: Location dict with entity_id, location_id, and address fields.
@@ -513,13 +525,8 @@ class EntityWeaviateIndex:
         await self._ensure_connected()
         try:
             loc_id = location['location_id']
-            entity_id = location['entity_id']
             obj_uuid = location_id_to_weaviate_uuid(loc_id)
-            entity_uuid = entity_id_to_weaviate_uuid(entity_id)
             properties = location_to_weaviate_properties(location)
-
-            # Cross-reference to the owning entity
-            references = {"entity": entity_uuid}
 
             try:
                 existing = await self.location_collection.query.fetch_object_by_id(obj_uuid)
@@ -527,19 +534,17 @@ class EntityWeaviateIndex:
                     await self.location_collection.data.update(
                         uuid=obj_uuid,
                         properties=properties,
-                        references=references,
                     )
-                    logger.debug(f"Updated location {loc_id} in Weaviate")
+                    logger.info(f"Updated location {loc_id} in Weaviate")
                     return True
-            except Exception:
-                pass
+            except Exception as fetch_err:
+                logger.debug(f"fetch_object_by_id for location {loc_id} failed: {fetch_err}")
 
             await self.location_collection.data.insert(
                 uuid=obj_uuid,
                 properties=properties,
-                references=references,
             )
-            logger.debug(f"Inserted location {loc_id} into Weaviate")
+            logger.info(f"Inserted location {loc_id} into Weaviate")
             return True
 
         except Exception as e:
@@ -599,20 +604,50 @@ class EntityWeaviateIndex:
         """Set the locations cross-reference on an EntityIndex object.
 
         Replaces any existing location refs with the given list.
+        Retries up to 3 times to tolerate replication delay after entity insert.
         """
         await self._ensure_connected()
-        try:
-            entity_uuid = entity_id_to_weaviate_uuid(entity_id)
-            loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in location_ids]
-            # Replace all location refs
-            await self.collection.data.reference_replace(
-                from_uuid=entity_uuid,
-                from_property="locations",
-                to=loc_uuids,
-            )
-            logger.debug(f"Set {len(loc_uuids)} location refs on entity {entity_id}")
-        except Exception as e:
-            logger.error(f"Failed to set location refs for entity {entity_id}: {e}")
+        entity_uuid = entity_id_to_weaviate_uuid(entity_id)
+        loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in location_ids]
+        for attempt in range(1, 4):
+            try:
+                await self.collection.data.reference_replace(
+                    from_uuid=entity_uuid,
+                    from_property="locations",
+                    to=loc_uuids,
+                )
+                logger.debug(f"Set {len(loc_uuids)} location refs on entity {entity_id}")
+                return
+            except Exception as e:
+                if attempt < 3:
+                    logger.debug(f"set_entity_location_refs attempt {attempt} failed for {entity_id}: {e} — retrying in {attempt}s")
+                    await asyncio.sleep(attempt)
+                else:
+                    logger.warning(f"Failed to set location refs for entity {entity_id} after 3 attempts: {e}")
+
+    async def set_location_entity_ref(self, location_id: int, entity_id: str):
+        """Set the entity cross-reference on a LocationIndex object.
+
+        Retries up to 3 times to tolerate replication delay after entity insert.
+        """
+        await self._ensure_connected()
+        loc_uuid = location_id_to_weaviate_uuid(location_id)
+        entity_uuid = entity_id_to_weaviate_uuid(entity_id)
+        for attempt in range(1, 4):
+            try:
+                await self.location_collection.data.reference_replace(
+                    from_uuid=loc_uuid,
+                    from_property="entity",
+                    to=[entity_uuid],
+                )
+                logger.debug(f"Set entity ref on location {location_id}")
+                return
+            except Exception as e:
+                if attempt < 3:
+                    logger.debug(f"set_location_entity_ref attempt {attempt} failed for location {location_id}: {e} — retrying in {attempt}s")
+                    await asyncio.sleep(attempt)
+                else:
+                    logger.warning(f"Failed to set entity ref on location {location_id} after 3 attempts: {e}")
 
     # ------------------------------------------------------------------
     # Full sync from PostgreSQL
