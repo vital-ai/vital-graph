@@ -8,7 +8,7 @@ performing semantic topic search via vector similarity.
 import asyncio
 import logging
 import os
-import threading
+from contextlib import asynccontextmanager
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,21 +50,15 @@ class EntityWeaviateIndex:
     - Combined topic + geo queries via cross-reference traversal
     """
 
-    def __init__(self, client, collection_name: Optional[str] = None,
+    def __init__(self, client=None, collection_name: Optional[str] = None,
                  location_collection_name: Optional[str] = None):
         self.client = client
         self.collection_name = collection_name or get_collection_name()
         self.location_collection_name = location_collection_name or get_location_collection_name()
         self._collection = None
         self._location_collection = None
-        self._refresh_thread = None
-        self._stop_refresh = threading.Event()
-        # Connection params for reconnect (set by from_env)
+        # Connection params (set by from_env); enables fresh-connection-per-request
         self._connect_params = None
-        self._token_expires_in = 60
-        # Lazy reconnect support for async token refresh
-        self._needs_reconnect = False
-        self._pending_client = None
 
     @staticmethod
     def _create_client(token_data: dict, http_host: str, grpc_host: str,
@@ -92,71 +86,60 @@ class EntityWeaviateIndex:
             ),
         )
 
-    def _reconnect(self):
-        """Get a fresh token and prepare a new async client for lazy reconnect."""
+    async def _ensure_connected(self):
+        """Close any existing client and create a fresh connection with a new token.
+
+        Used by bulk/admin/search methods that operate on self.client.
+        Individual entity operations use _fresh_connection() instead
+        for concurrent safety.
+        """
         if not self._connect_params:
             return
-        try:
-            token_data = EntityWeaviateIndex._get_jwt_token()
-            if not token_data:
-                logger.error("Token refresh failed: could not get new JWT")
-                return
-            self._pending_client = self._create_client(token_data, **self._connect_params)
-            self._needs_reconnect = True
-            logger.info("Weaviate token refreshed — reconnect pending")
-        except Exception as e:
-            logger.error(f"Weaviate reconnect failed: {e}")
-
-    async def _ensure_connected(self):
-        """If a token refresh created a pending client, swap and connect it.
-
-        Retries up to 3 times with exponential backoff on transient errors
-        (e.g. ConnectTimeout) so long-running jobs aren't killed by blips.
-        """
-        if self._needs_reconnect and self._pending_client:
-            import asyncio
-            import warnings
-            old_client = self.client
-            self.client = self._pending_client
-            max_retries = 3
-            for attempt in range(1, max_retries + 1):
-                try:
-                    await self.client.connect()
-                    break
-                except Exception as e:
-                    if attempt == max_retries:
-                        raise
-                    wait = 5 * attempt
-                    logger.warning(f"Weaviate reconnect attempt {attempt}/{max_retries} failed: {e} "
-                                   f"— retrying in {wait}s")
-                    await asyncio.sleep(wait)
-            self._collection = None
-            self._location_collection = None
-            self._needs_reconnect = False
-            self._pending_client = None
-            logger.info("Weaviate async client reconnected")
+        t0 = time.time()
+        old_client = self.client
+        if old_client:
             try:
+                import warnings
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", ResourceWarning)
                     await old_client.close()
             except Exception:
                 pass
+        token_data = EntityWeaviateIndex._get_jwt_token()
+        if not token_data:
+            raise RuntimeError("Failed to obtain fresh JWT token for Weaviate")
+        self.client = self._create_client(token_data, **self._connect_params)
+        await self.client.connect()
+        self._collection = None
+        self._location_collection = None
+        elapsed_ms = (time.time() - t0) * 1000
+        logger.debug(f"[weaviate] reconnected with fresh token ({elapsed_ms:.0f}ms)")
 
-    def _start_token_refresh(self, expires_in: int):
-        """Start a daemon thread that refreshes the token before expiry."""
-        self._token_expires_in = expires_in
-        refresh_interval = max(expires_in - 30, 30)  # refresh 30s before expiry
+    @asynccontextmanager
+    async def _fresh_connection(self):
+        """Async context manager: yields a connected Weaviate client with a fresh JWT.
 
-        def _refresh_loop():
-            while not self._stop_refresh.wait(timeout=refresh_interval):
-                self._reconnect()
-
-        self._refresh_thread = threading.Thread(
-            target=_refresh_loop, daemon=True, name="WeaviateTokenRefresh",
-        )
-        self._refresh_thread.start()
-        logger.info(f"Weaviate token refresh thread started "
-                    f"(interval={refresh_interval}s, token_expires_in={expires_in}s)")
+        Each call gets its own independent client and connection, making this
+        safe for concurrent use across multiple async request handlers.
+        Eliminates token expiry issues entirely.
+        """
+        if not self._connect_params:
+            raise RuntimeError("Weaviate not configured — was from_env() called?")
+        t0 = time.time()
+        token_data = EntityWeaviateIndex._get_jwt_token()
+        if not token_data:
+            raise RuntimeError("Failed to obtain JWT token for Weaviate")
+        client = self._create_client(token_data, **self._connect_params)
+        try:
+            await client.connect()
+            elapsed_ms = (time.time() - t0) * 1000
+            logger.debug(f"[weaviate] fresh connection opened ({elapsed_ms:.0f}ms)")
+            yield client
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
     @staticmethod
     async def from_env() -> Optional['EntityWeaviateIndex']:
@@ -211,26 +194,35 @@ class EntityWeaviateIndex:
                 'grpc_port': grpc_port,
             }
 
-            client = EntityWeaviateIndex._create_client(token_data, **connect_params)
-            await client.connect()
+            # Verify connectivity with a test connection
+            test_client = EntityWeaviateIndex._create_client(token_data, **connect_params)
+            try:
+                await test_client.connect()
+                logger.info(f"[weaviate] test connection to {http_host} successful")
+            except Exception as e:
+                logger.error(f"Failed to connect to Weaviate at {http_host}: {e}")
+                return None
+            finally:
+                try:
+                    await test_client.close()
+                except Exception:
+                    pass
 
             collection_name = get_collection_name()
             location_collection_name = get_location_collection_name()
             index = EntityWeaviateIndex(
-                client, collection_name=collection_name,
+                collection_name=collection_name,
                 location_collection_name=location_collection_name,
             )
             index._connect_params = connect_params
 
-            expires_in = token_data.get('expires_in', 60)
-            index._start_token_refresh(expires_in)
-
-            logger.info(f"Entity Weaviate index connected to {http_host} "
-                         f"(entity={collection_name}, location={location_collection_name})")
+            logger.info(f"Entity Weaviate index configured for {http_host} "
+                         f"(entity={collection_name}, location={location_collection_name}, "
+                         f"mode=fresh-connection-per-request)")
             return index
 
         except Exception as e:
-            logger.error(f"Failed to connect to Weaviate: {e}")
+            logger.error(f"Failed to initialize Weaviate: {e}")
             return None
 
     @staticmethod
@@ -248,6 +240,7 @@ class EntityWeaviateIndex:
             logger.error("Missing Weaviate Keycloak credentials in environment")
             return None
 
+        t0 = time.time()
         try:
             response = requests.post(
                 keycloak_url,
@@ -262,9 +255,15 @@ class EntityWeaviateIndex:
                 timeout=10,
             )
             response.raise_for_status()
-            return response.json()
+            token_data = response.json()
+            elapsed_ms = (time.time() - t0) * 1000
+            expires_in = token_data.get('expires_in', '?')
+            logger.debug(f"[weaviate] JWT token obtained ({elapsed_ms:.0f}ms, "
+                         f"expires_in={expires_in}s)")
+            return token_data
         except Exception as e:
-            logger.error(f"Failed to get Weaviate JWT token: {e}")
+            elapsed_ms = (time.time() - t0) * 1000
+            logger.error(f"[weaviate] JWT token request FAILED ({elapsed_ms:.0f}ms): {e}")
             return None
 
     # ------------------------------------------------------------------
@@ -410,57 +409,71 @@ class EntityWeaviateIndex:
     # ------------------------------------------------------------------
 
     async def upsert_entity(self, entity: dict) -> bool:
-        """Upsert a single entity into Weaviate.
+        """Upsert a single entity into Weaviate using a fresh connection.
 
         Args:
             entity: Entity dict with aliases and categories included.
 
         Returns True on success.
         """
-        await self._ensure_connected()
+        entity_id = entity.get('entity_id', '?')
+        t0 = time.time()
+        logger.info(f"[weaviate] upsert_entity START entity_id={entity_id}")
         try:
-            entity_id = entity['entity_id']
-            obj_uuid = entity_id_to_weaviate_uuid(entity_id)
-            properties = entity_to_weaviate_properties(entity)
+            async with self._fresh_connection() as client:
+                collection = client.collections.use(self.collection_name)
+                obj_uuid = entity_id_to_weaviate_uuid(entity_id)
+                properties = entity_to_weaviate_properties(entity)
 
-            # Check if object exists
-            try:
-                existing = await self.collection.query.fetch_object_by_id(obj_uuid)
-                if existing:
-                    await self.collection.data.update(
-                        uuid=obj_uuid,
-                        properties=properties,
-                    )
-                    logger.debug(f"Updated entity {entity_id} in Weaviate")
-                    return True
-            except Exception:
-                pass
+                try:
+                    existing = await collection.query.fetch_object_by_id(obj_uuid)
+                    if existing:
+                        await collection.data.update(
+                            uuid=obj_uuid,
+                            properties=properties,
+                        )
+                        elapsed = time.time() - t0
+                        logger.info(f"[weaviate] upsert_entity UPDATED entity_id={entity_id} "
+                                    f"uuid={obj_uuid} ({elapsed:.3f}s)")
+                        return True
+                except Exception as fetch_err:
+                    logger.info(f"[weaviate] upsert_entity fetch failed for {entity_id}, "
+                                f"will insert: {fetch_err}")
 
-            # Insert new
-            await self.collection.data.insert(
-                uuid=obj_uuid,
-                properties=properties,
-            )
-            logger.debug(f"Inserted entity {entity_id} into Weaviate")
-            return True
+                await collection.data.insert(
+                    uuid=obj_uuid,
+                    properties=properties,
+                )
+                elapsed = time.time() - t0
+                logger.info(f"[weaviate] upsert_entity INSERTED entity_id={entity_id} "
+                            f"uuid={obj_uuid} ({elapsed:.3f}s)")
+                return True
 
         except Exception as e:
-            logger.error(f"Failed to upsert entity {entity.get('entity_id')} in Weaviate: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"[weaviate] upsert_entity FAILED entity_id={entity_id} "
+                         f"({elapsed:.3f}s): {e}", exc_info=True)
             return False
 
     async def delete_entity(self, entity_id: str) -> bool:
-        """Delete a single entity from Weaviate.
+        """Delete a single entity from Weaviate using a fresh connection.
 
         Returns True if deleted or didn't exist.
         """
-        await self._ensure_connected()
+        t0 = time.time()
+        logger.info(f"[weaviate] delete_entity START entity_id={entity_id}")
         try:
-            obj_uuid = entity_id_to_weaviate_uuid(entity_id)
-            await self.collection.data.delete_by_id(obj_uuid)
-            logger.debug(f"Deleted entity {entity_id} from Weaviate")
-            return True
+            async with self._fresh_connection() as client:
+                collection = client.collections.use(self.collection_name)
+                obj_uuid = entity_id_to_weaviate_uuid(entity_id)
+                await collection.data.delete_by_id(obj_uuid)
+                elapsed = time.time() - t0
+                logger.info(f"[weaviate] delete_entity OK entity_id={entity_id} ({elapsed:.3f}s)")
+                return True
         except Exception as e:
-            logger.error(f"Failed to delete entity {entity_id} from Weaviate: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"[weaviate] delete_entity FAILED entity_id={entity_id} "
+                         f"({elapsed:.3f}s): {e}", exc_info=True)
             return False
 
     async def upsert_entities_batch(self, entities: List[dict]) -> int:
@@ -497,62 +510,75 @@ class EntityWeaviateIndex:
     # ------------------------------------------------------------------
 
     async def upsert_location(self, location: dict) -> bool:
-        """Upsert a single location into LocationIndex with cross-ref to EntityIndex.
+        """Upsert a single location into LocationIndex using a fresh connection.
 
         Args:
             location: Location dict with entity_id, location_id, and address fields.
 
         Returns True on success.
         """
-        await self._ensure_connected()
+        loc_id = location.get('location_id', '?')
+        entity_id = location.get('entity_id', '?')
+        t0 = time.time()
+        logger.info(f"[weaviate] upsert_location START loc_id={loc_id} entity_id={entity_id}")
         try:
-            loc_id = location['location_id']
-            entity_id = location['entity_id']
-            obj_uuid = location_id_to_weaviate_uuid(loc_id)
-            entity_uuid = entity_id_to_weaviate_uuid(entity_id)
-            properties = location_to_weaviate_properties(location)
+            async with self._fresh_connection() as client:
+                loc_collection = client.collections.use(self.location_collection_name)
+                obj_uuid = location_id_to_weaviate_uuid(loc_id)
+                entity_uuid = entity_id_to_weaviate_uuid(entity_id)
+                properties = location_to_weaviate_properties(location)
+                references = {"entity": entity_uuid}
 
-            # Cross-reference to the owning entity
-            references = {"entity": entity_uuid}
+                try:
+                    existing = await loc_collection.query.fetch_object_by_id(obj_uuid)
+                    if existing:
+                        await loc_collection.data.update(
+                            uuid=obj_uuid,
+                            properties=properties,
+                            references=references,
+                        )
+                        elapsed = time.time() - t0
+                        logger.info(f"[weaviate] upsert_location UPDATED loc_id={loc_id} "
+                                    f"({elapsed:.3f}s)")
+                        return True
+                except Exception as fetch_err:
+                    logger.info(f"[weaviate] upsert_location fetch failed for loc_id={loc_id}, "
+                                f"will insert: {fetch_err}")
 
-            try:
-                existing = await self.location_collection.query.fetch_object_by_id(obj_uuid)
-                if existing:
-                    await self.location_collection.data.update(
-                        uuid=obj_uuid,
-                        properties=properties,
-                        references=references,
-                    )
-                    logger.debug(f"Updated location {loc_id} in Weaviate")
-                    return True
-            except Exception:
-                pass
-
-            await self.location_collection.data.insert(
-                uuid=obj_uuid,
-                properties=properties,
-                references=references,
-            )
-            logger.debug(f"Inserted location {loc_id} into Weaviate")
-            return True
+                await loc_collection.data.insert(
+                    uuid=obj_uuid,
+                    properties=properties,
+                    references=references,
+                )
+                elapsed = time.time() - t0
+                logger.info(f"[weaviate] upsert_location INSERTED loc_id={loc_id} ({elapsed:.3f}s)")
+                return True
 
         except Exception as e:
-            logger.error(f"Failed to upsert location {location.get('location_id')} in Weaviate: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"[weaviate] upsert_location FAILED loc_id={loc_id} "
+                         f"({elapsed:.3f}s): {e}", exc_info=True)
             return False
 
     async def delete_location(self, location_id: int) -> bool:
-        """Delete a single location from LocationIndex.
+        """Delete a single location from LocationIndex using a fresh connection.
 
         Returns True if deleted or didn't exist.
         """
-        await self._ensure_connected()
+        t0 = time.time()
+        logger.info(f"[weaviate] delete_location START loc_id={location_id}")
         try:
-            obj_uuid = location_id_to_weaviate_uuid(location_id)
-            await self.location_collection.data.delete_by_id(obj_uuid)
-            logger.debug(f"Deleted location {location_id} from Weaviate")
-            return True
+            async with self._fresh_connection() as client:
+                loc_collection = client.collections.use(self.location_collection_name)
+                obj_uuid = location_id_to_weaviate_uuid(location_id)
+                await loc_collection.data.delete_by_id(obj_uuid)
+                elapsed = time.time() - t0
+                logger.info(f"[weaviate] delete_location OK loc_id={location_id} ({elapsed:.3f}s)")
+                return True
         except Exception as e:
-            logger.error(f"Failed to delete location {location_id} from Weaviate: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"[weaviate] delete_location FAILED loc_id={location_id} "
+                         f"({elapsed:.3f}s): {e}", exc_info=True)
             return False
 
     async def upsert_locations_batch(self, locations: List[dict]) -> int:
@@ -590,23 +616,30 @@ class EntityWeaviateIndex:
             return 0
 
     async def set_entity_location_refs(self, entity_id: str, location_ids: List[int]):
-        """Set the locations cross-reference on an EntityIndex object.
+        """Set locations cross-reference on an EntityIndex object using a fresh connection.
 
         Replaces any existing location refs with the given list.
         """
-        await self._ensure_connected()
+        t0 = time.time()
+        logger.info(f"[weaviate] set_entity_location_refs START entity_id={entity_id} "
+                    f"loc_count={len(location_ids)}")
         try:
-            entity_uuid = entity_id_to_weaviate_uuid(entity_id)
-            loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in location_ids]
-            # Replace all location refs
-            await self.collection.data.reference_replace(
-                from_uuid=entity_uuid,
-                from_property="locations",
-                to=loc_uuids,
-            )
-            logger.debug(f"Set {len(loc_uuids)} location refs on entity {entity_id}")
+            async with self._fresh_connection() as client:
+                collection = client.collections.use(self.collection_name)
+                entity_uuid = entity_id_to_weaviate_uuid(entity_id)
+                loc_uuids = [location_id_to_weaviate_uuid(lid) for lid in location_ids]
+                await collection.data.reference_replace(
+                    from_uuid=entity_uuid,
+                    from_property="locations",
+                    to=loc_uuids,
+                )
+                elapsed = time.time() - t0
+                logger.info(f"[weaviate] set_entity_location_refs OK entity_id={entity_id} "
+                            f"loc_count={len(loc_uuids)} ({elapsed:.3f}s)")
         except Exception as e:
-            logger.error(f"Failed to set location refs for entity {entity_id}: {e}")
+            elapsed = time.time() - t0
+            logger.error(f"[weaviate] set_entity_location_refs FAILED entity_id={entity_id} "
+                         f"({elapsed:.3f}s): {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Full sync from PostgreSQL
@@ -2062,10 +2095,11 @@ class EntityWeaviateIndex:
         return combined
 
     async def close(self):
-        """Close the Weaviate client connection."""
+        """Close any active Weaviate client connection."""
         try:
-            self._stop_refresh.set()
-            await self.client.close()
-            logger.info("Weaviate client closed")
+            if self.client:
+                await self.client.close()
+                self.client = None
+                logger.info("[weaviate] client closed")
         except Exception as e:
-            logger.warning(f"Error closing Weaviate client: {e}")
+            logger.warning(f"[weaviate] error closing client: {e}")
