@@ -53,6 +53,7 @@ def _bindings_to_objects(bindings: List[Dict]) -> List[Any]:
     Bypasses rdflib entirely for maximum throughput.
     """
     from vital_ai_vitalsigns.model.GraphObject import GraphObject
+    from vital_ai_vitalsigns.impl.annotation_registry import is_annotation_property
 
     subjects: Dict[str, Dict] = defaultdict(
         lambda: {'type_uri': None, 'properties': {}}
@@ -77,7 +78,11 @@ def _bindings_to_objects(bindings: List[Dict]) -> List[Any]:
         if o_type == 'uri':
             value = o_val
         else:
-            value = _convert_literal(o_val, o_data.get('datatype'))
+            lang = o_data.get('xml:lang')
+            if lang and is_annotation_property(p):
+                value = {"value": o_val, "lang": lang}
+            else:
+                value = _convert_literal(o_val, o_data.get('datatype'))
 
         props = subjects[s]['properties']
         if p in props:

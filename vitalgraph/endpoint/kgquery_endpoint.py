@@ -24,6 +24,7 @@ from ..model.kgqueries_model import (
     FrameQueryResult
 )
 from ..cache.entity_graph_cache import _entity_graph_cache
+from ..cache.count_cache import _count_cache
 
 
 class KGQueriesEndpoint:
@@ -190,19 +191,71 @@ class KGQueriesEndpoint:
                     builder_sort_criteria, anchor_var=anchor_var
                 )
             
-            # Build SPARQL query for relation connections
+            # Build paginated data query + count query
             sparql_query = self.connection_query_builder.build_relation_query(
                 query_request.criteria, graph_id,
+                page_size=query_request.page_size,
+                offset=query_request.offset,
                 sort_patterns=sort_patterns,
                 sort_select_vars=sort_select_vars,
-                order_by_clause=order_by_clause
+                order_by_clause=order_by_clause,
+            )
+            count_query = self.connection_query_builder.build_relation_count_query(
+                query_request.criteria, graph_id,
+                sort_patterns=sort_patterns,
             )
             
             self.logger.info(f"Generated relation SPARQL query:\n{sparql_query}")
             
-            # Execute SPARQL query via backend interface
+            # count_only short-circuit: run only the count query
             t0 = _time.monotonic()
-            results = await backend.execute_sparql_query(space_id, sparql_query)
+            if query_request.count_only:
+                _qh = _count_cache.query_hash(count_query)
+                _cached = _count_cache.get(space_id, graph_id, _qh)
+                if _cached is not None:
+                    total_count = _cached
+                else:
+                    count_results = await backend.execute_sparql_query(space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                self.logger.info(f"Relation count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                return KGQueryResponse(
+                    query_type="relation",
+                    relation_connections=[],
+                    frame_connections=None,
+                    total_count=total_count,
+                    page_size=0,
+                    offset=0,
+                )
+            
+            # Count-first short-circuit: when offset > 0 run the cheap count
+            # query first so we can skip the expensive paginated query if the
+            # caller has already paged past the end of the result set.
+            if query_request.offset > 0:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_total_count(count_results)
+                if query_request.offset >= total_count:
+                    t_query = _time.monotonic()
+                    self.logger.info(
+                        f"Relation query short-circuit: offset {query_request.offset} >= total {total_count}, "
+                        f"{(t_query - t0)*1000:.0f}ms (count only)")
+                    return KGQueryResponse(
+                        query_type="relation",
+                        relation_connections=[],
+                        frame_connections=None,
+                        total_count=total_count,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset,
+                    )
+                # Offset is valid — now run the paginated query
+                results = await backend.execute_sparql_query(space_id, sparql_query)
+            else:
+                # First page: run both in parallel for lowest latency
+                results, count_results = await asyncio.gather(
+                    backend.execute_sparql_query(space_id, sparql_query),
+                    backend.execute_sparql_query(space_id, count_query),
+                )
+                total_count = self._extract_total_count(count_results)
             t_query = _time.monotonic()
             
             # Log the final SQL if returned by the backend (fire-and-forget, non-blocking)
@@ -213,7 +266,7 @@ class KGQueriesEndpoint:
                 asyncio.get_event_loop().run_in_executor(
                     None, lambda: _logger.debug(f"Final SQL ({len(_sql)} chars):\n{_pretty(_sql)}"))
             
-            # Convert results to RelationConnection objects
+            # Convert results — these are already the correct page
             connections = []
             if results and results.get("results") and results["results"].get("bindings"):
                 for result in results["results"]["bindings"]:
@@ -225,21 +278,15 @@ class KGQueriesEndpoint:
                     )
                     connections.append(connection)
             
-            # Apply pagination
-            total_count = len(connections)
-            start_idx = query_request.offset
-            end_idx = start_idx + query_request.page_size
-            paginated_connections = connections[start_idx:end_idx]
-            
-            self.logger.info(f"Relation query: {total_count} results, {len(paginated_connections)} returned, {(t_query - t0)*1000:.0f}ms")
+            self.logger.info(f"Relation query: {len(connections)} results (total={total_count}), {(t_query - t0)*1000:.0f}ms")
             
             return KGQueryResponse(
                 query_type="relation",
-                relation_connections=paginated_connections,
+                relation_connections=connections,
                 frame_connections=None,
                 total_count=total_count,
                 page_size=query_request.page_size,
-                offset=query_request.offset
+                offset=query_request.offset,
             )
             
         except Exception as e:
@@ -256,6 +303,7 @@ class KGQueriesEndpoint:
             from ..sparql.kg_query_builder import FrameCriteria as BuilderFrameCriteria
             from ..sparql.kg_query_builder import SlotCriteria as BuilderSlotCriteria
             from ..sparql.kg_query_builder import SortCriteria as BuilderSortCriteria
+            from ..sparql.kg_query_builder import EntityPropertyFilter as BuilderEntityPropertyFilter
             
             criteria = query_request.criteria
             
@@ -302,11 +350,27 @@ class KGQueriesEndpoint:
             
             use_edge_pattern = (criteria.query_mode == "edge") if hasattr(criteria, 'query_mode') else True
             
+            # Convert entity property filters from Pydantic to builder dataclass
+            builder_entity_property_filters = None
+            # Check top-level criteria first, then source_entity_criteria
+            pydantic_epf = criteria.entity_property_filters
+            if not pydantic_epf and criteria.source_entity_criteria:
+                pydantic_epf = getattr(criteria.source_entity_criteria, 'entity_property_filters', None)
+            if pydantic_epf:
+                builder_entity_property_filters = [
+                    BuilderEntityPropertyFilter(
+                        property_uri=epf.property_uri,
+                        operator=epf.operator,
+                        value=epf.value
+                    ) for epf in pydantic_epf
+                ]
+            
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,
                 frame_criteria=builder_frame_criteria,
                 sort_criteria=builder_sort_criteria,
+                entity_property_filters=builder_entity_property_filters,
                 use_edge_pattern=use_edge_pattern
             )
             
@@ -321,10 +385,29 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated entity SPARQL query:\n{sparql_query}")
             
+            # count_only short-circuit: run only the count query
+            t0 = _time.monotonic()
+            if query_request.count_only:
+                _qh = _count_cache.query_hash(count_query)
+                _cached = _count_cache.get(space_id, graph_id, _qh)
+                if _cached is not None:
+                    total_count = _cached
+                else:
+                    count_results = await backend.execute_sparql_query(space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                self.logger.info(f"Entity count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                return KGQueryResponse(
+                    query_type="entity",
+                    entity_uris=[],
+                    total_count=total_count,
+                    page_size=0,
+                    offset=0,
+                )
+            
             # Count-first short-circuit: when offset > 0 run the cheap count
             # query first so we can skip the expensive paginated query if the
             # caller has already paged past the end of the result set.
-            t0 = _time.monotonic()
             if query_request.offset > 0:
                 count_results = await backend.execute_sparql_query(space_id, count_query)
                 total_count = self._extract_total_count(count_results)
@@ -461,10 +544,30 @@ class KGQueriesEndpoint:
                 entity_criteria, graph_id
             )
             
+            # count_only short-circuit: run only the count query
+            t0 = _time.monotonic()
+            if query_request.count_only:
+                _qh = _count_cache.query_hash(count_query)
+                _cached = _count_cache.get(space_id, graph_id, _qh)
+                if _cached is not None:
+                    total_count = _cached
+                else:
+                    count_results = await backend.execute_sparql_query(space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                self.logger.info(f"Frame count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                return KGQueryResponse(
+                    query_type="frame",
+                    relation_connections=None,
+                    frame_connections=[],
+                    total_count=total_count,
+                    page_size=0,
+                    offset=0,
+                )
+            
             # Count-first short-circuit: when offset > 0 run the cheap count
             # query first so we can skip the expensive paginated query if the
             # caller has already paged past the end of the result set.
-            t0 = _time.monotonic()
             if query_request.offset > 0:
                 count_results = await backend.execute_sparql_query(space_id, count_query)
                 total_count = self._extract_total_count(count_results)
@@ -593,10 +696,29 @@ class KGQueriesEndpoint:
             
             self.logger.info(f"Generated frame_query SPARQL:\n{sparql_query}")
             
+            # count_only short-circuit: run only the count query
+            t0 = _time.monotonic()
+            if query_request.count_only:
+                _qh = _count_cache.query_hash(count_query)
+                _cached = _count_cache.get(space_id, graph_id, _qh)
+                if _cached is not None:
+                    total_count = _cached
+                else:
+                    count_results = await backend.execute_sparql_query(space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                self.logger.info(f"Frame_query count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                return KGQueryResponse(
+                    query_type="frame_query",
+                    frame_results=[],
+                    total_count=total_count,
+                    page_size=0,
+                    offset=0,
+                )
+            
             # Count-first short-circuit: when offset > 0 run the cheap count
             # query first so we can skip the expensive paginated query if the
             # caller has already paged past the end of the result set.
-            t0 = _time.monotonic()
             if query_request.offset > 0:
                 count_results = await backend.execute_sparql_query(space_id, count_query)
                 total_count = self._extract_total_count(count_results)
@@ -688,13 +810,8 @@ class KGQueriesEndpoint:
         
         if criteria.search_string:
             where_clauses.append(f"""
-            {{
-                ?frame rdfs:label ?label .
-                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
-            }} UNION {{
-                ?frame vital-core:name ?name .
-                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            }}
+            ?frame vital-core:hasName ?search_name .
+            FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))
             """)
         
         if criteria.entity_type:

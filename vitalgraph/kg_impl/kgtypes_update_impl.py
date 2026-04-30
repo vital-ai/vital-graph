@@ -119,14 +119,18 @@ class KGTypesUpdateProcessor:
         try:
             self.logger.info(f"🔄 Atomic KGType update: {kgtype_uri} in graph: {graph_id}")
             
-            # Step 1: Build delete quads for existing type data
-            delete_quads = await self._build_delete_quads_for_kgtype(backend, space_id, graph_id, kgtype_uri)
-            
-            # Step 2: Build insert quads for updated type data
+            # Step 1: Build insert quads for updated type data
             insert_quads = await self._build_insert_quads_for_objects(updated_objects, graph_id)
             
-            # Step 3: Execute atomic update using validated update_quads function
-            success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
+            # Step 2: Subject-level delete + insert (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                subject_uris = list({str(obj.URI) for obj in updated_objects
+                                     if hasattr(obj, 'URI') and obj.URI})
+                success = await backend.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads)
+            else:
+                delete_quads = await self._build_delete_quads_for_kgtype(backend, space_id, graph_id, kgtype_uri)
+                success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             if success:
                 self.logger.info(f"✅ Successfully updated KGType atomically: {kgtype_uri}")

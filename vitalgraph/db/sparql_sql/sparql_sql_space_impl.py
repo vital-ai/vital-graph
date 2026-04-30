@@ -110,10 +110,12 @@ class _SparqlSQLGraphsAdapter:
                         f"DELETE FROM {t['rdf_quad']} WHERE context_uuid = $1",
                         ctx_uuid,
                     )
-            # Invalidate entity graph cache (local, synchronous)
+            # Invalidate entity graph + count cache (local, synchronous)
             try:
                 from ...cache.entity_graph_cache import _entity_graph_cache
+                from ...cache.count_cache import _count_cache
                 _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+                _count_cache.invalidate_graph(space_id, graph_uri)
             except Exception:
                 pass
             # Notify other instances of graph clear
@@ -584,10 +586,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 "DELETE FROM graph WHERE space_id = $1 AND graph_uri = $2",
                 [space_id, graph_uri],
             )
-            # Invalidate entity graph cache (local, synchronous)
+            # Invalidate entity graph + count cache (local, synchronous)
             try:
                 from ...cache.entity_graph_cache import _entity_graph_cache
+                from ...cache.count_cache import _count_cache
                 _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+                _count_cache.invalidate_graph(space_id, graph_uri)
             except Exception:
                 pass
             # Notify other instances of graph deletion
@@ -1396,15 +1400,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     cr.update_ops, space_id,
                 )
                 if targets:
+                    from vitalgraph.cache.count_cache import _count_cache
                     sm = self._signal_manager or (
                         self.db_impl.get_signal_manager() if self.db_impl else None)
+                    _invalidated_graphs = set()
                     for graph_id, entity_uri in targets:
                         _entity_graph_cache.invalidate(space_id, graph_id, entity_uri)
+                        if graph_id not in _invalidated_graphs:
+                            _count_cache.invalidate_graph(space_id, graph_id)
+                            _invalidated_graphs.add(graph_id)
                         if sm:
                             await sm.notify_entity_graph_changed(
                                 space_id, graph_id, entity_uri)
                     logger.debug(
-                        "Entity graph cache: invalidated %d entries after SPARQL UPDATE",
+                        "Entity+count cache: invalidated %d entries after SPARQL UPDATE",
                         len(targets))
             except Exception as ce:
                 logger.debug("Entity graph cache invalidation after SPARQL UPDATE failed (non-critical): %s", ce)

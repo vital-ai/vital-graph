@@ -968,6 +968,126 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.error("update_quads failed: %s", e)
             return False
 
+    async def update_entity_graph(self, space_id: str, graph_id: str,
+                                   entity_uri: str,
+                                   insert_quads: List[tuple]) -> bool:
+        """Atomically replace an entity graph: subject-level delete + insert.
+
+        Uses direct SQL to find all subjects belonging to the entity graph
+        (via hasKGGraphURI) and deletes all their quads, then inserts the
+        new quads — all within a single transaction.  This avoids the SPARQL
+        pipeline's datatype-propagation issues that cause quad-level deletes
+        to miss rows.
+        """
+        import time as _time
+        try:
+            _t0 = _time.monotonic()
+            schema = self.backend.schema
+            t = schema.get_table_names(space_id)
+            from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+            g_uuid = _generate_term_uuid(graph_id, 'U')
+            HAS_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI'
+            p_uuid = _generate_term_uuid(HAS_KG_GRAPH_URI, 'U')
+            entity_uuid = _generate_term_uuid(entity_uri, 'U')
+
+            async with self.backend.db_impl.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    # Step 1: Find all subjects in the entity graph
+                    rows = await conn.fetch(
+                        f"SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                        f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND context_uuid = $3",
+                        p_uuid, entity_uuid, g_uuid,
+                    )
+                    subject_uuids = [r['subject_uuid'] for r in rows]
+                    if not subject_uuids:
+                        self.logger.warning("update_entity_graph: no subjects found for %s", entity_uri)
+                        # Still insert the new quads (entity may not have kGGraphURI on itself)
+                    else:
+                        # Step 2: Sync auxiliary tables before delete
+                        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
+                        await sync_frame_entity_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+                        await sync_edge_table_before_delete(conn, space_id, subject_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
+                        await sync_stats_for_deleted_subjects(conn, space_id, subject_uuids, context_uuid=g_uuid)
+
+                        # Step 3: Delete all quads for those subjects
+                        result = await conn.execute(
+                            f"DELETE FROM {t['rdf_quad']} "
+                            f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                            subject_uuids, g_uuid,
+                        )
+                        deleted = int(result.split()[-1]) if result else 0
+                        self.logger.info("update_entity_graph: deleted %d quads for %d subjects",
+                                         deleted, len(subject_uuids))
+
+                    # Step 4: Insert new quads in the same transaction
+                    if insert_quads:
+                        await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, insert_quads, connection=conn)
+
+            _t1 = _time.monotonic()
+            self.logger.info("⏱️  update_entity_graph: %.3fs", _t1 - _t0)
+            return True
+        except Exception as e:
+            self.logger.error("update_entity_graph failed: %s", e)
+            return False
+
+    async def update_subjects_graph(self, space_id: str, graph_id: str,
+                                     subject_uris: List[str],
+                                     insert_quads: List[tuple]) -> bool:
+        """Atomically replace quads for a list of subject URIs.
+
+        Subject-level delete + insert in a single transaction.  Avoids the
+        fragile quad-level UUID matching in ``remove_rdf_quads_batch_bulk``.
+        Used by frame create/update paths where the subject URIs are known.
+        """
+        import time as _time
+        try:
+            if not subject_uris and not insert_quads:
+                return True
+            _t0 = _time.monotonic()
+            schema = self.backend.schema
+            t = schema.get_table_names(space_id)
+            from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+
+            g_uuid = _generate_term_uuid(graph_id, 'U')
+            s_uuids = [_generate_term_uuid(uri, 'U') for uri in subject_uris]
+
+            async with self.backend.db_impl.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    if s_uuids:
+                        # Sync auxiliary tables before delete
+                        from ..db.sparql_sql.sync_frame_entity_table import sync_frame_entity_before_delete
+                        await sync_frame_entity_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_edge_table import sync_edge_table_before_delete
+                        await sync_edge_table_before_delete(conn, space_id, s_uuids, context_uuid=g_uuid)
+                        from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
+                        await sync_stats_for_deleted_subjects(conn, space_id, s_uuids, context_uuid=g_uuid)
+
+                        # Delete all quads for these subjects in this graph
+                        result = await conn.execute(
+                            f"DELETE FROM {t['rdf_quad']} "
+                            f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                            s_uuids, g_uuid,
+                        )
+                        deleted = int(result.split()[-1]) if result else 0
+                        self.logger.info("update_subjects_graph: deleted %d quads for %d subjects",
+                                         deleted, len(s_uuids))
+
+                    # Insert new quads
+                    if insert_quads:
+                        await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, insert_quads, connection=conn)
+
+            _t1 = _time.monotonic()
+            self.logger.info("⏱️  update_subjects_graph: %.3fs (%d subjects)",
+                             _t1 - _t0, len(subject_uris))
+            return True
+        except Exception as e:
+            self.logger.error("update_subjects_graph failed: %s", e)
+            return False
+
     async def delete_entity_graph_direct(self, space_id: str, graph_id: str,
                                           entity_uri: str) -> int:
         """Delete entire entity graph via direct SQL (no SPARQL pipeline)."""

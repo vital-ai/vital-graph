@@ -402,11 +402,12 @@ class KGEntityFrameCreateProcessor:
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],
                                         operation_mode: str) -> tuple:
         """
-        Execute atomic frame UPDATE/UPSERT using the validated update_quads function.
+        Execute atomic frame UPDATE/UPSERT via subject-level delete + insert.
         
-        This method replaces the separate deletion and creation operations with a single
-        atomic transaction using the update_quads function that has been validated with
-        100% test success rate.
+        Collects subject URIs from all objects being written, deletes their
+        existing quads via direct SQL, then inserts new quads — all in one
+        transaction.  Falls back to SPARQL-based quad diff for backends
+        without update_subjects_graph.
         
         Args:
             backend_adapter: Backend adapter for database operations
@@ -424,34 +425,44 @@ class KGEntityFrameCreateProcessor:
             t0 = time.time()
             self.logger.debug(f"🔄 Executing atomic frame {operation_mode} for {len(frame_objects)} frames")
             
-            # Step 1: Build delete quads for existing frame data
-            delete_quads = await self.build_delete_quads_for_frames(backend_adapter, space_id, graph_id, frame_objects)
-            t1 = time.time()
-            self.logger.info(f"⏱️ FRAME_UPDATE step1 build_delete_quads: {t1-t0:.3f}s ({len(delete_quads)} quads)")
-            
-            # Step 2: Build insert quads for new frame data
+            # Step 1: Build insert quads for new frame data
             insert_quads = await self.build_insert_quads_for_objects(all_objects, graph_id)
-            t2 = time.time()
-            self.logger.info(f"⏱️ FRAME_UPDATE step2 build_insert_quads: {t2-t1:.3f}s ({len(insert_quads)} quads)")
+            t1 = time.time()
+            self.logger.info(f"⏱️ FRAME_UPDATE step1 build_insert_quads: {t1-t0:.3f}s ({len(insert_quads)} quads)")
             
-            # Step 2.5: Diff — only delete removed quads, only insert added quads
-            # Use string keys for comparison (RDFLib objects don't hash consistently
-            # across different construction paths), then map back to original quads.
-            def _quad_str_key(q):
-                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
-            
-            old_key_map = {_quad_str_key(q): q for q in delete_quads}
-            new_key_map = {_quad_str_key(q): q for q in insert_quads}
-            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
-            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
-            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
-            self.logger.info(f"⏱️ FRAME_UPDATE diff: {len(unchanged_keys)} unchanged, {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
-            
-            # Step 3: Execute atomic update with only the changed quads
-            success = await backend_adapter.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
-            t3 = time.time()
-            self.logger.info(f"⏱️ FRAME_UPDATE step3 update_quads: {t3-t2:.3f}s")
-            self.logger.info(f"⏱️ FRAME_UPDATE total: {t3-t0:.3f}s")
+            # Step 2: Subject-level delete + insert (safe path)
+            if hasattr(backend_adapter, 'update_subjects_graph'):
+                # Collect all subject URIs from both frame objects and child objects
+                subject_uris = list({str(obj.URI) for obj in all_objects
+                                     if hasattr(obj, 'URI') and obj.URI})
+                success = await backend_adapter.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads)
+                t2 = time.time()
+                self.logger.info(f"⏱️ FRAME_UPDATE step2 update_subjects_graph: {t2-t1:.3f}s "
+                               f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
+                self.logger.info(f"⏱️ FRAME_UPDATE total: {t2-t0:.3f}s")
+            else:
+                # Fallback: SPARQL-based quad diff + update_quads
+                delete_quads = await self.build_delete_quads_for_frames(
+                    backend_adapter, space_id, graph_id, frame_objects)
+                t2 = time.time()
+                self.logger.info(f"⏱️ FRAME_UPDATE step2 build_delete_quads: {t2-t1:.3f}s ({len(delete_quads)} quads)")
+                
+                def _quad_str_key(q):
+                    return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
+                
+                old_key_map = {_quad_str_key(q): q for q in delete_quads}
+                new_key_map = {_quad_str_key(q): q for q in insert_quads}
+                unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
+                actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
+                actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
+                self.logger.info(f"⏱️ FRAME_UPDATE diff: {len(unchanged_keys)} unchanged, "
+                               f"{len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
+                
+                success = await backend_adapter.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
+                t3 = time.time()
+                self.logger.info(f"⏱️ FRAME_UPDATE step3 update_quads: {t3-t2:.3f}s")
+                self.logger.info(f"⏱️ FRAME_UPDATE total: {t3-t0:.3f}s")
             
             if success:
                 self.logger.debug(f"✅ Atomic frame {operation_mode} completed successfully")
@@ -782,12 +793,15 @@ class KGEntityFrameCreateProcessor:
     async def execute_frame_creation(self, backend_adapter: KGBackendInterface, space_id: str, 
                                    graph_id: str, all_objects: List[GraphObject]) -> bool:
         """
-        Execute atomic frame creation via backend using update_quads.
+        Execute atomic frame creation via subject-level delete + insert.
         
-        Uses a single transaction that deletes any existing triples for all
-        subject URIs and inserts the new triples atomically.  This prevents
-        triple accumulation when CREATE is called for subjects that already
-        exist (e.g. a second write for the same slot URI).
+        Collects all subject URIs from the objects, deletes their existing
+        quads via direct SQL, then inserts the new quads — all in a single
+        transaction.  This avoids the fragile SPARQL round-trip that can
+        lose datatype metadata and cause silent delete failures.
+        
+        Falls back to the old update_quads path for backends without
+        update_subjects_graph (e.g. legacy Fuseki+PostgreSQL).
         
         Args:
             backend_adapter: Backend adapter for database operations
@@ -811,31 +825,25 @@ class KGEntityFrameCreateProcessor:
             _t1 = _time.time()
             self.logger.info(f"⏱️ FRAME_CREATE step1 build_insert_quads: {_t1-_t0:.3f}s ({len(insert_quads)} quads)")
             
-            # Step 2: Query existing triples for all subjects being created (pre-cleanup)
-            delete_quads = await self._build_delete_quads_for_subjects(
-                backend_adapter, space_id, graph_id, all_objects)
-            _t2 = _time.time()
-            self.logger.info(f"⏱️ FRAME_CREATE step2 build_delete_quads: {_t2-_t1:.3f}s ({len(delete_quads)} quads)")
-            
-            # Step 3: Diff — only delete removed quads, only insert added quads
-            # Use string keys for comparison, map back to original quads with RDFLib objects.
-            def _quad_str_key(q):
-                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
-            
-            old_key_map = {_quad_str_key(q): q for q in delete_quads}
-            new_key_map = {_quad_str_key(q): q for q in insert_quads}
-            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
-            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
-            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
-            self.logger.info(f"⏱️ FRAME_CREATE diff: {len(unchanged_keys)} unchanged, "
-                           f"{len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
-            
-            # Step 4: Atomic update — single PG transaction, single Fuseki request
-            success = await backend_adapter.update_quads(
-                space_id, graph_id, actual_deletes, actual_inserts)
-            _t3 = _time.time()
-            self.logger.info(f"⏱️ FRAME_CREATE step3 update_quads: {_t3-_t2:.3f}s")
-            self.logger.info(f"⏱️ FRAME_CREATE total: {_t3-_t0:.3f}s")
+            # Step 2: Subject-level delete + insert (safe path)
+            if hasattr(backend_adapter, 'update_subjects_graph'):
+                subject_uris = list({str(obj.URI) for obj in all_objects
+                                     if hasattr(obj, 'URI') and obj.URI})
+                success = await backend_adapter.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads)
+                _t2 = _time.time()
+                self.logger.info(f"⏱️ FRAME_CREATE step2 update_subjects_graph: {_t2-_t1:.3f}s "
+                               f"({len(subject_uris)} subjects, {len(insert_quads)} quads)")
+                self.logger.info(f"⏱️ FRAME_CREATE total: {_t2-_t0:.3f}s")
+            else:
+                # Fallback for backends without subject-level delete
+                delete_quads = await self._build_delete_quads_for_subjects(
+                    backend_adapter, space_id, graph_id, all_objects)
+                success = await backend_adapter.update_quads(
+                    space_id, graph_id, delete_quads, insert_quads)
+                _t2 = _time.time()
+                self.logger.info(f"⏱️ FRAME_CREATE fallback update_quads: {_t2-_t1:.3f}s")
+                self.logger.info(f"⏱️ FRAME_CREATE total: {_t2-_t0:.3f}s")
             
             if success:
                 self.logger.debug(f"✅ Atomic frame creation completed successfully")

@@ -62,22 +62,21 @@ class KGEntityUpdateProcessor:
             t0 = time.time()
             self.logger.info(f"🔄 Entity update START: {entity_uri} ({len(updated_objects)} objects)")
             
-            # Step 1: Build delete quads for existing entity data
-            t1 = time.time()
-            delete_quads = await self._build_delete_quads_for_entity(backend, space_id, graph_id, entity_uri)
-            t2 = time.time()
-            self.logger.info(f"🔄 Step 1 build_delete_quads: {len(delete_quads)} quads in {t2-t1:.3f}s")
-            
-            # Step 2: Build insert quads for updated entity data
+            # Step 1: Build insert quads for updated entity data
             insert_quads = await self._build_insert_quads_for_objects(updated_objects, graph_id)
-            t3 = time.time()
-            self.logger.info(f"🔄 Step 2 build_insert_quads: {len(insert_quads)} quads in {t3-t2:.3f}s")
+            t1 = time.time()
+            self.logger.info(f"🔄 Step 1 build_insert_quads: {len(insert_quads)} quads in {t1-t0:.3f}s")
             
-            # Step 3: Execute atomic update using validated update_quads function
-            success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-            t4 = time.time()
-            self.logger.info(f"🔄 Step 3 update_quads: success={success} in {t4-t3:.3f}s")
-            self.logger.info(f"🔄 Entity update DONE: {entity_uri} total={t4-t0:.3f}s")
+            # Step 2: Atomic subject-level delete + insert (avoids SPARQL datatype issues)
+            if hasattr(backend, 'update_entity_graph'):
+                success = await backend.update_entity_graph(space_id, graph_id, entity_uri, insert_quads)
+            else:
+                # Fallback for backends without update_entity_graph
+                delete_quads = await self._build_delete_quads_for_entity(backend, space_id, graph_id, entity_uri)
+                success = await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
+            t2 = time.time()
+            self.logger.info(f"🔄 Step 2 update_entity_graph: success={success} in {t2-t1:.3f}s")
+            self.logger.info(f"🔄 Entity update DONE: {entity_uri} total={t2-t0:.3f}s")
             
             if success:
                 return EntityUpdateResponse(

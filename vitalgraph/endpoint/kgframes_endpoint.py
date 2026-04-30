@@ -60,7 +60,7 @@ from ..kg_impl.kgframe_graph_impl import KGFrameGraphProcessor
 from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 
 # Import backend utilities
-from ..kg_impl.kg_backend_utils import create_backend_adapter, FusekiPostgreSQLBackendAdapter
+from ..kg_impl.kg_backend_utils import create_backend_adapter
 
 
 
@@ -118,7 +118,7 @@ class KGFramesEndpoint:
         if not backend:
             raise ValueError(f"Backend not available for space: {space_id}")
         
-        return FusekiPostgreSQLBackendAdapter(backend)
+        return create_backend_adapter(backend)
     
     
     
@@ -161,8 +161,7 @@ class KGFramesEndpoint:
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
                 return _fail("Backend implementation not available")
-            from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
 
             # --- type filtering ---
             frames = [obj for obj in vitalsigns_objects if isinstance(obj, KGFrame)]
@@ -957,8 +956,7 @@ class KGFramesEndpoint:
                 )
             
             # Wrap backend with adapter for consistency
-            from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
             
             # Check if frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, uri):
@@ -1023,8 +1021,7 @@ class KGFramesEndpoint:
                 )
             
             # Wrap backend with adapter for consistency
-            from ..kg_impl.kg_backend_utils import FusekiPostgreSQLBackendAdapter
-            backend = FusekiPostgreSQLBackendAdapter(backend_impl)
+            backend = create_backend_adapter(backend_impl)
             
             deleted_uris = []
             for uri in uris:
@@ -1096,14 +1093,15 @@ class KGFramesEndpoint:
                 )
             
             space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
+            backend_impl = space_impl.get_db_space_impl()
+            if not backend_impl:
                 return SlotCreateResponse(
                     success=False,
                     message="Backend implementation not available",
                     created_count=0,
                     created_uris=[]
                 )
+            backend = create_backend_adapter(backend_impl)
             
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotCreateResponse(
@@ -1179,14 +1177,15 @@ class KGFramesEndpoint:
                 )
             
             space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
+            backend_impl = space_impl.get_db_space_impl()
+            if not backend_impl:
                 return SlotUpdateResponse(
                     success=False,
                     message="Backend implementation not available",
                     updated_count=0,
                     updated_uris=[]
                 )
+            backend = create_backend_adapter(backend_impl)
             
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotUpdateResponse(
@@ -1256,14 +1255,15 @@ class KGFramesEndpoint:
                 )
             
             space_impl = space_record.space_impl
-            backend = space_impl.get_db_space_impl()
-            if not backend:
+            backend_impl = space_impl.get_db_space_impl()
+            if not backend_impl:
                 return SlotDeleteResponse(
                     success=False,
                     message="Backend implementation not available",
                     deleted_count=0,
                     deleted_uris=[]
                 )
+            backend = create_backend_adapter(backend_impl)
             
             # Validate that frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
@@ -1841,54 +1841,42 @@ class KGFramesEndpoint:
             if not insert_quads:
                 return frame_uris
             
-            # Step 2: Query existing triples for all subjects (pre-cleanup)
-            subject_uris = set()
-            for obj in objects:
-                if hasattr(obj, 'URI') and obj.URI:
-                    subject_uris.add(str(obj.URI))
+            # Step 2: Subject-level delete + insert (safe path)
+            subject_uris = list({str(obj.URI) for obj in objects
+                                 if hasattr(obj, 'URI') and obj.URI})
             
-            delete_quads = []
-            if subject_uris:
-                subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
-                query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                    GRAPH <{graph_id}> {{
-                        VALUES ?subject {{ {subject_values} }}
-                        ?subject ?predicate ?object .
-                    }}
-                }}"""
+            if hasattr(backend, 'update_subjects_graph'):
+                await backend.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads)
+            else:
+                delete_quads = []
+                if subject_uris:
+                    subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
+                    query = f"""SELECT ?subject ?predicate ?object WHERE {{
+                        GRAPH <{graph_id}> {{
+                            VALUES ?subject {{ {subject_values} }}
+                            ?subject ?predicate ?object .
+                        }}
+                    }}"""
+                    
+                    results = await backend.execute_sparql_query(space_id, query)
+                    
+                    bindings = []
+                    if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                        bindings = results['results'].get('bindings', [])
+                    elif isinstance(results, list):
+                        bindings = results
+                    
+                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                    for row in bindings:
+                        if isinstance(row, dict):
+                            s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                            p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                            o = _sparql_binding_to_rdflib(row.get('object', ''))
+                            if s and p and o is not None:
+                                delete_quads.append((s, p, o, graph_id))
                 
-                results = await backend.execute_sparql_query(space_id, query)
-                
-                bindings = []
-                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                    bindings = results['results'].get('bindings', [])
-                elif isinstance(results, list):
-                    bindings = results
-                
-                from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                for row in bindings:
-                    if isinstance(row, dict):
-                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                        # Reconstruct RDFLib object from full binding to preserve datatype/language
-                        o = _sparql_binding_to_rdflib(row.get('object', ''))
-                        if s and p and o is not None:
-                            delete_quads.append((s, p, o, graph_id))
-            
-            if delete_quads:
-                self.logger.info(f"🧹 Pre-cleanup: found {len(delete_quads)} existing triples for {len(subject_uris)} frame subjects")
-            
-            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
-            def _quad_str_key(q):
-                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
-            old_key_map = {_quad_str_key(q): q for q in delete_quads}
-            new_key_map = {_quad_str_key(q): q for q in insert_quads}
-            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
-            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
-            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
-            
-            # Step 4: Atomic update — single PG transaction, single Fuseki request
-            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
+                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             return frame_uris
             
@@ -2349,51 +2337,41 @@ class KGFramesEndpoint:
             
             slot_uris = [str(slot.URI) for slot in slots]
             
-            # Step 1: Query existing triples for all slot subjects (delete side)
-            subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
-            query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                GRAPH <{graph_id}> {{
-                    VALUES ?subject {{ {subject_values} }}
-                    ?subject ?predicate ?object .
-                }}
-            }}"""
-            
-            results = await backend.execute_sparql_query(space_id, query)
-            
-            delete_quads = []
-            bindings = []
-            if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                bindings = results['results'].get('bindings', [])
-            elif isinstance(results, list):
-                bindings = results
-            
-            for row in bindings:
-                if isinstance(row, dict):
-                    s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                    p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                    # Reconstruct RDFLib object from full binding to preserve datatype/language
-                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                    o = _sparql_binding_to_rdflib(row.get('object', ''))
-                    if s and p and o is not None:
-                        delete_quads.append((s, p, o, graph_id))
-            
-            # Step 2: Build insert quads from VitalSigns objects (preserve RDFLib objects)
+            # Step 1: Build insert quads from VitalSigns objects (preserve RDFLib objects)
             triples = await asyncio.to_thread(GraphObject.to_triples_list, slots)
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in triples]
             
-            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
-            def _quad_str_key(q):
-                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
-            old_key_map = {_quad_str_key(q): q for q in delete_quads}
-            new_key_map = {_quad_str_key(q): q for q in insert_quads}
-            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
-            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
-            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
-            
-            self.logger.info(f"🔄 Slot update: {len(actual_deletes)} to delete, {len(actual_inserts)} to insert")
-            
-            # Step 4: Atomic update — single PG transaction, single Fuseki request
-            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
+            # Step 2: Subject-level delete + insert (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                await backend.update_subjects_graph(
+                    space_id, graph_id, slot_uris, insert_quads)
+            else:
+                subject_values = " ".join(f"<{uri}>" for uri in slot_uris)
+                query = f"""SELECT ?subject ?predicate ?object WHERE {{
+                    GRAPH <{graph_id}> {{
+                        VALUES ?subject {{ {subject_values} }}
+                        ?subject ?predicate ?object .
+                    }}
+                }}"""
+                results = await backend.execute_sparql_query(space_id, query)
+                
+                delete_quads = []
+                bindings = []
+                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                    bindings = results['results'].get('bindings', [])
+                elif isinstance(results, list):
+                    bindings = results
+                
+                from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                for row in bindings:
+                    if isinstance(row, dict):
+                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                        o = _sparql_binding_to_rdflib(row.get('object', ''))
+                        if s and p and o is not None:
+                            delete_quads.append((s, p, o, graph_id))
+                
+                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             return slot_uris
             
@@ -2474,54 +2452,41 @@ class KGFramesEndpoint:
             if not insert_quads:
                 return slot_uris
             
-            # Step 2: Query existing triples for all subjects (pre-cleanup)
-            subject_uris = set()
-            for obj in objects:
-                if hasattr(obj, 'URI') and obj.URI:
-                    subject_uris.add(str(obj.URI))
+            # Step 2: Subject-level delete + insert (safe path)
+            subject_uris = list({str(obj.URI) for obj in objects
+                                 if hasattr(obj, 'URI') and obj.URI})
             
-            delete_quads = []
-            if subject_uris:
-                subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
-                query = f"""SELECT ?subject ?predicate ?object WHERE {{
-                    GRAPH <{graph_id}> {{
-                        VALUES ?subject {{ {subject_values} }}
-                        ?subject ?predicate ?object .
-                    }}
-                }}"""
+            if hasattr(backend, 'update_subjects_graph'):
+                await backend.update_subjects_graph(
+                    space_id, graph_id, subject_uris, insert_quads)
+            else:
+                delete_quads = []
+                if subject_uris:
+                    subject_values = " ".join(f"<{uri}>" for uri in subject_uris)
+                    query = f"""SELECT ?subject ?predicate ?object WHERE {{
+                        GRAPH <{graph_id}> {{
+                            VALUES ?subject {{ {subject_values} }}
+                            ?subject ?predicate ?object .
+                        }}
+                    }}"""
+                    results = await backend.execute_sparql_query(space_id, query)
+                    
+                    bindings = []
+                    if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
+                        bindings = results['results'].get('bindings', [])
+                    elif isinstance(results, list):
+                        bindings = results
+                    
+                    from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
+                    for row in bindings:
+                        if isinstance(row, dict):
+                            s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
+                            p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
+                            o = _sparql_binding_to_rdflib(row.get('object', ''))
+                            if s and p and o is not None:
+                                delete_quads.append((s, p, o, graph_id))
                 
-                results = await backend.execute_sparql_query(space_id, query)
-                
-                bindings = []
-                if isinstance(results, dict) and 'results' in results and isinstance(results['results'], dict):
-                    bindings = results['results'].get('bindings', [])
-                elif isinstance(results, list):
-                    bindings = results
-                
-                for row in bindings:
-                    if isinstance(row, dict):
-                        s = str(row['subject'].get('value', '')) if isinstance(row.get('subject'), dict) else str(row.get('subject', ''))
-                        p = str(row['predicate'].get('value', '')) if isinstance(row.get('predicate'), dict) else str(row.get('predicate', ''))
-                        # Reconstruct RDFLib object from full binding to preserve datatype/language
-                        from vitalgraph.kg_impl.kgentity_frame_create_impl import _sparql_binding_to_rdflib
-                        o = _sparql_binding_to_rdflib(row.get('object', ''))
-                        if s and p and o is not None:
-                            delete_quads.append((s, p, o, graph_id))
-            
-            if delete_quads:
-                self.logger.info(f"🧹 Pre-cleanup: found {len(delete_quads)} existing triples for {len(subject_uris)} subjects")
-            
-            # Step 3: Diff — use string keys for comparison, preserve RDFLib quads
-            def _quad_str_key(q):
-                return (str(q[0]), str(q[1]), str(q[2]), str(q[3]))
-            old_key_map = {_quad_str_key(q): q for q in delete_quads}
-            new_key_map = {_quad_str_key(q): q for q in insert_quads}
-            unchanged_keys = set(old_key_map.keys()) & set(new_key_map.keys())
-            actual_deletes = [old_key_map[k] for k in set(old_key_map.keys()) - unchanged_keys]
-            actual_inserts = [new_key_map[k] for k in set(new_key_map.keys()) - unchanged_keys]
-            
-            # Step 4: Atomic update — single PG transaction, single Fuseki request
-            await backend.update_quads(space_id, graph_id, actual_deletes, actual_inserts)
+                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
             
             return slot_uris
             

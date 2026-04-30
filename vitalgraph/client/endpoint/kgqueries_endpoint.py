@@ -17,7 +17,7 @@ from ...model.kgqueries_model import (
     KGEntityQueryResponse,
     RelationQueryResponse,
 )
-from ...model.kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria
+from ...model.kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         page_size: int = 10,
         offset: int = 0,
         include_frame_graph: bool = False,
-        include_entity_graph: bool = False
+        include_entity_graph: bool = False,
+        count_only: bool = False
     ) -> KGQueryResponse:
         """
         Query entity-to-entity connections based on criteria.
@@ -71,7 +72,8 @@ class KGQueriesEndpoint(BaseEndpoint):
                 page_size=page_size,
                 offset=offset,
                 include_frame_graph=include_frame_graph,
-                include_entity_graph=include_entity_graph
+                include_entity_graph=include_entity_graph,
+                count_only=count_only
             )
             
             # Log complete request for debugging
@@ -171,7 +173,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         sort_criteria: Optional[List[SortCriteria]] = None,
         exclude_self_connections: bool = True,
         page_size: int = 10,
-        offset: int = 0
+        offset: int = 0,
+        count_only: bool = False
     ) -> RelationQueryResponse:
         """
         Convenience method for querying relation-based connections.
@@ -219,7 +222,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             graph_id=graph_id,
             criteria=criteria,
             page_size=page_size,
-            offset=offset
+            offset=offset,
+            count_only=count_only
         )
         return RelationQueryResponse.from_raw(raw)
     
@@ -233,7 +237,8 @@ class KGQueriesEndpoint(BaseEndpoint):
         sort_criteria: Optional[List[SortCriteria]] = None,
         include_frame_graph: bool = False,
         page_size: int = 10,
-        offset: int = 0
+        offset: int = 0,
+        count_only: bool = False
     ) -> FrameQueryResponse:
         """
         Query frames matching criteria. Returns frame URIs + entity slot refs.
@@ -282,7 +287,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             criteria=criteria,
             page_size=page_size,
             offset=offset,
-            include_frame_graph=include_frame_graph
+            include_frame_graph=include_frame_graph,
+            count_only=count_only
         )
         return FrameQueryResponse.from_raw(raw)
     
@@ -294,10 +300,12 @@ class KGQueriesEndpoint(BaseEndpoint):
         entity_uris: Optional[List[str]] = None,
         frame_criteria: Optional[List[FrameCriteria]] = None,
         sort_criteria: Optional[List[SortCriteria]] = None,
+        entity_property_filters: Optional[List[EntityPropertyFilter]] = None,
         query_mode: str = "edge",
         include_entity_graph: bool = False,
         page_size: int = 10,
-        offset: int = 0
+        offset: int = 0,
+        count_only: bool = False
     ) -> KGEntityQueryResponse:
         """
         Query entities matching criteria. Returns entity URIs with correct total count.
@@ -319,8 +327,11 @@ class KGQueriesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         source_entity_criteria = None
-        if entity_type:
-            source_entity_criteria = EntityQueryCriteria(entity_type=entity_type)
+        if entity_type or entity_property_filters:
+            source_entity_criteria = EntityQueryCriteria(
+                entity_type=entity_type,
+                entity_property_filters=entity_property_filters
+            )
         
         criteria = KGQueryCriteria(
             query_type="entity",
@@ -328,7 +339,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             source_entity_uris=entity_uris,
             source_entity_criteria=source_entity_criteria,
             frame_criteria=frame_criteria,
-            sort_criteria=sort_criteria
+            sort_criteria=sort_criteria,
+            entity_property_filters=entity_property_filters
         )
         
         raw = await self.query_connections(
@@ -337,7 +349,8 @@ class KGQueriesEndpoint(BaseEndpoint):
             criteria=criteria,
             page_size=page_size,
             offset=offset,
-            include_entity_graph=include_entity_graph
+            include_entity_graph=include_entity_graph,
+            count_only=count_only
         )
         response = KGEntityQueryResponse.from_raw(raw)
         

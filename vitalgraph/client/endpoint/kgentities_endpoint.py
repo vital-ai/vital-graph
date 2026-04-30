@@ -100,6 +100,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
         include_entity_graph: bool = False,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        status: Optional[str] = None,
+        exclude_status: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        modified_after: Optional[str] = None,
+        modified_before: Optional[str] = None,
     ):
         """
         List KGEntities with pagination and optional filtering.
@@ -114,6 +120,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
             include_entity_graph: If True, include complete entity graphs
             sort_by: Optional property URI to sort by (e.g. vital-core:hasName)
             sort_order: Sort direction — 'asc' or 'desc'
+            status: Filter by status URI (exact match)
+            exclude_status: Exclude entities with this status URI
+            created_after: Entities created after this ISO 8601 datetime
+            created_before: Entities created before this ISO 8601 datetime
+            modified_after: Entities modified after this ISO 8601 datetime
+            modified_before: Entities modified before this ISO 8601 datetime
             
         Returns:
             PaginatedGraphObjectResponse if include_entity_graph=False
@@ -137,6 +149,12 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 include_entity_graph=include_entity_graph,
                 sort_by=sort_by,
                 sort_order=sort_order if sort_by else None,
+                status=status,
+                exclude_status=exclude_status,
+                created_after=created_after,
+                created_before=created_before,
+                modified_after=modified_after,
+                modified_before=modified_before,
             )
             
             response = await self._make_request('GET', url, params=params)
@@ -1103,3 +1121,76 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 query_criteria=query_criteria
             )
+    
+    async def count_kgentities(
+        self,
+        space_id: str,
+        graph_id: str,
+        entity_type_uri: Optional[str] = None,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        status: Optional[str] = None,
+        exclude_status: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        modified_after: Optional[str] = None,
+        modified_before: Optional[str] = None,
+    ) -> int:
+        """
+        Return count of entities matching the given filters.
+        
+        Returns:
+            Integer count of matching entities.
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id)
+        
+        url = f"{self._get_server_url()}/api/graphs/kgentities/count"
+        params = build_query_params(
+            space_id=space_id,
+            graph_id=graph_id,
+            entity_type_uri=entity_type_uri,
+            search=search,
+            sort_by=sort_by,
+            status=status,
+            exclude_status=exclude_status,
+            created_after=created_after,
+            created_before=created_before,
+            modified_after=modified_after,
+            modified_before=modified_before,
+        )
+        response = await self._make_request('GET', url, params=params)
+        data = response.json()
+        return data.get("count", 0)
+    
+    async def batch_count_kgentities(
+        self,
+        space_id: str,
+        graph_id: str,
+        count_requests: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Return counts for multiple filter combinations in a single call.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            count_requests: List of dicts, each with 'label' and optional filter keys
+                (entity_type_uri, search, sort_by, status, exclude_status,
+                 created_after, created_before, modified_after, modified_before)
+        
+        Returns:
+            List of {'label': str, 'count': int} dicts.
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id)
+        
+        url = f"{self._get_server_url()}/api/graphs/kgentities/counts"
+        body = {
+            "space_id": space_id,
+            "graph_id": graph_id,
+            "count_requests": count_requests,
+        }
+        response = await self._make_request('POST', url, json=body)
+        data = response.json()
+        return data.get("counts", [])

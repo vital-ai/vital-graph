@@ -29,7 +29,40 @@ class KGConnectionQueryBuilder:
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         """
     
+    def _build_relation_where_clause(self, criteria: KGQueryCriteria) -> str:
+        """Build the shared WHERE clause body for relation queries.
+
+        Used by both ``build_relation_query`` (data) and
+        ``build_relation_count_query`` (count) so the two stay in sync.
+        Does **not** include sort patterns — callers append those
+        separately since the count query needs them but not sort vars.
+        """
+        source_patterns = self._build_source_entity_patterns(
+            criteria.source_entity_criteria, criteria.source_entity_uris)
+        relation_patterns = self._build_relation_connection_patterns(criteria)
+        dest_patterns = self._build_destination_entity_patterns(
+            criteria.destination_entity_criteria, criteria.destination_entity_uris)
+
+        source_frame_patterns = (
+            self._build_source_frame_patterns(criteria.source_frame_criteria)
+            if criteria.source_frame_criteria else "")
+        dest_frame_patterns = (
+            self._build_destination_frame_patterns(criteria.destination_frame_criteria)
+            if criteria.destination_frame_criteria else "")
+
+        filter_clause = self._build_relation_filter_clause(criteria)
+
+        where_patterns = [source_patterns, relation_patterns, dest_patterns]
+        if source_frame_patterns:
+            where_patterns.append(source_frame_patterns)
+        if dest_frame_patterns:
+            where_patterns.append(dest_frame_patterns)
+        where_patterns.append(filter_clause)
+
+        return "\n                ".join(p for p in where_patterns if p)
+
     def build_relation_query(self, criteria: KGQueryCriteria, graph_id: str,
+                             page_size: int = 100, offset: int = 0,
                              sort_patterns: Optional[List[str]] = None,
                              sort_select_vars: Optional[List[str]] = None,
                              order_by_clause: Optional[str] = None) -> str:
@@ -38,6 +71,8 @@ class KGConnectionQueryBuilder:
         Args:
             criteria: KGQueryCriteria with relation query parameters
             graph_id: Graph ID to search in
+            page_size: Maximum number of results to return.
+            offset: Number of results to skip (for pagination).
             sort_patterns: Optional SPARQL triple patterns for sort bindings
             sort_select_vars: Optional SELECT variables for sort values (e.g. ["?sort_val_0"])
             order_by_clause: Optional ORDER BY clause (e.g. "ORDER BY DESC(?sort_val_0)")
@@ -49,27 +84,11 @@ class KGConnectionQueryBuilder:
             select_extra = " " + " ".join(sort_select_vars)
         select_clause = f"SELECT DISTINCT ?source_entity ?destination_entity ?relation_edge ?relation_type{select_extra}"
         
-        source_patterns = self._build_source_entity_patterns(criteria.source_entity_criteria, criteria.source_entity_uris)
-        relation_patterns = self._build_relation_connection_patterns(criteria)
-        dest_patterns = self._build_destination_entity_patterns(criteria.destination_entity_criteria, criteria.destination_entity_uris)
-        
-        # NEW: Add frame/slot filtering for source and destination entities
-        source_frame_patterns = self._build_source_frame_patterns(criteria.source_frame_criteria) if criteria.source_frame_criteria else ""
-        dest_frame_patterns = self._build_destination_frame_patterns(criteria.destination_frame_criteria) if criteria.destination_frame_criteria else ""
-        
-        filter_clause = self._build_relation_filter_clause(criteria)
-        
-        # Build WHERE clause with all patterns
-        where_patterns = [source_patterns, relation_patterns, dest_patterns]
-        if source_frame_patterns:
-            where_patterns.append(source_frame_patterns)
-        if dest_frame_patterns:
-            where_patterns.append(dest_frame_patterns)
-        where_patterns.append(filter_clause)
+        where_clause = self._build_relation_where_clause(criteria)
+
+        # Append sort patterns (inner-join on sort slot values)
         if sort_patterns:
-            where_patterns.extend(sort_patterns)
-        
-        where_clause = "\n                ".join(p for p in where_patterns if p)
+            where_clause += "\n                " + "\n                ".join(sort_patterns)
         
         effective_order_by = order_by_clause or "ORDER BY ?source_entity ?destination_entity"
         
@@ -82,8 +101,43 @@ class KGConnectionQueryBuilder:
             }}
         }}
         {effective_order_by}
+        LIMIT {page_size}
+        OFFSET {offset}
         """
         
+        return query.strip()
+    
+    def build_relation_count_query(self, criteria: KGQueryCriteria, graph_id: str,
+                                   sort_patterns: Optional[List[str]] = None) -> str:
+        """Build COUNT query for relation connections.
+
+        Uses the same WHERE clause as ``build_relation_query`` — including
+        sort join patterns — so the count is consistent with the paginated
+        data query.  (Sort patterns act as inner joins; connections lacking
+        the sort property are excluded from data results, so the count must
+        exclude them too.  Same rationale as
+        ``build_entity_count_query_sparql``.)
+        """
+        where_clause = self._build_relation_where_clause(criteria)
+
+        # Include sort patterns so count matches data query
+        if sort_patterns:
+            where_clause += "\n                " + "\n                ".join(sort_patterns)
+
+        # Subquery approach: wrap SELECT DISTINCT inside COUNT(*)
+        # to avoid non-standard COUNT(DISTINCT *).
+        query = f"""
+        {self.prefixes}
+        SELECT (COUNT(*) AS ?count) WHERE {{
+            SELECT DISTINCT ?source_entity ?destination_entity ?relation_edge ?relation_type
+            WHERE {{
+                GRAPH <{graph_id}> {{
+                    {where_clause}
+                }}
+            }}
+        }}
+        """
+
         return query.strip()
     
     def build_frame_query(self, criteria: KGQueryCriteria, graph_id: str) -> str:

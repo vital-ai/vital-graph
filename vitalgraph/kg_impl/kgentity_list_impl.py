@@ -82,7 +82,13 @@ class KGEntityListProcessor:
                            search: Optional[str] = None,
                            include_entity_graph: bool = False,
                            sort_by: Optional[str] = None,
-                           sort_order: str = "asc") -> ListEntitiesResult:
+                           sort_order: str = "asc",
+                           status: Optional[str] = None,
+                           exclude_status: Optional[str] = None,
+                           created_after: Optional[str] = None,
+                           created_before: Optional[str] = None,
+                           modified_after: Optional[str] = None,
+                           modified_before: Optional[str] = None) -> ListEntitiesResult:
         """
         List KGEntities with filtering and pagination.
 
@@ -105,17 +111,26 @@ class KGEntityListProcessor:
                 sort_by, sort_order,
             )
 
+            # Build property filter clauses for SPARQL injection
+            prop_filters = self._build_property_filter_clauses(
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
+
             if not include_entity_graph:
                 return await self._list_entities_fast(
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
                     sort_by=sort_by, sort_order=sort_order,
+                    prop_filters=prop_filters,
                 )
             else:
                 return await self._list_entities_with_graph(
                     space_id, graph_id, page_size, offset,
                     entity_type_uri, search, backend_adapter,
                     sort_by=sort_by, sort_order=sort_order,
+                    prop_filters=prop_filters,
                 )
 
         except Exception as e:
@@ -129,7 +144,8 @@ class KGEntityListProcessor:
     async def _list_entities_fast(self, space_id, graph_id, page_size,
                                   offset, entity_type_uri, search,
                                   backend_adapter,
-                                  sort_by=None, sort_order="asc") -> ListEntitiesResult:
+                                  sort_by=None, sort_order="asc",
+                                  prop_filters: str = "") -> ListEntitiesResult:
         """Single SPARQL query fetches paginated entity properties directly."""
         from collections import defaultdict
 
@@ -137,10 +153,11 @@ class KGEntityListProcessor:
         sparql = self._build_optimized_properties_query(
             graph_id, page_size, offset, entity_type_uri, search,
             sort_by=sort_by, sort_order=sort_order,
+            prop_filters=prop_filters,
         )
 
         # Run data query and count query concurrently
-        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by)
+        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by, prop_filters=prop_filters)
 
         data_task = backend_adapter.execute_sparql_query(space_id, sparql)
         count_task = backend_adapter.execute_sparql_query(space_id, count_sparql)
@@ -168,7 +185,8 @@ class KGEntityListProcessor:
     async def _list_entities_with_graph(self, space_id, graph_id, page_size,
                                         offset, entity_type_uri, search,
                                         backend_adapter,
-                                        sort_by=None, sort_order="asc") -> ListEntitiesResult:
+                                        sort_by=None, sort_order="asc",
+                                        prop_filters: str = "") -> ListEntitiesResult:
         """Get entity URIs, then fetch full entity graphs in parallel."""
         from .kgentity_get_impl import KGEntityGetProcessor
 
@@ -176,8 +194,9 @@ class KGEntityListProcessor:
         uri_sparql = self._build_entity_uris_query(
             graph_id, page_size, offset, entity_type_uri, search,
             sort_by=sort_by, sort_order=sort_order,
+            prop_filters=prop_filters,
         )
-        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by)
+        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by, prop_filters=prop_filters)
 
         # Run URI + count concurrently
         uri_task = backend_adapter.execute_sparql_query(space_id, uri_sparql)
@@ -228,6 +247,7 @@ class KGEntityListProcessor:
     async def _bindings_to_graph_objects(self, bindings: list) -> List[GraphObject]:
         """Convert ?s ?p ?o SPARQL bindings to GraphObjects via from_property_maps."""
         from collections import defaultdict
+        from vital_ai_vitalsigns.impl.annotation_registry import is_annotation_property
 
         _RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
         _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
@@ -257,7 +277,11 @@ class KGEntityListProcessor:
             if o_type == 'uri':
                 value = o_val
             else:
-                value = self._convert_literal(o_val, o_data.get('datatype'))
+                lang = o_data.get('xml:lang')
+                if lang and is_annotation_property(p):
+                    value = {"value": o_val, "lang": lang}
+                else:
+                    value = self._convert_literal(o_val, o_data.get('datatype'))
 
             props = subjects[s]['properties']
             if p in props:
@@ -317,7 +341,8 @@ class KGEntityListProcessor:
                                           offset: int, entity_type_uri: Optional[str],
                                           search: Optional[str],
                                           sort_by: Optional[str] = None,
-                                          sort_order: str = "asc") -> str:
+                                          sort_order: str = "asc",
+                                          prop_filters: str = "") -> str:
         """Single query: subquery for paginated entity URIs + property fetch."""
         # Inner subquery type clause
         if entity_type_uri:
@@ -336,6 +361,11 @@ class KGEntityListProcessor:
                 f"\n          FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             )
 
+        # Property filter clauses (status, date range, etc.)
+        pf_clause = ""
+        if prop_filters:
+            pf_clause = "\n" + prop_filters.replace("?entity", "?s")
+
         # Sort triple + ORDER BY
         sort_triple = ""
         order_by = "ORDER BY ?s"
@@ -351,12 +381,13 @@ class KGEntityListProcessor:
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>\n"
+            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
             "SELECT ?s ?p ?o WHERE {\n"
             f"  GRAPH <{graph_id}> {{\n"
             "    {\n"
             f"      {inner_select}\n"
             f"        GRAPH <{graph_id}> {{\n"
-            f"          {type_clause}{search_clause}{sort_triple}\n"
+            f"          {type_clause}{search_clause}{pf_clause}{sort_triple}\n"
             "        }\n"
             "      }\n"
             f"      {order_by}\n"
@@ -374,7 +405,8 @@ class KGEntityListProcessor:
                                   offset: int, entity_type_uri: Optional[str],
                                   search: Optional[str],
                                   sort_by: Optional[str] = None,
-                                  sort_order: str = "asc") -> str:
+                                  sort_order: str = "asc",
+                                  prop_filters: str = "") -> str:
         """SELECT DISTINCT entity URIs with subclass UNIONs and pagination."""
         if entity_type_uri:
             type_clause = (
@@ -391,6 +423,10 @@ class KGEntityListProcessor:
                 f"\n    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             )
 
+        pf_clause = ""
+        if prop_filters:
+            pf_clause = "\n" + prop_filters
+
         sort_triple = ""
         order_by = "ORDER BY ?entity"
         if sort_by:
@@ -405,9 +441,10 @@ class KGEntityListProcessor:
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>\n"
+            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
             f"{select_clause}\n"
             f"  GRAPH <{graph_id}> {{\n"
-            f"    {type_clause}{search_clause}{sort_triple}\n"
+            f"    {type_clause}{search_clause}{pf_clause}{sort_triple}\n"
             "  }\n"
             "}\n"
             f"{order_by}\n"
@@ -618,7 +655,8 @@ class KGEntityListProcessor:
     
     def _build_count_query(self, graph_id: str, entity_type_uri: Optional[str], 
                           search: Optional[str],
-                          sort_by: Optional[str] = None) -> str:
+                          sort_by: Optional[str] = None,
+                          prop_filters: str = "") -> str:
         """Build SPARQL count query (with subclass UNIONs).
         
         When sort_by is provided the sort triple is included as a required join
@@ -637,6 +675,7 @@ class KGEntityListProcessor:
         query_parts = [
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>",
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>",
+            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>",
             "SELECT (COUNT(DISTINCT ?entity) AS ?count) WHERE {",
             f"  GRAPH <{graph_id}> {{",
             f"    {type_clause}"
@@ -649,6 +688,10 @@ class KGEntityListProcessor:
                 f"    FILTER(CONTAINS(LCASE(?name), LCASE(\"{search}\")))"
             ])
 
+        # Property filter clauses (status, date range, etc.)
+        if prop_filters:
+            query_parts.append(prop_filters)
+
         # Sort join — required so count matches paginated results
         if sort_by:
             query_parts.append(f"    ?entity <{sort_by}> ?sort_val .")
@@ -659,6 +702,58 @@ class KGEntityListProcessor:
         ])
         
         return "\n".join(query_parts)
+    
+    @staticmethod
+    def _build_property_filter_clauses(
+        status: Optional[str] = None,
+        exclude_status: Optional[str] = None,
+        created_after: Optional[str] = None,
+        created_before: Optional[str] = None,
+        modified_after: Optional[str] = None,
+        modified_before: Optional[str] = None,
+    ) -> str:
+        """Build SPARQL clauses for direct entity property filters.
+        
+        Returns a string of SPARQL triple patterns and FILTER expressions
+        that can be injected into WHERE clauses.  Uses ``?entity`` as the
+        subject variable (callers using ``?s`` should .replace accordingly).
+        """
+        _STATUS_URI = "http://vital.ai/ontology/vital-aimp#hasObjectStatusType"
+        _CREATED_URI = "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime"
+        _MODIFIED_URI = "http://vital.ai/ontology/vital#hasObjectModificationDateTime"
+        
+        parts: list = []
+        
+        if status:
+            parts.append(f"    ?entity <{_STATUS_URI}> <{status}> .")
+        
+        if exclude_status:
+            parts.append(f"    ?entity <{_STATUS_URI}> ?_excl_status .")
+            parts.append(f"    FILTER(?_excl_status != <{exclude_status}>)")
+        
+        if created_after or created_before:
+            parts.append(f"    ?entity <{_CREATED_URI}> ?_created .")
+            if created_after:
+                parts.append(
+                    f'    FILTER(?_created >= "{created_after}"^^xsd:dateTime)'
+                )
+            if created_before:
+                parts.append(
+                    f'    FILTER(?_created <= "{created_before}"^^xsd:dateTime)'
+                )
+        
+        if modified_after or modified_before:
+            parts.append(f"    ?entity <{_MODIFIED_URI}> ?_modified .")
+            if modified_after:
+                parts.append(
+                    f'    FILTER(?_modified >= "{modified_after}"^^xsd:dateTime)'
+                )
+            if modified_before:
+                parts.append(
+                    f'    FILTER(?_modified <= "{modified_before}"^^xsd:dateTime)'
+                )
+        
+        return "\n".join(parts)
     
     def _build_entities_query(self, graph_id: str, page_size: int, offset: int,
                              entity_type_uri: Optional[str], search: Optional[str],

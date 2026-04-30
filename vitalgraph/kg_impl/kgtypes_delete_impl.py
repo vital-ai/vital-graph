@@ -37,20 +37,15 @@ class KGTypesDeleteProcessor:
                 self.logger.info(f"KGType not found for deletion: {kgtype_uri}")
                 return False
             
-            # Build delete quads for the KGType
-            delete_quads = await self._build_delete_quads_for_kgtype(backend, space_id, graph_id, kgtype_uri)
-            
-            self.logger.info(f"🔍 Built {len(delete_quads)} delete quads for KGType")
-            
-            # Perform atomic delete using update_quads (no insert quads needed for DELETE)
-            insert_quads = []  # Empty for DELETE operation
-            
-            success = await backend.update_quads(
-                space_id=space_id,
-                graph_id=graph_id,
-                delete_quads=delete_quads,
-                insert_quads=insert_quads
-            )
+            # Subject-level delete (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                success = await backend.update_subjects_graph(
+                    space_id, graph_id, [kgtype_uri], [])
+            else:
+                delete_quads = await self._build_delete_quads_for_kgtype(backend, space_id, graph_id, kgtype_uri)
+                success = await backend.update_quads(
+                    space_id=space_id, graph_id=graph_id,
+                    delete_quads=delete_quads, insert_quads=[])
             
             if success:
                 self.logger.info(f"✅ Successfully deleted KGType atomically: {kgtype_uri}")
@@ -94,17 +89,18 @@ class KGTypesDeleteProcessor:
                 self.logger.info("No KGTypes found for deletion")
                 return 0
             
-            self.logger.info(f"🔍 Built {len(all_delete_quads)} delete quads for {deleted_count} KGTypes")
+            self.logger.info(f"🔍 Deleting {deleted_count} KGTypes")
             
-            # Perform atomic batch delete using update_quads
-            insert_quads = []  # Empty for DELETE operation
-            
-            success = await backend.update_quads(
-                space_id=space_id,
-                graph_id=graph_id,
-                delete_quads=all_delete_quads,
-                insert_quads=insert_quads
-            )
+            # Subject-level delete (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                delete_uris = [uri for uri in kgtype_uris
+                               if await self.kgtype_exists(backend, space_id, graph_id, uri)]
+                success = await backend.update_subjects_graph(
+                    space_id, graph_id, delete_uris, [])
+            else:
+                success = await backend.update_quads(
+                    space_id=space_id, graph_id=graph_id,
+                    delete_quads=all_delete_quads, insert_quads=[])
             
             if success:
                 self.logger.info(f"✅ Successfully deleted {deleted_count} KGTypes atomically")

@@ -34,6 +34,16 @@ class EntityGraphCache:
         self._max_bytes = max_bytes
         self._total_bytes: int = 0
 
+        # Subject → entity index.  Built at put() time from ALL unique
+        # subject URIs in the cached entity graph quads.
+        #   _sub_to_entity: (space_id, subject_uri) → {(graph_id, entity_uri), …}
+        #   _entity_subs:   cache_key → {subject_uri, …}  (for cleanup)
+        # At SPARQL UPDATE time we know only the quads being added/deleted.
+        # hasKGGraphURI is typically NOT among them.  This index lets us
+        # resolve any subject URI back to the owning entity for invalidation.
+        self._sub_to_entity: Dict[Tuple[str, str], Set[Tuple[str, str]]] = {}
+        self._entity_subs: Dict[Tuple, Set[str]] = {}
+
         # Counters for observability
         self._hits: int = 0
         self._misses: int = 0
@@ -80,6 +90,8 @@ class EntityGraphCache:
         self._cache[key] = (compressed, byte_size, time.time())
         self._cache.move_to_end(key)
         self._total_bytes += byte_size
+        # Index all subject URIs from cached quads → entity
+        self._index_subjects(key, quads)
         # Evict oldest if over entry count
         while len(self._cache) > self._max_entries:
             self._evict_oldest()
@@ -121,16 +133,27 @@ class EntityGraphCache:
     ) -> Set[Tuple[str, str]]:
         """Scan changed quads and return (graph_id, entity_uri) pairs to invalidate.
 
-        Pure in-memory — no DB queries. Two rules per quad:
-        1. Subject URI is a cached entity → invalidate it.
-        2. Predicate is hasKGGraphURI → object is the entity URI to invalidate.
+        Pure in-memory — no DB queries.  For each quad subject URI:
+        1. If it matches a cached entity key → invalidate that entity.
+        2. Otherwise look it up in the subject→entity index (built at
+           put() time from ALL subjects in the entity graph).  Any hits
+           → invalidate those parent entities.
 
-        For graph-level ops (CLEAR, DROP) returns all cached entries for that graph.
+        Additionally, if the predicate is hasKGGraphURI the object URI
+        is treated as an entity URI to invalidate (covers sub-object
+        creation/deletion where the triple IS in the SPARQL).
+
+        For graph-level ops (CLEAR, DROP) invalidates all cached entries.
         """
         from ..db.jena_sparql.jena_types import (
+            URINode,
             UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
             UpdateClear, UpdateDrop,
         )
+
+        def _uri_of(node) -> Optional[str]:
+            """Return the URI string if *node* is a URINode, else None."""
+            return node.value if isinstance(node, URINode) else None
 
         HAS_KG_GRAPH_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
         targets: Set[Tuple[str, str]] = set()  # (graph_id, entity_uri)
@@ -156,25 +179,22 @@ class EntityGraphCache:
                 quads = op.quads
 
             for q in quads:
-                sub_uri = getattr(q.subject, 'uri', None)
-                pred_uri = getattr(q.predicate, 'uri', None)
-                obj_uri = getattr(q.object, 'uri', None)
-                graph_uri = getattr(q.graph, 'uri', None) if q.graph else None
+                sub_uri = _uri_of(q.subject)
+                pred_uri = _uri_of(q.predicate)
+                obj_uri = _uri_of(q.object)
+                graph_uri = _uri_of(q.graph) if q.graph else None
 
-                # Rule 1: subject is a cached entity → invalidate it
+                # Look up subject in subject→entity index
                 if sub_uri:
-                    # Check all graphs in cache for this space + subject
-                    matched = [k for k in self._cache
-                               if k[0] == space_id and k[2] == sub_uri]
-                    for k in matched:
-                        targets.add((k[1], sub_uri))
+                    parents = self._sub_to_entity.get((space_id, sub_uri))
+                    if parents:
+                        targets.update(parents)
 
-                # Rule 2: quad is ?sub hasKGGraphURI ?entity_uri → invalidate ?entity_uri
+                # hasKGGraphURI in SPARQL → object is entity URI
                 if pred_uri == HAS_KG_GRAPH_URI and obj_uri:
                     if graph_uri:
                         targets.add((graph_uri, obj_uri))
                     else:
-                        # Check all graphs in cache for this entity URI
                         matched = [k for k in self._cache
                                    if k[0] == space_id and k[2] == obj_uri]
                         for k in matched:
@@ -221,11 +241,53 @@ class EntityGraphCache:
         entry = self._cache.pop(key, None)
         if entry:
             self._total_bytes -= entry[1]  # entry[1] = byte_size
+        self._remove_subject_index(key)
 
     def _evict_oldest(self) -> None:
         if self._cache:
-            _, entry = self._cache.popitem(last=False)
+            oldest_key, entry = self._cache.popitem(last=False)
             self._total_bytes -= entry[1]
+            self._remove_subject_index(oldest_key)
+
+    # Subject → entity index management
+
+    def _index_subjects(self, key: Tuple, quads: List[Any]) -> None:
+        """Index every unique subject URI from cached entity graph quads.
+
+        We know the entity URI (cache key) and we know all the subjects
+        being cached.  Map each (space_id, subject_uri) → (graph_id, entity_uri)
+        so that collect_invalidation_targets() can resolve any subject in a
+        SPARQL UPDATE back to the owning entity.
+        """
+        space_id, graph_id, entity_uri = key
+        entity_ref = (graph_id, entity_uri)
+        subject_uris: Set[str] = set()
+        for q in quads:
+            s = getattr(q, 's', None)
+            if s is None and isinstance(q, dict):
+                s = q.get('s', '')
+            if s and isinstance(s, str) and s.startswith('<') and s.endswith('>'):
+                bare = s[1:-1]
+                subject_uris.add(bare)
+                rk = (space_id, bare)
+                if rk not in self._sub_to_entity:
+                    self._sub_to_entity[rk] = set()
+                self._sub_to_entity[rk].add(entity_ref)
+        self._entity_subs[key] = subject_uris
+
+    def _remove_subject_index(self, key: Tuple) -> None:
+        """Purge all subject→entity index entries for a removed cache entry."""
+        subject_uris = self._entity_subs.pop(key, None)
+        if subject_uris:
+            space_id = key[0]
+            entity_ref = (key[1], key[2])
+            for su in subject_uris:
+                rk = (space_id, su)
+                refs = self._sub_to_entity.get(rk)
+                if refs:
+                    refs.discard(entity_ref)
+                    if not refs:
+                        del self._sub_to_entity[rk]
 
 
 # Module-level singleton — shared across all endpoint instances within one process.

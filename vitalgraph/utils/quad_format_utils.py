@@ -270,6 +270,24 @@ def _graphobjects_to_quad_list_fast(
                 o_enc = _value_to_nquads_outbound(v, is_uri)
                 quads.append(Quad(s=s, p=p_enc, o=o_enc, g=g_encoded))
 
+        # Annotation triples (rdfs:label, rdfs:comment, etc.)
+        annotations = pm.get('annotations')
+        if annotations:
+            for ann_uri, ann_values in annotations.items():
+                p_enc = f"<{ann_uri}>"
+                for av in ann_values:
+                    if isinstance(av, dict):
+                        lexical = _escape_nquads_string(av.get('value', ''))
+                        lang = av.get('lang')
+                        if lang:
+                            o_enc = f'"{lexical}"@{lang}'
+                        else:
+                            o_enc = f'"{lexical}"'
+                    else:
+                        lexical = _escape_nquads_string(str(av))
+                        o_enc = f'"{lexical}"'
+                    quads.append(Quad(s=s, p=p_enc, o=o_enc, g=g_encoded))
+
     logger.debug("Converted %d GraphObjects to %d quads (fast path)", len(graph_objects), len(quads))
     return quads
 
@@ -312,7 +330,8 @@ def _parse_nquads_object(term_str: str) -> Any:
     """Parse an N-Quads object term into a native Python value.
 
     Returns:
-        str for URIs and plain/language literals,
+        str for URIs and plain literals,
+        dict {"value": str, "lang": str} for language-tagged literals,
         int/float/bool/datetime for typed literals.
     """
     term_str = term_str.strip()
@@ -342,7 +361,9 @@ def _parse_nquads_object(term_str: str) -> Any:
         if rest.startswith('^^<') and rest.endswith('>'):
             datatype = rest[3:-1]
             return _convert_typed_literal(lexical, datatype)
-        # Language-tagged or plain string → just return lexical value
+        if rest.startswith('@'):
+            lang = rest[1:]
+            return {"value": lexical, "lang": lang}
         return lexical
 
     return term_str
@@ -382,6 +403,7 @@ def _parse_nquads_uri(term_str: str) -> str:
 def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
     """Convert quads → GraphObjects via from_property_maps (no rdflib)."""
     from collections import defaultdict
+    from vital_ai_vitalsigns.impl.annotation_registry import is_annotation_property
 
     subjects: dict = defaultdict(lambda: {'type_uri': None, 'properties': {}})
 
@@ -397,6 +419,11 @@ def _quad_list_to_graphobjects_fast(quads: List[Quad]) -> List[GraphObject]:
             continue
         if p_uri == _URI_PROP:
             continue
+
+        # For non-annotation predicates, unwrap language-tagged dicts to plain strings
+        # (domain properties don't support language tags)
+        if isinstance(o_val, dict) and 'value' in o_val and not is_annotation_property(p_uri):
+            o_val = o_val['value']
 
         props = subjects[s_uri]['properties']
         if p_uri in props:

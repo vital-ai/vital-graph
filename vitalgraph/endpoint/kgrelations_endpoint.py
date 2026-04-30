@@ -555,36 +555,41 @@ class KGRelationsEndpoint:
             
             relation_uri = str(relation.URI)
             
-            # Step 1: Query existing triples to build delete quads with proper RDFLib objects
-            query = f"""SELECT ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{relation_uri}> ?p ?o .
-                }}
-            }}"""
-            results = await backend.execute_sparql_query(space_id, query)
-            
-            delete_quads = []
-            bindings = []
-            if isinstance(results, dict) and 'results' in results:
-                bindings = results['results'].get('bindings', [])
-            elif isinstance(results, list):
-                bindings = results
-            
-            for binding in bindings:
-                if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
-                    p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                    o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                    if p_value and o_rdflib is not None:
-                        delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
-            
-            # Step 2: Build insert quads from VitalSigns (preserves RDFLib objects)
+            # Build insert quads from VitalSigns (preserves RDFLib objects)
             relation_triples = relation.to_rdf()
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
             
-            # Step 3: Atomic update
-            if delete_quads or insert_quads:
-                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-                updated_uris.append(relation_uri)
+            # Subject-level delete + insert (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                if insert_quads or True:  # always delete existing
+                    await backend.update_subjects_graph(
+                        space_id, graph_id, [relation_uri], insert_quads)
+                    updated_uris.append(relation_uri)
+            else:
+                query = f"""SELECT ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{
+                        <{relation_uri}> ?p ?o .
+                    }}
+                }}"""
+                results = await backend.execute_sparql_query(space_id, query)
+                
+                delete_quads = []
+                bindings = []
+                if isinstance(results, dict) and 'results' in results:
+                    bindings = results['results'].get('bindings', [])
+                elif isinstance(results, list):
+                    bindings = results
+                
+                for binding in bindings:
+                    if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
+                        if p_value and o_rdflib is not None:
+                            delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
+                
+                if delete_quads or insert_quads:
+                    await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
+                    updated_uris.append(relation_uri)
         
         return updated_uris
     
@@ -608,36 +613,41 @@ class KGRelationsEndpoint:
             
             relation_uri = str(relation.URI)
             
-            # Step 1: Query existing triples (may be empty for create case)
-            query = f"""SELECT ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    <{relation_uri}> ?p ?o .
-                }}
-            }}"""
-            results = await backend.execute_sparql_query(space_id, query)
-            
-            delete_quads = []
-            bindings = []
-            if isinstance(results, dict) and 'results' in results:
-                bindings = results['results'].get('bindings', [])
-            elif isinstance(results, list):
-                bindings = results
-            
-            for binding in bindings:
-                if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
-                    p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
-                    o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
-                    if p_value and o_rdflib is not None:
-                        delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
-            
-            # Step 2: Build insert quads from VitalSigns (preserves RDFLib objects)
+            # Build insert quads from VitalSigns (preserves RDFLib objects)
             relation_triples = relation.to_rdf()
             insert_quads = [(str(s), str(p), o, graph_id) for s, p, o in relation_triples]
             
-            # Step 3: Atomic update (works for both create and update cases)
-            if insert_quads:
-                await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
-                upserted_uris.append(relation_uri)
+            # Subject-level delete + insert (safe path)
+            if hasattr(backend, 'update_subjects_graph'):
+                if insert_quads:
+                    await backend.update_subjects_graph(
+                        space_id, graph_id, [relation_uri], insert_quads)
+                    upserted_uris.append(relation_uri)
+            else:
+                query = f"""SELECT ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{
+                        <{relation_uri}> ?p ?o .
+                    }}
+                }}"""
+                results = await backend.execute_sparql_query(space_id, query)
+                
+                delete_quads = []
+                bindings = []
+                if isinstance(results, dict) and 'results' in results:
+                    bindings = results['results'].get('bindings', [])
+                elif isinstance(results, list):
+                    bindings = results
+                
+                for binding in bindings:
+                    if isinstance(binding, dict) and 'p' in binding and 'o' in binding:
+                        p_value = binding['p'].get('value', '') if isinstance(binding['p'], dict) else str(binding['p'])
+                        o_rdflib = _sparql_binding_to_rdflib(binding.get('o', ''))
+                        if p_value and o_rdflib is not None:
+                            delete_quads.append((relation_uri, p_value, o_rdflib, graph_id))
+                
+                if insert_quads:
+                    await backend.update_quads(space_id, graph_id, delete_quads, insert_quads)
+                    upserted_uris.append(relation_uri)
         
         return upserted_uris
     

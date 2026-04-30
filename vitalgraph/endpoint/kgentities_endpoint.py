@@ -29,6 +29,7 @@ from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, Fra
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from ..sparql.graph_validation import EntityGraphValidator
 from ..cache.entity_graph_cache import _entity_graph_cache
+from ..cache.count_cache import _count_cache
 
 # Import new kg_impl implementation
 from ..kg_impl.kg_backend_utils import create_backend_adapter
@@ -93,9 +94,10 @@ class KGEntitiesEndpoint:
         _effective_graph = graph_id or "default"
         try:
             _entity_graph_cache.invalidate(space_id, _effective_graph, entity_uri)
-            self.logger.info(f"🗑️ Entity cache LOCAL invalidation: {entity_uri} ({signal_type})")
+            _count_cache.invalidate_graph(space_id, _effective_graph)
+            self.logger.info(f"🗑️ Entity+count cache LOCAL invalidation: {entity_uri} ({signal_type})")
         except Exception as e:
-            self.logger.warning(f"Entity graph cache local invalidation failed: {e}")
+            self.logger.warning(f"Entity/count cache local invalidation failed: {e}")
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if space_record:
@@ -127,6 +129,12 @@ class KGEntitiesEndpoint:
             include_entity_graph: bool = Query(False, description="If True, include complete entity graphs with frames and slots"),
             sort_by: Optional[str] = Query(None, description="Property URI to sort by (e.g. vital-core:hasName). Must be one of the allowed sortable properties."),
             sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
+            status: Optional[str] = Query(None, description="Filter by status URI (exact match)"),
+            exclude_status: Optional[str] = Query(None, description="Exclude entities with this status URI"),
+            created_after: Optional[str] = Query(None, description="Entities created after this ISO 8601 datetime"),
+            created_before: Optional[str] = Query(None, description="Entities created before this ISO 8601 datetime"),
+            modified_after: Optional[str] = Query(None, description="Entities modified after this ISO 8601 datetime"),
+            modified_before: Optional[str] = Query(None, description="Entities modified before this ISO 8601 datetime"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
@@ -184,7 +192,13 @@ class KGEntitiesEndpoint:
                     raise HTTPException(status_code=400, detail="sort_order must be 'asc' or 'desc'")
 
             # Handle paginated listing
-            return await self._list_entities(space_id, graph_id, page_size, offset, entity_type_uri, search, include_entity_graph, current_user, sort_by=sort_by, sort_order=sort_order)
+            return await self._list_entities(
+                space_id, graph_id, page_size, offset, entity_type_uri, search,
+                include_entity_graph, current_user, sort_by=sort_by, sort_order=sort_order,
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
         
         @self.router.post("/kgentities", response_model=Union[EntityCreateResponse, EntityUpdateResponse], tags=["KG Entities"])
         async def create_or_update_entities(
@@ -226,6 +240,54 @@ class KGEntitiesEndpoint:
                     deleted_count=0,
                     deleted_uris=[]
                 )
+        
+        @self.router.get("/kgentities/count", tags=["KG Entities"])
+        async def count_entities(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: Optional[str] = Query(None, description="Graph ID"),
+            entity_type_uri: Optional[str] = Query(None, description="Entity type URI to filter by"),
+            search: Optional[str] = Query(None, description="Search text to find in entity properties"),
+            sort_by: Optional[str] = Query(None, description="Property URI — entities missing this property are excluded from count"),
+            status: Optional[str] = Query(None, description="Filter by status URI (exact match)"),
+            exclude_status: Optional[str] = Query(None, description="Exclude entities with this status URI"),
+            created_after: Optional[str] = Query(None, description="Entities created after this ISO 8601 datetime"),
+            created_before: Optional[str] = Query(None, description="Entities created before this ISO 8601 datetime"),
+            modified_after: Optional[str] = Query(None, description="Entities modified after this ISO 8601 datetime"),
+            modified_before: Optional[str] = Query(None, description="Entities modified before this ISO 8601 datetime"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            """Return only the count of entities matching the given filters."""
+            return await self._count_entities(
+                space_id, graph_id, entity_type_uri, search, sort_by,
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
+        
+        class _CountRequest(BaseModel):
+            label: str = Field(..., description="Label for this count request")
+            entity_type_uri: Optional[str] = Field(None, description="Entity type URI")
+            search: Optional[str] = Field(None, description="Search text")
+            sort_by: Optional[str] = Field(None, description="Sort property URI (entities missing it are excluded)")
+            status: Optional[str] = Field(None, description="Status URI filter")
+            exclude_status: Optional[str] = Field(None, description="Exclude status URI")
+            created_after: Optional[str] = Field(None, description="Created after ISO 8601")
+            created_before: Optional[str] = Field(None, description="Created before ISO 8601")
+            modified_after: Optional[str] = Field(None, description="Modified after ISO 8601")
+            modified_before: Optional[str] = Field(None, description="Modified before ISO 8601")
+        
+        class _BatchCountRequest(BaseModel):
+            space_id: str = Field(..., description="Space ID")
+            graph_id: Optional[str] = Field(None, description="Graph ID")
+            count_requests: List[_CountRequest] = Field(..., description="List of count requests")
+        
+        @self.router.post("/kgentities/counts", tags=["KG Entities"])
+        async def batch_count_entities(
+            body: _BatchCountRequest = Body(...),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
+            """Return counts for multiple filter combinations in a single call."""
+            return await self._batch_count_entities(body)
         
         @self.router.get("/kgentities/kgframes", response_model=Union[QuadResponse, FrameGraphsResponse], response_model_by_alias=True, tags=["KG Entities"])
         async def get_entity_frames(
@@ -307,7 +369,7 @@ class KGEntitiesEndpoint:
             return await self._query_kgentities(space_id, graph_id, query_request, current_user)
         
     
-    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc"):
+    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc", status: Optional[str] = None, exclude_status: Optional[str] = None, created_after: Optional[str] = None, created_before: Optional[str] = None, modified_after: Optional[str] = None, modified_before: Optional[str] = None):
         """List entities using KGEntityListProcessor."""
         try:
             import time as _time
@@ -341,6 +403,12 @@ class KGEntitiesEndpoint:
                 include_entity_graph=include_entity_graph,
                 sort_by=sort_by,
                 sort_order=sort_order,
+                status=status,
+                exclude_status=exclude_status,
+                created_after=created_after,
+                created_before=created_before,
+                modified_after=modified_after,
+                modified_before=modified_before,
             )
             t_query = _time.monotonic()
             
@@ -370,6 +438,99 @@ class KGEntitiesEndpoint:
         except Exception as e:
             self.logger.error(f"Error listing KGEntities: {e}")
             return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+    
+    async def _count_entities(self, space_id: str, graph_id: Optional[str],
+                              entity_type_uri: Optional[str], search: Optional[str],
+                              sort_by: Optional[str],
+                              status: Optional[str] = None, exclude_status: Optional[str] = None,
+                              created_after: Optional[str] = None, created_before: Optional[str] = None,
+                              modified_after: Optional[str] = None, modified_before: Optional[str] = None):
+        """Execute count-only query and return {'count': N}."""
+        try:
+            _effective_graph = graph_id or "default"
+            
+            list_processor = KGEntityListProcessor(logger=self.logger)
+            prop_filters = list_processor._build_property_filter_clauses(
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
+            count_sparql = list_processor._build_count_query(
+                _effective_graph, entity_type_uri, search,
+                sort_by=sort_by, prop_filters=prop_filters,
+            )
+            
+            # Check count cache
+            qhash = _count_cache.query_hash(count_sparql)
+            cached = _count_cache.get(space_id, _effective_graph, qhash)
+            if cached is not None:
+                return {"count": cached}
+            
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                return {"count": 0}
+            backend = space_record.space_impl.get_db_space_impl()
+            if not backend:
+                return {"count": 0}
+            backend_adapter = create_backend_adapter(backend)
+            
+            from ..kg_impl.kgentity_list_impl import _extract_bindings
+            result = await backend_adapter.execute_sparql_query(space_id, count_sparql)
+            bindings = _extract_bindings(result)
+            count = int(bindings[0]['count']['value']) if bindings and 'count' in bindings[0] else 0
+            
+            _count_cache.put(space_id, _effective_graph, qhash, count)
+            return {"count": count}
+        except Exception as e:
+            self.logger.error(f"Error counting entities: {e}")
+            return {"count": 0}
+    
+    async def _batch_count_entities(self, body):
+        """Execute multiple count queries concurrently and return results."""
+        try:
+            space_record = await self.space_manager.get_space_or_load(body.space_id)
+            if not space_record:
+                return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
+            backend = space_record.space_impl.get_db_space_impl()
+            if not backend:
+                return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
+            backend_adapter = create_backend_adapter(backend)
+            
+            list_processor = KGEntityListProcessor(logger=self.logger)
+            graph_id = body.graph_id or "default"
+            
+            async def _run_count(cr):
+                try:
+                    pf = list_processor._build_property_filter_clauses(
+                        status=cr.status, exclude_status=cr.exclude_status,
+                        created_after=cr.created_after, created_before=cr.created_before,
+                        modified_after=cr.modified_after, modified_before=cr.modified_before,
+                    )
+                    sparql = list_processor._build_count_query(
+                        graph_id, cr.entity_type_uri, cr.search,
+                        sort_by=cr.sort_by, prop_filters=pf,
+                    )
+                    # Check count cache
+                    qhash = _count_cache.query_hash(sparql)
+                    cached = _count_cache.get(body.space_id, graph_id, qhash)
+                    if cached is not None:
+                        return {"label": cr.label, "count": cached}
+                    
+                    from ..kg_impl.kgentity_list_impl import _extract_bindings
+                    result = await backend_adapter.execute_sparql_query(body.space_id, sparql)
+                    bindings = _extract_bindings(result)
+                    count = int(bindings[0]['count']['value']) if bindings and 'count' in bindings[0] else 0
+                    _count_cache.put(body.space_id, graph_id, qhash, count)
+                    return {"label": cr.label, "count": count}
+                except Exception as e:
+                    self.logger.error(f"Batch count error for '{cr.label}': {e}")
+                    return {"label": cr.label, "count": 0}
+            
+            counts = await asyncio.gather(*[_run_count(cr) for cr in body.count_requests])
+            return {"counts": list(counts)}
+        except Exception as e:
+            self.logger.error(f"Error in batch count: {e}")
+            return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
     
     async def _get_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: Optional[str], include_entity_graph: bool, current_user: Dict, reference_id: Optional[str] = None):
         """Get single entity by URI or reference ID."""
@@ -604,6 +765,13 @@ class KGEntitiesEndpoint:
             if operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
 
+            # Stamp server-managed properties on KGEntity objects (T2)
+            from datetime import datetime, timezone
+            from ..kg_impl.kg_server_properties import stamp_entity_server_properties
+            _now = datetime.now(timezone.utc)
+            for _ent in entity_objects:
+                stamp_entity_server_properties(_ent, _now, is_create=True)
+
             processor = KGEntityCreateProcessor(backend_adapter)
             _result = await processor.create_or_update_entities(
                 space_id=space_id,
@@ -659,14 +827,46 @@ class KGEntitiesEndpoint:
                     updated_uri=""
                 )
             
-            # Check if entities exist before updating
-            for entity_uri in entity_uris:
-                if not await self.update_processor.entity_exists(backend_adapter, space_id, graph_id, entity_uri):
+            # Combined existence check + property fetch + stamp (T3, Decision 4)
+            from datetime import datetime, timezone
+            from ..kg_impl.kg_server_properties import (
+                fetch_entity_server_props, batch_fetch_entity_server_props,
+                stamp_entity_server_properties,
+            )
+            _now = datetime.now(timezone.utc)
+            _entity_map = {str(obj.URI): obj for obj in updated_objects
+                           if isinstance(obj, KGEntity) and hasattr(obj, 'URI') and obj.URI}
+
+            if len(entity_uris) == 1:
+                _props = await fetch_entity_server_props(
+                    backend_adapter, space_id, graph_id, entity_uris[0])
+                if _props is None:
                     return EntityUpdateResponse(
-                        message=f"Entity {entity_uri} does not exist. Use CREATE mode to create new entities.",
+                        message=f"Entity {entity_uris[0]} does not exist. Use CREATE mode to create new entities.",
                         updated_uri=""
                     )
-            
+                _props_map = {entity_uris[0]: _props}
+            else:
+                _props_map = await batch_fetch_entity_server_props(
+                    backend_adapter, space_id, graph_id, entity_uris)
+                for _eu in entity_uris:
+                    if _eu not in _props_map:
+                        return EntityUpdateResponse(
+                            message=f"Entity {_eu} does not exist. Use CREATE mode to create new entities.",
+                            updated_uri=""
+                        )
+
+            for _eu, _ep in _props_map.items():
+                _ent_obj = _entity_map.get(_eu)
+                if _ent_obj:
+                    stamp_entity_server_properties(
+                        _ent_obj, _now,
+                        existing_creation_time=_ep.creation_time,
+                        existing_status=_ep.status,
+                        existing_entity_type=_ep.entity_type,
+                        is_create=False,
+                    )
+
             # Ownership check: verify sub-object URIs don't belong to a different entity.
             # This prevents cross-entity data corruption from malicious or buggy clients.
             ownership_validator = KGOwnershipValidator(backend_adapter, self.logger)
@@ -1145,6 +1345,18 @@ class KGEntitiesEndpoint:
             if result.success:
                 self.logger.debug(f"Successfully created/updated {result.frame_count} frame objects")
                 
+                # Touch entity modification time after frame write (T4)
+                if entity_uri:
+                    try:
+                        from datetime import datetime, timezone
+                        from ..kg_impl.kg_server_properties import touch_entity_modification_time
+                        await touch_entity_modification_time(
+                            backend_adapter, space_id, graph_id, entity_uri,
+                            datetime.now(timezone.utc),
+                        )
+                    except Exception as _te:
+                        self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
+
                 # Invalidate entity graph cache (frame write changes the entity graph)
                 if entity_uri:
                     await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
@@ -1524,8 +1736,17 @@ class KGEntitiesEndpoint:
             # Execute frame deletion
             result = await processor.delete_frames(space_id, full_graph_uri, entity_uri, frame_uris)
             
-            # Invalidate entity graph cache (frame deletion changes the entity graph)
+            # Touch entity modification time and invalidate cache after frame deletion (T6)
             if result.deleted_frame_uris:
+                try:
+                    from datetime import datetime, timezone
+                    from ..kg_impl.kg_server_properties import touch_entity_modification_time
+                    await touch_entity_modification_time(
+                        backend_adapter, space_id, full_graph_uri, entity_uri,
+                        datetime.now(timezone.utc),
+                    )
+                except Exception as _te:
+                    self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
             
             # Convert to response model
@@ -1826,6 +2047,17 @@ class KGEntitiesEndpoint:
                 if failure_messages:
                     message += f", {len(failed_updates)} frame(s) failed: {'; '.join(failure_messages)}"
                 
+                # Touch entity modification time after frame update (T5)
+                try:
+                    from datetime import datetime, timezone
+                    from ..kg_impl.kg_server_properties import touch_entity_modification_time
+                    await touch_entity_modification_time(
+                        backend_adapter, space_id, graph_id, entity_uri,
+                        datetime.now(timezone.utc),
+                    )
+                except Exception as _te:
+                    self.logger.warning(f"touch_entity_modification_time failed (non-critical): {_te}")
+
                 # Invalidate entity graph cache (frame update changes the entity graph)
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
                 
@@ -1990,6 +2222,18 @@ class KGEntitiesEndpoint:
                 frame_type=criteria.frame_type
             )]
         
+        # Convert entity property filters
+        sparql_entity_property_filters = None
+        if hasattr(criteria, 'entity_property_filters') and criteria.entity_property_filters:
+            from ..sparql.kg_query_builder import EntityPropertyFilter as SparqlEntityPropertyFilter
+            sparql_entity_property_filters = [
+                SparqlEntityPropertyFilter(
+                    property_uri=epf.property_uri,
+                    operator=epf.operator,
+                    value=epf.value
+                ) for epf in criteria.entity_property_filters
+            ]
+        
         # Create SPARQL criteria object
         sparql_criteria = SparqlEntityQueryCriteria(
             search_string=criteria.search_string,
@@ -1997,7 +2241,8 @@ class KGEntitiesEndpoint:
             frame_criteria=sparql_frame_criteria,
             slot_criteria=sparql_slot_criteria,
             sort_criteria=sparql_sort_criteria,
-            filters=sparql_filters
+            filters=sparql_filters,
+            entity_property_filters=sparql_entity_property_filters
         )
         
         return sparql_criteria

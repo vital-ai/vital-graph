@@ -69,14 +69,56 @@ class FrameCriteria(BaseModel):
     frame_criteria: Optional[List['FrameCriteria']] = Field(None, description="Nested frame criteria for hierarchical frame structures (parent→child frames)")
 
 
-# Allowed property URIs for entity_property sort type
-_ENTITY_SORT_PROPERTIES = {
-    "http://vital.ai/ontology/vital-core#hasName",
-    "http://vital.ai/ontology/vital#hasObjectModificationDateTime",
-    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime",
-    "http://vital.ai/ontology/vital-core#hasTimestamp",
-    "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType",
+# Property registry: maps property URI → datatype for filtering and sorting.
+# Adding a property here makes it available for both sorting and filtering.
+_FILTERABLE_ENTITY_PROPERTIES = {
+    "http://vital.ai/ontology/vital-core#hasName":                        "string",
+    "http://vital.ai/ontology/vital#hasObjectModificationDateTime":       "dateTime",
+    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime":          "dateTime",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType":               "uri",
+    "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
 }
+
+# Allowed property URIs for entity_property sort type (derived from registry)
+_ENTITY_SORT_PROPERTIES = set(_FILTERABLE_ENTITY_PROPERTIES.keys())
+
+# Valid operators per datatype
+_OPERATORS_BY_DATATYPE = {
+    "string":   {"eq", "ne", "contains"},
+    "dateTime": {"eq", "ne", "gt", "lt", "gte", "lte"},
+    "uri":      {"eq", "ne", "in", "not_in"},
+}
+
+
+class EntityPropertyFilter(BaseModel):
+    """Filter on a direct property of the entity node."""
+    property_uri: str = Field(..., description="Full property URI")
+    operator: str = Field(..., description="Filter operator: eq, ne, gt, lt, gte, lte, contains, in, not_in")
+    value: Optional[Union[str, List[str]]] = Field(
+        None,
+        description="Single value for eq/ne/gt/lt/gte/lte/contains, or list of values for in/not_in"
+    )
+
+    @model_validator(mode='after')
+    def validate_entity_property_filter(self) -> 'EntityPropertyFilter':
+        if self.property_uri not in _FILTERABLE_ENTITY_PROPERTIES:
+            raise ValueError(
+                f"property_uri '{self.property_uri}' is not a filterable property. "
+                f"Allowed: {', '.join(sorted(_FILTERABLE_ENTITY_PROPERTIES.keys()))}"
+            )
+        datatype = _FILTERABLE_ENTITY_PROPERTIES[self.property_uri]
+        valid_ops = _OPERATORS_BY_DATATYPE[datatype]
+        if self.operator not in valid_ops:
+            raise ValueError(
+                f"operator '{self.operator}' is not valid for datatype '{datatype}'. "
+                f"Allowed: {', '.join(sorted(valid_ops))}"
+            )
+        if self.operator in ("in", "not_in"):
+            if not isinstance(self.value, list):
+                raise ValueError(
+                    f"value must be a list when operator is '{self.operator}'"
+                )
+        return self
 
 _VALID_SORT_TYPES = {
     "entity_frame_slot", "frame_slot",
@@ -144,6 +186,7 @@ class EntityQueryCriteria(BaseModel):
     slot_criteria: Optional[List[SlotCriteria]] = Field(None, description="Slot-based filtering criteria")
     sort_criteria: Optional[List[SortCriteria]] = Field(None, description="Multi-level sorting criteria")
     filters: Optional[List[QueryFilter]] = Field(None, description="Property-based filters")
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
 
 
 class EntityQueryRequest(BaseModel):

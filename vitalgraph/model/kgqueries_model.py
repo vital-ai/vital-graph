@@ -7,7 +7,7 @@ Single endpoint with query criteria that specifies relation, frame, or entity qu
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .kgentities_model import EntityQueryCriteria, FrameCriteria, SlotCriteria, SortCriteria
+from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria
 from .api_model import BasePaginatedResponse
 
 
@@ -42,6 +42,9 @@ class KGQueryCriteria(BaseModel):
     # Sorting
     sort_criteria: Optional[List[SortCriteria]] = Field(None, description="Multi-level sorting criteria (sort by slot values)")
     
+    # Direct entity property filters
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
+    
     # Query constraints
     exclude_self_connections: bool = Field(True, description="Exclude connections from entity to itself")
 
@@ -53,6 +56,7 @@ class KGQueryRequest(BaseModel):
     offset: int = Field(0, description="Offset for pagination", ge=0)
     include_frame_graph: bool = Field(False, description="When True, include structured frame graph data in frame_query results")
     include_entity_graph: bool = Field(False, description="When True, include structured entity graph data in entity query results")
+    count_only: bool = Field(False, description="When True, execute only the count query and return total_count with empty result lists")
 
 
 class RelationConnection(BaseModel):

@@ -185,10 +185,16 @@ class EntityWeaviateIndex:
             WEAVIATE_GRPC_PORT - Weaviate gRPC port (default 50051)
         """
         from vitalgraph.config.config_loader import get_scoped_env
+        import os
 
-        enabled = get_scoped_env('ENTITY_WEAVIATE_ENABLED', 'false').lower() == 'true'
+        env_profile = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()
+        raw_value = get_scoped_env('ENTITY_WEAVIATE_ENABLED', 'false')
+        enabled = raw_value.lower() == 'true'
         if not enabled:
-            logger.info("Entity Weaviate indexing is disabled (ENTITY_WEAVIATE_ENABLED != true)")
+            logger.info("Entity Weaviate indexing is disabled "
+                        "(ENTITY_WEAVIATE_ENABLED=%s, profile=%s — "
+                        "looked for %s_ENTITY_WEAVIATE_ENABLED then ENTITY_WEAVIATE_ENABLED)",
+                        raw_value, env_profile, env_profile)
             return None
 
         try:

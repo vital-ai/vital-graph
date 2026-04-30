@@ -46,6 +46,7 @@ class VitalGraphAppImpl:
         self.config: VitalGraphConfig = config
         self.entity_registry: Any = None
         self.agent_registry: Any = None
+        self._backfill_task: Any = None
         
         # Configure logging based on config file
         try:
@@ -237,6 +238,8 @@ class VitalGraphAppImpl:
                             from vitalgraph.entity_registry.entity_dedup import EntityDedupIndex
                             from vitalgraph.entity_registry.entity_weaviate import EntityWeaviateIndex
                             dedup_index = EntityDedupIndex.from_env()
+                            self.logger.info("Initializing Weaviate index (profile=%s)...",
+                                             os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper())
                             weaviate_index = await EntityWeaviateIndex.from_env()
                             signal_mgr = self.vital_graph_impl.signal_manager if self.vital_graph_impl else None
                             self.entity_registry = EntityRegistryImpl(
@@ -408,6 +411,7 @@ class VitalGraphAppImpl:
                         if signal_manager:
                             from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_GRAPH, CHANNEL_GRAPH, CHANNEL_SPACE
                             from vitalgraph.cache.entity_graph_cache import _entity_graph_cache
+                            from vitalgraph.cache.count_cache import _count_cache
 
                             async def _handle_entity_graph_signal(data: dict):
                                 space_id = data.get("space_id", "")
@@ -415,10 +419,12 @@ class VitalGraphAppImpl:
                                 entity_uri = data.get("entity_uri", "")
                                 if space_id and graph_id and entity_uri:
                                     _entity_graph_cache.invalidate(space_id, graph_id, entity_uri)
-                                    self.logger.info(f"📡 Entity cache NOTIFY received — invalidated {entity_uri}")
+                                    _count_cache.invalidate_graph(space_id, graph_id)
+                                    self.logger.info(f"📡 Entity+count cache NOTIFY received — invalidated {entity_uri}")
                                 elif space_id and graph_id:
                                     _entity_graph_cache.invalidate_graph(space_id, graph_id)
-                                    self.logger.info(f"📡 Entity cache NOTIFY received — invalidated graph {graph_id}")
+                                    _count_cache.invalidate_graph(space_id, graph_id)
+                                    self.logger.info(f"📡 Entity+count cache NOTIFY received — invalidated graph {graph_id}")
 
                             async def _handle_graph_entity_cache(data: dict):
                                 signal_type = data.get("type", "")
@@ -426,17 +432,19 @@ class VitalGraphAppImpl:
                                 space_id = data.get("space_id", "")
                                 if signal_type in ("deleted", "updated") and space_id and graph_uri:
                                     _entity_graph_cache.invalidate_graph(space_id, graph_uri)
+                                    _count_cache.invalidate_graph(space_id, graph_uri)
 
                             async def _handle_space_entity_cache(data: dict):
                                 signal_type = data.get("type", "")
                                 space_id = data.get("space_id", "")
                                 if signal_type == "deleted" and space_id:
                                     _entity_graph_cache.invalidate_space(space_id)
+                                    _count_cache.invalidate_space(space_id)
 
                             signal_manager.register_callback(CHANNEL_ENTITY_GRAPH, _handle_entity_graph_signal)
                             signal_manager.register_callback(CHANNEL_GRAPH, _handle_graph_entity_cache)
                             signal_manager.register_callback(CHANNEL_SPACE, _handle_space_entity_cache)
-                            self.logger.info("✅ Entity graph cache cross-instance sync registered on CHANNEL_ENTITY_GRAPH/GRAPH/SPACE")
+                            self.logger.info("✅ Entity graph + count cache cross-instance sync registered on CHANNEL_ENTITY_GRAPH/GRAPH/SPACE")
                         else:
                             self.logger.warning("Entity graph cache signal sync skipped — signal_manager not available")
                     except Exception as e:
@@ -454,7 +462,20 @@ class VitalGraphAppImpl:
                             self.logger.warning("SignalManager not available — NOTIFY listener not started")
                     except Exception as e:
                         self.logger.warning(f"SignalManager listener start failed (non-critical): {e}")
-                    
+
+                    # Start incremental backfill of server-managed entity properties
+                    try:
+                        pool = getattr(self.db_impl, 'connection_pool', None)
+                        if pool and self.space_manager:
+                            from vitalgraph.tasks.backfill_server_properties_task import BackfillServerPropertiesTask
+                            self._backfill_task = BackfillServerPropertiesTask(pool, self.space_manager)
+                            self._backfill_task.start()
+                            self.logger.info("✅ Server-properties backfill task started")
+                        else:
+                            self.logger.warning("Backfill task skipped — no connection pool or space_manager")
+                    except Exception as e:
+                        self.logger.warning(f"Backfill task initialization failed (non-critical): {e}")
+
                 except Exception as e:
                     self.logger.error(f"Failed to connect to database: {e}")
             
@@ -493,7 +514,15 @@ class VitalGraphAppImpl:
                         self.logger.info("✅ Process scheduler stopped")
                     except Exception as e:
                         self.logger.warning(f"Error stopping process scheduler: {e}")
-                
+
+                # Stop backfill task
+                if self._backfill_task:
+                    try:
+                        await self._backfill_task.stop()
+                        self.logger.info("✅ Backfill task stopped")
+                    except Exception as e:
+                        self.logger.warning(f"Error stopping backfill task: {e}")
+
                 # Stop event loop monitor
                 try:
                     await self.event_loop_monitor.stop()

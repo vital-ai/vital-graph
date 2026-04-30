@@ -17,6 +17,37 @@ from .sparql_sql_schema import SparqlSQLSchema
 
 logger = logging.getLogger(__name__)
 
+# DDL for deterministic UUID v5 function — mirrors Python's _generate_term_uuid()
+# exactly, including \x00 separators. Requires pgcrypto extension.
+_VITALGRAPH_TERM_UUID_DDL = """
+CREATE OR REPLACE FUNCTION vitalgraph_term_uuid(
+    p_text text, p_type char(1),
+    p_lang text DEFAULT NULL,
+    p_datatype_id bigint DEFAULT NULL
+) RETURNS uuid AS $$
+DECLARE
+    name_bytes bytea;
+    ns_bytes bytea;
+    hash bytea;
+    raw bytea;
+BEGIN
+    name_bytes := convert_to(p_text, 'UTF8') || '\\x00'::bytea || convert_to(p_type, 'UTF8');
+    IF p_lang IS NOT NULL THEN
+        name_bytes := name_bytes || '\\x00'::bytea || convert_to('lang:' || p_lang, 'UTF8');
+    END IF;
+    IF p_datatype_id IS NOT NULL THEN
+        name_bytes := name_bytes || '\\x00'::bytea || convert_to('datatype:' || p_datatype_id::text, 'UTF8');
+    END IF;
+    ns_bytes := '\\x6ba7b8109dad11d180b400c04fd430c8'::bytea;
+    hash := digest(ns_bytes || name_bytes, 'sha1');
+    raw := substring(hash from 1 for 16);
+    raw := set_byte(raw, 6, (get_byte(raw, 6) & 15) | 80);
+    raw := set_byte(raw, 8, (get_byte(raw, 8) & 63) | 128);
+    RETURN encode(raw, 'hex')::uuid;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+"""
+
 
 class SparqlSQLAdmin(DbAdminInterface):
     """Admin operations for the sparql_sql backend."""
@@ -46,14 +77,16 @@ class SparqlSQLAdmin(DbAdminInterface):
     # ---- init ------------------------------------------------------------
 
     async def init_tables(self, db_impl) -> bool:
+        # Ensure extensions + functions (idempotent — always runs)
+        await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        await db_impl.execute_update(_VITALGRAPH_TERM_UUID_DDL)
+
         status = await self.check_admin_tables(db_impl)
 
         if status['found'] == status['expected']:
             logger.info("All %d admin tables already exist", status['expected'])
             return True
-
-        # Ensure pg_trgm extension (needed for per-space trigram indexes)
-        await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 
         # Create tables
         for stmt in self.schema.create_admin_tables_sql():

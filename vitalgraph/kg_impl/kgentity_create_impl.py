@@ -12,6 +12,7 @@ from enum import Enum
 
 # VitalSigns imports
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
+from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
 from ai_haley_kg_domain.model.KGEntity import KGEntity
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
@@ -80,6 +81,16 @@ class KGEntityCreateProcessor:
             
             self.logger.debug(f"Found {len(entities)} KGEntity objects")
             
+            # Defence-in-depth: stamp server-managed properties if not already set (T7).
+            # The endpoint normally stamps before calling this processor.  This
+            # catches direct callers that bypass the endpoint.
+            from datetime import datetime, timezone as _tz
+            from .kg_server_properties import stamp_entity_server_properties
+            _now = datetime.now(_tz.utc)
+            _is_create = (operation_mode == OperationMode.CREATE)
+            for _ent in entities:
+                stamp_entity_server_properties(_ent, _now, is_create=_is_create)
+
             # Step 3: Validate entity structure
             self.logger.debug(f"🔍 Step 3: Validating entity structure...")
             validation_result = self.validator.validate_entity_structure(vitalsigns_objects)
@@ -90,9 +101,40 @@ class KGEntityCreateProcessor:
                 return self._create_error_response(operation_mode, error_msg)
             
             # Step 4: Set dual grouping URIs
-            entity_uri = str(entities[0].URI)
-            self.logger.debug(f"🔍 Step 4: Setting dual grouping URIs for entity {entity_uri}")
-            self.grouping_manager.set_dual_grouping_uris_with_frame_separation(vitalsigns_objects, entity_uri)
+            # When multiple independent entities are in a batch, each entity
+            # must get its OWN URI as kGGraphURI — not the first entity's URI.
+            if len(entities) == 1:
+                # Single entity: all sub-objects belong to it
+                entity_uri = str(entities[0].URI)
+                self.logger.debug(f"🔍 Step 4: Setting dual grouping URIs for entity {entity_uri}")
+                self.grouping_manager.set_dual_grouping_uris_with_frame_separation(vitalsigns_objects, entity_uri)
+            else:
+                # Multiple entities: stamp each entity with its own URI.
+                # Build a map from entity URI → list of sub-objects belonging to it.
+                entity_uri_set = {str(e.URI) for e in entities}
+                # For each entity, collect itself plus any objects connected via edges
+                for ent in entities:
+                    ent_uri = str(ent.URI)
+                    # Collect objects that belong to this entity:
+                    # the entity itself, and any edges/frames/slots whose kGGraphURI
+                    # should point to this entity.
+                    ent_objects: List[GraphObject] = [ent]
+                    for obj in vitalsigns_objects:
+                        if obj is ent:
+                            continue
+                        # Edges sourced from this entity
+                        if isinstance(obj, VITAL_Edge):
+                            src = str(obj.edgeSource) if obj.edgeSource else None
+                            dst = str(obj.edgeDestination) if obj.edgeDestination else None
+                            if src == ent_uri or dst == ent_uri:
+                                ent_objects.append(obj)
+                        # Non-entity, non-edge objects not claimed by another entity
+                        elif not isinstance(obj, KGEntity):
+                            # Only claim if not already in another entity's set
+                            # (heuristic: standalone sub-objects default to their closest entity)
+                            pass
+                    self.grouping_manager.set_dual_grouping_uris_with_frame_separation(ent_objects, ent_uri)
+                    self.logger.debug(f"🔍 Step 4: Set kGGraphURI={ent_uri} on {len(ent_objects)} objects")
             self.logger.debug(f"🔍 Dual grouping URIs set successfully")
             
             # Step 5: Handle parent relationships if specified

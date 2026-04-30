@@ -12,6 +12,7 @@ and graph management operations (CLEAR, DROP, CREATE, COPY, MOVE, ADD).
 from __future__ import annotations
 
 import logging
+import uuid as _uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..jena_sparql.jena_types import (
@@ -24,6 +25,69 @@ from ..jena_sparql.jena_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Deterministic UUID namespace — must match sparql_sql_space_impl._VITALGRAPH_NS
+_VITALGRAPH_NS = _uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+
+
+def _generate_term_uuid(
+    term_text: str, term_type: str,
+    lang: Optional[str] = None, datatype_id: Optional[int] = None,
+) -> _uuid.UUID:
+    """Deterministic UUID v5 for an RDF term — mirrors sparql_sql_space_impl."""
+    parts = [term_text, term_type]
+    if lang is not None:
+        parts.append(f"lang:{lang}")
+    if datatype_id is not None:
+        parts.append(f"datatype:{datatype_id}")
+    return _uuid.uuid5(_VITALGRAPH_NS, "\x00".join(parts))
+
+
+async def _resolve_datatype_map(
+    space_id: str,
+    conn=None,
+    conn_params: Optional[Dict[str, Any]] = None,
+) -> Dict[str, int]:
+    """Return {datatype_uri: datatype_id} for a space.
+
+    Reuses the generator's datatype cache when possible.
+    """
+    from .generator import _load_datatype_cache
+    id_to_uri = await _load_datatype_cache(space_id, conn_params=conn_params, conn=conn)
+    return {uri: did for did, uri in id_to_uri.items()}
+
+
+async def _ensure_datatype_id(
+    space_id: str,
+    datatype_uri: str,
+    dt_map: Dict[str, int],
+    conn=None,
+) -> int:
+    """Get or create a datatype_id for a URI.  Updates dt_map in place."""
+    if datatype_uri in dt_map:
+        return dt_map[datatype_uri]
+    if conn is None:
+        raise RuntimeError(
+            f"Cannot create datatype_id for {datatype_uri} without a DB connection")
+    dt_table = f"{space_id}_datatype"
+    new_id = await conn.fetchval(
+        f"INSERT INTO {dt_table} (datatype_uri) VALUES ($1) "
+        f"ON CONFLICT (datatype_uri) DO UPDATE SET datatype_uri = EXCLUDED.datatype_uri "
+        f"RETURNING datatype_id",
+        datatype_uri,
+    )
+    dt_map[datatype_uri] = new_id
+    # Invalidate generator cache so next load picks up the new entry
+    from .generator import invalidate_datatype_cache
+    invalidate_datatype_cache(space_id)
+    return new_id
+
+
+def _node_datatype_uri(node: RDFNode) -> Optional[str]:
+    """Return the datatype URI for a LiteralNode, or None."""
+    if isinstance(node, LiteralNode) and node.datatype:
+        return node.datatype
+    return None
 
 
 # ===========================================================================
@@ -115,23 +179,39 @@ def _node_lang(node: RDFNode) -> Optional[str]:
 
 
 def _term_upsert(term_table: str, text: str, ttype: str,
-                 lang: Optional[str] = None) -> str:
+                 lang: Optional[str] = None,
+                 datatype_id: Optional[int] = None) -> str:
     """Generate INSERT ... WHERE NOT EXISTS for a term row.
 
-    Uses gen_random_uuid() for term_uuid since the column has no default.
+    Uses deterministic UUID v5 (matching _generate_term_uuid) so that
+    term rows created here are consistent with the main write path.
     """
+    term_uuid = _generate_term_uuid(text, ttype, lang=lang, datatype_id=datatype_id)
     lang_val = f"'{_esc(lang)}'" if lang else "NULL"
+    dt_val = str(datatype_id) if datatype_id is not None else "NULL"
     return (
-        f"INSERT INTO {term_table} (term_uuid, term_text, term_type, lang) "
-        f"SELECT gen_random_uuid(), '{_esc(text)}', '{ttype}', {lang_val} "
+        f"INSERT INTO {term_table} (term_uuid, term_text, term_type, lang, datatype_id) "
+        f"SELECT '{term_uuid}', '{_esc(text)}', '{ttype}', {lang_val}, {dt_val} "
         f"WHERE NOT EXISTS ("
         f"SELECT 1 FROM {term_table} "
-        f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}')"
+        f"WHERE term_uuid = '{term_uuid}')"
     )
 
 
-def _term_uuid_subquery(term_table: str, text: str, ttype: str) -> str:
-    """Scalar subquery to look up a term_uuid by text + type."""
+def _term_uuid_subquery(term_table: str, text: str, ttype: str,
+                        datatype_id: Optional[int] = None) -> str:
+    """Return a UUID expression for a constant term.
+
+    When datatype_id is known the deterministic UUID is computed
+    in Python and emitted as a literal — no subquery needed.
+    For URIs / blank-nodes / untyped literals the existing
+    text+type lookup is used as a safe fallback.
+    """
+    if datatype_id is not None or ttype != 'L':
+        # Deterministic — matches the main write-path UUID exactly.
+        computed = _generate_term_uuid(text, ttype, datatype_id=datatype_id)
+        return f"'{computed}'::uuid"
+    # Fallback: text + type lookup (for plain literals without datatype)
     return (
         f"(SELECT term_uuid FROM {term_table} "
         f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1)"
@@ -150,7 +230,8 @@ def _sparql_to_sql_col(var_name: str,
 
 def _binding_uuid_col(var_name: str,
                       var_map: Optional[Dict[str, str]] = None,
-                      term_table: Optional[str] = None) -> str:
+                      term_table: Optional[str] = None,
+                      dt_table: Optional[str] = None) -> str:
     """Column reference for a variable's UUID in the _upd_bindings table.
 
     var_map maps sql_col → sparql_name.  We need the inverse: given a
@@ -158,45 +239,64 @@ def _binding_uuid_col(var_name: str,
     the __uuid companion column.
 
     If the variable has no __uuid column (e.g. aggregates produce NULL),
-    fall back to a text+type term lookup when term_table is provided.
+    fall back to vitalgraph_term_uuid() which uses deterministic UUID v5
+    including lang and datatype_id from companion columns.
     """
     sql_col = _sparql_to_sql_col(var_name, var_map)
     if sql_col:
         if term_table:
             # COALESCE: use __uuid if available (regular BGP vars), else
-            # fall back to text+type term lookup (aggregates produce NULL __uuid).
-            text_lookup = (
-                f'(SELECT term_uuid FROM {term_table} '
-                f'WHERE term_text = CAST(b."{sql_col}" AS text) '
-                f"AND term_type = CAST(b.\"{sql_col}__type\" AS char(1)) LIMIT 1)"
-            )
-            return f'COALESCE(CAST(b."{sql_col}__uuid" AS uuid), {text_lookup})'
+            # compute deterministic UUID from text+type+lang+datatype_id.
+            fallback = _deterministic_uuid_expr(sql_col, dt_table)
+            return f'COALESCE(CAST(b."{sql_col}__uuid" AS uuid), {fallback})'
         return f'b."{sql_col}__uuid"'
-    # Fallback for variables not in var_map: text-based lookup
+    # Fallback for variables not in var_map: deterministic UUID
     if term_table:
         col = var_name
-        return (
-            f'(SELECT term_uuid FROM {term_table} '
-            f'WHERE term_text = CAST(b."{col}" AS text) '
-            f"AND term_type = CAST(b.\"{col}__type\" AS char(1)) LIMIT 1)"
-        )
+        return _deterministic_uuid_expr(col, dt_table)
     return f'b."{var_name}__uuid"'
+
+
+def _deterministic_uuid_expr(col: str, dt_table: Optional[str] = None) -> str:
+    """SQL expression that computes a deterministic UUID v5 for a binding row.
+
+    Uses vitalgraph_term_uuid(text, type, lang, datatype_id) which mirrors
+    the Python _generate_term_uuid() function exactly.
+    """
+    text = f'CAST(b."{col}" AS text)'
+    ttype = f'CAST(b."{col}__type" AS char(1))'
+    lang = f'b."{col}__lang"'
+    if dt_table:
+        dt_id = (
+            f'(SELECT dt.datatype_id FROM {dt_table} dt '
+            f'WHERE dt.datatype_uri = b."{col}__datatype")'
+        )
+    else:
+        dt_id = 'NULL::integer'
+    return f'vitalgraph_term_uuid({text}, {ttype}, {lang}, {dt_id})'
 
 
 def _node_to_uuid_expr(node: RDFNode, term_table: str,
                        default_graph: Optional[str] = None,
-                       var_map: Optional[Dict[str, str]] = None) -> str:
+                       var_map: Optional[Dict[str, str]] = None,
+                       dt_map: Optional[Dict[str, int]] = None,
+                       dt_table: Optional[str] = None) -> str:
     """Resolve a template node to a UUID expression.
 
     VarNode  → reference __uuid column from _upd_bindings.
-    Constant → scalar subquery against term table.
+    Constant → deterministic UUID (using datatype_id when available).
     """
     if isinstance(node, VarNode):
         return _binding_uuid_col(node.name, var_map=var_map,
-                                 term_table=term_table)
+                                 term_table=term_table,
+                                 dt_table=dt_table)
     text = _node_text(node)
     ttype = _node_type(node)
-    return _term_uuid_subquery(term_table, text, ttype)
+    dt_id = None
+    dt_uri = _node_datatype_uri(node)
+    if dt_uri and dt_map:
+        dt_id = dt_map.get(dt_uri)
+    return _term_uuid_subquery(term_table, text, ttype, datatype_id=dt_id)
 
 
 # ===========================================================================
@@ -249,11 +349,20 @@ async def _dispatch_one(
     All other ops are pure SQL generation.
     """
     if isinstance(op, UpdateDataInsert):
+        dt_map = await _resolve_datatype_map(space_id, conn=conn, conn_params=conn_params)
+        # Ensure datatype_ids exist for any new datatype URIs
+        for q in op.quads:
+            dt_uri = _node_datatype_uri(q.object)
+            if dt_uri and dt_uri not in dt_map and conn is not None:
+                await _ensure_datatype_id(space_id, dt_uri, dt_map, conn=conn)
         return _insert_data_sql(op.quads, space_id,
-                                default_graph_uri=default_graph_uri)
+                                default_graph_uri=default_graph_uri,
+                                dt_map=dt_map)
     elif isinstance(op, UpdateDataDelete):
+        dt_map = await _resolve_datatype_map(space_id, conn=conn, conn_params=conn_params)
         return _delete_data_sql(op.quads, space_id,
-                                default_graph_uri=default_graph_uri)
+                                default_graph_uri=default_graph_uri,
+                                dt_map=dt_map)
     elif isinstance(op, UpdateModify):
         return await _modify_sql(op, space_id, conn_params=conn_params, conn=conn,
                                  default_graph_uri=default_graph_uri)
@@ -282,17 +391,23 @@ async def _dispatch_one(
 # ===========================================================================
 
 def _insert_data_sql(quads: List[QuadPattern], space_id: str,
-                     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH) -> str:
+                     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
+                     dt_map: Optional[Dict[str, int]] = None) -> str:
     """INSERT DATA → term upserts + quad inserts.
 
-    Generates term_uuid via gen_random_uuid() for new terms, populates
-    lang column for language-tagged literals, and uses term_type filters
-    for accurate UUID cross-join lookups.
+    Uses deterministic UUID v5 for new terms, populates datatype_id and
+    lang column for typed/language-tagged literals.
     """
     term_table = f"{space_id}_term"
     quad_table = f"{space_id}_rdf_quad"
     stmts: List[str] = []
-    seen_terms: Set[Tuple[str, str]] = set()
+    seen_terms: Set[Tuple[str, str, Optional[int]]] = set()
+
+    def _node_dt_id(node: RDFNode) -> Optional[int]:
+        dt_uri = _node_datatype_uri(node)
+        if dt_uri and dt_map:
+            return dt_map.get(dt_uri)
+        return None
 
     for q in quads:
         graph_uri = _node_text(q.graph) if q.graph else default_graph_uri
@@ -301,32 +416,35 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
         for node in [q.subject, q.predicate, q.object]:
             text = _node_text(node)
             ttype = _node_type(node)
-            key = (text, ttype)
+            dt_id = _node_dt_id(node)
+            key = (text, ttype, dt_id)
             if key not in seen_terms:
                 seen_terms.add(key)
                 lang = _node_lang(node)
-                stmts.append(_term_upsert(term_table, text, ttype, lang))
+                stmts.append(_term_upsert(term_table, text, ttype, lang,
+                                          datatype_id=dt_id))
 
         # Graph term
-        key = (graph_uri, "U")
+        key = (graph_uri, "U", None)
         if key not in seen_terms:
             seen_terms.add(key)
             stmts.append(_term_upsert(term_table, graph_uri, "U"))
 
-        # Insert quad via UUID cross-join lookup (with type filters)
-        s_text, s_type = _node_text(q.subject), _node_type(q.subject)
-        p_text, p_type = _node_text(q.predicate), _node_type(q.predicate)
-        o_text, o_type = _node_text(q.object), _node_type(q.object)
+        # Insert quad using deterministic UUID references
+        s_uuid = _term_uuid_subquery(term_table, _node_text(q.subject), _node_type(q.subject))
+        p_uuid = _term_uuid_subquery(term_table, _node_text(q.predicate), _node_type(q.predicate))
+        o_uuid = _term_uuid_subquery(term_table, _node_text(q.object), _node_type(q.object),
+                                     datatype_id=_node_dt_id(q.object))
+        g_uuid = _term_uuid_subquery(term_table, graph_uri, "U")
 
         stmts.append(
             f"INSERT INTO {quad_table} "
             f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
-            f"SELECT s.term_uuid, p.term_uuid, o.term_uuid, g.term_uuid "
-            f"FROM {term_table} s, {term_table} p, {term_table} o, {term_table} g "
-            f"WHERE s.term_text = '{_esc(s_text)}' AND s.term_type = '{s_type}' "
-            f"AND p.term_text = '{_esc(p_text)}' AND p.term_type = '{p_type}' "
-            f"AND o.term_text = '{_esc(o_text)}' AND o.term_type = '{o_type}' "
-            f"AND g.term_text = '{_esc(graph_uri)}' AND g.term_type = 'U'"
+            f"SELECT {s_uuid}, {p_uuid}, {o_uuid}, {g_uuid} "
+            f"WHERE NOT EXISTS ("
+            f"SELECT 1 FROM {quad_table} "
+            f"WHERE subject_uuid = {s_uuid} AND predicate_uuid = {p_uuid} "
+            f"AND object_uuid = {o_uuid} AND context_uuid = {g_uuid})"
         )
     return ";\n".join(stmts)
 
@@ -336,21 +454,29 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
 # ===========================================================================
 
 def _delete_data_sql(quads: List[QuadPattern], space_id: str,
-                     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH) -> str:
-    """DELETE DATA → DELETE FROM statements with type-aware lookups."""
+                     default_graph_uri: str = _FALLBACK_DEFAULT_GRAPH,
+                     dt_map: Optional[Dict[str, int]] = None) -> str:
+    """DELETE DATA → DELETE FROM statements with deterministic UUID lookups."""
     quad_table = f"{space_id}_rdf_quad"
     term_table = f"{space_id}_term"
     stmts: List[str] = []
+
+    def _obj_dt_id(node: RDFNode) -> Optional[int]:
+        dt_uri = _node_datatype_uri(node)
+        if dt_uri and dt_map:
+            return dt_map.get(dt_uri)
+        return None
 
     for q in quads:
         s_text, s_type = _node_text(q.subject), _node_type(q.subject)
         p_text, p_type = _node_text(q.predicate), _node_type(q.predicate)
         o_text, o_type = _node_text(q.object), _node_type(q.object)
+        o_dt_id = _obj_dt_id(q.object)
 
         where_parts = [
             f"subject_uuid = {_term_uuid_subquery(term_table, s_text, s_type)}",
             f"predicate_uuid = {_term_uuid_subquery(term_table, p_text, p_type)}",
-            f"object_uuid = {_term_uuid_subquery(term_table, o_text, o_type)}",
+            f"object_uuid = {_term_uuid_subquery(term_table, o_text, o_type, datatype_id=o_dt_id)}",
         ]
         if q.graph:
             graph_text = _node_text(q.graph)
@@ -386,14 +512,24 @@ async def _modify_sql(
       4. INSERT using bindings + insert template
       5. Cleanup
     """
+    # Resolve datatype URI → ID map (used by all paths below)
+    dt_map = await _resolve_datatype_map(space_id, conn=conn, conn_params=conn_params)
+    # Ensure datatype_ids exist for any new datatype URIs in insert quads
+    if op.insert_quads and conn is not None:
+        for q in op.insert_quads:
+            dt_uri = _node_datatype_uri(q.object)
+            if dt_uri and dt_uri not in dt_map:
+                await _ensure_datatype_id(space_id, dt_uri, dt_map, conn=conn)
+
     # Simple case: no WHERE pattern (plain DELETE + INSERT of constant quads)
     if not op.where_pattern:
         parts: List[str] = []
         if op.delete_quads:
-            parts.append(_delete_data_sql(op.delete_quads, space_id))
+            parts.append(_delete_data_sql(op.delete_quads, space_id, dt_map=dt_map))
         if op.insert_quads:
             parts.append(_insert_data_sql(op.insert_quads, space_id,
-                                          default_graph_uri=default_graph_uri))
+                                          default_graph_uri=default_graph_uri,
+                                          dt_map=dt_map))
         return ";\n".join(parts)
 
     # Full WHERE pattern matching via V2 pipeline
@@ -429,12 +565,21 @@ async def _modify_sql(
         where_algebra = op.where_pattern
         target_graph = default_graph_uri
 
+    # Collect all template variables so they are projected by the WHERE clause.
+    # Without this, OPTIONAL-only variables (e.g. ?old_mod) are not projected,
+    # causing the DELETE to become a no-op.
+    _template_vars: Set[str] = set()
+    for _tq in (op.delete_quads or []) + (op.insert_quads or []):
+        for _tn in [_tq.graph, _tq.subject, _tq.predicate, _tq.object]:
+            if isinstance(_tn, VarNode):
+                _template_vars.add(_tn.name)
+
     where_compile = CompileResult(
         ok=True,
         meta=ParsedQueryMeta(
             sparql_form="QUERY",
             query_type="SELECT",
-            project_vars=[],
+            project_vars=sorted(_template_vars) if _template_vars else [],
         ),
         algebra=where_algebra,
     )
@@ -461,23 +606,32 @@ async def _modify_sql(
     if op.delete_quads:
         for dq in op.delete_quads:
             stmts.append(_delete_from_bindings(dq, space_id, target_graph,
-                                               var_map=var_map))
+                                               var_map=var_map,
+                                               dt_map=dt_map))
 
     # Step 3: Ensure new constant terms exist for INSERT template
     if op.insert_quads:
-        seen_terms: Set[Tuple[str, str]] = set()
+        seen_terms: Set[Tuple[str, str, Optional[int]]] = set()
         for iq in op.insert_quads:
             for node in [iq.graph, iq.subject, iq.predicate, iq.object]:
                 if node is not None and not isinstance(node, VarNode):
                     text = _node_text(node)
                     ttype = _node_type(node)
-                    key = (text, ttype)
+                    dt_uri = _node_datatype_uri(node)
+                    dt_id = dt_map.get(dt_uri) if dt_uri else None
+                    key = (text, ttype, dt_id)
                     if key not in seen_terms:
                         seen_terms.add(key)
                         lang = _node_lang(node) if isinstance(node, LiteralNode) else None
-                        stmts.append(_term_upsert(term_table, text, ttype, lang))
+                        stmts.append(_term_upsert(term_table, text, ttype, lang,
+                                                  datatype_id=dt_id))
 
         # Step 3b: Upsert term entries for variable values from bindings
+        # Variable values have __uuid from the WHERE clause; only create
+        # term rows for values where __uuid is NULL (e.g. aggregates).
+        # Uses deterministic UUID v5 via vitalgraph_term_uuid() so that
+        # terms created here match the main write path exactly.
+        dt_table = f"{space_id}_datatype"
         seen_var_upserts: Set[str] = set()
         for iq in op.insert_quads:
             for node in [iq.graph, iq.subject, iq.predicate, iq.object]:
@@ -485,24 +639,37 @@ async def _modify_sql(
                     seen_var_upserts.add(node.name)
                     sql_col = _sparql_to_sql_col(node.name, var_map)
                     col = sql_col or node.name
+                    text_expr = f'CAST(b."{col}" AS text)'
+                    type_expr = f'CAST(b."{col}__type" AS char(1))'
+                    lang_expr = f'b."{col}__lang"'
+                    dt_id_expr = (
+                        f'(SELECT dt.datatype_id FROM {dt_table} dt '
+                        f'WHERE dt.datatype_uri = b."{col}__datatype")'
+                    )
+                    uuid_expr = (
+                        f'vitalgraph_term_uuid({text_expr}, {type_expr}, '
+                        f'{lang_expr}, {dt_id_expr})'
+                    )
                     stmts.append(
                         f"INSERT INTO {term_table} "
-                        f"(term_uuid, term_text, term_type, lang) "
-                        f"SELECT gen_random_uuid(), "
-                        f"CAST(b.\"{col}\" AS text), "
-                        f"CAST(b.\"{col}__type\" AS char(1)), NULL "
+                        f"(term_uuid, term_text, term_type, lang, datatype_id) "
+                        f"SELECT {uuid_expr}, "
+                        f"{text_expr}, "
+                        f"{type_expr}, "
+                        f"{lang_expr}, "
+                        f"{dt_id_expr} "
                         f"FROM _upd_bindings b "
                         f"WHERE b.\"{col}__uuid\" IS NULL "
                         f"AND NOT EXISTS ("
                         f"SELECT 1 FROM {term_table} "
-                        f"WHERE term_text = CAST(b.\"{col}\" AS text) "
-                        f"AND term_type = CAST(b.\"{col}__type\" AS char(1)))"
+                        f"WHERE term_uuid = {uuid_expr})"
                     )
 
         # Step 4: INSERT new quads from bindings
         for iq in op.insert_quads:
             stmts.append(_insert_from_bindings(iq, space_id, target_graph,
-                                               var_map=var_map))
+                                               var_map=var_map,
+                                               dt_map=dt_map))
 
     # Step 5: Cleanup
     stmts.append("DROP TABLE IF EXISTS _upd_bindings")
@@ -564,29 +731,26 @@ async def _delete_where_sql(
 
 def _delete_from_bindings(dq: QuadPattern, space_id: str,
                           default_graph: Optional[str] = None,
-                          var_map: Optional[Dict[str, str]] = None) -> str:
+                          var_map: Optional[Dict[str, str]] = None,
+                          dt_map: Optional[Dict[str, int]] = None) -> str:
     """Generate DELETE ... USING _upd_bindings for one delete template quad."""
     quad_table = f"{space_id}_rdf_quad"
     term_table = f"{space_id}_term"
+    dt_table = f"{space_id}_datatype"
 
     conditions: List[str] = []
+    needs_bindings = False  # track whether we reference _upd_bindings
 
     def _var_is_bound(name: str) -> bool:
         """Check if a variable is bound by the WHERE clause."""
         return _sparql_to_sql_col(name, var_map) is not None
 
-    # Per SPARQL spec §3.1.3.1: if any variable in the template is
-    # unbound (not in WHERE), the template instantiation silently fails.
-    # Return no-op if any template variable is not in var_map.
-    for node in [dq.subject, dq.predicate, dq.object]:
-        if isinstance(node, VarNode) and not _var_is_bound(node.name):
-            return "SELECT 1"  # no-op: unbound variable in template
-    if dq.graph and isinstance(dq.graph, VarNode) and not _var_is_bound(dq.graph.name):
-        return "SELECT 1"
-
     # Subject
     if isinstance(dq.subject, VarNode):
-        conditions.append(f"q.subject_uuid = {_binding_uuid_col(dq.subject.name, var_map, term_table)}")
+        if _var_is_bound(dq.subject.name):
+            conditions.append(f"q.subject_uuid = {_binding_uuid_col(dq.subject.name, var_map, term_table, dt_table)}")
+            needs_bindings = True
+        # else: unbound variable → omit condition (wildcard match)
     else:
         conditions.append(
             f"q.subject_uuid = {_term_uuid_subquery(term_table, _node_text(dq.subject), _node_type(dq.subject))}"
@@ -594,7 +758,10 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
 
     # Predicate
     if isinstance(dq.predicate, VarNode):
-        conditions.append(f"q.predicate_uuid = {_binding_uuid_col(dq.predicate.name, var_map, term_table)}")
+        if _var_is_bound(dq.predicate.name):
+            conditions.append(f"q.predicate_uuid = {_binding_uuid_col(dq.predicate.name, var_map, term_table, dt_table)}")
+            needs_bindings = True
+        # else: unbound variable → omit condition (wildcard match)
     else:
         conditions.append(
             f"q.predicate_uuid = {_term_uuid_subquery(term_table, _node_text(dq.predicate), _node_type(dq.predicate))}"
@@ -602,15 +769,25 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
 
     # Object
     if isinstance(dq.object, VarNode):
-        conditions.append(f"q.object_uuid = {_binding_uuid_col(dq.object.name, var_map, term_table)}")
+        if _var_is_bound(dq.object.name):
+            conditions.append(f"q.object_uuid = {_binding_uuid_col(dq.object.name, var_map, term_table, dt_table)}")
+            needs_bindings = True
+        # else: unbound variable → omit condition (wildcard match)
     else:
+        o_dt_id = None
+        o_dt_uri = _node_datatype_uri(dq.object)
+        if o_dt_uri and dt_map:
+            o_dt_id = dt_map.get(o_dt_uri)
         conditions.append(
-            f"q.object_uuid = {_term_uuid_subquery(term_table, _node_text(dq.object), _node_type(dq.object))}"
+            f"q.object_uuid = {_term_uuid_subquery(term_table, _node_text(dq.object), _node_type(dq.object), datatype_id=o_dt_id)}"
         )
 
     # Graph
     if dq.graph and isinstance(dq.graph, VarNode):
-        conditions.append(f"q.context_uuid = {_binding_uuid_col(dq.graph.name, var_map, term_table)}")
+        if _var_is_bound(dq.graph.name):
+            conditions.append(f"q.context_uuid = {_binding_uuid_col(dq.graph.name, var_map, term_table, dt_table)}")
+            needs_bindings = True
+        # else: unbound graph variable → omit condition
     elif dq.graph:
         conditions.append(
             f"q.context_uuid = {_term_uuid_subquery(term_table, _node_text(dq.graph), 'U')}"
@@ -620,26 +797,37 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
             f"q.context_uuid = {_term_uuid_subquery(term_table, default_graph, 'U')}"
         )
 
+    if not conditions:
+        return "SELECT 1"  # all positions are unbound variables → no-op
+
+    if needs_bindings:
+        return (
+            f"DELETE FROM {quad_table} q "
+            f"USING _upd_bindings b "
+            f"WHERE " + " AND ".join(conditions)
+        )
+    # No variables reference bindings — direct DELETE without USING
     return (
         f"DELETE FROM {quad_table} q "
-        f"USING _upd_bindings b "
         f"WHERE " + " AND ".join(conditions)
     )
 
 
 def _insert_from_bindings(iq: QuadPattern, space_id: str,
                           default_graph: Optional[str] = None,
-                          var_map: Optional[Dict[str, str]] = None) -> str:
+                          var_map: Optional[Dict[str, str]] = None,
+                          dt_map: Optional[Dict[str, int]] = None) -> str:
     """Generate INSERT ... SELECT from _upd_bindings for one insert template quad."""
     quad_table = f"{space_id}_rdf_quad"
     term_table = f"{space_id}_term"
+    dt_table = f"{space_id}_datatype"
 
-    s_expr = _node_to_uuid_expr(iq.subject, term_table, var_map=var_map)
-    p_expr = _node_to_uuid_expr(iq.predicate, term_table, var_map=var_map)
-    o_expr = _node_to_uuid_expr(iq.object, term_table, var_map=var_map)
+    s_expr = _node_to_uuid_expr(iq.subject, term_table, var_map=var_map, dt_map=dt_map, dt_table=dt_table)
+    p_expr = _node_to_uuid_expr(iq.predicate, term_table, var_map=var_map, dt_map=dt_map, dt_table=dt_table)
+    o_expr = _node_to_uuid_expr(iq.object, term_table, var_map=var_map, dt_map=dt_map, dt_table=dt_table)
 
     if iq.graph:
-        g_expr = _node_to_uuid_expr(iq.graph, term_table, var_map=var_map)
+        g_expr = _node_to_uuid_expr(iq.graph, term_table, var_map=var_map, dt_table=dt_table)
     elif default_graph:
         g_expr = _term_uuid_subquery(term_table, default_graph, "U")
     else:

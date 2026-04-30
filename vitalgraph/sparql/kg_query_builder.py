@@ -5,8 +5,8 @@ including graph separation queries and criteria-based search queries.
 """
 
 import logging
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,24 @@ class QueryFilter:
     value: Optional[Any] = None
 
 
+# Property datatype registry (mirrors _FILTERABLE_ENTITY_PROPERTIES in kgentities_model.py)
+_FILTERABLE_ENTITY_PROPERTIES = {
+    "http://vital.ai/ontology/vital-core#hasName":                        "string",
+    "http://vital.ai/ontology/vital#hasObjectModificationDateTime":       "dateTime",
+    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime":          "dateTime",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType":               "uri",
+    "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
+}
+
+
+@dataclass
+class EntityPropertyFilter:
+    """Filter on a direct property of the entity node."""
+    property_uri: str
+    operator: str  # "eq", "ne", "gt", "lt", "gte", "lte", "contains", "in", "not_in"
+    value: Optional[Union[str, List[str]]] = None
+
+
 @dataclass
 class EntityQueryCriteria:
     """Criteria for entity queries."""
@@ -76,6 +94,7 @@ class EntityQueryCriteria:
     slot_criteria: Optional[List[SlotCriteria]] = None  # Slot-based filtering
     sort_criteria: Optional[List[SortCriteria]] = None  # Multi-level sorting
     filters: Optional[List[QueryFilter]] = None  # Property-based filters
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = None  # Direct entity property filters
     use_edge_pattern: bool = True  # Use edge-based pattern (Edge_hasEntityKGFrame) vs direct property (hasFrame)
 
 
@@ -327,15 +346,10 @@ class KGQueryCriteriaBuilder:
         if criteria.entity_type and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity":
             filter_clauses.append(f"?entity haley:hasKGEntityType <{criteria.entity_type}> .")
         
-        # Add search string filter (search in name/label)
+        # Add search string filter (search in hasName only)
         if criteria.search_string:
-            filter_clauses.append(f"""{{
-                ?entity rdfs:label ?label .
-                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
-            }} UNION {{
-                ?entity vital-core:hasName ?name .
-                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            }}""")
+            filter_clauses.append(f"""?entity vital-core:hasName ?search_name .
+FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         
         # Frame type filtering is now handled via frame_criteria, not a single frame_type field
         
@@ -359,6 +373,54 @@ class KGQueryCriteriaBuilder:
                 elif filter_criterion.operator == "contains":
                     filter_clauses.append(f"?entity <{property_uri}> ?{filter_var} .")
                     filter_clauses.append(f"FILTER(CONTAINS(LCASE(STR(?{filter_var})), LCASE(\"{filter_criterion.value}\")))")
+        
+        # Add direct entity property filters (datatype-aware)
+        if criteria.entity_property_filters:
+            for i, epf in enumerate(criteria.entity_property_filters):
+                var = f"epf_val_{i}"
+                prop_uri = epf.property_uri
+                datatype = _FILTERABLE_ENTITY_PROPERTIES.get(prop_uri, "string")
+                
+                if epf.operator == "eq":
+                    if datatype == "uri":
+                        filter_clauses.append(f"?entity <{prop_uri}> <{epf.value}> .")
+                    elif datatype == "dateTime":
+                        filter_clauses.append(f'?entity <{prop_uri}> "{epf.value}"^^xsd:dateTime .')
+                    else:
+                        filter_clauses.append(f'?entity <{prop_uri}> "{epf.value}" .')
+                elif epf.operator == "ne":
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    if datatype == "uri":
+                        filter_clauses.append(f"FILTER(?{var} != <{epf.value}>)")
+                    elif datatype == "dateTime":
+                        filter_clauses.append(f'FILTER(?{var} != "{epf.value}"^^xsd:dateTime)')
+                    else:
+                        filter_clauses.append(f'FILTER(?{var} != "{epf.value}")')
+                elif epf.operator == "contains":
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    filter_clauses.append(f'FILTER(CONTAINS(LCASE(STR(?{var})), LCASE("{epf.value}")))')
+                elif epf.operator in ("gt", "lt", "gte", "lte"):
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
+                    sparql_op = op_map[epf.operator]
+                    if datatype == "dateTime":
+                        filter_clauses.append(f'FILTER(?{var} {sparql_op} "{epf.value}"^^xsd:dateTime)')
+                    else:
+                        filter_clauses.append(f'FILTER(?{var} {sparql_op} "{epf.value}")')
+                elif epf.operator == "in" and isinstance(epf.value, list):
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    if datatype == "uri":
+                        val_list = ", ".join(f"<{v}>" for v in epf.value)
+                    else:
+                        val_list = ", ".join(f'"{v}"' for v in epf.value)
+                    filter_clauses.append(f"FILTER(?{var} IN ({val_list}))")
+                elif epf.operator == "not_in" and isinstance(epf.value, list):
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    if datatype == "uri":
+                        val_list = ", ".join(f"<{v}>" for v in epf.value)
+                    else:
+                        val_list = ", ".join(f'"{v}"' for v in epf.value)
+                    filter_clauses.append(f"FILTER(?{var} NOT IN ({val_list}))")
         
         # Combine class clause with filters
         if filter_clauses:
@@ -648,17 +710,11 @@ class KGQueryCriteriaBuilder:
         if criteria.frame_type:
             where_clauses.append(f"?frame haley:hasKGFrameType <{criteria.frame_type}> .")
         
-        # Add search string filter
+        # Add search string filter (search in hasName only)
         if criteria.search_string:
-            where_clauses.append(f"""
-            {{
-                ?frame rdfs:label ?label .
-                FILTER(CONTAINS(LCASE(?label), LCASE("{criteria.search_string}")))
-            }} UNION {{
-                ?frame vital-core:name ?name .
-                FILTER(CONTAINS(LCASE(?name), LCASE("{criteria.search_string}")))
-            }}
-            """)
+            where_clauses.append(f"""?frame vital-core:hasName ?search_name .
+FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
+
         
         # Add entity type filter
         if criteria.entity_type:
