@@ -277,10 +277,10 @@ class EntityRegistryImpl(
                     await self.dedup_index.async_add_entity(entity_id, entity_for_index)
                     await self._notify_dedup_change('add', entity_id)
 
-        # Sync to Weaviate (outside transaction so get_entity can see the committed row)
-        await self._weaviate_upsert_entity(entity_id)
+                # Sync to Weaviate
+                await self._weaviate_upsert_entity(entity_id)
 
-        return entity
+                return entity
 
     @with_db_retry()
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]:

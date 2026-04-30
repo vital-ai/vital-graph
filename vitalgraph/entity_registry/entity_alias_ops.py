@@ -77,10 +77,10 @@ class AliasMixin:
                         await self.dedup_index.async_add_entity(entity_id, entity)
                         await self._notify_dedup_change('add', entity_id)
 
-        # Sync to Weaviate (outside transaction so changes are visible)
-        await self._weaviate_upsert_entity(entity_id)
+                # Sync to Weaviate (aliases changed)
+                await self._weaviate_upsert_entity(entity_id)
 
-        return alias
+                return alias
 
     async def remove_alias(self, alias_id: int,
                            retracted_by: Optional[str] = None) -> bool:
@@ -111,10 +111,10 @@ class AliasMixin:
                         await self.dedup_index.async_add_entity(row['entity_id'], entity)
                         await self._notify_dedup_change('add', row['entity_id'])
 
-        # Sync to Weaviate (outside transaction so changes are visible)
-        await self._weaviate_upsert_entity(row['entity_id'])
+                # Sync to Weaviate (aliases changed)
+                await self._weaviate_upsert_entity(row['entity_id'])
 
-        return True
+                return True
 
     async def list_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
         """List all active aliases for an entity."""

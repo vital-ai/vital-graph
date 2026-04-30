@@ -15,8 +15,8 @@ class WeaviateMixin:
         """Upsert an entity to Weaviate (non-blocking, logs errors).
 
         Fetches the full entity with aliases and categories, then upserts.
-        Inserts all data objects first (entity + locations), then sets
-        cross-references once both sides exist in Weaviate.
+        Also ensures all locations exist in LocationIndex before setting
+        Entity→Location cross-references.
         """
         if not self.weaviate_index:
             return
@@ -27,24 +27,17 @@ class WeaviateMixin:
             # Fetch categories and identifiers for this entity
             entity['categories'] = await self.list_entity_categories(entity_id)
             entity['identifiers'] = await self.list_identifiers(entity_id)
-
-            # Step 1: Insert entity data
             await self.weaviate_index.upsert_entity(entity)
 
-            # Step 2: Insert location data (no cross-refs yet)
+            # Ensure all locations exist in LocationIndex, then set cross-refs
             locations = entity.get('locations', [])
-            loc_ids = []
             if locations:
                 for loc in locations:
                     if loc.get('location_id'):
                         await self.weaviate_index.upsert_location(loc)
-                        loc_ids.append(loc['location_id'])
-
-            # Step 3: Set cross-refs now that both entity and locations exist
-            if loc_ids:
-                await self.weaviate_index.set_entity_location_refs(entity_id, loc_ids)
-                for lid in loc_ids:
-                    await self.weaviate_index.set_location_entity_ref(lid, entity_id)
+                loc_ids = [loc['location_id'] for loc in locations if loc.get('location_id')]
+                if loc_ids:
+                    await self.weaviate_index.set_entity_location_refs(entity_id, loc_ids)
         except Exception as e:
             logger.warning(f"Weaviate upsert failed for {entity_id} (non-critical): {e}")
 

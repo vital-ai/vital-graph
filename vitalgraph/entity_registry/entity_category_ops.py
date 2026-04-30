@@ -79,10 +79,10 @@ class CategoryMixin:
                 result = dict(row)
                 result['category_key'] = category_key
 
-        # Sync to Weaviate (outside transaction so changes are visible)
-        await self._weaviate_upsert_entity(entity_id)
+                # Sync to Weaviate (categories changed)
+                await self._weaviate_upsert_entity(entity_id)
 
-        return result
+                return result
 
     async def remove_entity_category(
         self, entity_id: str, category_key: str,
@@ -110,10 +110,10 @@ class CategoryMixin:
                     'category_key': category_key
                 }, changed_by=removed_by)
 
-        # Sync to Weaviate (outside transaction so changes are visible)
-        await self._weaviate_upsert_entity(entity_id)
+                # Sync to Weaviate (categories changed)
+                await self._weaviate_upsert_entity(entity_id)
 
-        return True
+                return True
 
     async def list_entity_categories(self, entity_id: str) -> List[Dict[str, Any]]:
         """List all active categories for an entity."""
