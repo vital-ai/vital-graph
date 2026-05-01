@@ -74,6 +74,9 @@ class WeaviateMixin:
     async def _weaviate_upsert_location(self, location: Dict[str, Any]):
         """Upsert a location to Weaviate LocationIndex (non-blocking, logs errors).
 
+        Ensures the owning entity exists in Weaviate first (the location
+        cross-references the entity, so Weaviate rejects the insert if the
+        entity object is missing).
         Also refreshes the Entity→Location cross-refs for the owning entity.
         """
         if not self.weaviate_index:
@@ -83,6 +86,22 @@ class WeaviateMixin:
         t0 = time.time()
         logger.info(f"[weaviate-ops] upsert location START loc_id={loc_id} entity_id={entity_id}")
         try:
+            # Ensure the owning entity exists in Weaviate first —
+            # location insert includes a cross-ref to the entity and
+            # Weaviate returns 422 if the referenced entity is missing.
+            if entity_id and entity_id != '?':
+                entity = await self.get_entity(entity_id)
+                if entity:
+                    entity['categories'] = await self.list_entity_categories(entity_id)
+                    entity['identifiers'] = await self.list_identifiers(entity_id)
+                    logger.info(f"[weaviate-ops] ensuring entity exists in weaviate before "
+                                f"location upsert: entity_id={entity_id}")
+                    await self.weaviate_index.upsert_entity(entity)
+                else:
+                    logger.warning(f"[weaviate-ops] entity {entity_id} not found in DB, "
+                                   f"skipping location upsert loc_id={loc_id}")
+                    return
+
             await self.weaviate_index.upsert_location(location)
 
             # Refresh Entity→Location cross-refs
