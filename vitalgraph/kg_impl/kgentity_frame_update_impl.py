@@ -10,7 +10,7 @@ Handles frame property updates, slot modifications, and frame graph URI preserva
 
 import logging
 import time
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 # VitalSigns imports
@@ -280,11 +280,111 @@ class KGEntityFrameUpdateProcessor:
             for uri in validated_from_query:
                 self.cache_ownership(space_id, uri, entity_uri)
             
-            return validated_from_cache + validated_from_query
+            # For frames not yet validated (depth > 1), walk up Edge_hasKGFrame chain
+            validated_set = set(validated_from_cache + validated_from_query)
+            remaining = [uri for uri in uncached if uri not in validated_set]
+            validated_by_walk = []
+            if remaining:
+                self.logger.info(f"🔍 OWNERSHIP walk-up: {len(remaining)} frames need deep hierarchy check")
+                for uri in remaining:
+                    if await self._walk_up_to_entity(space_id, graph_id, entity_uri, uri):
+                        validated_by_walk.append(uri)
+                        self.cache_ownership(space_id, uri, entity_uri)
+                if validated_by_walk:
+                    self.logger.info(f"🔍 OWNERSHIP walk-up validated {len(validated_by_walk)} deep frames")
+            
+            return validated_from_cache + validated_from_query + validated_by_walk
             
         except Exception as e:
             self.logger.error(f"❌ Error validating frame ownership: {e}")
             return []
+    
+    async def _walk_up_to_entity(self, space_id: str, graph_id: str,
+                                entity_uri: str, frame_uri: str,
+                                max_depth: int = 20) -> bool:
+        """
+        Walk up Edge_hasKGFrame chain from frame_uri to check if it's
+        transitively owned by entity_uri via Edge_hasEntityKGFrame.
+        
+        Returns True if a path entity → ... → frame_uri exists.
+        """
+        current = frame_uri
+        visited = {frame_uri}
+        
+        for _ in range(max_depth):
+            # Find parent of current via Edge_hasKGFrame (current is destination)
+            parent_query = f"""
+            SELECT ?parent WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> .
+                    ?edge <{self.vital_prefix}hasEdgeSource> ?parent .
+                    ?edge <{self.vital_prefix}hasEdgeDestination> <{current}> .
+                }}
+            }} LIMIT 1
+            """
+            results = await self.backend.execute_sparql_query(space_id, parent_query)
+            parents = self._extract_uris_from_results(results, "parent")
+            
+            if not parents:
+                return False  # No parent — not connected to entity
+            
+            parent = parents[0]
+            if parent in visited:
+                return False  # Cycle
+            visited.add(parent)
+            
+            # Check if this parent is directly owned by the entity
+            check_query = f"""
+            SELECT ?edge WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasEntityKGFrame> .
+                    ?edge <{self.vital_prefix}hasEdgeSource> <{entity_uri}> .
+                    ?edge <{self.vital_prefix}hasEdgeDestination> <{parent}> .
+                }}
+            }} LIMIT 1
+            """
+            check_results = await self.backend.execute_sparql_query(space_id, check_query)
+            if self._has_results(check_results):
+                return True  # Found entity connection
+            
+            current = parent
+        
+        return False  # Max depth exceeded
+    
+    def _extract_uris_from_results(self, results: Any, var_name: str) -> List[str]:
+        """Extract URIs for a given variable name from SPARQL results."""
+        uris = []
+        try:
+            if isinstance(results, dict) and 'results' in results:
+                for binding in results['results'].get('bindings', []):
+                    if var_name in binding:
+                        val = binding[var_name]
+                        if isinstance(val, dict) and 'value' in val:
+                            uris.append(val['value'])
+                        else:
+                            uris.append(str(val))
+            elif isinstance(results, list):
+                for row in results:
+                    if isinstance(row, dict) and var_name in row:
+                        val = row[var_name]
+                        if isinstance(val, dict) and 'value' in val:
+                            uris.append(val['value'])
+                        else:
+                            uris.append(str(val))
+        except Exception as e:
+            self.logger.error(f"Error extracting URIs for {var_name}: {e}")
+        return uris
+    
+    def _has_results(self, results: Any) -> bool:
+        """Check if SPARQL results contain at least one binding."""
+        try:
+            if isinstance(results, dict) and 'results' in results:
+                return len(results['results'].get('bindings', [])) > 0
+            elif isinstance(results, list):
+                return len(results) > 0
+        except Exception:
+            pass
+        return False
     
     async def assign_grouping_uris(self, frame_objects: List[GraphObject], entity_uri: str) -> None:
         """

@@ -56,6 +56,7 @@ class OperationMode(str, Enum):
     CREATE = "create"
     UPDATE = "update"
     UPSERT = "upsert"
+    REPLACE = "replace"
 
 
 class KGEntitiesEndpoint:
@@ -335,6 +336,8 @@ class KGEntitiesEndpoint:
             quads = body.quads
             if operation_mode == OperationMode.UPDATE:
                 return await self._update_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
+            elif operation_mode == OperationMode.REPLACE:
+                return await self._replace_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
             else:
                 return await self._create_or_update_frames(space_id, graph_id, quads, operation_mode, entity_uri=entity_uri, current_user=current_user, parent_frame_uri=parent_frame_uri)
         
@@ -1669,6 +1672,142 @@ class KGEntitiesEndpoint:
                 except Exception as _ue:
                     self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_ue}")
     
+    
+    async def _replace_entity_frames(self, space_id: str, graph_id: str, entity_uri: str,
+                                     quads: List[Quad], current_user: Dict,
+                                     parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
+        """Replace frame subtree within entity context.
+        
+        Deletes the existing frame and all its descendants, then inserts the
+        replacement frame graph. Preserves the root frame URI.
+        
+        Args:
+            parent_frame_uri: If provided, validates that frames are children of this parent.
+        """
+        from ..model.kgframes_model import FrameUpdateResponse
+        graph_objects = quad_list_to_graphobjects(quads)
+        
+        try:
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                return FrameUpdateResponse(message=f"Space {space_id} not found", updated_uri="", updated_count=0)
+            
+            space_impl = space_record.space_impl
+            backend_impl = space_impl.get_db_space_impl()
+            if not backend_impl:
+                return FrameUpdateResponse(message="Backend implementation not available", updated_uri="", updated_count=0)
+            
+            backend_adapter = create_backend_adapter(backend_impl)
+            
+            # Extract KGFrame objects from the replacement graph
+            from ai_haley_kg_domain.model.KGFrame import KGFrame
+            frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
+            if not frame_uris:
+                return FrameUpdateResponse(message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
+            
+            # Validate ownership (frames must belong to entity)
+            from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
+            update_processor = KGEntityFrameUpdateProcessor(backend_adapter, self.logger)
+            validated = await update_processor.validate_frame_ownership(space_id, graph_id, entity_uri, frame_uris)
+            if not validated:
+                return FrameUpdateResponse(
+                    message=f"Frame ownership validation failed: frames do not belong to entity {entity_uri}",
+                    updated_uri="", updated_count=0
+                )
+            
+            # Validate parent-child relationship if parent_frame_uri is provided
+            if parent_frame_uri:
+                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+                sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
+                validation_map = await sparql_processor.validate_frame_parent_relationship(
+                    space_id, graph_id, parent_frame_uri, validated
+                )
+                invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
+                if invalid_frames:
+                    return FrameUpdateResponse(
+                        message=f"Frames are not children of parent {parent_frame_uri}: {', '.join(invalid_frames)}",
+                        updated_uri="", updated_count=0
+                    )
+            
+            # Phase 1: Collect all descendants of each root frame being replaced
+            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+            sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
+            
+            all_uris_to_delete = list(validated)
+            descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, validated)
+            if descendants:
+                self.logger.info(f"🔄 REPLACE: found {len(descendants)} descendant frames to remove")
+                all_uris_to_delete.extend(descendants)
+            
+            # Phase 2: Delete existing subtree via SPARQL
+            for uri in all_uris_to_delete:
+                delete_query = f"""
+                DELETE WHERE {{
+                    GRAPH <{graph_id}> {{
+                        <{uri}> ?p ?o .
+                    }}
+                }}
+                """
+                await backend_adapter.execute_sparql_update(space_id, delete_query)
+                # Delete edges pointing TO this frame (slots, child edges)
+                delete_incoming = f"""
+                DELETE WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> <{uri}> .
+                        ?edge ?p ?o .
+                    }}
+                }}
+                """
+                await backend_adapter.execute_sparql_update(space_id, delete_incoming)
+                # Delete edges FROM this frame (slots, child edges)
+                delete_outgoing = f"""
+                DELETE WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{uri}> .
+                        ?edge ?p ?o .
+                    }}
+                }}
+                """
+                await backend_adapter.execute_sparql_update(space_id, delete_outgoing)
+            
+            self.logger.info(f"🗑️ REPLACE: deleted {len(all_uris_to_delete)} existing frames")
+            
+            # Phase 3: Insert replacement graph via CREATE
+            from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
+            frame_processor = KGEntityFrameCreateProcessor()
+            result = await frame_processor.create_entity_frame(
+                backend_adapter=backend_adapter,
+                space_id=space_id,
+                graph_id=graph_id,
+                entity_uri=entity_uri,
+                frame_objects=graph_objects,
+                operation_mode="CREATE",
+                parent_frame_uri=parent_frame_uri
+            )
+            
+            if not result.success:
+                return FrameUpdateResponse(
+                    message=f"Replace failed during re-creation: {result.message}",
+                    updated_uri="", updated_count=0
+                )
+            
+            created_uris = result.created_uris
+            
+            # Invalidate entity graph cache
+            await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+            
+            return FrameUpdateResponse(
+                message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
+                updated_uri=entity_uri,
+                updated_count=len(created_uris),
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error in _replace_entity_frames: {e}")
+            return FrameUpdateResponse(
+                message=f"Replace operation failed: {str(e)}",
+                updated_uri="", updated_count=0
+            )
     
     async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None, recursive: bool = False):
         """Delete frames within entity context using Edge_hasEntityKGFrame relationships.

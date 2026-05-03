@@ -904,7 +904,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         graph_id: str,
         entity_uri: str,
         objects: List,
-        parent_frame_uri: Optional[str] = None
+        parent_frame_uri: Optional[str] = None,
+        operation_mode: str = "create"
     ) -> FrameResponse:
         """
         Create frames for a specific entity.
@@ -915,6 +916,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             entity_uri: Entity URI to create frames for
             objects: List of GraphObject instances (frames and slots)
             parent_frame_uri: Optional parent frame URI
+            operation_mode: Operation mode (create, update, upsert, replace)
             
         Returns:
             FrameResponse containing created frames
@@ -932,7 +934,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 entity_uri=entity_uri,
-                parent_frame_uri=parent_frame_uri
+                parent_frame_uri=parent_frame_uri,
+                operation_mode=operation_mode
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)

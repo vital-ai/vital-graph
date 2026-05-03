@@ -381,7 +381,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 error_code=4, error_message=str(e), status_code=500
             )
     
-    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete a KGFrame by URI.
         
@@ -389,6 +389,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: KGFrame URI to delete
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if frame has children.
             
         Returns:
             DeleteResponse containing operation result
@@ -401,7 +403,7 @@ class KGFramesEndpoint(BaseEndpoint):
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
-            params = build_query_params(space_id=space_id, graph_id=graph_id, uri=uri)
+            params = build_query_params(space_id=space_id, graph_id=graph_id, uri=uri, recursive=recursive)
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
@@ -427,7 +429,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id, graph_id=graph_id, requested_uris=[uri]
             )
     
-    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete multiple KGFrames by URI list.
         
@@ -435,6 +437,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGFrame URIs
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing operation result
@@ -447,7 +451,7 @@ class KGFramesEndpoint(BaseEndpoint):
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
-            params = build_query_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list)
+            params = build_query_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list, recursive=recursive)
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
@@ -618,7 +622,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error updating frames with slots: {e}")
             return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=500)
     
-    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete KGFrames with their associated slots by URI list.
         
@@ -626,6 +630,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGFrame URIs
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing operation result
@@ -633,9 +639,9 @@ class KGFramesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)
     
-    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframes(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete KGFrames by URI list.
         
@@ -643,6 +649,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of KGFrame URIs
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing operation result
@@ -650,7 +658,7 @@ class KGFramesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)
 
     # Frame-Slot Sub-Endpoint Operations
     
@@ -932,7 +940,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error updating child frames: {e}")
             return build_error_response(UpdateEntityResponse, error_code=4, error_message=str(e), status_code=500)
     
-    async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_uris: list[str]) -> DeleteResponse:
+    async def delete_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_uris: list[str], recursive: bool = False) -> DeleteResponse:
         """
         Delete child frames from a parent frame.
         
@@ -941,6 +949,8 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             parent_frame_uri: Parent frame URI
             frame_uris: List of child frame URIs to delete
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing operation result
@@ -948,7 +958,7 @@ class KGFramesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, ','.join(frame_uris))
+        return await self.delete_kgframes_batch(space_id, graph_id, ','.join(frame_uris), recursive=recursive)
     
     async def get_child_frames(self, space_id: str, graph_id: str, parent_frame_uri: str, frame_type: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
@@ -1160,7 +1170,7 @@ class KGFramesEndpoint(BaseEndpoint):
         """
         return await self.get_kgframe(space_id, graph_id, uri, include_frame_graph=True)
     
-    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
+    async def delete_kgframe_graph(self, space_id: str, graph_id: str, uri: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete a KGFrame and its complete graph including all connected objects.
         
@@ -1168,6 +1178,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri: Frame URI to delete graph for
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if frame has children.
             
         Returns:
             DeleteResponse containing deletion result
@@ -1175,9 +1187,9 @@ class KGFramesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframe(space_id, graph_id, uri)
+        return await self.delete_kgframe(space_id, graph_id, uri, recursive=recursive)
     
-    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
+    async def delete_kgframe_graphs(self, space_id: str, graph_id: str, uri_list: str, recursive: bool = False) -> DeleteResponse:
         """
         Delete multiple KGFrames and their complete graphs.
         
@@ -1185,6 +1197,8 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             uri_list: Comma-separated list of frame URIs to delete graphs for
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing deletion result
@@ -1192,4 +1206,4 @@ class KGFramesEndpoint(BaseEndpoint):
         Raises:
             VitalGraphClientError: If request fails
         """
-        return await self.delete_kgframes_batch(space_id, graph_id, uri_list)
+        return await self.delete_kgframes_batch(space_id, graph_id, uri_list, recursive=recursive)

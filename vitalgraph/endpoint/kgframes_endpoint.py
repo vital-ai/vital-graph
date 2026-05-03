@@ -68,6 +68,7 @@ class OperationMode(str, Enum):
     CREATE = "create"
     UPDATE = "update"
     UPSERT = "upsert"
+    REPLACE = "replace"
 
 
 class KGFramesEndpoint:
@@ -189,6 +190,8 @@ class KGFramesEndpoint:
                 return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
             elif op_mode == OperationMode.UPSERT:
                 return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
+            elif op_mode == OperationMode.REPLACE:
+                return await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, effective_parent_uri)
             else:
                 return _fail(f"Invalid operation_mode: {op_mode}")
 
@@ -605,16 +608,20 @@ class KGFramesEndpoint:
             graph_id: str = Query(..., description="Graph ID"),
             uri: Optional[str] = Query(None, description="Single frame URI to delete"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs to delete"),
+            recursive: bool = Query(False, description="If true, recursively delete all descendant frames. If false (default), fail if any frame has children."),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
             Delete frames by URI or URI list.
+            
+            Args:
+                recursive: If true, cascade-delete all descendant frames. If false, fail if children exist.
             """
             if uri:
-                return await self._delete_frame_by_uri(space_id, graph_id, uri, current_user)
+                return await self._delete_frame_by_uri(space_id, graph_id, uri, current_user, recursive=recursive)
             elif uri_list:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
-                return await self._delete_frames_by_uris(space_id, graph_id, uris, current_user)
+                return await self._delete_frames_by_uris(space_id, graph_id, uris, current_user, recursive=recursive)
             else:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
@@ -928,12 +935,17 @@ class KGFramesEndpoint:
                 has_more=False
             )
     
-    async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict) -> FrameDeleteResponse:
-        """Delete single frame by URI."""
+    async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
+        """Delete single frame by URI.
+        
+        Args:
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if frame has children.
+        """
         from ..model.kgframes_model import FrameDeleteResponse
         
         try:
-            self.logger.info(f"Deleting frame {uri} from space {space_id}, graph {graph_id}")
+            self.logger.info(f"Deleting frame {uri} from space {space_id}, graph {graph_id}, recursive={recursive}")
             
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
@@ -967,22 +979,38 @@ class KGFramesEndpoint:
                     deleted_uris=[]
                 )
             
-            # Delete frame and associated objects
-            success = await self._delete_frame_from_backend(backend, space_id, graph_id, uri)
+            # Check for child frames and handle recursive vs fail mode
+            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
+            children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
             
-            if success:
-                return FrameDeleteResponse(
-                    message=f"Successfully deleted frame {uri}",
-                    deleted_count=1,
-                    deleted_uris=[uri]
-                )
-            else:
-                return FrameDeleteResponse(
-                    success=False,
-                    message=f"Failed to delete frame {uri}",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
+            uris_to_delete = [uri]
+            if children:
+                if not recursive:
+                    return FrameDeleteResponse(
+                        success=False,
+                        message=f"Cannot delete frame with children (use recursive=true to cascade): {uri} has {len(children)} child(ren)",
+                        deleted_count=0,
+                        deleted_uris=[]
+                    )
+                else:
+                    descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, [uri])
+                    if descendants:
+                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
+                        uris_to_delete.extend(descendants)
+            
+            # Delete all frames (original + descendants)
+            deleted_uris = []
+            for frame_uri in uris_to_delete:
+                success = await self._delete_frame_from_backend(backend, space_id, graph_id, frame_uri)
+                if success:
+                    deleted_uris.append(frame_uri)
+            
+            return FrameDeleteResponse(
+                message=f"Successfully deleted {len(deleted_uris)} frame(s)",
+                deleted_count=len(deleted_uris),
+                deleted_uris=deleted_uris
+            )
                 
         except Exception as e:
             self.logger.error(f"Error deleting frame: {e}")
@@ -993,12 +1021,17 @@ class KGFramesEndpoint:
                 deleted_uris=[]
             )
     
-    async def _delete_frames_by_uris(self, space_id: str, graph_id: str, uris: List[str], current_user: Dict) -> FrameDeleteResponse:
-        """Delete multiple frames by URI list."""
+    async def _delete_frames_by_uris(self, space_id: str, graph_id: str, uris: List[str], current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
+        """Delete multiple frames by URI list.
+        
+        Args:
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
+        """
         from ..model.kgframes_model import FrameDeleteResponse
         
         try:
-            self.logger.info(f"Deleting {len(uris)} frames from space {space_id}, graph {graph_id}")
+            self.logger.info(f"Deleting {len(uris)} frames from space {space_id}, graph {graph_id}, recursive={recursive}")
             
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
@@ -1023,6 +1056,34 @@ class KGFramesEndpoint:
             # Wrap backend with adapter for consistency
             backend = create_backend_adapter(backend_impl)
             
+            # Check for child frames and handle recursive vs fail mode
+            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
+            
+            frames_with_children = {}
+            for uri in uris:
+                children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
+                if children:
+                    frames_with_children[uri] = children
+            
+            if frames_with_children:
+                if not recursive:
+                    child_summary = "; ".join(
+                        f"{uri} has {len(kids)} child(ren)"
+                        for uri, kids in frames_with_children.items()
+                    )
+                    return FrameDeleteResponse(
+                        success=False,
+                        message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
+                        deleted_count=0,
+                        deleted_uris=[]
+                    )
+                else:
+                    descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, uris)
+                    if descendants:
+                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
+                        uris = uris + descendants
+            
             deleted_uris = []
             for uri in uris:
                 try:
@@ -1035,7 +1096,7 @@ class KGFramesEndpoint:
                     continue
             
             return FrameDeleteResponse(
-                message=f"Successfully deleted {len(deleted_uris)} of {len(uris)} frames",
+                message=f"Successfully deleted {len(deleted_uris)} frame(s)",
                 deleted_count=len(deleted_uris),
                 deleted_uris=deleted_uris
             )
@@ -1683,8 +1744,30 @@ class KGFramesEndpoint:
             )
     
     async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
-        """Handle UPDATE mode: verify frames exist, then update using atomic processor."""
+        """Handle UPDATE mode: verify frames exist, then update using atomic processor.
+        
+        When parent_uri points to a KGFrame, validates that the frames being updated
+        are children of that parent via Edge_hasKGFrame before proceeding.
+        """
         try:
+            # Validate parent-child relationship if parent_uri is a frame
+            if parent_uri:
+                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+                sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
+                frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
+                if frame_uris:
+                    validation_map = await sparql_processor.validate_frame_parent_relationship(
+                        space_id, graph_id, parent_uri, frame_uris
+                    )
+                    invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
+                    if invalid_frames:
+                        return FrameUpdateResponse(
+                            success=False,
+                            message=f"Frames are not children of parent {parent_uri}: {', '.join(invalid_frames)}",
+                            updated_uri="",
+                            updated_count=0
+                        )
+            
             # Use atomic frame processor for UPDATE mode
             # Extract entity URI from parent_uri or first entity in objects
             entity_uri = parent_uri
@@ -1790,6 +1873,103 @@ class KGFramesEndpoint:
                 message=f"Upsert operation failed: {str(e)}",
                 created_count=0,
                 created_uris=[]
+            )
+    
+    async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
+        """Handle REPLACE mode: delete the existing frame subtree, then insert the new frame graph.
+        
+        Preserves the root frame URI and any parent→frame edge. Removes all existing
+        descendant frames, slots, and edges before inserting the replacement graph.
+        """
+        try:
+            frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
+            if not frame_uris:
+                return FrameUpdateResponse(
+                    success=False,
+                    message="No frame URIs found in replacement graph",
+                    updated_uri="",
+                    updated_count=0
+                )
+            
+            # Validate parent-child relationship if parent_uri is provided
+            if parent_uri:
+                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+                sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
+                validation_map = await sparql_processor.validate_frame_parent_relationship(
+                    space_id, graph_id, parent_uri, frame_uris
+                )
+                invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
+                if invalid_frames:
+                    return FrameUpdateResponse(
+                        success=False,
+                        message=f"Frames are not children of parent {parent_uri}: {', '.join(invalid_frames)}",
+                        updated_uri="",
+                        updated_count=0
+                    )
+            
+            # Phase 1: Collect all descendants of each root frame being replaced
+            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+            sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
+            
+            all_uris_to_delete = list(frame_uris)
+            descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, frame_uris)
+            if descendants:
+                self.logger.info(f"🔄 REPLACE mode: found {len(descendants)} descendant frames to remove")
+                all_uris_to_delete.extend(descendants)
+            
+            # Phase 2: Delete existing subtree (frames + slots + edges) but NOT parent→root edges
+            for uri in all_uris_to_delete:
+                await self._delete_frame_from_backend(backend, space_id, graph_id, uri)
+            self.logger.info(f"🗑️ REPLACE mode: deleted {len(all_uris_to_delete)} existing frames")
+            
+            # Phase 3: Insert replacement graph using CREATE mode
+            entity_uri = parent_uri
+            if not entity_uri:
+                for obj in objects:
+                    if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
+                        entity_uri = str(obj.kGGraphURI)
+                        break
+            
+            if not entity_uri:
+                return FrameUpdateResponse(
+                    success=False,
+                    message="Entity/parent URI required for frame replace",
+                    updated_uri="",
+                    updated_count=0
+                )
+            
+            result = await self.frame_processor.create_entity_frame(
+                backend_adapter=backend,
+                space_id=space_id,
+                graph_id=graph_id,
+                entity_uri=entity_uri,
+                frame_objects=objects,
+                operation_mode="CREATE"
+            )
+            
+            if not result.success:
+                return FrameUpdateResponse(
+                    success=False,
+                    message=f"Replace failed during re-creation: {result.message}",
+                    updated_uri="",
+                    updated_count=0
+                )
+            
+            created_uris = result.created_uris
+            return FrameUpdateResponse(
+                success=True,
+                message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
+                updated_uri=created_uris[0] if created_uris else "unknown",
+                updated_count=len(created_uris),
+                frames_updated=len(created_uris),
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error in REPLACE mode: {e}")
+            return FrameUpdateResponse(
+                success=False,
+                message=f"Replace operation failed: {str(e)}",
+                updated_uri=""
             )
     
     async def _frame_exists_in_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
@@ -1944,6 +2124,57 @@ class KGFramesEndpoint:
             }}
             """
             await backend.execute_sparql_update(space_id, delete_slots_query)
+            
+            # Delete Edge_hasKGFrame edges where this frame is destination (parent→this)
+            delete_incoming_frame_edges = f"""
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> ;
+                          <{self.vital_prefix}hasEdgeDestination> <{frame_uri}> .
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            """
+            await backend.execute_sparql_update(space_id, delete_incoming_frame_edges)
+            
+            # Delete Edge_hasKGFrame edges where this frame is source (this→children)
+            delete_outgoing_frame_edges = f"""
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> ;
+                          <{self.vital_prefix}hasEdgeSource> <{frame_uri}> .
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            """
+            await backend.execute_sparql_update(space_id, delete_outgoing_frame_edges)
+            
+            # Delete Edge_hasEntityKGFrame edges where this frame is destination (entity→this)
+            delete_entity_frame_edges = f"""
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasEntityKGFrame> ;
+                          <{self.vital_prefix}hasEdgeDestination> <{frame_uri}> .
+                    ?edge ?ep ?eo .
+                }}
+            }}
+            """
+            await backend.execute_sparql_update(space_id, delete_entity_frame_edges)
             
             return True
             
