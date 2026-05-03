@@ -398,6 +398,91 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 requested_reference_ids=reference_ids
             )
     
+    async def get_kgentities_by_uris(
+        self,
+        space_id: str,
+        graph_id: str,
+        uris: List[str],
+        include_entity_graph: bool = False
+    ):
+        """
+        Get multiple KGEntities by URI list.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uris: List of entity URIs
+            include_entity_graph: If True, include complete entity graphs
+            
+        Returns:
+            PaginatedGraphObjectResponse if include_entity_graph=False
+            MultiEntityGraphResponse if include_entity_graph=True
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, uris=uris)
+        
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri_list=",".join(uris),
+                include_entity_graph=include_entity_graph
+            )
+            
+            response = await self._make_request('GET', url, params=params)
+            response_data = response.json()
+            
+            vs = self.vs
+            
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, vs)
+            pagination = extract_pagination_from_json_quads(response_data)
+            
+            if include_entity_graph:
+                entity_graphs_dict = {}
+                for obj in objects:
+                    graph_uri = str(obj.kGGraphURI) if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI else None
+                    if graph_uri:
+                        entity_graphs_dict.setdefault(graph_uri, []).append(obj)
+                entity_graphs = [build_entity_graph(eu, objs) for eu, objs in entity_graphs_dict.items()]
+                return build_success_response(
+                    MultiEntityGraphResponse,
+                    graph_list=entity_graphs,
+                    status_code=response.status_code,
+                    message=f"Retrieved {len(entity_graphs)} entity graphs",
+                    space_id=space_id,
+                    graph_id=graph_id,
+                    metadata={'total_graphs': len(entity_graphs)}
+                )
+            else:
+                return build_success_response(
+                    PaginatedGraphObjectResponse,
+                    objects=objects,
+                    status_code=response.status_code,
+                    message=f"Retrieved {len(objects)} entities",
+                    space_id=space_id,
+                    graph_id=graph_id,
+                    **pagination,
+                    metadata={'object_types': count_object_types(objects)}
+                )
+                
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting entities by URIs: {e}")
+            response_class = MultiEntityGraphResponse if include_entity_graph else PaginatedGraphObjectResponse
+            return build_error_response(
+                response_class,
+                error_code=3,
+                error_message=str(e),
+                status_code=500,
+                space_id=space_id,
+                graph_id=graph_id
+            )
+    
     async def create_kgentities(
         self, 
         space_id: str, 

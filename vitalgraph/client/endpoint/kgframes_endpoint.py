@@ -199,6 +199,79 @@ class KGFramesEndpoint(BaseEndpoint):
                 requested_frame_uri=uri
             )
     
+    async def get_kgframes_by_uris(
+        self,
+        space_id: str,
+        graph_id: str,
+        uris: List[str],
+        include_frame_graph: bool = False
+    ):
+        """
+        Get multiple KGFrames by URI list.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            uris: List of frame URIs
+            include_frame_graph: If True, include complete frame graphs with slots
+            
+        Returns:
+            PaginatedGraphObjectResponse if include_frame_graph=False
+            MultiFrameGraphResponse if include_frame_graph=True
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, uris=uris)
+        
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgframes"
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                uri_list=",".join(uris),
+                include_frame_graph=include_frame_graph
+            )
+            
+            response = await self._make_request('GET', url, params=params)
+            response_data = response.json()
+            
+            objects = deserialize_response_to_graphobjects(response_data, ClientWireFormat.JSON_QUADS, self.vs)
+            pagination = extract_pagination_from_json_quads(response_data)
+            
+            if include_frame_graph:
+                frame_graphs = [build_frame_graph(uri, objects) for uri in uris]
+                return build_success_response(
+                    MultiFrameGraphResponse,
+                    frame_graph_list=frame_graphs,
+                    status_code=response.status_code,
+                    message=f"Retrieved {len(frame_graphs)} frame graphs",
+                    space_id=space_id, graph_id=graph_id,
+                    metadata={'total_graphs': len(frame_graphs)}
+                )
+            else:
+                return build_success_response(
+                    PaginatedGraphObjectResponse,
+                    objects=objects,
+                    status_code=response.status_code,
+                    message=f"Retrieved {len(objects)} frames",
+                    space_id=space_id, graph_id=graph_id,
+                    **pagination,
+                    metadata={'object_types': count_object_types(objects)}
+                )
+                
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting frames by URIs: {e}")
+            response_class = MultiFrameGraphResponse if include_frame_graph else PaginatedGraphObjectResponse
+            return build_error_response(
+                response_class,
+                error_code=2, error_message=str(e), status_code=500,
+                space_id=space_id, graph_id=graph_id
+            )
+    
     async def create_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
                        entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
         """
@@ -719,7 +792,9 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id, graph_id=graph_id, requested_uris=slot_uris
             )
     
-    async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_type: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_type: Optional[str] = None,
+                              entity_uri: Optional[str] = None, parent_uri: Optional[str] = None,
+                              search: Optional[str] = None, page_size: int = 10, offset: int = 0) -> PaginatedGraphObjectResponse:
         """
         Get slots for a specific frame, optionally filtered by slot type.
         
@@ -728,6 +803,11 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             frame_uri: Frame URI to get slots for
             slot_type: Optional slot type URN for filtering by kGSlotType property
+            entity_uri: Optional entity URI for filtering
+            parent_uri: Optional parent URI for filtering
+            search: Optional search term
+            page_size: Number of items per page
+            offset: Offset for pagination
             
         Returns:
             PaginatedGraphObjectResponse containing frame's slots as GraphObjects
@@ -741,7 +821,9 @@ class KGFramesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
-                space_id=space_id, graph_id=graph_id, frame_uri=frame_uri, slot_type=slot_type
+                space_id=space_id, graph_id=graph_id, frame_uri=frame_uri, slot_type=slot_type,
+                entity_uri=entity_uri, parent_uri=parent_uri, search=search,
+                page_size=page_size, offset=offset
             )
             
             response = await self._make_request('GET', url, params=params)
