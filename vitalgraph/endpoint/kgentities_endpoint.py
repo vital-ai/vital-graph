@@ -1739,36 +1739,86 @@ class KGEntitiesEndpoint:
                 self.logger.info(f"🔄 REPLACE: found {len(descendants)} descendant frames to remove")
                 all_uris_to_delete.extend(descendants)
             
-            # Phase 2: Delete existing subtree via SPARQL
+            # Phase 2: Delete existing subtree using frameGraphURI grouping
+            haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
+            vital_prefix = "http://vital.ai/ontology/vital-core#"
             for uri in all_uris_to_delete:
-                delete_query = f"""
-                DELETE WHERE {{
+                # Delete all subjects in the frame graph (frame, slots, slot edges)
+                delete_frame_graph = f"""
+                DELETE {{
+                    GRAPH <{graph_id}> {{
+                        ?s ?p ?o .
+                    }}
+                }}
+                WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?s <{haley_prefix}hasFrameGraphURI> <{uri}> .
+                        ?s ?p ?o .
+                    }}
+                }}
+                """
+                await backend_adapter.execute_sparql_update(space_id, delete_frame_graph)
+                # Also delete the frame's own triples (may not have frameGraphURI → itself)
+                delete_frame_self = f"""
+                DELETE {{
+                    GRAPH <{graph_id}> {{
+                        <{uri}> ?p ?o .
+                    }}
+                }}
+                WHERE {{
                     GRAPH <{graph_id}> {{
                         <{uri}> ?p ?o .
                     }}
                 }}
                 """
-                await backend_adapter.execute_sparql_update(space_id, delete_query)
-                # Delete edges pointing TO this frame (slots, child edges)
-                delete_incoming = f"""
-                DELETE WHERE {{
+                await backend_adapter.execute_sparql_update(space_id, delete_frame_self)
+                # Clean up structural edges: Edge_hasKGFrame (both directions)
+                delete_incoming_frame_edges = f"""
+                DELETE {{
                     GRAPH <{graph_id}> {{
-                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> <{uri}> .
-                        ?edge ?p ?o .
+                        ?edge ?ep ?eo .
+                    }}
+                }}
+                WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge a <{haley_prefix}Edge_hasKGFrame> ;
+                              <{vital_prefix}hasEdgeDestination> <{uri}> .
+                        ?edge ?ep ?eo .
                     }}
                 }}
                 """
-                await backend_adapter.execute_sparql_update(space_id, delete_incoming)
-                # Delete edges FROM this frame (slots, child edges)
-                delete_outgoing = f"""
-                DELETE WHERE {{
+                await backend_adapter.execute_sparql_update(space_id, delete_incoming_frame_edges)
+                delete_outgoing_frame_edges = f"""
+                DELETE {{
                     GRAPH <{graph_id}> {{
-                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{uri}> .
-                        ?edge ?p ?o .
+                        ?edge ?ep ?eo .
+                    }}
+                }}
+                WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge a <{haley_prefix}Edge_hasKGFrame> ;
+                              <{vital_prefix}hasEdgeSource> <{uri}> .
+                        ?edge ?ep ?eo .
                     }}
                 }}
                 """
-                await backend_adapter.execute_sparql_update(space_id, delete_outgoing)
+                await backend_adapter.execute_sparql_update(space_id, delete_outgoing_frame_edges)
+                # Clean up Edge_hasEntityKGFrame (entity→frame)
+                delete_entity_frame_edges = f"""
+                DELETE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge ?ep ?eo .
+                    }}
+                }}
+                WHERE {{
+                    GRAPH <{graph_id}> {{
+                        ?edge a <{haley_prefix}Edge_hasEntityKGFrame> ;
+                              <{vital_prefix}hasEdgeDestination> <{uri}> .
+                        ?edge ?ep ?eo .
+                    }}
+                }}
+                """
+                await backend_adapter.execute_sparql_update(space_id, delete_entity_frame_edges)
             
             self.logger.info(f"🗑️ REPLACE: deleted {len(all_uris_to_delete)} existing frames")
             

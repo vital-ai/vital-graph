@@ -2088,10 +2088,34 @@ class KGFramesEndpoint:
             raise
     
     async def _delete_frame_from_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
-        """Delete frame and associated objects from backend."""
+        """Delete frame and all objects in its frame graph using frameGraphURI grouping.
+        
+        Uses the frameGraphURI pattern to find every subject that belongs to
+        this frame (the frame itself, its slots, and slot edges) and deletes
+        all their triples in a single pass.  Then removes structural edges
+        (Edge_hasKGFrame, Edge_hasEntityKGFrame) that reference this frame.
+        """
         try:
-            # Delete frame and all its properties
-            delete_query = f"""
+            # Phase 1: Delete all subjects in the frame graph (frame, slots, slot edges)
+            # Every object created under a frame has hasFrameGraphURI = frame_uri
+            delete_frame_graph = f"""
+            DELETE {{
+                GRAPH <{graph_id}> {{
+                    ?s ?p ?o .
+                }}
+            }}
+            WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?s <{self.haley_prefix}hasFrameGraphURI> <{frame_uri}> .
+                    ?s ?p ?o .
+                }}
+            }}
+            """
+            await backend.execute_sparql_update(space_id, delete_frame_graph)
+            
+            # Also delete the frame's own triples (in case it does not have
+            # hasFrameGraphURI pointing to itself)
+            delete_frame_self = f"""
             DELETE {{
                 GRAPH <{graph_id}> {{
                     <{frame_uri}> ?p ?o .
@@ -2103,29 +2127,10 @@ class KGFramesEndpoint:
                 }}
             }}
             """
-            await backend.execute_sparql_update(space_id, delete_query)
+            await backend.execute_sparql_update(space_id, delete_frame_self)
             
-            # Also delete any slots connected to this frame
-            delete_slots_query = f"""
-            DELETE {{
-                GRAPH <{graph_id}> {{
-                    ?slot ?p ?o .
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            WHERE {{
-                GRAPH <{graph_id}> {{
-                    ?edge a <{self.haley_prefix}Edge_hasKGSlot> ;
-                          <{self.vital_prefix}hasEdgeSource> <{frame_uri}> ;
-                          <{self.vital_prefix}hasEdgeDestination> ?slot .
-                    ?slot ?p ?o .
-                    ?edge ?ep ?eo .
-                }}
-            }}
-            """
-            await backend.execute_sparql_update(space_id, delete_slots_query)
-            
-            # Delete Edge_hasKGFrame edges where this frame is destination (parent→this)
+            # Phase 2: Clean up structural edges that reference this frame
+            # Edge_hasKGFrame where this frame is destination (parent→this)
             delete_incoming_frame_edges = f"""
             DELETE {{
                 GRAPH <{graph_id}> {{
@@ -2142,7 +2147,7 @@ class KGFramesEndpoint:
             """
             await backend.execute_sparql_update(space_id, delete_incoming_frame_edges)
             
-            # Delete Edge_hasKGFrame edges where this frame is source (this→children)
+            # Edge_hasKGFrame where this frame is source (this→children)
             delete_outgoing_frame_edges = f"""
             DELETE {{
                 GRAPH <{graph_id}> {{
@@ -2159,7 +2164,7 @@ class KGFramesEndpoint:
             """
             await backend.execute_sparql_update(space_id, delete_outgoing_frame_edges)
             
-            # Delete Edge_hasEntityKGFrame edges where this frame is destination (entity→this)
+            # Edge_hasEntityKGFrame where this frame is destination (entity→this)
             delete_entity_frame_edges = f"""
             DELETE {{
                 GRAPH <{graph_id}> {{
