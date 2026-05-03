@@ -309,6 +309,18 @@ class KGFramesEndpoint(BaseEndpoint):
                                                 headers={'Content-Type': content_type})
             response_data = response.json()
             
+            # Check if response indicates failure (success=false)
+            if response_data.get('success') is False:
+                error_msg = response_data.get('message') or 'Create/update/replace operation failed'
+                return build_error_response(
+                    CreateEntityResponse,
+                    error_code=response_data.get('error_code', 11),
+                    error_message=error_msg,
+                    status_code=response.status_code,
+                    created_count=0,
+                    created_uris=[]
+                )
+            
             created_count = response_data.get('created_count', 0)
             created_uris = response_data.get('created_uris', [])
             
@@ -364,6 +376,17 @@ class KGFramesEndpoint(BaseEndpoint):
                                                 headers={'Content-Type': content_type})
             response_data = response.json()
             
+            # Check if response indicates failure (success=false)
+            if response_data.get('success') is False:
+                error_msg = response_data.get('message') or 'Update operation failed'
+                return build_error_response(
+                    UpdateEntityResponse,
+                    error_code=response_data.get('error_code', 11),
+                    error_message=error_msg,
+                    status_code=response.status_code,
+                    updated_uri=''
+                )
+            
             updated_uri = response_data.get('updated_uri') or response_data.get('updated_uris', [None])[0]
             
             return build_success_response(
@@ -407,6 +430,18 @@ class KGFramesEndpoint(BaseEndpoint):
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
+            
+            # Check if response indicates failure (success=false)
+            if response_data.get('success') is False:
+                error_msg = response_data.get('message') or 'Delete operation failed'
+                return build_error_response(
+                    DeleteResponse,
+                    error_code=response_data.get('error_code', 11),
+                    error_message=error_msg,
+                    status_code=response.status_code,
+                    space_id=space_id, graph_id=graph_id,
+                    requested_uris=[uri]
+                )
             
             deleted_count = response_data.get('deleted_count', response_data.get('affected_count', 0))
             deleted_uris = response_data.get('deleted_uris', [uri] if deleted_count else [])
@@ -455,6 +490,18 @@ class KGFramesEndpoint(BaseEndpoint):
             
             response = await self._make_request('DELETE', url, params=params)
             response_data = response.json()
+            
+            # Check if response indicates failure (success=false)
+            if response_data.get('success') is False:
+                error_msg = response_data.get('message') or 'Delete operation failed'
+                return build_error_response(
+                    DeleteResponse,
+                    error_code=response_data.get('error_code', 11),
+                    error_message=error_msg,
+                    status_code=response.status_code,
+                    space_id=space_id, graph_id=graph_id,
+                    requested_uris=uri_list.split(',')
+                )
             
             deleted_count = response_data.get('deleted_count', response_data.get('affected_count', 0))
             deleted_uris = response_data.get('deleted_uris', [])
