@@ -25,28 +25,32 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements files
+# ---------- Stage 1: install dependencies only (cached until pyproject.toml changes) ----------
 COPY pyproject.toml .
 COPY README.md .
 COPY LICENSE .
 COPY MANIFEST.in .
-
-# Install Python dependencies with server extras
-RUN pip install --no-cache-dir -e ".[server]"
-
-# Copy VitalSigns config and pre-warm registry cache (before code layers for caching)
-COPY vitalhome/ ./vitalhome/
-ENV VITAL_HOME=/app/vitalhome
-RUN python -c "from vital_ai_vitalsigns.vitalsigns import VitalSigns; VitalSigns()"
-
-# Copy the application code
-COPY vitalgraph/ ./vitalgraph/
 
 # Copy frontend source files
 COPY frontend/ ./frontend/
 
 # Build frontend (this will copy built files to vitalgraph/api/frontend/)
 RUN cd frontend && npm install --production=false && npm run build && npm cache clean --force
+
+# Create a minimal package stub so pip can resolve deps without the real source
+RUN mkdir -p vitalgraph && touch vitalgraph/__init__.py \
+    && pip install --no-cache-dir ".[server]" \
+    && rm -rf vitalgraph
+
+# Copy VitalSigns config and pre-warm registry cache (before code layers for caching)
+COPY vitalhome/ ./vitalhome/
+ENV VITAL_HOME=/app/vitalhome
+RUN python -c "from vital_ai_vitalsigns.vitalsigns import VitalSigns; VitalSigns()"
+
+# ---------- Stage 2: install package with real source ----------
+COPY vitalgraph/ ./vitalgraph/
+RUN pip install --no-cache-dir --no-deps "."
+
 
 # Expose the default port (actual port is configurable via PORT environment variable at runtime)
 EXPOSE 8001

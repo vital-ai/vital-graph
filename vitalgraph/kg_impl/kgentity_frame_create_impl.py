@@ -22,6 +22,7 @@ from rdflib import URIRef, Literal, BNode
 
 # Domain model imports for edge creation and type categorization
 from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
+from ai_haley_kg_domain.model.Edge_hasKGFrame import Edge_hasKGFrame
 from ai_haley_kg_domain.model.KGFrame import KGFrame
 from ai_haley_kg_domain.model.KGSlot import KGSlot
 from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
@@ -180,12 +181,18 @@ class KGEntityFrameCreateProcessor:
             all_input_objects = categories.frame_objects + categories.slot_objects + categories.edge_objects
             all_objects = await self.assign_grouping_uris(all_input_objects, entity_uri)
             
-            # Step 5: Create Edge_hasEntityKGFrame objects (extracted from lines 1019-1040)
-            # Only create entity-frame edges during CREATE operations, not during UPDATE
+            # Step 5: Create linking edges
+            # Only create edges during CREATE operations, not during UPDATE
             # During UPDATE, the edges already exist and should not be recreated
             if not operation_mode or str(operation_mode).upper() not in ['UPDATE', 'UPSERT']:
-                entity_frame_edges = await self.create_entity_frame_edges(entity_uri, categories.frame_objects)
-                all_objects.extend(entity_frame_edges)
+                if parent_frame_uri:
+                    # Create Edge_hasKGFrame for parent→child frame relationships
+                    parent_child_edges = self._create_parent_child_edges(parent_frame_uri, entity_uri, categories.frame_objects)
+                    all_objects.extend(parent_child_edges)
+                else:
+                    # Create Edge_hasEntityKGFrame for entity→frame relationships (root frames)
+                    entity_frame_edges = await self.create_entity_frame_edges(entity_uri, categories.frame_objects)
+                    all_objects.extend(entity_frame_edges)
             
             _p2 = _time.time()
             self.logger.info(f"⏱️ PROCESSOR categorize+grouping+edges: {_p2-_p1:.3f}s")
@@ -397,6 +404,39 @@ class KGEntityFrameCreateProcessor:
             self.logger.debug(f"🔗 Created entity-to-frame edge: {entity_uri} -> {frame_obj.URI}")
         
         return entity_frame_edges
+    
+    def _create_parent_child_edges(self, parent_frame_uri: str, entity_uri: str,
+                                   frame_objects: List[GraphObject]) -> List[GraphObject]:
+        """
+        Create Edge_hasKGFrame linking objects for parent-to-child frame connections.
+        
+        Args:
+            parent_frame_uri: URI of the parent frame
+            entity_uri: URI of the entity (for kGGraphURI)
+            frame_objects: List of child KGFrame objects
+            
+        Returns:
+            List[GraphObject]: Created Edge_hasKGFrame objects
+        """
+        edges = []
+        for frame_obj in frame_objects:
+            if not isinstance(frame_obj, KGFrame):
+                continue
+            child_uri = str(frame_obj.URI)
+            parent_id = parent_frame_uri.split('/')[-1]
+            child_id = child_uri.split('/')[-1]
+            
+            edge = Edge_hasKGFrame()
+            edge.URI = f"http://vital.ai/haley.ai/app/Edge_hasKGFrame/{parent_id}_{child_id}_edge"
+            edge.edgeSource = parent_frame_uri
+            edge.edgeDestination = child_uri
+            if hasattr(edge, 'kGGraphURI'):
+                edge.kGGraphURI = entity_uri
+            
+            edges.append(edge)
+            self.logger.debug(f"🔗 Created parent-child frame edge: {parent_frame_uri} -> {child_uri}")
+        
+        return edges
     
     async def execute_atomic_frame_update(self, backend_adapter: KGBackendInterface, space_id: str,
                                         graph_id: str, frame_objects: List[GraphObject], all_objects: List[GraphObject],

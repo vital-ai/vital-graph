@@ -144,6 +144,7 @@ async def full_sync(weaviate_index: EntityWeaviateIndex, pool: asyncpg.Pool,
     resume_after = None
     if resume and not since:
         logger.info("Resume mode: scanning Weaviate for last loaded entity_id...")
+        await weaviate_index._ensure_connected()
         max_eid = None
         cursor_uuid = None
         scanned = 0

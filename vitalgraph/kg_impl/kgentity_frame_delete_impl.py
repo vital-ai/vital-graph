@@ -104,12 +104,18 @@ class KGEntityFrameDeleteProcessor:
                     self.logger.error(f"❌ Error discovering frame graph {frame_uri}: {e}")
                     continue
             
-            # Discover entity-frame edge triples
+            # Discover entity-frame edge triples (Edge_hasEntityKGFrame and Edge_hasKGFrame)
             if deleted_frame_uris:
                 edge_triples = await self._discover_entity_frame_edge_triples(space_id, graph_id, entity_uri, deleted_frame_uris)
                 if edge_triples:
                     all_triples.extend(edge_triples)
                     self.logger.info(f"🔍 Found {len(edge_triples)} entity-frame edge triples")
+                
+                # Also discover parent-child frame edges (Edge_hasKGFrame) pointing TO these frames
+                parent_edge_triples = await self._discover_parent_child_edge_triples(space_id, graph_id, deleted_frame_uris)
+                if parent_edge_triples:
+                    all_triples.extend(parent_edge_triples)
+                    self.logger.info(f"🔍 Found {len(parent_edge_triples)} parent-child frame edge triples")
             
             # Phase 3: Single batch delete of all collected triples
             if all_triples:
@@ -355,6 +361,70 @@ class KGEntityFrameDeleteProcessor:
             
         except Exception as e:
             self.logger.error(f"❌ Error discovering entity-frame edge triples: {e}")
+        
+        return all_edge_triples
+    
+    async def _discover_parent_child_edge_triples(self, space_id: str, graph_id: str,
+                                                    frame_uris: List[str]) -> List[tuple]:
+        """
+        Discover all triples for parent-child frame edges (Edge_hasKGFrame)
+        where the frame is the destination (child).
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uris: List of child frame URIs being deleted
+            
+        Returns:
+            List of (s, p, o, o_type, o_datatype, o_lang) tuples for edge triples
+        """
+        all_edge_triples = []
+        
+        try:
+            frame_uris_filter = ', '.join([f'<{uri}>' for uri in frame_uris])
+            
+            # Find Edge_hasKGFrame edges pointing to any of these frames as destination
+            find_edges_query = f"""
+            SELECT DISTINCT ?edge WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?edge a <{self.haley_prefix}Edge_hasKGFrame> .
+                    ?edge <{self.vital_prefix}hasEdgeDestination> ?frame .
+                    FILTER(?frame IN ({frame_uris_filter}))
+                }}
+            }}
+            """
+            
+            edge_results = await self.backend.execute_sparql_query(space_id, find_edges_query)
+            
+            edge_uris = []
+            if isinstance(edge_results, dict) and 'results' in edge_results:
+                bindings = edge_results['results'].get('bindings', [])
+                for binding in bindings:
+                    if 'edge' in binding:
+                        edge_value = binding['edge']
+                        if isinstance(edge_value, dict) and 'value' in edge_value:
+                            edge_uris.append(edge_value['value'])
+            
+            if not edge_uris:
+                return []
+            
+            # Get all triples for the discovered edges
+            edge_filter = ', '.join([f'<{uri}>' for uri in edge_uris])
+            triples_query = f"""
+            SELECT ?s ?p ?o WHERE {{
+                GRAPH <{graph_id}> {{
+                    ?s ?p ?o .
+                    FILTER(?s IN ({edge_filter}))
+                }}
+            }}
+            """
+            
+            results = await self.backend.execute_sparql_query(space_id, triples_query)
+            all_edge_triples = self._extract_triples_from_results(results)
+            self.logger.debug(f"🔍 Parent-child edges for {len(frame_uris)} frames: {len(edge_uris)} edges, {len(all_edge_triples)} triples")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error discovering parent-child edge triples: {e}")
         
         return all_edge_triples
     

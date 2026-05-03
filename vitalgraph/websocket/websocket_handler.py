@@ -134,7 +134,7 @@ class ConnectionManager:
         """Get total number of active connections."""
         return sum(len(connections) for connections in self.active_connections.values())
     
-    async def send_change_notification(self, group: str, user_id: str = None, space_id: str = None):
+    async def send_change_notification(self, group: str, user_id: str = None, space_id: str = None, graph_uri: str = None):
         """Send a change notification to all connected users."""
         change_message = {
             "type": "change",
@@ -146,9 +146,11 @@ class ConnectionManager:
             change_message["userId"] = user_id
         if space_id:
             change_message["spaceId"] = space_id
+        if graph_uri:
+            change_message["graphUri"] = graph_uri
             
         await self.broadcast(json.dumps(change_message))
-        logger.info(f"Sent change notification: group={group}, user_id={user_id}, space_id={space_id}")
+        logger.info(f"Sent change notification: group={group}, user_id={user_id}, space_id={space_id}, graph_uri={graph_uri}")
     
     async def send_users_change(self):
         """Send notification that the users list has changed."""

@@ -1054,7 +1054,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
         graph_id: str,
         entity_uri: str,
         frame_uris: List[str],
-        parent_frame_uri: Optional[str] = None
+        parent_frame_uri: Optional[str] = None,
+        recursive: bool = False
     ) -> DeleteResponse:
         """
         Delete specific frames from an entity.
@@ -1065,6 +1066,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
             entity_uri: Entity URI to delete frames from
             frame_uris: List of frame URIs to delete
             parent_frame_uri: Optional parent frame URI for validation
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
             
         Returns:
             DeleteResponse containing deletion results
@@ -1082,7 +1085,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 entity_uri=entity_uri,
                 frame_uris=','.join(frame_uris),
-                parent_frame_uri=parent_frame_uri
+                parent_frame_uri=parent_frame_uri,
+                recursive=recursive
             )
             
             response = await self._make_request('DELETE', url, params=params)

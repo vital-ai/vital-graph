@@ -211,8 +211,11 @@ class KGSparqlQueryProcessor:
                 graph_id, entity_uri, page_size, offset, search
             )
             
+            self.logger.info(f"📋 LIST_FRAMES query:\n{frames_query}")
             results = await self.backend.execute_sparql_query(space_id, frames_query)
+            self.logger.info(f"📋 LIST_FRAMES raw results: {results}")
             frame_uris = self.utils.extract_uris_from_results(results, "frame")
+            self.logger.info(f"📋 LIST_FRAMES extracted uris: {frame_uris}")
             
             # Get total count
             count_query = self.query_builder.build_frame_count_query(graph_id, entity_uri, search)
@@ -493,6 +496,8 @@ class KGSparqlQueryProcessor:
             
             # Distinguish "frame doesn't exist" from "frame belongs to another entity"
             missing_frames = set(frame_uris) - set(validated_frame_uris)
+            not_found = missing_frames
+            wrong_owner = set()
             if missing_frames:
                 missing_filter = ", ".join([self.utils.build_uri_reference(uri) for uri in missing_frames])
                 existence_query = f"""
@@ -520,16 +525,25 @@ class KGSparqlQueryProcessor:
             # Phase 2: Retrieve complete frame graphs concurrently
             frame_graphs = {}
             
-            # Separate valid and invalid frames
+            # Separate valid and invalid frames with distinct error codes
             for frame_uri in frame_uris:
                 if frame_uri not in validated_frame_uris:
-                    frame_graphs[frame_uri] = {
-                        "error": "frame_not_owned_by_entity",
-                        "message": f"Frame {frame_uri} does not belong to entity {entity_uri}",
-                        "frame_uri": frame_uri,
-                        "entity_uri": entity_uri
-                    }
-                    self.logger.info(f"🔒 Frame {frame_uri}: Access denied (not owned by entity)")
+                    if frame_uri in wrong_owner:
+                        frame_graphs[frame_uri] = {
+                            "error": "frame_not_owned_by_entity",
+                            "message": f"Frame {frame_uri} does not belong to entity {entity_uri}",
+                            "frame_uri": frame_uri,
+                            "entity_uri": entity_uri
+                        }
+                        self.logger.info(f"🔒 Frame {frame_uri}: Access denied (not owned by entity)")
+                    else:
+                        frame_graphs[frame_uri] = {
+                            "error": "frame_not_found",
+                            "message": f"Frame {frame_uri} not found in graph",
+                            "frame_uri": frame_uri,
+                            "entity_uri": entity_uri
+                        }
+                        self.logger.info(f"❌ Frame {frame_uri}: Not found in graph")
             
             # Fetch all valid frames concurrently
             valid_frame_uris = [uri for uri in frame_uris if uri in validated_frame_uris]
@@ -774,6 +788,79 @@ class KGSparqlQueryProcessor:
             self.logger.error(f"Error getting entity frames: {e}")
             raise
     
+    async def find_child_frames(self, space_id: str, graph_id: str,
+                               frame_uri: str) -> List[str]:
+        """
+        Find immediate child frames of a given frame via Edge_hasKGFrame edges.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uri: Parent frame URI to find children of
+            
+        Returns:
+            List of child frame URIs
+        """
+        try:
+            query = f"""
+            {self.utils.build_prefixes()}
+            
+            SELECT DISTINCT ?child WHERE {{
+                {self.utils.build_graph_clause(graph_id)} {{
+                    ?edge a haley:Edge_hasKGFrame ;
+                          vital:hasEdgeSource {self.utils.build_uri_reference(frame_uri)} ;
+                          vital:hasEdgeDestination ?child .
+                    ?child a haley:KGFrame .
+                }}
+            }}
+            """
+            
+            results = await self.backend.execute_sparql_query(space_id, query)
+            return self.utils.extract_uris_from_results(results, "child")
+            
+        except Exception as e:
+            self.logger.error(f"Error finding child frames of {frame_uri}: {e}")
+            return []
+
+    async def collect_all_descendants(self, space_id: str, graph_id: str,
+                                      frame_uris: List[str],
+                                      max_depth: int = 20) -> List[str]:
+        """
+        Recursively collect all descendant frame URIs for a list of frames.
+        
+        Walks the Edge_hasKGFrame tree breadth-first, collecting all descendants.
+        Includes a depth limit to guard against cycles.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            frame_uris: Starting frame URIs whose descendants to collect
+            max_depth: Maximum recursion depth (safety limit)
+            
+        Returns:
+            List of all descendant frame URIs (does NOT include the input frame_uris)
+        """
+        all_descendants = []
+        seen = set(frame_uris)
+        frontier = list(frame_uris)
+        
+        for depth in range(max_depth):
+            next_frontier = []
+            for uri in frontier:
+                children = await self.find_child_frames(space_id, graph_id, uri)
+                for child in children:
+                    if child not in seen:
+                        seen.add(child)
+                        all_descendants.append(child)
+                        next_frontier.append(child)
+            
+            if not next_frontier:
+                break
+            frontier = next_frontier
+            self.logger.debug(f"🔍 Descendant discovery depth {depth + 1}: found {len(next_frontier)} new frames")
+        
+        return all_descendants
+
     async def validate_frame_parent_relationship(self, space_id: str, graph_id: str, 
                                                  parent_frame_uri: str, child_frame_uris: List[str]) -> Dict[str, bool]:
         """

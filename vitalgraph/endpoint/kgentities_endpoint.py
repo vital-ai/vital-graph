@@ -345,6 +345,7 @@ class KGEntitiesEndpoint:
             entity_uri: str = Query(..., description="Entity URI to delete frames from"),
             frame_uris: str = Query(..., description="Comma-separated list of frame URIs to delete"),
             parent_frame_uri: Optional[str] = Query(None, description="Parent frame URI for validation"),
+            recursive: bool = Query(False, description="If true, recursively delete all descendant frames. If false (default), fail if any frame has children."),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
@@ -352,9 +353,10 @@ class KGEntitiesEndpoint:
             
             Args:
                 parent_frame_uri: If provided, validates frames are children of parent before deletion
+                recursive: If true, cascade-delete all descendant frames. If false, fail if children exist.
             """
             frame_uri_list = [uri.strip() for uri in frame_uris.split(',') if uri.strip()]
-            return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri)
+            return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri, recursive)
         
         @self.router.post("/kgentities/query", response_model=QuadResponse, tags=["KG Entities"])
         async def query_entities(
@@ -1174,15 +1176,21 @@ class KGEntitiesEndpoint:
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
             
             # Check if specific frame URIs are requested (enhanced functionality)
+            self.logger.info(f"📋 GET_FRAMES_BRANCH frame_uris={frame_uris}, entity_uri={entity_uri}, type(frame_uris)={type(frame_uris)}")
             if frame_uris and entity_uri:
                 return await self._get_specific_frame_graphs(backend_adapter, space_id, graph_id, entity_uri, frame_uris)
             
             # Use processor to get entity frames with pagination and search
+            self.logger.info(f"📋 GET_FRAMES entity_uri={entity_uri}, parent_frame_uri={parent_frame_uri}, page_size={page_size}, offset={offset}, search={search}")
             frame_results = await sparql_processor.get_entity_frames(
-                space_id, graph_id, entity_uri, page_size, offset, search, parent_frame_uri
+                space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+                page_size=page_size, offset=offset, search=search,
+                parent_frame_uri=parent_frame_uri
             )
             
-            self.logger.debug(f"Found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
+            self.logger.info(f"📋 GET_FRAMES found {len(frame_results['frame_uris'])} frames for entity {entity_uri}")
+            self.logger.info(f"📋 GET_FRAMES frame_uris={frame_results['frame_uris']}")
+            self.logger.info(f"📋 GET_FRAMES query={frame_results.get('frames_query', 'N/A')}")
             
             # Get all triples for the frame URIs and convert to VitalSigns objects
             frames = []
@@ -1338,7 +1346,8 @@ class KGEntitiesEndpoint:
                 graph_id=graph_id,
                 entity_uri=entity_uri,
                 frame_objects=graph_objects,
-                operation_mode=operation_mode_str
+                operation_mode=operation_mode_str,
+                parent_frame_uri=parent_frame_uri
             )
             
             # Handle processor result and maintain API compatibility
@@ -1661,11 +1670,16 @@ class KGEntitiesEndpoint:
                     self.logger.warning(f"⚠️ Error releasing entity lock for {entity_uri}: {_ue}")
     
     
-    async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
-        """Delete frames within entity context using Edge_hasEntityKGFrame relationships."""
+    async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None, recursive: bool = False):
+        """Delete frames within entity context using Edge_hasEntityKGFrame relationships.
+        
+        Args:
+            recursive: If True, recursively delete all descendant frames.
+                       If False (default), fail if any frame has children.
+        """
         _lock_ctx = None
         try:
-            self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}")
+            self.logger.debug(f"Deleting entity frames for {entity_uri} in space {space_id}, graph {graph_id}, parent_frame_uri {parent_frame_uri}, recursive={recursive}")
             
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
@@ -1709,11 +1723,11 @@ class KGEntitiesEndpoint:
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend)
             
+            from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
+            sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
+            
             # Validate parent-child relationships if parent_frame_uri is provided
             if parent_frame_uri:
-                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-                sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-                
                 validation_map = await sparql_processor.validate_frame_parent_relationship(
                     space_id, full_graph_uri, parent_frame_uri, frame_uris
                 )
@@ -1728,6 +1742,36 @@ class KGEntitiesEndpoint:
                         deleted_count=0,
                         deleted_uris=[]
                     )
+            
+            # Check for child frames and handle recursive vs fail mode
+            frames_with_children = {}
+            for frame_uri in frame_uris:
+                children = await sparql_processor.find_child_frames(space_id, full_graph_uri, frame_uri)
+                if children:
+                    frames_with_children[frame_uri] = children
+            
+            if frames_with_children:
+                if not recursive:
+                    # Fail mode: reject deletion if any frame has children
+                    child_summary = "; ".join(
+                        f"{uri} has {len(kids)} child(ren)" 
+                        for uri, kids in frames_with_children.items()
+                    )
+                    from ..model.kgframes_model import FrameDeleteResponse
+                    return FrameDeleteResponse(
+                        success=False,
+                        message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
+                        deleted_count=0,
+                        deleted_uris=[]
+                    )
+                else:
+                    # Recursive mode: collect all descendants and add to delete list
+                    descendants = await sparql_processor.collect_all_descendants(
+                        space_id, full_graph_uri, frame_uris
+                    )
+                    if descendants:
+                        self.logger.info(f"🔄 Recursive delete: adding {len(descendants)} descendant frames to deletion")
+                        frame_uris = frame_uris + descendants
             
             # Use KGEntityFrameDeleteProcessor for deletion
             from ..kg_impl.kgentity_frame_delete_impl import KGEntityFrameDeleteProcessor
