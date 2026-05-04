@@ -299,10 +299,14 @@ class KGEntityFrameCreateProcessor:
                                  entity_uri: str) -> List[GraphObject]:
         """
         Assign dual grouping URIs to frame objects.
-        EXTRACTED FROM: lines 995-1011 in _create_or_update_frames()
         
-        Entity-level: hasKGGraphURI = entity_uri (for complete entity retrieval)
-        Frame-level: frameGraphURI = frame_uri (for frame-specific retrieval)
+        Entity-level: kGGraphURI = entity_uri (for complete entity retrieval)
+        Frame-level:  frameGraphURI = immediate owning frame URI
+        
+        Slot/edge ownership is determined by Edge_hasKGSlot source edges.
+        Each frame's frameGraphURI points to itself.
+        Each slot's frameGraphURI points to the frame that owns it.
+        Each slot-edge's frameGraphURI points to the frame it sources from.
         
         Args:
             frame_objects: List of frame-related GraphObjects
@@ -311,52 +315,47 @@ class KGEntityFrameCreateProcessor:
         Returns:
             List[GraphObject]: Objects with assigned grouping URIs
         """
-        # Second pass: set grouping URIs (extracted from lines 995-1011)
-        # CRITICAL: Set kGGraphURI on ALL objects, including hierarchical child frames
+        # Build set of frame URIs for lookup
+        frame_uris = {str(obj.URI) for obj in frame_objects if isinstance(obj, KGFrame)}
+        
+        # Build slot→frame ownership map from Edge_hasKGSlot edges
+        # Edge source = frame URI, edge destination = slot URI
+        slot_to_frame = {}
         for obj in frame_objects:
-            self.logger.debug(f"🔍 Processing object {obj.__class__.__name__} with URI: {getattr(obj, 'URI', 'NO_URI')}")
-            
-            # Log object properties before modification
-            try:
-                obj_dict = obj.to_json()
-                self.logger.debug(f"🔍 Object before grouping URI assignment: {obj_dict}")
-            except Exception as e:
-                self.logger.warning(f"⚠️ Could not serialize object to JSON: {e}")
-            
-            # Set entity-level grouping URI for ALL objects
-            # All KG nodes (KGFrame, KGSlot) and KG edges have kGGraphURI
+            if isinstance(obj, VITAL_Edge) and hasattr(obj, 'edgeSource') and hasattr(obj, 'edgeDestination'):
+                src = str(obj.edgeSource) if obj.edgeSource else None
+                dst = str(obj.edgeDestination) if obj.edgeDestination else None
+                if src in frame_uris and dst:
+                    slot_to_frame[dst] = src
+        
+        # Fallback: if single frame, all non-frame objects belong to it
+        fallback_frame_uri = None
+        if len(frame_uris) == 1:
+            fallback_frame_uri = next(iter(frame_uris))
+        
+        for obj in frame_objects:
+            # Set entity-level grouping URI on ALL objects
             obj.kGGraphURI = entity_uri
-            self.logger.debug(f"🔧 Set kGGraphURI={entity_uri} for {obj.__class__.__name__}")
             
             # Set frame-level grouping URI based on object type
-            # Entity-to-frame edges (Edge_hasEntityKGFrame) are NOT part of the frame — skip
             if isinstance(obj, Edge_hasEntityKGFrame):
+                # Entity-to-frame edges are NOT part of any frame graph — skip frameGraphURI
                 pass
             elif isinstance(obj, KGFrame):
-                obj.frameGraphURI = obj.URI
-                self.logger.debug(f"🔧 Set frameGraphURI={obj.URI} for frame {obj.URI}")
+                obj.frameGraphURI = str(obj.URI)
             elif isinstance(obj, KGSlot):
-                frame_candidates = [o for o in frame_objects if isinstance(o, KGFrame)]
-                if frame_candidates:
-                    target_frame = frame_candidates[0]
-                    obj.frameGraphURI = target_frame.URI
-                    self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for slot {obj.URI}")
+                owning_frame = slot_to_frame.get(str(obj.URI), fallback_frame_uri)
+                if owning_frame:
+                    obj.frameGraphURI = owning_frame
                 else:
-                    self.logger.warning(f"⚠️ No frame candidates found for slot {obj.URI}")
+                    self.logger.warning(f"⚠️ No owning frame found for slot {obj.URI}")
             elif isinstance(obj, VITAL_Edge):
-                # Slot edges (Edge_hasKGSlot, Edge_hasKGFrame) belong to the frame
-                frame_candidates = [o for o in frame_objects if isinstance(o, KGFrame)]
-                if frame_candidates:
-                    target_frame = frame_candidates[0]
-                    obj.frameGraphURI = target_frame.URI
-                    self.logger.debug(f"🔧 Set frameGraphURI={target_frame.URI} for edge {obj.URI}")
-            
-            # Log object properties after modification
-            try:
-                obj_dict_after = obj.to_json()
-                self.logger.debug(f"🔍 Object after grouping URI assignment: {obj_dict_after}")
-            except Exception as e:
-                self.logger.warning(f"⚠️ Could not serialize modified object to JSON: {e}")
+                # Slot edges belong to the frame they source from
+                src = str(obj.edgeSource) if hasattr(obj, 'edgeSource') and obj.edgeSource else None
+                if src in frame_uris:
+                    obj.frameGraphURI = src
+                elif fallback_frame_uri:
+                    obj.frameGraphURI = fallback_frame_uri
         
         return frame_objects
     

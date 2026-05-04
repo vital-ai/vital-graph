@@ -1678,11 +1678,14 @@ class KGEntitiesEndpoint:
                                      parent_frame_uri: Optional[str] = None) -> FrameUpdateResponse:
         """Replace frame subtree within entity context.
         
-        Deletes the existing frame and all its descendants, then inserts the
-        replacement frame graph. Preserves the root frame URI.
+        Determines the delete scope from EXISTING frames in the DB:
+        - If parent_frame_uri: deletes children of parent + their descendants
+        - If no parent_frame_uri: deletes all top-level frames under the entity + descendants
+        
+        Then inserts the replacement graph via CREATE.
         
         Args:
-            parent_frame_uri: If provided, validates that frames are children of this parent.
+            parent_frame_uri: If provided, scopes replacement to children of this parent.
         """
         from ..model.kgframes_model import FrameUpdateResponse
         graph_objects = quad_list_to_graphobjects(quads)
@@ -1699,47 +1702,45 @@ class KGEntitiesEndpoint:
             
             backend_adapter = create_backend_adapter(backend_impl)
             
-            # Extract KGFrame objects from the replacement graph
+            # Extract KGFrame objects from the replacement graph (for re-creation)
             from ai_haley_kg_domain.model.KGFrame import KGFrame
-            frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
-            if not frame_uris:
+            replacement_frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
+            if not replacement_frame_uris:
                 return FrameUpdateResponse(message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
             
-            # Validate ownership (frames must belong to entity)
-            from ..kg_impl.kgentity_frame_update_impl import KGEntityFrameUpdateProcessor
-            update_processor = KGEntityFrameUpdateProcessor(backend_adapter, self.logger)
-            validated = await update_processor.validate_frame_ownership(space_id, graph_id, entity_uri, frame_uris)
-            if not validated:
-                return FrameUpdateResponse(
-                    message=f"Frame ownership validation failed: frames do not belong to entity {entity_uri}",
-                    updated_uri="", updated_count=0
-                )
-            
-            # Validate parent-child relationship if parent_frame_uri is provided
-            if parent_frame_uri:
-                from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-                sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-                validation_map = await sparql_processor.validate_frame_parent_relationship(
-                    space_id, graph_id, parent_frame_uri, validated
-                )
-                invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
-                if invalid_frames:
-                    return FrameUpdateResponse(
-                        message=f"Frames are not children of parent {parent_frame_uri}: {', '.join(invalid_frames)}",
-                        updated_uri="", updated_count=0
-                    )
-            
-            # Phase 1: Collect all descendants of each root frame being replaced
+            # Phase 1: Determine delete scope from EXISTING frames in the DB
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
             
-            all_uris_to_delete = list(validated)
-            descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, validated)
-            if descendants:
-                self.logger.info(f"🔄 REPLACE: found {len(descendants)} descendant frames to remove")
-                all_uris_to_delete.extend(descendants)
+            if parent_frame_uri:
+                # Scoped replace: delete children of the given parent
+                existing_children = await sparql_processor.find_child_frames(
+                    space_id, graph_id, parent_frame_uri
+                )
+                root_frames_to_delete = existing_children
+            else:
+                # Full entity replace: delete all top-level frames under the entity
+                entity_frames_result = await sparql_processor.get_entity_frames(
+                    space_id, graph_id, entity_uri, page_size=10000
+                )
+                root_frames_to_delete = entity_frames_result.get('frame_uris', [])
+            
+            # Collect all descendants of the root frames being deleted
+            all_uris_to_delete = list(root_frames_to_delete)
+            if root_frames_to_delete:
+                descendants = await sparql_processor.collect_all_descendants(
+                    space_id, graph_id, root_frames_to_delete
+                )
+                if descendants:
+                    self.logger.info(f"🔄 REPLACE: found {len(descendants)} descendant frames to remove")
+                    all_uris_to_delete.extend(descendants)
             
             # Phase 2: Delete existing subtree using frameGraphURI grouping
+            if not all_uris_to_delete:
+                self.logger.info(f"🔄 REPLACE: no existing frames to delete, proceeding to create")
+            else:
+                self.logger.info(f"🔄 REPLACE: deleting {len(all_uris_to_delete)} existing frames")
+            
             haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
             vital_prefix = "http://vital.ai/ontology/vital-core#"
             for uri in all_uris_to_delete:

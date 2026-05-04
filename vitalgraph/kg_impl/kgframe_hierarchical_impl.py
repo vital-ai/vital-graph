@@ -92,12 +92,12 @@ class KGFrameHierarchicalProcessor:
         try:
             self.logger.info(f"Creating child frames for parent {parent_frame_uri} in space {space_id}, graph {graph_id}")
             
-            # Step 1: Validate parent frame exists and get its kGGraphURI
-            parent_graph_uri = await self._get_parent_graph_uri(
+            # Step 1: Validate parent frame exists
+            parent_exists = await self._validate_parent_frame_exists(
                 backend_adapter, space_id, graph_id, parent_frame_uri
             )
             
-            if not parent_graph_uri:
+            if not parent_exists:
                 return CreateFrameResult(
                     success=False,
                     created_uris=[],
@@ -119,14 +119,12 @@ class KGFrameHierarchicalProcessor:
                     error="No KGFrame objects"
                 )
             
-            # Step 3: Set grouping URIs (inherit from parent)
-            all_objects = self._assign_grouping_uris(
-                child_frame_objects, parent_graph_uri
-            )
+            # Step 3: Set frameGraphURI on child frame members
+            all_objects = self._assign_grouping_uris(child_frame_objects)
             
             # Step 4: Create Edge_hasKGFrame relationships (parent -> child)
             edge_objects = self._create_parent_child_edges(
-                parent_frame_uri, frame_objects, parent_graph_uri
+                parent_frame_uri, frame_objects
             )
             all_objects.extend(edge_objects)
             
@@ -162,15 +160,15 @@ class KGFrameHierarchicalProcessor:
                 error=str(e)
             )
     
-    async def _get_parent_graph_uri(
+    async def _validate_parent_frame_exists(
         self, 
         backend_adapter: KGBackendInterface,
         space_id: str,
         graph_id: str,
         parent_frame_uri: str
-    ) -> Optional[str]:
+    ) -> bool:
         """
-        Get parent frame's kGGraphURI.
+        Validate that the parent frame exists in the graph.
         
         Args:
             backend_adapter: Backend adapter
@@ -179,73 +177,67 @@ class KGFrameHierarchicalProcessor:
             parent_frame_uri: Parent frame URI
             
         Returns:
-            Parent's kGGraphURI or None if not found
+            True if parent frame exists, False otherwise
         """
         try:
-            # Build SPARQL query to get parent frame's kGGraphURI
             query = f"""
-            SELECT ?graphUri WHERE {{
+            ASK WHERE {{
                 GRAPH <{graph_id}> {{
-                    <{parent_frame_uri}> <http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI> ?graphUri .
+                    <{parent_frame_uri}> a <http://vital.ai/ontology/haley-ai-kg#KGFrame> .
                 }}
             }}
-            LIMIT 1
             """
             
             results = await backend_adapter.execute_sparql_query(space_id, query)
             
-            if results and 'results' in results and 'bindings' in results['results']:
-                bindings = results['results']['bindings']
-                if bindings and len(bindings) > 0:
-                    graph_uri = bindings[0].get('graphUri', {}).get('value')
-                    self.logger.info(f"Found parent frame {parent_frame_uri} with kGGraphURI: {graph_uri}")
-                    return graph_uri
+            # Handle ASK result format
+            if isinstance(results, dict):
+                return results.get('boolean', False)
+            if isinstance(results, bool):
+                return results
             
-            self.logger.warning(f"Parent frame {parent_frame_uri} not found or has no kGGraphURI")
-            return None
+            self.logger.warning(f"Parent frame {parent_frame_uri} not found")
+            return False
             
         except Exception as e:
-            self.logger.error(f"Failed to get parent graph URI: {e}", exc_info=True)
-            return None
+            self.logger.error(f"Failed to validate parent frame: {e}", exc_info=True)
+            return False
     
-    def _assign_grouping_uris(
-        self, 
-        objects: List[GraphObject], 
-        parent_graph_uri: str
-    ) -> List[GraphObject]:
+    def _assign_grouping_uris(self, objects: List[GraphObject]) -> List[GraphObject]:
         """
-        Assign grouping URIs to child frames and their components.
+        Assign frameGraphURI to child frame members.
         
-        Sets:
-        - kGGraphURI: Inherited from parent (entity-level grouping)
-        - hasFrameGraphURI: Set to child frame URI (frame-level grouping)
+        - KGFrame: frameGraphURI = own URI
+        - Slots/edges: frameGraphURI = owning frame URI
+        
+        No kGGraphURI is set — that is an entity-scoped concept.
         
         Args:
             objects: List of graph objects
-            parent_graph_uri: Parent's kGGraphURI to inherit
             
         Returns:
-            List of objects with grouping URIs assigned
+            List of objects with frameGraphURI assigned
         """
+        # Find frame URIs for ownership lookup
+        frame_uris = {str(obj.URI) for obj in objects if isinstance(obj, KGFrame)}
+        fallback_frame_uri = next(iter(frame_uris)) if len(frame_uris) == 1 else None
+        
         for obj in objects:
             if isinstance(obj, KGFrame):
-                # For frames: set both grouping URIs
-                obj.kGGraphURI = parent_graph_uri
                 obj.frameGraphURI = str(obj.URI)
-                self.logger.debug(f"Frame {obj.URI}: kGGraphURI={parent_graph_uri}, frameGraphURI={obj.URI}")
+                self.logger.debug(f"Frame {obj.URI}: frameGraphURI={obj.URI}")
             else:
-                # For slots and other objects: inherit parent's kGGraphURI
-                if hasattr(obj, 'kGGraphURI'):
-                    obj.kGGraphURI = parent_graph_uri
-                    self.logger.debug(f"Object {obj.URI}: kGGraphURI={parent_graph_uri}")
+                # Slots and edges belong to a frame
+                if fallback_frame_uri and hasattr(obj, 'frameGraphURI'):
+                    obj.frameGraphURI = fallback_frame_uri
+                    self.logger.debug(f"Object {getattr(obj, 'URI', '?')}: frameGraphURI={fallback_frame_uri}")
         
         return objects
     
     def _create_parent_child_edges(
         self,
         parent_frame_uri: str,
-        child_frames: List[KGFrame],
-        parent_graph_uri: str
+        child_frames: List[KGFrame]
     ) -> List[Edge_hasKGFrame]:
         """
         Create Edge_hasKGFrame relationships between parent and child frames.
@@ -253,7 +245,6 @@ class KGFrameHierarchicalProcessor:
         Args:
             parent_frame_uri: Parent frame URI
             child_frames: List of child frames
-            parent_graph_uri: Parent's kGGraphURI
             
         Returns:
             List of Edge_hasKGFrame objects
@@ -272,10 +263,9 @@ class KGFrameHierarchicalProcessor:
             edge.edgeSource = parent_frame_uri
             edge.edgeDestination = str(child_frame.URI)
             
-            # Edge inherits parent's kGGraphURI (entity-level grouping)
-            edge.kGGraphURI = parent_graph_uri
-            
-            # Note: Edge does NOT have frameGraphURI (it's a connecting edge, not part of a frame)
+            # No kGGraphURI — entity-scoped concept not used here
+            # frameGraphURI on structural edges is set to parent frame
+            edge.frameGraphURI = parent_frame_uri
             
             edges.append(edge)
             self.logger.debug(f"Created Edge_hasKGFrame: {parent_frame_uri} -> {child_frame.URI}")

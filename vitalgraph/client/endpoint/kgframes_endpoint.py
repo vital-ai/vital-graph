@@ -86,7 +86,7 @@ class KGFramesEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, parent_uri: Optional[str] = None, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         List KGFrames with pagination and optional search.
         
@@ -95,7 +95,6 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             page_size: Number of items per page
             offset: Offset for pagination
-            entity_uri: Optional entity URI for filtering frames
             parent_uri: Optional parent URI for filtering frames
             search: Optional search term
             
@@ -115,7 +114,6 @@ class KGFramesEndpoint(BaseEndpoint):
                 graph_id=graph_id,
                 page_size=page_size,
                 offset=offset,
-                entity_uri=entity_uri,
                 parent_uri=parent_uri,
                 search=search
             )
@@ -273,7 +271,7 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def create_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                       entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+                       parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
         """
         Create KGFrames from GraphObjects.
         
@@ -281,7 +279,6 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (frames, slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property on frames
             parent_uri: Optional parent URI for frame relationships
             operation_mode: Operation mode (create, update, upsert)
             
@@ -299,7 +296,6 @@ class KGFramesEndpoint(BaseEndpoint):
             params = build_query_params(
                 space_id=space_id,
                 graph_id=graph_id,
-                entity_uri=entity_uri,
                 parent_uri=parent_uri,
                 operation_mode=operation_mode
             )
@@ -341,7 +337,7 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def update_kgframes(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                       entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+                       parent_uri: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update KGFrames from GraphObjects.
         
@@ -349,7 +345,6 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (frames, slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property on frames
             parent_uri: Optional parent URI for frame relationships
             
         Returns:
@@ -367,7 +362,6 @@ class KGFramesEndpoint(BaseEndpoint):
                 space_id=space_id,
                 graph_id=graph_id,
                 operation_mode="update",
-                entity_uri=entity_uri,
                 parent_uri=parent_uri
             )
             
@@ -527,7 +521,7 @@ class KGFramesEndpoint(BaseEndpoint):
     # KGFrames with Slots operations
     # Note: Server-side implementation may not be complete yet
     
-    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str] = None, page_size: int = 10, offset: int = 0, entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str] = None, page_size: int = 10, offset: int = 0, parent_uri: Optional[str] = None, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         Get KGFrames with their associated slots.
         
@@ -536,7 +530,6 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             page_size: Number of items per page
             offset: Offset for pagination
-            entity_uri: Optional entity URI for filtering frames
             parent_uri: Optional parent URI for filtering frames
             search: Optional search term
             
@@ -553,7 +546,7 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                page_size=page_size, offset=offset, entity_uri=entity_uri,
+                page_size=page_size, offset=offset,
                 parent_uri=parent_uri, search=search
             )
             
@@ -578,7 +571,7 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                                  entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+                                  parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
         """
         Create KGFrames with their associated slots from GraphObjects.
         
@@ -586,7 +579,6 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (frames, slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property on frames
             parent_uri: Optional parent URI for frame relationships
             operation_mode: Operation mode (create, update, upsert)
             
@@ -602,7 +594,7 @@ class KGFramesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
-                space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+                space_id=space_id, graph_id=graph_id,
                 parent_uri=parent_uri, operation_mode=operation_mode
             )
             
@@ -625,7 +617,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=500)
     
     async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List[GraphObject],
-                                  entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+                                  parent_uri: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update KGFrames with their associated slots from GraphObjects.
         
@@ -633,7 +625,6 @@ class KGFramesEndpoint(BaseEndpoint):
             space_id: Space identifier
             graph_id: Graph identifier
             objects: List of GraphObject instances (frames, slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property on frames
             parent_uri: Optional parent URI for frame relationships
             
         Returns:
@@ -648,7 +639,7 @@ class KGFramesEndpoint(BaseEndpoint):
         try:
             url = f"{self._get_server_url()}/api/graphs/kgframes"
             params = build_query_params(
-                space_id=space_id, graph_id=graph_id, entity_uri=entity_uri,
+                space_id=space_id, graph_id=graph_id,
                 parent_uri=parent_uri, operation_mode='update'
             )
             
@@ -709,7 +700,7 @@ class KGFramesEndpoint(BaseEndpoint):
 
     # Frame-Slot Sub-Endpoint Operations
     
-    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
+    async def create_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None, operation_mode: str = "create") -> CreateEntityResponse:
         """
         Create slots for a specific frame.
         
@@ -718,7 +709,6 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             frame_uri: Frame URI to create slots for
             objects: List of GraphObject instances (slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property
             parent_uri: Optional parent URI for slot relationships
             operation_mode: Operation mode (create, update, upsert)
             
@@ -735,7 +725,7 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                entity_uri=entity_uri, parent_uri=parent_uri, operation_mode=operation_mode
+                parent_uri=parent_uri, operation_mode=operation_mode
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -756,7 +746,7 @@ class KGFramesEndpoint(BaseEndpoint):
             logger.error(f"Error creating frame slots: {e}")
             return build_error_response(CreateEntityResponse, error_code=3, error_message=str(e), status_code=500)
     
-    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], entity_uri: Optional[str] = None, parent_uri: Optional[str] = None) -> UpdateEntityResponse:
+    async def update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, objects: List[GraphObject], parent_uri: Optional[str] = None) -> UpdateEntityResponse:
         """
         Update slots for a specific frame.
         
@@ -765,7 +755,6 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             frame_uri: Frame URI to update slots for
             objects: List of GraphObject instances (slots, edges)
-            entity_uri: Optional entity URI for setting hasKGGraphURI property
             parent_uri: Optional parent URI for slot relationships
             
         Returns:
@@ -781,7 +770,7 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri,
-                entity_uri=entity_uri, parent_uri=parent_uri, operation_mode="update"
+                parent_uri=parent_uri, operation_mode="update"
             )
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
@@ -848,7 +837,7 @@ class KGFramesEndpoint(BaseEndpoint):
             )
     
     async def get_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_type: Optional[str] = None,
-                              entity_uri: Optional[str] = None, parent_uri: Optional[str] = None,
+                              parent_uri: Optional[str] = None,
                               search: Optional[str] = None, page_size: int = 10, offset: int = 0) -> PaginatedGraphObjectResponse:
         """
         Get slots for a specific frame, optionally filtered by slot type.
@@ -858,7 +847,6 @@ class KGFramesEndpoint(BaseEndpoint):
             graph_id: Graph identifier
             frame_uri: Frame URI to get slots for
             slot_type: Optional slot type URN for filtering by kGSlotType property
-            entity_uri: Optional entity URI for filtering
             parent_uri: Optional parent URI for filtering
             search: Optional search term
             page_size: Number of items per page
@@ -877,7 +865,7 @@ class KGFramesEndpoint(BaseEndpoint):
             url = f"{self._get_server_url()}/api/graphs/kgframes/kgslots"
             params = build_query_params(
                 space_id=space_id, graph_id=graph_id, frame_uri=frame_uri, slot_type=slot_type,
-                entity_uri=entity_uri, parent_uri=parent_uri, search=search,
+                parent_uri=parent_uri, search=search,
                 page_size=page_size, offset=offset
             )
             

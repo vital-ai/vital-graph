@@ -101,7 +101,7 @@ class KGFramesEndpoint:
         self.slot_update_processor = None
         self.slot_delete_processor = None
         
-        # Frame processor for entity frame operations (initialized when needed)
+        # Standalone frame processor (initialized when needed, no entity dependency)
         self.frame_processor = None
         
         self._setup_routes()
@@ -128,15 +128,18 @@ class KGFramesEndpoint:
         operation_mode: str, entity_uri: Optional[str] = None,
         parent_uri: Optional[str] = None, current_user: Dict = None,
     ):
-        """Create or update frames from quads.
+        """Create or update standalone frames from quads.
 
         Applies the validation pipeline:
         1. Convert quads to GraphObjects
         2. Extract KGFrame instances from the object list
-        3. Set grouping URIs (kGGraphURI / parent references)
+        3. Set frameGraphURI grouping (no kGGraphURI — entity-scoped concept)
         4. Validate frame structure (at least one frame, valid types)
-        5. Handle parent / entity relationships and create edges
-        6. Dispatch to mode-specific handler (create / update / upsert)
+        5. Handle parent relationships and create edges
+        6. Dispatch to mode-specific handler (create / update / upsert / replace)
+
+        Note: entity_uri is accepted for backward compatibility but is NOT used.
+        Standalone frames have no entity dependency.
         """
         vitalsigns_objects = quad_list_to_graphobjects(quads)
         try:
@@ -170,9 +173,8 @@ class KGFramesEndpoint:
                 return _fail("No valid KGFrame objects found in request")
 
             # --- grouping URIs ---
-            # entity_uri is used for grouping (kGGraphURI); parent_uri for frame-to-frame validation
-            grouping_uri = entity_uri if entity_uri else parent_uri
-            self._set_frame_grouping_uris(frames, graph_id, grouping_uri)
+            # Standalone frames use only frameGraphURI (no kGGraphURI, no entity_uri)
+            self._set_frame_grouping_uris(frames, graph_id)
 
             # --- structure validation ---
             validation_result = self._validate_frame_structure(vitalsigns_objects)
@@ -181,22 +183,18 @@ class KGFramesEndpoint:
 
             # --- parent / entity relationships ---
             enhanced_objects = await self._handle_parent_relationships(
-                backend, space_id, graph_id, frames, vitalsigns_objects, grouping_uri
+                backend, space_id, graph_id, frames, vitalsigns_objects, parent_uri
             )
-
-            # For update/replace, prefer explicit parent_uri for validation;
-            # fall back to entity_uri (grouping_uri) for create/upsert.
-            validation_parent = parent_uri if parent_uri else grouping_uri
 
             # --- dispatch by mode ---
             if op_mode == OperationMode.CREATE:
-                return await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, grouping_uri)
+                return await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.UPDATE:
-                return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, validation_parent)
+                return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.UPSERT:
-                return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, grouping_uri)
+                return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.REPLACE:
-                return await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, validation_parent)
+                return await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             else:
                 return _fail(f"Invalid operation_mode: {op_mode}")
 
@@ -1632,23 +1630,16 @@ class KGFramesEndpoint:
 
     
     
-    def _set_frame_grouping_uris(self, frames: List[KGFrame], graph_id: str, parent_uri: Optional[str]):
-        """Set grouping URIs on frame objects following MockKGFramesEndpoint patterns."""
+    def _set_frame_grouping_uris(self, frames: List[KGFrame], graph_id: str):
+        """Set frameGraphURI on frame objects for frame-level grouping.
+        
+        Standalone frames use only frameGraphURI (= frame's own URI).
+        No kGGraphURI is set — that is an entity-scoped concept.
+        """
         for frame in frames:
             if isinstance(frame, KGFrame):
-                # Set frameGraphURI for frame-level grouping - should be the frame URI itself
                 if hasattr(frame, 'URI') and frame.URI:
-                    # Cast URI property to get actual string value
-                    frame_uri_str = str(frame.URI)
-                    frame.frameGraphURI = frame_uri_str
-                
-                # Set kGGraphURI for entity-level grouping (if parent provided)
-                if parent_uri:
-                    frame.kGGraphURI = parent_uri
-                else:
-                    # Use frame URI as fallback for kGGraphURI
-                    frame_uri_str = str(frame.URI)
-                    frame.kGGraphURI = frame_uri_str
+                    frame.frameGraphURI = str(frame.URI)
     
     def _validate_frame_structure(self, objects: List[GraphObject]) -> Dict[str, Any]:
         """Validate frame structure following MockKGFramesEndpoint patterns."""
@@ -1677,36 +1668,17 @@ class KGFramesEndpoint:
             return {"valid": False, "error": str(e)}
     
     async def _handle_create_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
-        """Handle CREATE mode: verify frames dont exist, then create using atomic processor."""
+        """Handle CREATE mode: create frames using standalone frame processor."""
         try:
-            # Initialize frame processor if needed
+            # Initialize standalone frame processor if needed
             if not self.frame_processor:
-                from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-                self.frame_processor = KGEntityFrameCreateProcessor()
+                from ..kg_impl.kgframe_create_impl import KGFrameCreateProcessor
+                self.frame_processor = KGFrameCreateProcessor()
             
-            # Use atomic frame processor for CREATE mode
-            # Extract entity URI from parent_uri or first entity in objects
-            entity_uri = parent_uri
-            if not entity_uri:
-                # Try to find entity URI from objects
-                for obj in objects:
-                    if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
-                        entity_uri = str(obj.kGGraphURI)
-                        break
-            
-            if not entity_uri:
-                return FrameCreateResponse(
-                    success=False,
-                    message="Entity URI required for frame creation",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-            result = await self.frame_processor.create_entity_frame(
+            result = await self.frame_processor.create_frame(
                 backend_adapter=backend,
                 space_id=space_id,
                 graph_id=graph_id,
-                entity_uri=entity_uri,
                 frame_objects=objects,
                 operation_mode="CREATE"
             )
@@ -1749,15 +1721,13 @@ class KGFramesEndpoint:
             )
     
     async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
-        """Handle UPDATE mode: verify frames exist, then update using atomic processor.
+        """Handle UPDATE mode: verify frames exist, then update using standalone processor.
         
-        When parent_uri points to a KGFrame, validates that the frames being updated
-        are children of that parent via Edge_hasKGFrame before proceeding.
+        Args:
+            parent_uri: Used for frame-to-frame validation (Edge_hasKGFrame).
         """
         try:
             # Validate parent-child relationship only if parent_uri is itself a KGFrame
-            # (when parent_uri is a KGEntity, the relationship is via Edge_hasEntityKGFrame,
-            # which is handled by the entity frames endpoint, not Edge_hasKGFrame)
             if parent_uri:
                 parent_is_frame = await self._frame_exists_in_backend(backend, space_id, graph_id, parent_uri)
                 if parent_is_frame:
@@ -1777,33 +1747,15 @@ class KGFramesEndpoint:
                                 updated_count=0
                             )
             
-            # Initialize frame processor if needed
+            # Initialize standalone frame processor if needed
             if not self.frame_processor:
-                from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-                self.frame_processor = KGEntityFrameCreateProcessor()
+                from ..kg_impl.kgframe_create_impl import KGFrameCreateProcessor
+                self.frame_processor = KGFrameCreateProcessor()
             
-            # Use atomic frame processor for UPDATE mode
-            # Extract entity URI from objects' kGGraphURI (set during grouping), fall back to parent_uri
-            entity_uri = None
-            for obj in objects:
-                if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
-                    entity_uri = str(obj.kGGraphURI)
-                    break
-            if not entity_uri:
-                entity_uri = parent_uri
-            
-            if not entity_uri:
-                return FrameUpdateResponse(
-                success=False,
-                message="Entity URI required for frame update",
-                updated_uri=""
-            )
-            
-            result = await self.frame_processor.create_entity_frame(
+            result = await self.frame_processor.create_frame(
                 backend_adapter=backend,
                 space_id=space_id,
                 graph_id=graph_id,
-                entity_uri=entity_uri,
                 frame_objects=objects,
                 operation_mode="UPDATE"
             )
@@ -1834,33 +1786,19 @@ class KGFramesEndpoint:
             )
     
     async def _handle_upsert_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
-        """Handle UPSERT mode: create or update frames as needed using atomic processor."""
+        """Handle UPSERT mode: create or update frames as needed using standalone processor."""
         try:
-            # Use atomic frame processor for UPSERT mode
-            # Extract entity URI from parent_uri or first entity in objects
-            entity_uri = parent_uri
-            if not entity_uri:
-                # Try to find entity URI from objects
-                for obj in objects:
-                    if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
-                        entity_uri = str(obj.kGGraphURI)
-                        break
+            # Initialize standalone frame processor if needed
+            if not self.frame_processor:
+                from ..kg_impl.kgframe_create_impl import KGFrameCreateProcessor
+                self.frame_processor = KGFrameCreateProcessor()
             
-            if not entity_uri:
-                return FrameCreateResponse(
-                    success=False,
-                    message="Entity URI required for frame upsert",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
-            result = await self.frame_processor.create_entity_frame(
+            result = await self.frame_processor.create_frame(
                 backend_adapter=backend,
                 space_id=space_id,
                 graph_id=graph_id,
-                entity_uri=entity_uri,
                 frame_objects=objects,
-                operation_mode=OperationMode.UPSERT
+                operation_mode="UPSERT"
             )
             
             if not result.success:
@@ -1892,12 +1830,18 @@ class KGFramesEndpoint:
     async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
         """Handle REPLACE mode: delete the existing frame subtree, then insert the new frame graph.
         
-        Preserves the root frame URI and any parent→frame edge. Removes all existing
-        descendant frames, slots, and edges before inserting the replacement graph.
+        Determines the delete scope from EXISTING frames in the DB:
+        - If parent_uri is a KGFrame: deletes its children + their descendants
+        - Otherwise: falls back to deleting the replacement graph's frame URIs + descendants
+        
+        Then inserts the replacement graph via CREATE.
+        
+        Args:
+            parent_uri: If provided and is a KGFrame, scopes replacement to children of this parent.
         """
         try:
-            frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
-            if not frame_uris:
+            replacement_frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
+            if not replacement_frame_uris:
                 return FrameUpdateResponse(
                     success=False,
                     message="No frame URIs found in replacement graph",
@@ -1905,66 +1849,47 @@ class KGFramesEndpoint:
                     updated_count=0
                 )
             
-            # Validate parent-child relationship only if parent_uri is itself a KGFrame
-            if parent_uri:
-                parent_is_frame = await self._frame_exists_in_backend(backend, space_id, graph_id, parent_uri)
-                if parent_is_frame:
-                    from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-                    sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
-                    validation_map = await sparql_processor.validate_frame_parent_relationship(
-                        space_id, graph_id, parent_uri, frame_uris
-                    )
-                    invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
-                    if invalid_frames:
-                        return FrameUpdateResponse(
-                            success=False,
-                            message=f"Frames are not children of parent {parent_uri}: {', '.join(invalid_frames)}",
-                            updated_uri="",
-                            updated_count=0
-                        )
-            
-            # Phase 1: Collect all descendants of each root frame being replaced
+            # Phase 1: Determine delete scope from EXISTING frames in the DB
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
             
-            all_uris_to_delete = list(frame_uris)
-            descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, frame_uris)
-            if descendants:
-                self.logger.info(f"🔄 REPLACE mode: found {len(descendants)} descendant frames to remove")
-                all_uris_to_delete.extend(descendants)
+            if parent_uri:
+                parent_is_frame = await self._frame_exists_in_backend(backend, space_id, graph_id, parent_uri)
+                if parent_is_frame:
+                    # Scoped replace: delete children of the given parent
+                    existing_children = await sparql_processor.find_child_frames(
+                        space_id, graph_id, parent_uri
+                    )
+                    root_frames_to_delete = existing_children
+                else:
+                    # parent_uri is not a frame (e.g. entity URI) — use replacement URIs as fallback
+                    root_frames_to_delete = replacement_frame_uris
+            else:
+                # No parent scope — use replacement URIs as fallback
+                root_frames_to_delete = replacement_frame_uris
+            
+            # Collect all descendants of the root frames being deleted
+            all_uris_to_delete = list(root_frames_to_delete)
+            if root_frames_to_delete:
+                descendants = await sparql_processor.collect_all_descendants(space_id, graph_id, root_frames_to_delete)
+                if descendants:
+                    self.logger.info(f"🔄 REPLACE mode: found {len(descendants)} descendant frames to remove")
+                    all_uris_to_delete.extend(descendants)
             
             # Phase 2: Delete existing subtree (frames + slots + edges) but NOT parent→root edges
             for uri in all_uris_to_delete:
                 await self._delete_frame_from_backend(backend, space_id, graph_id, uri)
             self.logger.info(f"🗑️ REPLACE mode: deleted {len(all_uris_to_delete)} existing frames")
             
-            # Phase 3: Insert replacement graph using CREATE mode
+            # Phase 3: Insert replacement graph using standalone CREATE mode
             if not self.frame_processor:
-                from ..kg_impl.kgentity_frame_create_impl import KGEntityFrameCreateProcessor
-                self.frame_processor = KGEntityFrameCreateProcessor()
+                from ..kg_impl.kgframe_create_impl import KGFrameCreateProcessor
+                self.frame_processor = KGFrameCreateProcessor()
             
-            # Extract entity URI from objects' kGGraphURI (set during grouping), fall back to parent_uri
-            entity_uri = None
-            for obj in objects:
-                if hasattr(obj, 'kGGraphURI') and obj.kGGraphURI:
-                    entity_uri = str(obj.kGGraphURI)
-                    break
-            if not entity_uri:
-                entity_uri = parent_uri
-            
-            if not entity_uri:
-                return FrameUpdateResponse(
-                    success=False,
-                    message="Entity/parent URI required for frame replace",
-                    updated_uri="",
-                    updated_count=0
-                )
-            
-            result = await self.frame_processor.create_entity_frame(
+            result = await self.frame_processor.create_frame(
                 backend_adapter=backend,
                 space_id=space_id,
                 graph_id=graph_id,
-                entity_uri=entity_uri,
                 frame_objects=objects,
                 operation_mode="CREATE"
             )
@@ -2320,31 +2245,47 @@ class KGFramesEndpoint:
     # Removed duplicate _get_all_triples_for_subjects method - using the implementation above
     # Removed duplicate _convert_triples_to_vitalsigns_frames method - using the implementation above
 
+    @staticmethod
+    def _result_has_rows(result) -> bool:
+        """Check if a SPARQL SELECT result contains any rows."""
+        if isinstance(result, dict):
+            bindings = result.get("bindings") or result.get("results", {}).get("bindings")
+            return bool(bindings and len(bindings) > 0)
+        elif isinstance(result, list):
+            return len(result) > 0
+        return False
+
     async def _validate_parent_object(self, backend, space_id: str, graph_id: str, parent_uri: str) -> Dict[str, Any]:
-        """Validate that parent object exists and determine its type."""
+        """Validate that parent object exists and determine its type.
+        
+        Uses SELECT queries (not ASK) because the SQL backend compiles ASK
+        to SELECT and does not return a 'boolean' key.
+        """
         try:
             # Check if parent is a KGEntity
             entity_query = f"""
-            ASK {{
+            SELECT ?s WHERE {{
                 GRAPH <{graph_id}> {{
                     <{parent_uri}> a <{self.haley_prefix}KGEntity> .
+                    BIND(<{parent_uri}> as ?s)
                 }}
-            }}
+            }} LIMIT 1
             """
             entity_result = await backend.execute_sparql_query(space_id, entity_query)
-            if entity_result and entity_result.get("boolean", False):
+            if self._result_has_rows(entity_result):
                 return {"valid": True, "type": "entity", "uri": parent_uri}
             
             # Check if parent is a KGFrame
             frame_query = f"""
-            ASK {{
+            SELECT ?s WHERE {{
                 GRAPH <{graph_id}> {{
                     <{parent_uri}> a <{self.haley_prefix}KGFrame> .
+                    BIND(<{parent_uri}> as ?s)
                 }}
-            }}
+            }} LIMIT 1
             """
             frame_result = await backend.execute_sparql_query(space_id, frame_query)
-            if frame_result and frame_result.get("boolean", False):
+            if self._result_has_rows(frame_result):
                 return {"valid": True, "type": "frame", "uri": parent_uri}
             
             return {"valid": False, "error": f"Parent object {parent_uri} not found or invalid type"}
