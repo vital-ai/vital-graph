@@ -19,6 +19,9 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 
 # Backend utilities - no direct import needed, will use backend_adapter method
 
+# Property registry for datatype-aware sort handling (uri_list needs GROUP BY)
+from vitalgraph.model.kgentities_model import _FILTERABLE_ENTITY_PROPERTIES
+
 # ---------------------------------------------------------------------------
 # KGEntity subclass type clause — matches KGEntity and all known subclasses.
 # Must be kept in sync with kg_query_builder.py entity_type_clause.
@@ -88,7 +91,8 @@ class KGEntityListProcessor:
                            created_after: Optional[str] = None,
                            created_before: Optional[str] = None,
                            modified_after: Optional[str] = None,
-                           modified_before: Optional[str] = None) -> ListEntitiesResult:
+                           modified_before: Optional[str] = None,
+                           action_type: Optional[str] = None) -> ListEntitiesResult:
         """
         List KGEntities with filtering and pagination.
 
@@ -116,6 +120,7 @@ class KGEntityListProcessor:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                action_type=action_type,
             )
 
             if not include_entity_graph:
@@ -149,6 +154,11 @@ class KGEntityListProcessor:
         """Single SPARQL query fetches paginated entity properties directly."""
         from collections import defaultdict
 
+        count_sparql = self._build_count_query(
+            graph_id, entity_type_uri, search,
+            sort_by=sort_by, prop_filters=prop_filters,
+        )
+
         # Build the optimized single query
         sparql = self._build_optimized_properties_query(
             graph_id, page_size, offset, entity_type_uri, search,
@@ -157,8 +167,6 @@ class KGEntityListProcessor:
         )
 
         # Run data query and count query concurrently
-        count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by, prop_filters=prop_filters)
-
         data_task = backend_adapter.execute_sparql_query(space_id, sparql)
         count_task = backend_adapter.execute_sparql_query(space_id, count_sparql)
         data_result, count_result = await asyncio.gather(data_task, count_task)
@@ -369,20 +377,38 @@ class KGEntityListProcessor:
         # Sort triple + ORDER BY
         sort_triple = ""
         order_by = "ORDER BY ?s"
+        group_by = ""
+        is_multi_value_sort = False
         if sort_by:
-            sort_triple = f"\n          ?s <{sort_by}> ?sort_val ."
+            sort_datatype = _FILTERABLE_ENTITY_PROPERTIES.get(sort_by)
+            is_multi_value_sort = sort_datatype == "uri_list"
             direction = "DESC" if sort_order == "desc" else "ASC"
-            order_by = f"ORDER BY {direction}(?sort_val) ?s"
+            agg_fn = "MAX" if sort_order == "desc" else "MIN"
 
-        inner_select = "SELECT DISTINCT ?s WHERE {"
-        if sort_by:
+            if is_multi_value_sort:
+                sort_triple = f"\n          ?s <{sort_by}> ?_sort_raw ."
+                order_by = f"ORDER BY {direction}(?sort_val) ?s"
+                group_by = "GROUP BY ?s"
+            else:
+                sort_triple = f"\n          ?s <{sort_by}> ?sort_val ."
+                order_by = f"ORDER BY {direction}(?sort_val) ?s"
+
+        if is_multi_value_sort:
+            inner_select = f"SELECT ?s ({agg_fn}(?_sort_raw) AS ?sort_val) WHERE {{"
+        elif sort_by:
             inner_select = "SELECT DISTINCT ?s ?sort_val WHERE {"
+        else:
+            inner_select = "SELECT DISTINCT ?s WHERE {"
+
+        outer_select = "SELECT ?s ?p ?o"
+        if sort_by:
+            outer_select += " ?sort_val"
 
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
             "PREFIX vital-core: <http://vital.ai/ontology/vital-core#>\n"
             "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
-            "SELECT ?s ?p ?o WHERE {\n"
+            f"{outer_select} WHERE {{\n"
             f"  GRAPH <{graph_id}> {{\n"
             "    {\n"
             f"      {inner_select}\n"
@@ -390,6 +416,7 @@ class KGEntityListProcessor:
             f"          {type_clause}{search_clause}{pf_clause}{sort_triple}\n"
             "        }\n"
             "      }\n"
+            f"      {group_by}\n"
             f"      {order_by}\n"
             f"      LIMIT {page_size}\n"
             f"      OFFSET {offset}\n"
@@ -429,14 +456,28 @@ class KGEntityListProcessor:
 
         sort_triple = ""
         order_by = "ORDER BY ?entity"
+        group_by = ""
+        is_multi_value_sort = False
         if sort_by:
-            sort_triple = f"\n    ?entity <{sort_by}> ?sort_val ."
+            sort_datatype = _FILTERABLE_ENTITY_PROPERTIES.get(sort_by)
+            is_multi_value_sort = sort_datatype == "uri_list"
             direction = "DESC" if sort_order == "desc" else "ASC"
-            order_by = f"ORDER BY {direction}(?sort_val) ?entity"
+            agg_fn = "MAX" if sort_order == "desc" else "MIN"
 
-        select_clause = "SELECT DISTINCT ?entity WHERE {"
-        if sort_by:
+            if is_multi_value_sort:
+                sort_triple = f"\n    ?entity <{sort_by}> ?_sort_raw ."
+                order_by = f"ORDER BY {direction}(?sort_val) ?entity"
+                group_by = f"GROUP BY ?entity"
+            else:
+                sort_triple = f"\n    ?entity <{sort_by}> ?sort_val ."
+                order_by = f"ORDER BY {direction}(?sort_val) ?entity"
+
+        if is_multi_value_sort:
+            select_clause = f"SELECT ?entity ({agg_fn}(?_sort_raw) AS ?sort_val) WHERE {{"
+        elif sort_by:
             select_clause = "SELECT DISTINCT ?entity ?sort_val WHERE {"
+        else:
+            select_clause = "SELECT DISTINCT ?entity WHERE {"
 
         return (
             "PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>\n"
@@ -447,6 +488,7 @@ class KGEntityListProcessor:
             f"    {type_clause}{search_clause}{pf_clause}{sort_triple}\n"
             "  }\n"
             "}\n"
+            f"{group_by}\n"
             f"{order_by}\n"
             f"LIMIT {page_size}\n"
             f"OFFSET {offset}"
@@ -692,7 +734,9 @@ class KGEntityListProcessor:
         if prop_filters:
             query_parts.append(prop_filters)
 
-        # Sort join — required so count matches paginated results
+        # Sort join — required so count matches paginated results.
+        # For uri_list properties, the triple pattern creates multiple bindings
+        # per entity, but COUNT(DISTINCT ?entity) handles deduplication correctly.
         if sort_by:
             query_parts.append(f"    ?entity <{sort_by}> ?sort_val .")
         
@@ -711,6 +755,7 @@ class KGEntityListProcessor:
         created_before: Optional[str] = None,
         modified_after: Optional[str] = None,
         modified_before: Optional[str] = None,
+        action_type: Optional[str] = None,
     ) -> str:
         """Build SPARQL clauses for direct entity property filters.
         
@@ -752,6 +797,10 @@ class KGEntityListProcessor:
                 parts.append(
                     f'    FILTER(?_modified <= "{modified_before}"^^xsd:dateTime)'
                 )
+        
+        if action_type:
+            _ACTION_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList"
+            parts.append(f"    ?entity <{_ACTION_TYPE_URI}> <{action_type}> .")
         
         return "\n".join(parts)
     

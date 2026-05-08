@@ -1275,6 +1275,9 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
 
+                if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
+                    logger.info("DEBUG multi-value sort SQL:\n%s", sql)
+
                 rows = await conn.fetch(sql)
                 t_exec = _time.monotonic()
                 result_rows = [dict(r) for r in rows]

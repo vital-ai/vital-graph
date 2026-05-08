@@ -44,7 +44,34 @@ def emit_project(plan: PlanV2, ctx: EmitContext) -> str:
 
     ctx.log("project", f"projecting: {name_map}")
 
-    return (
+    base = (
         f"SELECT {', '.join(proj_cols)}\n"
         f"FROM ({child_sql}) AS {p_alias}"
     )
+
+    # Lift ORDER BY: the child may be an ORDER node whose SQL ends with
+    # "ORDER BY ...".  Wrapping it in a subquery buries the ORDER BY where
+    # PostgreSQL ignores it.  Re-emit the ORDER BY on the outer SELECT,
+    # rewriting column references from the child alias to p_alias.
+    child_plan = plan.child if plan.children else None
+    # Walk through SLICE to find the ORDER node
+    if child_plan and child_plan.kind == "slice" and child_plan.children:
+        child_plan = child_plan.children[0]
+    if child_plan and child_plan.kind == "order" and child_plan.order_conditions:
+        from .emit_expressions import expr_to_sql
+        ob_parts = []
+        for key, direction in child_plan.order_conditions:
+            if isinstance(key, str):
+                info = ctx.types.get(key)
+                sn = info.sql_name if info else key
+                col = f"{p_alias}.{sn}"
+            else:
+                col = expr_to_sql(key, ctx)
+                if not col:
+                    continue
+            suffix = " DESC" if direction == "DESC" else ""
+            ob_parts.append(f"{col}{suffix}")
+        if ob_parts:
+            base += f"\nORDER BY {', '.join(ob_parts)}"
+
+    return base

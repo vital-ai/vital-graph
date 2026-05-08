@@ -8,6 +8,10 @@ import logging
 from typing import Dict, List, Any, Optional
 from vitalgraph.model.kgqueries_model import KGQueryCriteria
 from vitalgraph.model.kgentities_model import EntityQueryCriteria, SlotCriteria
+from vitalgraph.sparql.kg_query_builder import (
+    _SLOT_CLASS_TO_VALUE_PROPERTY,
+    _URI_VALUE_SLOT_CLASSES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -463,6 +467,19 @@ class KGConnectionQueryBuilder:
         
         return "\n                ".join(patterns)
     
+    @staticmethod
+    def _format_conn_value(value: Any, slot_class_uri: Optional[str] = None) -> str:
+        """Format a single value for SPARQL based on slot class URI or value type."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        elif isinstance(value, str):
+            if slot_class_uri in _URI_VALUE_SLOT_CLASSES:
+                return f'<{value}>'
+            else:
+                return f"'{value}'"
+        else:
+            return str(value)
+
     def _build_slot_value_filter(self, slot_var: str, value_var: str, value: Any, 
                                  comparator: str, slot_class_uri: Optional[str] = None) -> List[str]:
         """Build SPARQL patterns for slot value filtering.
@@ -471,7 +488,7 @@ class KGConnectionQueryBuilder:
             slot_var: Slot variable name
             value_var: Value variable name
             value: Value to compare
-            comparator: Comparison operator (gt, lt, eq, gte, lte, contains, ne)
+            comparator: Comparison operator (gt, lt, eq, gte, lte, contains, ne, has, has_any, has_all, not_has, not_has_any)
             slot_class_uri: Optional slot class URI to determine value property
             
         Returns:
@@ -480,21 +497,13 @@ class KGConnectionQueryBuilder:
         patterns = []
         
         # Determine value property based on slot class or value type
-        if slot_class_uri:
-            if "TextSlot" in slot_class_uri:
-                value_property = "haley:hasTextSlotValue"
-            elif "IntegerSlot" in slot_class_uri or "LongSlot" in slot_class_uri:
-                value_property = "haley:hasIntegerSlotValue"
-            elif "DoubleSlot" in slot_class_uri or "FloatSlot" in slot_class_uri:
-                value_property = "haley:hasDoubleSlotValue"
-            elif "DateTimeSlot" in slot_class_uri:
-                value_property = "haley:hasDateTimeSlotValue"
-            elif "BooleanSlot" in slot_class_uri:
-                value_property = "haley:hasBooleanSlotValue"
-            else:
-                value_property = "haley:hasTextSlotValue"  # Default
+        if slot_class_uri and slot_class_uri in _SLOT_CLASS_TO_VALUE_PROPERTY:
+            value_property = _SLOT_CLASS_TO_VALUE_PROPERTY[slot_class_uri]
+        elif slot_class_uri:
+            # Unknown slot class URI — default to text
+            value_property = "haley:hasTextSlotValue"
         else:
-            # Infer from value type
+            # No slot class URI — infer from value type
             if isinstance(value, bool):
                 value_property = "haley:hasBooleanSlotValue"
             elif isinstance(value, int):
@@ -504,29 +513,58 @@ class KGConnectionQueryBuilder:
             else:
                 value_property = "haley:hasTextSlotValue"
         
-        # Get the value
-        patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
-        
         # Build filter based on comparator
         if comparator == "eq":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             if isinstance(value, str):
                 patterns.append(f"FILTER(?{value_var} = '{value}')")
             else:
                 patterns.append(f"FILTER(?{value_var} = {value})")
         elif comparator == "ne":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             if isinstance(value, str):
                 patterns.append(f"FILTER(?{value_var} != '{value}')")
             else:
                 patterns.append(f"FILTER(?{value_var} != {value})")
         elif comparator == "gt":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             patterns.append(f"FILTER(?{value_var} > {value})")
         elif comparator == "lt":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             patterns.append(f"FILTER(?{value_var} < {value})")
         elif comparator == "gte":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             patterns.append(f"FILTER(?{value_var} >= {value})")
         elif comparator == "lte":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             patterns.append(f"FILTER(?{value_var} <= {value})")
         elif comparator == "contains":
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
             patterns.append(f"FILTER(CONTAINS(LCASE(?{value_var}), LCASE('{value}')))")
+        elif comparator == "has":
+            fv = self._format_conn_value(value, slot_class_uri)
+            patterns.append(f"?{slot_var} {value_property} {fv} .")
+        elif comparator == "has_any":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            patterns.append(f"?{slot_var} {value_property} ?{value_var} .")
+            formatted = [self._format_conn_value(v, slot_class_uri) for v in value]
+            val_list = ", ".join(formatted)
+            patterns.append(f"FILTER(?{value_var} IN ({val_list}))")
+        elif comparator == "has_all":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            for v in value:
+                fv = self._format_conn_value(v, slot_class_uri)
+                patterns.append(f"?{slot_var} {value_property} {fv} .")
+        elif comparator == "not_has":
+            fv = self._format_conn_value(value, slot_class_uri)
+            patterns.append(f"FILTER NOT EXISTS {{ ?{slot_var} {value_property} {fv} . }}")
+        elif comparator == "not_has_any":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            formatted = [self._format_conn_value(v, slot_class_uri) for v in value]
+            val_list = ", ".join(formatted)
+            patterns.append(f"FILTER NOT EXISTS {{ ?{slot_var} {value_property} ?{value_var} . FILTER(?{value_var} IN ({val_list})) }}")
         
         return patterns

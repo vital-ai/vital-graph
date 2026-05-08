@@ -290,9 +290,9 @@ def _qualify_agg_inner(inner_expr, agg_expr: ExprAggregator,
         return f"CAST({src_alias}.{info.sql_name} AS NUMERIC)"
 
     if agg_name in ("MIN", "MAX"):
-        # Use numeric column if available, else text
-        if info.num_col:
-            return f"{src_alias}.{info.sql_name}__num"
+        # Use text column — __num is NULL for URIs/strings, which would
+        # make the error guard evaluate to NULL and destroy sort order.
+        # Text comparison is correct for SPARQL MIN/MAX on all RDF types.
         return f"{src_alias}.{info.sql_name}"
 
     if agg_name == "GROUP_CONCAT":

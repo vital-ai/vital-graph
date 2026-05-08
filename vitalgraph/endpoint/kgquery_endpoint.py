@@ -187,7 +187,7 @@ class KGQueriesEndpoint:
                 anchor_var = "source_entity"
                 if builder_sort_criteria and builder_sort_criteria[0].sort_type == "destination_frame_slot":
                     anchor_var = "destination_entity"
-                sort_patterns, sort_select_vars, order_by_clause = self.query_builder._build_sort_bindings(
+                sort_patterns, sort_select_vars, order_by_clause, _requires_group_by = self.query_builder._build_sort_bindings(
                     builder_sort_criteria, anchor_var=anchor_var
                 )
             

@@ -10,6 +10,74 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Slot class URI → value property mapping (full URIs, never use substring match)
+# ---------------------------------------------------------------------------
+_HALEY_NS = "http://vital.ai/ontology/haley-ai-kg#"
+
+_SLOT_CLASS_TO_VALUE_PROPERTY = {
+    f"{_HALEY_NS}KGAudioSlot":              "haley:hasAudioSlotValue",
+    f"{_HALEY_NS}KGBooleanSlot":            "haley:hasBooleanSlotValue",
+    f"{_HALEY_NS}KGChoiceOptionSlot":       "haley:hasChoiceSlotOptionValues",
+    f"{_HALEY_NS}KGChoiceSlot":             "haley:hasChoiceSlotValue",
+    f"{_HALEY_NS}KGCodeSlot":               "haley:hasCodeSlotValue",
+    f"{_HALEY_NS}KGCurrencySlot":           "haley:hasCurrencySlotValue",
+    f"{_HALEY_NS}KGDateTimeSlot":           "haley:hasDateTimeSlotValue",
+    f"{_HALEY_NS}KGDoubleSlot":             "haley:hasDoubleSlotValue",
+    f"{_HALEY_NS}KGEntitySlot":             "haley:hasEntitySlotValue",
+    f"{_HALEY_NS}KGFileUploadSlot":         "haley:hasFileUploadSlotValue",
+    f"{_HALEY_NS}KGGeoLocationSlot":        "haley:hasGeoLocationSlotValue",
+    f"{_HALEY_NS}KGImageSlot":              "haley:hasImageSlotValue",
+    f"{_HALEY_NS}KGIntegerSlot":            "haley:hasIntegerSlotValue",
+    f"{_HALEY_NS}KGJSONSlot":               "haley:hasJsonSlotValue",
+    f"{_HALEY_NS}KGLongSlot":               "haley:hasLongSlotValue",
+    f"{_HALEY_NS}KGLongTextSlot":           "haley:hasLongTextSlotValue",
+    f"{_HALEY_NS}KGMultiChoiceOptionSlot":  "haley:hasMultiChoiceSlotValues",
+    f"{_HALEY_NS}KGMultiChoiceSlot":        "haley:hasMultiChoiceSlotValues",
+    f"{_HALEY_NS}KGMultiTaxonomyOptionSlot": "haley:hasKGTaxonomyOptionURI",
+    f"{_HALEY_NS}KGMultiTaxonomySlot":      "haley:hasMultiTaxonomySlotValues",
+    f"{_HALEY_NS}KGPropertySlot":           "haley:hasPropertyFrameTypeSlotValue",
+    f"{_HALEY_NS}KGRunSlot":                "haley:hasRunSlotValue",
+    f"{_HALEY_NS}KGTaxonomyOptionSlot":     "haley:hasKGTaxonomyOptionURI",
+    f"{_HALEY_NS}KGTaxonomySlot":           "haley:hasTaxonomySlotValue",
+    f"{_HALEY_NS}KGTextSlot":               "haley:hasTextSlotValue",
+    f"{_HALEY_NS}KGURISlot":                "haley:hasUriSlotValue",
+    f"{_HALEY_NS}KGVideoSlot":              "haley:hasVideoSlotValue",
+}
+
+_URI_VALUE_SLOT_CLASSES = {
+    f"{_HALEY_NS}KGAudioSlot",
+    f"{_HALEY_NS}KGCodeSlot",
+    f"{_HALEY_NS}KGEntitySlot",
+    f"{_HALEY_NS}KGFileUploadSlot",
+    f"{_HALEY_NS}KGImageSlot",
+    f"{_HALEY_NS}KGMultiTaxonomyOptionSlot",
+    f"{_HALEY_NS}KGMultiTaxonomySlot",
+    f"{_HALEY_NS}KGPropertySlot",
+    f"{_HALEY_NS}KGRunSlot",
+    f"{_HALEY_NS}KGTaxonomyOptionSlot",
+    f"{_HALEY_NS}KGTaxonomySlot",
+    f"{_HALEY_NS}KGURISlot",
+    f"{_HALEY_NS}KGVideoSlot",
+}
+
+_NUMERIC_SLOT_CLASSES = {
+    f"{_HALEY_NS}KGCurrencySlot": "xsd:double",
+    f"{_HALEY_NS}KGDoubleSlot":   "xsd:double",
+    f"{_HALEY_NS}KGIntegerSlot":  "xsd:integer",
+    f"{_HALEY_NS}KGLongSlot":     "xsd:integer",
+}
+
+_TEXT_SLOT_CLASSES = {
+    f"{_HALEY_NS}KGChoiceOptionSlot",
+    f"{_HALEY_NS}KGChoiceSlot",
+    f"{_HALEY_NS}KGJSONSlot",
+    f"{_HALEY_NS}KGLongTextSlot",
+    f"{_HALEY_NS}KGMultiChoiceOptionSlot",
+    f"{_HALEY_NS}KGMultiChoiceSlot",
+    f"{_HALEY_NS}KGTextSlot",
+}
+
 
 @dataclass
 class FrameCriteria:
@@ -35,7 +103,7 @@ class SlotCriteria:
     slot_type: Optional[str] = None
     slot_class_uri: Optional[str] = None  # Underlying slot class URI (e.g., KGTextSlot, KGDoubleSlot)
     value: Optional[Any] = None
-    comparator: Optional[str] = None  # "eq", "gt", "lt", "gte", "lte", "contains", "ne", "exists", "not_exists", "is_empty"
+    comparator: Optional[str] = None  # "eq", "gt", "lt", "gte", "lte", "contains", "ne", "exists", "not_exists", "is_empty", "has", "has_any", "has_all", "not_has", "not_has_any"
 
 
 @dataclass
@@ -421,6 +489,28 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                     else:
                         val_list = ", ".join(f'"{v}"' for v in epf.value)
                     filter_clauses.append(f"FILTER(?{var} NOT IN ({val_list}))")
+                elif epf.operator == "has":
+                    filter_clauses.append(f"?entity <{prop_uri}> <{epf.value}> .")
+                elif epf.operator == "has_any" and isinstance(epf.value, list):
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                    val_list = ", ".join(f"<{v}>" for v in epf.value)
+                    filter_clauses.append(f"FILTER(?{var} IN ({val_list}))")
+                elif epf.operator == "has_all" and isinstance(epf.value, list):
+                    for v in epf.value:
+                        filter_clauses.append(f"?entity <{prop_uri}> <{v}> .")
+                elif epf.operator == "not_has":
+                    filter_clauses.append(
+                        f"FILTER NOT EXISTS {{ ?entity <{prop_uri}> <{epf.value}> . }}")
+                elif epf.operator == "not_has_any" and isinstance(epf.value, list):
+                    val_list = ", ".join(f"<{v}>" for v in epf.value)
+                    filter_clauses.append(
+                        f"FILTER NOT EXISTS {{ ?entity <{prop_uri}> ?{var} . "
+                        f"FILTER(?{var} IN ({val_list})) }}")
+                elif epf.operator == "exists":
+                    filter_clauses.append(f"?entity <{prop_uri}> ?{var} .")
+                elif epf.operator == "not_exists":
+                    filter_clauses.append(
+                        f"FILTER NOT EXISTS {{ ?entity <{prop_uri}> ?{var} . }}")
         
         # Combine class clause with filters
         if filter_clauses:
@@ -604,8 +694,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         sort_extra_where = ""
         select_extra = ""
         order_by = "ORDER BY ?entity"
+        group_by = ""
+        use_distinct = True
         if criteria.sort_criteria:
-            sort_patterns, sort_vars, order_by_clause = self._build_sort_bindings(
+            sort_patterns, sort_vars, order_by_clause, requires_group_by = self._build_sort_bindings(
                 criteria.sort_criteria, anchor_var="entity",
                 use_edge_pattern=criteria.use_edge_pattern
             )
@@ -613,14 +705,20 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 sort_extra_where = " " + " ".join(sort_patterns)
                 select_extra = " " + " ".join(sort_vars)
                 order_by = order_by_clause
+                if requires_group_by:
+                    group_by = "GROUP BY ?entity"
+                    use_distinct = False
+        
+        select_keyword = "SELECT DISTINCT" if use_distinct else "SELECT"
         
         if graph_id is None:
             # Query default graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?entity{select_extra} WHERE {{
+            {select_keyword} ?entity{select_extra} WHERE {{
                 {where_clause}{sort_extra_where}
             }}
+            {group_by}
             {order_by}
             LIMIT {page_size}
             OFFSET {offset}
@@ -629,11 +727,12 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             # Query named graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?entity{select_extra} WHERE {{
+            {select_keyword} ?entity{select_extra} WHERE {{
                 GRAPH <{graph_id}> {{
                     {where_clause}{sort_extra_where}
                 }}
             }}
+            {group_by}
             {order_by}
             LIMIT {page_size}
             OFFSET {offset}
@@ -662,7 +761,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         # slot are excluded from the count (matching paginated query).
         sort_extra_where = ""
         if criteria.sort_criteria:
-            sort_patterns, _sort_vars, _order_by = self._build_sort_bindings(
+            sort_patterns, _sort_vars, _order_by, _requires_group_by = self._build_sort_bindings(
                 criteria.sort_criteria, anchor_var="entity",
                 use_edge_pattern=criteria.use_edge_pattern
             )
@@ -762,8 +861,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         sort_extra_where = ""
         select_extra = ""
         order_by = "ORDER BY ?frame"
+        group_by = ""
+        use_distinct = True
         if criteria.sort_criteria:
-            sort_patterns, sort_vars, order_by_clause = self._build_sort_bindings(
+            sort_patterns, sort_vars, order_by_clause, requires_group_by = self._build_sort_bindings(
                 criteria.sort_criteria, anchor_var="frame",
                 use_edge_pattern=True
             )
@@ -771,14 +872,20 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 sort_extra_where = " " + " ".join(sort_patterns)
                 select_extra = " " + " ".join(sort_vars)
                 order_by = order_by_clause
+                if requires_group_by:
+                    group_by = "GROUP BY ?frame"
+                    use_distinct = False
+        
+        select_keyword = "SELECT DISTINCT" if use_distinct else "SELECT"
         
         if graph_id is None:
             # Query default graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?frame{select_extra} WHERE {{
+            {select_keyword} ?frame{select_extra} WHERE {{
                 {where_clause}{sort_extra_where}
             }}
+            {group_by}
             {order_by}
             LIMIT {page_size}
             OFFSET {offset}
@@ -787,11 +894,12 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             # Query named graph
             query = f"""
             {self.prefixes}
-            SELECT DISTINCT ?frame{select_extra} WHERE {{
+            {select_keyword} ?frame{select_extra} WHERE {{
                 GRAPH <{graph_id}> {{
                     {where_clause}{sort_extra_where}
                 }}
             }}
+            {group_by}
             {order_by}
             LIMIT {page_size}
             OFFSET {offset}
@@ -804,46 +912,16 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         """Get the correct slot value property based on slot class URI or slot type.
         
         Args:
-            slot_class_uri: Slot class URI (e.g., KGTextSlot, KGDoubleSlot) - preferred
-            slot_type: Slot type URI - fallback for backward compatibility
+            slot_class_uri: Slot class URI (full URI) - preferred
+            slot_type: Slot type URI (full URI) - fallback for backward compatibility
             
         Returns:
             SPARQL property name for slot values
         """
-        # Use slot_class_uri if provided (preferred)
-        if slot_class_uri:
-            if slot_class_uri.endswith("KGTextSlot"):
-                return "haley:hasTextSlotValue"
-            elif slot_class_uri.endswith("KGDoubleSlot"):
-                return "haley:hasDoubleSlotValue"
-            elif slot_class_uri.endswith("KGDateTimeSlot"):
-                return "haley:hasDateTimeSlotValue"
-            elif slot_class_uri.endswith("KGIntegerSlot"):
-                return "haley:hasIntegerSlotValue"
-            elif slot_class_uri.endswith("KGBooleanSlot"):
-                return "haley:hasBooleanSlotValue"
-            elif slot_class_uri.endswith("KGEntitySlot"):
-                return "haley:hasEntitySlotValue"
-            elif slot_class_uri.endswith("KGURISlot"):
-                return "haley:hasUriSlotValue"
-        
-        # Fallback to slot_type for backward compatibility
-        if slot_type:
-            if slot_type == "http://vital.ai/ontology/haley-ai-kg#KGTextSlot":
-                return "haley:hasTextSlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                return "haley:hasDoubleSlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDateTimeSlot":
-                return "haley:hasDateTimeSlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                return "haley:hasIntegerSlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot":
-                return "haley:hasBooleanSlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGEntitySlot":
-                return "haley:hasEntitySlotValue"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGURISlot":
-                return "haley:hasUriSlotValue"
-        
+        if slot_class_uri and slot_class_uri in _SLOT_CLASS_TO_VALUE_PROPERTY:
+            return _SLOT_CLASS_TO_VALUE_PROPERTY[slot_class_uri]
+        if slot_type and slot_type in _SLOT_CLASS_TO_VALUE_PROPERTY:
+            return _SLOT_CLASS_TO_VALUE_PROPERTY[slot_type]
         # Default to text slot value
         return "haley:hasTextSlotValue"
 
@@ -853,19 +931,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         Returns:
             Tuple of (is_numeric, xsd_type)
         """
-        # Check slot_class_uri first
-        if slot_class_uri:
-            if slot_class_uri.endswith("KGDoubleSlot"):
-                return True, "xsd:double"
-            elif slot_class_uri.endswith("KGIntegerSlot"):
-                return True, "xsd:integer"
-        
-        # Fallback to slot_type
-        if slot_type:
-            if slot_type == "http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot":
-                return True, "xsd:double"
-            elif slot_type == "http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot":
-                return True, "xsd:integer"
+        for uri in (slot_class_uri, slot_type):
+            if uri and uri in _NUMERIC_SLOT_CLASSES:
+                return True, _NUMERIC_SLOT_CLASSES[uri]
         
         return False, ""
 
@@ -1069,7 +1137,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
     
     def _build_sort_bindings(self, sort_criteria: List[SortCriteria],
                              anchor_var: str = "entity",
-                             use_edge_pattern: bool = True) -> tuple[List[str], List[str], str]:
+                             use_edge_pattern: bool = True) -> tuple[List[str], List[str], str, bool]:
         """Build SPARQL patterns for sort criteria by walking frame_path to the slot.
         
         Args:
@@ -1079,13 +1147,15 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             use_edge_pattern: If True, use Edge_hasEntityKGFrame / Edge_hasKGSlot / Edge_hasKGFrame
             
         Returns:
-            Tuple of (where_patterns, select_vars, order_by_clause)
+            Tuple of (where_patterns, select_vars, order_by_clause, requires_group_by)
               - where_patterns: SPARQL triple patterns to add to WHERE clause
-              - select_vars: variables to add to SELECT (e.g. ["?sort_val_0"])
+              - select_vars: variables/expressions to add to SELECT (e.g. ["?sort_val_0"] or
+                ["(MIN(?_sort_raw_0) AS ?sort_val_0)"])
               - order_by_clause: ORDER BY string (e.g. "ORDER BY DESC(?sort_val_0) ASC(?sort_val_1)")
+              - requires_group_by: True if SELECT must use GROUP BY instead of DISTINCT
         """
         if not sort_criteria:
-            return [], [], ""
+            return [], [], "", False
         
         # Sort by priority to ensure correct order
         sorted_criteria = sorted(sort_criteria, key=lambda x: x.priority)
@@ -1093,16 +1163,25 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         patterns = []
         select_vars = []
         order_terms = []
+        requires_group_by = False
         
         for idx, sc in enumerate(sorted_criteria):
             sort_val_var = f"sort_val_{idx}"
-            select_vars.append(f"?{sort_val_var}")
             
             # entity_property: single triple on the anchor node
             if sc.sort_type == "entity_property":
                 if not sc.property_uri:
                     raise ValueError("property_uri is required for entity_property sort_type")
-                patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{sort_val_var} .")
+                sort_datatype = _FILTERABLE_ENTITY_PROPERTIES.get(sc.property_uri)
+                if sort_datatype == "uri_list":
+                    raw_var = f"_sort_raw_{idx}"
+                    agg_fn = "MAX" if sc.sort_order.lower() == "desc" else "MIN"
+                    patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{raw_var} .")
+                    select_vars.append(f"({agg_fn}(?{raw_var}) AS ?{sort_val_var})")
+                    requires_group_by = True
+                else:
+                    patterns.append(f"?{anchor_var} <{sc.property_uri}> ?{sort_val_var} .")
+                    select_vars.append(f"?{sort_val_var}")
                 if sc.sort_order.lower() == "desc":
                     order_terms.append(f"DESC(?{sort_val_var})")
                 else:
@@ -1182,7 +1261,24 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             order_by_clause = f"ORDER BY {' '.join(order_terms)} ?{anchor_var}"
         else:
             order_by_clause = ""
-        return patterns, select_vars, order_by_clause
+        return patterns, select_vars, order_by_clause, requires_group_by
+    
+    def _format_slot_value(self, value: Any, slot_class_uri: Optional[str] = None, slot_type: Optional[str] = None) -> str:
+        """Format a single value for use in SPARQL based on slot type.
+        
+        Returns the formatted SPARQL literal/URI string.
+        """
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        elif isinstance(value, str):
+            if (slot_class_uri in _URI_VALUE_SLOT_CLASSES) or (slot_type in _URI_VALUE_SLOT_CLASSES):
+                return f'<{value}>'
+            elif (slot_class_uri in _TEXT_SLOT_CLASSES) or (slot_type in _TEXT_SLOT_CLASSES):
+                return f'"{value}"^^xsd:string'
+            else:
+                return f'"{value}"'
+        else:
+            return str(value)
     
     def _build_value_filter(self, var_name: str, value: Any, comparator: str, slot_class_uri: Optional[str] = None, slot_type: Optional[str] = None, value_var: str = "val") -> str:
         """Build SPARQL filter clause for value comparison.
@@ -1205,13 +1301,11 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             # Boolean values must be lowercase in SPARQL
             escaped_value = "true" if value else "false"
         elif isinstance(value, str):
-            # Check if this is a URI slot or Entity slot - use angle brackets for URI references
-            is_uri_slot = (slot_class_uri and (slot_class_uri.endswith("KGURISlot") or slot_class_uri.endswith("KGEntitySlot"))) or \
-                         (slot_type == "http://vital.ai/ontology/haley-ai-kg#KGURISlot") or \
-                         (slot_type == "http://vital.ai/ontology/haley-ai-kg#KGEntitySlot")
+            # Check if this is a URI-valued slot class - use angle brackets for URI references
+            is_uri_slot = (slot_class_uri in _URI_VALUE_SLOT_CLASSES) or (slot_type in _URI_VALUE_SLOT_CLASSES)
             if is_uri_slot:
                 escaped_value = f'<{value}>'
-            elif slot_class_uri and slot_class_uri.endswith("KGTextSlot"):
+            elif (slot_class_uri in _TEXT_SLOT_CLASSES) or (slot_type in _TEXT_SLOT_CLASSES):
                 escaped_value = f'"{value}"^^xsd:string'
             else:
                 escaped_value = f'"{value}"'
@@ -1255,6 +1349,30 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} <= {escaped_value})"
         elif comparator == "contains":
             return f"?{var_name} {property_name} ?{value_var} . FILTER(CONTAINS(LCASE(?{value_var}), LCASE({escaped_value})))"
+        elif comparator == "has":
+            return f"?{var_name} {property_name} {escaped_value} ."
+        elif comparator == "has_any":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            formatted = [self._format_slot_value(v, slot_class_uri, slot_type) for v in value]
+            val_list = ", ".join(formatted)
+            return f"?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} IN ({val_list}))"
+        elif comparator == "has_all":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            parts = []
+            for v in value:
+                fv = self._format_slot_value(v, slot_class_uri, slot_type)
+                parts.append(f"?{var_name} {property_name} {fv} .")
+            return " ".join(parts)
+        elif comparator == "not_has":
+            return f"FILTER NOT EXISTS {{ ?{var_name} {property_name} {escaped_value} . }}"
+        elif comparator == "not_has_any":
+            if not isinstance(value, list):
+                raise ValueError(f"value must be a list for comparator '{comparator}'")
+            formatted = [self._format_slot_value(v, slot_class_uri, slot_type) for v in value]
+            val_list = ", ".join(formatted)
+            return f"FILTER NOT EXISTS {{ ?{var_name} {property_name} ?{value_var} . FILTER(?{value_var} IN ({val_list})) }}"
         else:
             self.logger.warning(f"Unknown comparator: {comparator}")
             return f"?{var_name} {property_name} {escaped_value} ."

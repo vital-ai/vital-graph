@@ -357,7 +357,6 @@ def _print_node_tree(node: DAGNode, output: list, indent_level: int, show_proper
                 'KGChoiceSlot': 'choiceSlotValue',
                 'KGCodeSlot': 'codeSlotValue',
                 'KGCurrencySlot': 'currencySlotValue',
-                'KGDateSlot': 'dateSlotValue',
                 'KGDateTimeSlot': 'dateTimeSlotValue',
                 'KGDoubleSlot': 'doubleSlotValue',
                 'KGEntitySlot': 'entitySlotValue',
@@ -365,19 +364,20 @@ def _print_node_tree(node: DAGNode, output: list, indent_level: int, show_proper
                 'KGGeoLocationSlot': 'geoLocationSlotValue',
                 'KGImageSlot': 'imageSlotValue',
                 'KGIntegerSlot': 'integerSlotValue',
-                'KGJsonSlot': 'jsonSlotValue',
+                'KGJSONSlot': 'jsonSlotValue',
                 'KGLongSlot': 'longSlotValue',
                 'KGLongTextSlot': 'longTextSlotValue',
-                'KGMultiChoiceSlot': 'multiChoiceSlotValues',
                 'KGMultiChoiceOptionSlot': 'multiChoiceSlotValues',
+                'KGMultiChoiceSlot': 'multiChoiceSlotValues',
+                'KGMultiTaxonomyOptionSlot': 'kGTaxonomyOptionURI',
                 'KGMultiTaxonomySlot': 'multiTaxonomySlotValues',
-                'KGPropertyNameSlot': 'kGPropertyNameSlotValue',
                 'KGPropertySlot': 'propertyFrameTypeSlotValue',
+                'KGRunSlot': 'runSlotValue',
+                'KGTaxonomyOptionSlot': 'kGTaxonomyOptionURI',
                 'KGTaxonomySlot': 'taxonomySlotValue',
                 'KGTextSlot': 'textSlotValue',
-                'KGEntitySlot': 'entitySlotValue',
                 'KGURISlot': 'uRISlotValue',
-                'KGVideoSlot': 'videoSlotValue'
+                'KGVideoSlot': 'videoSlotValue',
             }
             
             # Get the correct property for this slot type

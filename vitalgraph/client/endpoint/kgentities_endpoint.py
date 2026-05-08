@@ -106,6 +106,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         created_before: Optional[str] = None,
         modified_after: Optional[str] = None,
         modified_before: Optional[str] = None,
+        action_type: Optional[str] = None,
     ):
         """
         List KGEntities with pagination and optional filtering.
@@ -126,6 +127,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             created_before: Entities created before this ISO 8601 datetime
             modified_after: Entities modified after this ISO 8601 datetime
             modified_before: Entities modified before this ISO 8601 datetime
+            action_type: Filter by action type URI (entity has this value in hasKGActionTypeList)
             
         Returns:
             PaginatedGraphObjectResponse if include_entity_graph=False
@@ -155,6 +157,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 created_before=created_before,
                 modified_after=modified_after,
                 modified_before=modified_before,
+                action_type=action_type,
             )
             
             response = await self._make_request('GET', url, params=params)

@@ -49,7 +49,7 @@ class SlotCriteria(BaseModel):
     slot_type: Optional[str] = Field(None, description="Slot type URI to filter by")
     slot_class_uri: Optional[str] = Field(None, description="Underlying slot class URI (e.g., KGTextSlot, KGDoubleSlot) to determine value property")
     value: Optional[Any] = Field(None, description="Value to compare against")
-    comparator: Optional[str] = Field(None, description="Comparison operator: eq, ne, gt, lt, gte, lte, contains, exists, not_exists, is_empty")
+    comparator: Optional[str] = Field(None, description="Comparison operator: eq, ne, gt, lt, gte, lte, contains, exists, not_exists, is_empty, has, has_any, has_all, not_has, not_has_any")
 
 
 class FrameCriteria(BaseModel):
@@ -77,6 +77,7 @@ _FILTERABLE_ENTITY_PROPERTIES = {
     "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime":          "dateTime",
     "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType":               "uri",
     "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList":           "uri_list",
 }
 
 # Allowed property URIs for entity_property sort type (derived from registry)
@@ -87,16 +88,17 @@ _OPERATORS_BY_DATATYPE = {
     "string":   {"eq", "ne", "contains"},
     "dateTime": {"eq", "ne", "gt", "lt", "gte", "lte"},
     "uri":      {"eq", "ne", "in", "not_in"},
+    "uri_list": {"has", "has_any", "has_all", "not_has", "not_has_any", "exists", "not_exists"},
 }
 
 
 class EntityPropertyFilter(BaseModel):
     """Filter on a direct property of the entity node."""
     property_uri: str = Field(..., description="Full property URI")
-    operator: str = Field(..., description="Filter operator: eq, ne, gt, lt, gte, lte, contains, in, not_in")
+    operator: str = Field(..., description="Filter operator: eq, ne, gt, lt, gte, lte, contains, in, not_in, has, has_any, has_all, not_has, not_has_any, exists, not_exists")
     value: Optional[Union[str, List[str]]] = Field(
         None,
-        description="Single value for eq/ne/gt/lt/gte/lte/contains, or list of values for in/not_in"
+        description="Single value for eq/ne/gt/lt/gte/lte/contains/has/not_has, list for in/not_in/has_any/has_all/not_has_any, none for exists/not_exists"
     )
 
     @model_validator(mode='after')
@@ -113,11 +115,22 @@ class EntityPropertyFilter(BaseModel):
                 f"operator '{self.operator}' is not valid for datatype '{datatype}'. "
                 f"Allowed: {', '.join(sorted(valid_ops))}"
             )
-        if self.operator in ("in", "not_in"):
+        if self.operator in ("in", "not_in", "has_any", "has_all", "not_has_any"):
             if not isinstance(self.value, list):
                 raise ValueError(
                     f"value must be a list when operator is '{self.operator}'"
                 )
+        if self.operator in ("has", "not_has"):
+            if isinstance(self.value, list):
+                raise ValueError(
+                    f"value must be a single string when operator is '{self.operator}'"
+                )
+            if self.value is None:
+                raise ValueError(
+                    f"value is required when operator is '{self.operator}'"
+                )
+        if self.operator in ("exists", "not_exists"):
+            pass  # value is ignored
         return self
 
 _VALID_SORT_TYPES = {
