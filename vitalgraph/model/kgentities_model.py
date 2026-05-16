@@ -78,6 +78,7 @@ _FILTERABLE_ENTITY_PROPERTIES = {
     "http://vital.ai/ontology/haley-ai-kg#hasKGEntityType":               "uri",
     "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
     "http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList":           "uri_list",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGProvenanceType":            "uri",
 }
 
 # Allowed property URIs for entity_property sort type (derived from registry)
