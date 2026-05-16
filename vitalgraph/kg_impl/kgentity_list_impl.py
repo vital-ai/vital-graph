@@ -92,7 +92,8 @@ class KGEntityListProcessor:
                            created_before: Optional[str] = None,
                            modified_after: Optional[str] = None,
                            modified_before: Optional[str] = None,
-                           action_type: Optional[str] = None) -> ListEntitiesResult:
+                           action_type: Optional[str] = None,
+                           provenance_type: Optional[str] = None) -> ListEntitiesResult:
         """
         List KGEntities with filtering and pagination.
 
@@ -121,6 +122,7 @@ class KGEntityListProcessor:
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
                 action_type=action_type,
+                provenance_type=provenance_type,
             )
 
             if not include_entity_graph:
@@ -756,6 +758,7 @@ class KGEntityListProcessor:
         modified_after: Optional[str] = None,
         modified_before: Optional[str] = None,
         action_type: Optional[str] = None,
+        provenance_type: Optional[str] = None,
     ) -> str:
         """Build SPARQL clauses for direct entity property filters.
         
@@ -801,6 +804,10 @@ class KGEntityListProcessor:
         if action_type:
             _ACTION_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGActionTypeList"
             parts.append(f"    ?entity <{_ACTION_TYPE_URI}> <{action_type}> .")
+        
+        if provenance_type:
+            _PROVENANCE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGProvenanceType"
+            parts.append(f"    ?entity <{_PROVENANCE_URI}> <{provenance_type}> .")
         
         return "\n".join(parts)
     

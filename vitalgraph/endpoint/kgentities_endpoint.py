@@ -137,6 +137,7 @@ class KGEntitiesEndpoint:
             modified_after: Optional[str] = Query(None, description="Entities modified after this ISO 8601 datetime"),
             modified_before: Optional[str] = Query(None, description="Entities modified before this ISO 8601 datetime"),
             action_type: Optional[str] = Query(None, description="Filter by action type URI (entity has this value in hasKGActionTypeList)"),
+            provenance_type: Optional[str] = Query(None, description="Filter by provenance type URI (exact match on hasKGProvenanceType)"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
@@ -201,6 +202,7 @@ class KGEntitiesEndpoint:
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
                 action_type=action_type,
+                provenance_type=provenance_type,
             )
         
         @self.router.post("/kgentities", response_model=Union[EntityCreateResponse, EntityUpdateResponse], tags=["KG Entities"])
@@ -257,6 +259,7 @@ class KGEntitiesEndpoint:
             created_before: Optional[str] = Query(None, description="Entities created before this ISO 8601 datetime"),
             modified_after: Optional[str] = Query(None, description="Entities modified after this ISO 8601 datetime"),
             modified_before: Optional[str] = Query(None, description="Entities modified before this ISO 8601 datetime"),
+            provenance_type: Optional[str] = Query(None, description="Filter by provenance type URI (exact match on hasKGProvenanceType)"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Return only the count of entities matching the given filters."""
@@ -265,6 +268,7 @@ class KGEntitiesEndpoint:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                provenance_type=provenance_type,
             )
         
         class _CountRequest(BaseModel):
@@ -376,7 +380,7 @@ class KGEntitiesEndpoint:
             return await self._query_kgentities(space_id, graph_id, query_request, current_user)
         
     
-    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc", status: Optional[str] = None, exclude_status: Optional[str] = None, created_after: Optional[str] = None, created_before: Optional[str] = None, modified_after: Optional[str] = None, modified_before: Optional[str] = None, action_type: Optional[str] = None):
+    async def _list_entities(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, entity_type_uri: Optional[str], search: Optional[str], include_entity_graph: bool, current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc", status: Optional[str] = None, exclude_status: Optional[str] = None, created_after: Optional[str] = None, created_before: Optional[str] = None, modified_after: Optional[str] = None, modified_before: Optional[str] = None, action_type: Optional[str] = None, provenance_type: Optional[str] = None):
         """List entities using KGEntityListProcessor."""
         try:
             import time as _time
@@ -417,6 +421,7 @@ class KGEntitiesEndpoint:
                 modified_after=modified_after,
                 modified_before=modified_before,
                 action_type=action_type,
+                provenance_type=provenance_type,
             )
             t_query = _time.monotonic()
             
@@ -452,7 +457,8 @@ class KGEntitiesEndpoint:
                               sort_by: Optional[str],
                               status: Optional[str] = None, exclude_status: Optional[str] = None,
                               created_after: Optional[str] = None, created_before: Optional[str] = None,
-                              modified_after: Optional[str] = None, modified_before: Optional[str] = None):
+                              modified_after: Optional[str] = None, modified_before: Optional[str] = None,
+                              provenance_type: Optional[str] = None):
         """Execute count-only query and return {'count': N}."""
         try:
             _effective_graph = graph_id or "default"
@@ -462,6 +468,7 @@ class KGEntitiesEndpoint:
                 status=status, exclude_status=exclude_status,
                 created_after=created_after, created_before=created_before,
                 modified_after=modified_after, modified_before=modified_before,
+                provenance_type=provenance_type,
             )
             count_sparql = list_processor._build_count_query(
                 _effective_graph, entity_type_uri, search,

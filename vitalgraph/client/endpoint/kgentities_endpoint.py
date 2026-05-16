@@ -107,6 +107,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         modified_after: Optional[str] = None,
         modified_before: Optional[str] = None,
         action_type: Optional[str] = None,
+        provenance_type: Optional[str] = None,
     ):
         """
         List KGEntities with pagination and optional filtering.
@@ -128,6 +129,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             modified_after: Entities modified after this ISO 8601 datetime
             modified_before: Entities modified before this ISO 8601 datetime
             action_type: Filter by action type URI (entity has this value in hasKGActionTypeList)
+            provenance_type: Filter by provenance type URI (exact match on hasKGProvenanceType)
             
         Returns:
             PaginatedGraphObjectResponse if include_entity_graph=False
@@ -158,6 +160,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 modified_after=modified_after,
                 modified_before=modified_before,
                 action_type=action_type,
+                provenance_type=provenance_type,
             )
             
             response = await self._make_request('GET', url, params=params)
