@@ -2185,36 +2185,12 @@ class KGEntitiesEndpoint:
                         updated_count=0
                     )
             
-            # Create hierarchical connection edges if parent_frame_uri is provided using processor
-            if parent_frame_uri:
-                if not 'hierarchical_processor' in locals():
-                    from ..kg_impl.kgentity_hierarchical_frame_impl import KGEntityHierarchicalFrameProcessor
-                    hierarchical_processor = KGEntityHierarchicalFrameProcessor(backend_adapter, self.logger)
-                
-                # Create connection edges for frames being updated
-                frame_objects_for_edges = []
-                for frame_uri in frame_groups.keys():
-                    # Create a mock frame object for edge creation
-                    from ai_haley_kg_domain.model.KGFrame import KGFrame
-                    mock_frame = KGFrame()
-                    mock_frame.URI = frame_uri
-                    frame_objects_for_edges.append(mock_frame)
-                
-                hierarchical_edges = hierarchical_processor.create_connection_edges(entity_uri, frame_objects_for_edges, parent_frame_uri)
-                
-                # Add hierarchical edges to connecting edges and frame groups
-                for edge in hierarchical_edges:
-                    connecting_edges.append(edge)
-                    
-                    # Determine which frame this edge affects and add to frame group
-                    affected_frames = hierarchical_processor.determine_affected_frames(edge, list(frame_groups.keys()))
-                    for frame_uri in affected_frames:
-                        if frame_uri in frame_groups:
-                            frame_groups[frame_uri]['connecting_edges'].append(edge)
+            # Note: Hierarchical connection edges (Edge_hasKGFrame) are NOT created here.
+            # The downstream KGEntityFrameCreateProcessor handles edge creation based on
+            # operation_mode: skips for UPDATE (edges already exist), creates for CREATE.
             
-            # Distribute connecting edges to relevant frame groups for atomic operations
+            # Distribute any connecting edges from the payload to relevant frame groups
             for edge in connecting_edges:
-                # Determine which frame(s) this connecting edge affects using processor
                 if not 'hierarchical_processor' in locals():
                     from ..kg_impl.kgentity_hierarchical_frame_impl import KGEntityHierarchicalFrameProcessor
                     hierarchical_processor = KGEntityHierarchicalFrameProcessor(backend_adapter, self.logger)
@@ -2222,7 +2198,6 @@ class KGEntitiesEndpoint:
                 affected_frames = hierarchical_processor.determine_affected_frames(edge, list(frame_groups.keys()))
                 for frame_uri in affected_frames:
                     if frame_uri in frame_groups:
-                        # Only add if not already added (avoid duplicates from hierarchical edges above)
                         if edge not in frame_groups[frame_uri]['connecting_edges']:
                             frame_groups[frame_uri]['connecting_edges'].append(edge)
             
