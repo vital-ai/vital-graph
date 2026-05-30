@@ -57,6 +57,7 @@ class OperationMode(str, Enum):
     UPDATE = "update"
     UPSERT = "upsert"
     REPLACE = "replace"
+    ENTITY_ONLY = "entity_only"
 
 
 class KGEntitiesEndpoint:
@@ -780,6 +781,9 @@ class KGEntitiesEndpoint:
             if operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
 
+            if operation_mode == OperationMode.ENTITY_ONLY:
+                return await self._handle_entity_only_update(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
+
             # Stamp server-managed properties on KGEntity objects (T2)
             from datetime import datetime, timezone
             from ..kg_impl.kg_server_properties import stamp_entity_server_properties
@@ -940,7 +944,90 @@ class KGEntitiesEndpoint:
                 message=f"Error updating entities: {str(e)}",
                 updated_uri=""
             )
-    
+
+    async def _handle_entity_only_update(self, backend_adapter, space_id: str, graph_id: str,
+                                          vitalsigns_objects: List[GraphObject], current_user: Dict) -> EntityUpdateResponse:
+        """Handle ENTITY_ONLY mode: update only the entity subject triples, preserving all frames/slots/edges."""
+        try:
+            self.logger.debug(f"Handling ENTITY_ONLY update in space '{space_id}', graph '{graph_id}'")
+
+            # Validate: only KGEntity objects allowed
+            non_entity = [obj for obj in vitalsigns_objects if not isinstance(obj, KGEntity)]
+            if non_entity:
+                return EntityUpdateResponse(
+                    success=False,
+                    message="entity_only mode only accepts KGEntity objects, not frames/slots/edges",
+                    updated_uri=""
+                )
+
+            # Single entity per request
+            if len(vitalsigns_objects) != 1:
+                return EntityUpdateResponse(
+                    success=False,
+                    message="entity_only mode accepts exactly one KGEntity per request",
+                    updated_uri=""
+                )
+
+            entity_obj = vitalsigns_objects[0]
+            entity_uri = str(entity_obj.URI)
+
+            # Existence check + server property stamping
+            from datetime import datetime, timezone
+            from ..kg_impl.kg_server_properties import fetch_entity_server_props, stamp_entity_server_properties
+            _now = datetime.now(timezone.utc)
+
+            _props = await fetch_entity_server_props(backend_adapter, space_id, graph_id, entity_uri)
+            if _props is None:
+                return EntityUpdateResponse(
+                    success=False,
+                    message=f"Entity {entity_uri} does not exist. Use CREATE mode to create new entities.",
+                    updated_uri=""
+                )
+
+            stamp_entity_server_properties(
+                entity_obj, _now,
+                existing_creation_time=_props.creation_time,
+                existing_status=_props.status,
+                existing_entity_type=_props.entity_type,
+                is_create=False,
+            )
+
+            # Stamp grouping URI on the entity object
+            grouping_manager = KGGroupingURIManager()
+            grouping_manager.set_dual_grouping_uris_with_frame_separation([entity_obj], entity_uri)
+
+            # Build insert quads via normal VitalSigns serialization path
+            if not hasattr(self, 'update_processor') or self.update_processor is None:
+                self.update_processor = KGEntityUpdateProcessor()
+            insert_quads = await self.update_processor._build_insert_quads_for_objects([entity_obj], graph_id)
+
+            # Execute entity-subject-only update
+            success = await backend_adapter.update_entity_subject_only(
+                space_id, graph_id, entity_uri, insert_quads
+            )
+
+            if success:
+                await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+                return EntityUpdateResponse(
+                    success=True,
+                    message=f"Successfully updated entity (entity_only): {entity_uri}",
+                    updated_uri=entity_uri
+                )
+            else:
+                return EntityUpdateResponse(
+                    success=False,
+                    message=f"Failed to update entity (entity_only): {entity_uri}",
+                    updated_uri=""
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error in ENTITY_ONLY mode handling: {e}")
+            return EntityUpdateResponse(
+                success=False,
+                message=f"Error in entity_only update: {str(e)}",
+                updated_uri=""
+            )
+
     def _extract_entity_uris(self, graph_objects: List[GraphObject]) -> List[str]:
         """
         Extract entity URIs from GraphObject instances.

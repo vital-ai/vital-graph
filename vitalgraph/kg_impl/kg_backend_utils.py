@@ -1033,6 +1033,56 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.error("update_entity_graph failed: %s", e)
             return False
 
+    async def update_entity_subject_only(self, space_id: str, graph_id: str,
+                                          entity_uri: str,
+                                          insert_quads: List[tuple]) -> bool:
+        """Atomically replace only the entity's own quads (subject = entity_uri).
+
+        Unlike update_entity_graph which deletes ALL subjects with hasKGGraphURI,
+        this only deletes quads where the subject IS the entity itself, preserving
+        all frames, slots, and edges in the entity graph.
+
+        Only rdf_stats sync is needed (no edge/frame_entity sync) because the entity
+        subject has no edge-source/dest properties and is not a frame.
+        """
+        import time as _time
+        try:
+            _t0 = _time.monotonic()
+            schema = self.backend.schema
+            t = schema.get_table_names(space_id)
+            from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+            g_uuid = _generate_term_uuid(graph_id, 'U')
+            entity_uuid = _generate_term_uuid(entity_uri, 'U')
+
+            async with self.backend.db_impl.connection_pool.acquire() as conn:
+                async with conn.transaction():
+                    # Sync stats before delete (decrement counts for old quads)
+                    from ..db.sparql_sql.sync_stats_tables import sync_stats_for_deleted_subjects
+                    await sync_stats_for_deleted_subjects(
+                        conn, space_id, [entity_uuid], context_uuid=g_uuid)
+
+                    # Delete only entity's own quads
+                    result = await conn.execute(
+                        f"DELETE FROM {t['rdf_quad']} "
+                        f"WHERE subject_uuid = $1 AND context_uuid = $2",
+                        entity_uuid, g_uuid,
+                    )
+                    deleted = int(result.split()[-1]) if result else 0
+                    self.logger.info("update_entity_subject_only: deleted %d quads for %s",
+                                     deleted, entity_uri)
+
+                    # Insert new entity quads
+                    if insert_quads:
+                        await self.backend.add_rdf_quads_batch_bulk(
+                            space_id, insert_quads, connection=conn)
+
+            _t1 = _time.monotonic()
+            self.logger.info("⏱️  update_entity_subject_only: %.3fs", _t1 - _t0)
+            return True
+        except Exception as e:
+            self.logger.error("update_entity_subject_only failed: %s", e)
+            return False
+
     async def update_subjects_graph(self, space_id: str, graph_id: str,
                                      subject_uris: List[str],
                                      insert_quads: List[tuple]) -> bool:

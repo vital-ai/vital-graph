@@ -617,6 +617,68 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
+    async def update_entity_only(
+        self,
+        space_id: str,
+        graph_id: str,
+        objects: List
+    ) -> UpdateEntityResponse:
+        """
+        Update only entity properties without touching frames/slots/edges.
+        
+        Uses operation_mode=entity_only which scopes the delete to only the
+        entity subject's quads, preserving the entire frame graph.
+        
+        Args:
+            space_id: Space identifier
+            graph_id: Graph identifier
+            objects: List containing exactly one KGEntity GraphObject
+            
+        Returns:
+            UpdateEntityResponse with updated_uri on success
+            
+        Raises:
+            VitalGraphClientError: If request fails
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgentities"
+
+            params = build_query_params(
+                space_id=space_id,
+                graph_id=graph_id,
+                operation_mode="entity_only"
+            )
+
+            body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
+            response = await self._make_request('POST', url, params=params, json=body,
+                                                headers={'Content-Type': content_type})
+            response_data = response.json()
+
+            updated_uri = response_data.get('updated_uri')
+
+            return build_success_response(
+                UpdateEntityResponse,
+                status_code=response.status_code,
+                message=response_data.get('message', 'Updated entity (entity_only)'),
+                updated_uri=updated_uri
+            )
+
+        except VitalGraphClientError:
+            raise
+        except Exception as e:
+            logger.error(f"Error in update_entity_only: {e}")
+            return build_error_response(
+                UpdateEntityResponse,
+                error_code=5,
+                error_message=str(e),
+                status_code=500,
+                space_id=space_id,
+                graph_id=graph_id
+            )
+
     async def delete_kgentity(
         self, 
         space_id: str, 
