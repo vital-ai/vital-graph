@@ -657,6 +657,17 @@ class KGEntitiesEndpoint(BaseEndpoint):
                                                 headers={'Content-Type': content_type})
             response_data = response.json()
 
+            # Check server-side success flag
+            if not response_data.get('success', True):
+                return build_error_response(
+                    UpdateEntityResponse,
+                    error_code=5,
+                    error_message=response_data.get('message', 'entity_only update failed'),
+                    status_code=response.status_code,
+                    space_id=space_id,
+                    graph_id=graph_id
+                )
+
             updated_uri = response_data.get('updated_uri')
 
             return build_success_response(
