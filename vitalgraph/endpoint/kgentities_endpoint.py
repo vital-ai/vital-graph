@@ -760,8 +760,14 @@ class KGEntitiesEndpoint:
                     return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
                 return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
 
-            impl_operation_mode = self._convert_operation_mode(operation_mode)
             backend_adapter = create_backend_adapter(backend_impl)
+
+            # ENTITY_ONLY mode: early return before _convert_operation_mode
+            # (which doesn't know about ENTITY_ONLY and would raise ValueError)
+            if operation_mode == OperationMode.ENTITY_ONLY:
+                return await self._handle_entity_only_update(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
+
+            impl_operation_mode = self._convert_operation_mode(operation_mode)
 
             # Acquire entity-level advisory locks
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
@@ -780,9 +786,6 @@ class KGEntitiesEndpoint:
 
             if operation_mode == OperationMode.UPDATE:
                 return await self._handle_update_mode(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
-
-            if operation_mode == OperationMode.ENTITY_ONLY:
-                return await self._handle_entity_only_update(backend_adapter, space_id, graph_id, vitalsigns_objects, current_user)
 
             # Stamp server-managed properties on KGEntity objects (T2)
             from datetime import datetime, timezone
