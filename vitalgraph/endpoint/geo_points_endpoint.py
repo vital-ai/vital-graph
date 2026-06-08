@@ -14,29 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query as QueryParam, stat
 from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read
+from ..model.geo_model import GeoPointOut, GeoPointsResponse
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
-
-class GeoPointOut(BaseModel):
-    subject_uri: str
-    subject_uuid: str
-    latitude: float
-    longitude: float
-    context_uuid: str
-    distance_m: Optional[float] = None
-    updated_time: Optional[str] = None
-
-
-class GeoPointsResponse(BaseModel):
-    points: List[GeoPointOut]
-    total_count: int
-    limit: int
-    offset: int
 
 
 # ---------------------------------------------------------------------------

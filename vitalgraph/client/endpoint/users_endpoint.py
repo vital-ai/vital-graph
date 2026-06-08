@@ -10,7 +10,8 @@ from typing import Dict, Any, Optional, List
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ...model.users_model import (
-    User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
+    User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse,
+    PasswordChangeRequest, PasswordChangeResponse,
 )
 
 
@@ -139,3 +140,24 @@ class UsersEndpoint(BaseEndpoint):
         params = build_query_params(tenant=tenant)
         
         return await self._make_typed_request('GET', url, UsersListResponse, params=params)
+
+    async def change_password(self, current_password: str, new_password: str) -> PasswordChangeResponse:
+        """Change the authenticated user's own password.
+
+        Args:
+            current_password: Current password (must match stored hash)
+            new_password: New password (minimum 8 characters)
+
+        Returns:
+            PasswordChangeResponse confirming the change
+        """
+        self._check_connection()
+        validate_required_params(current_password=current_password, new_password=new_password)
+
+        url = f"{self._get_server_url().rstrip('/')}/api/users/me/password"
+        request = PasswordChangeRequest(
+            current_password=current_password, new_password=new_password
+        )
+        return await self._make_typed_request(
+            'POST', url, PasswordChangeResponse, json=request.model_dump(),
+        )

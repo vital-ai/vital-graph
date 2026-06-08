@@ -17,28 +17,9 @@ from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
 from ..vectorization.geo_config_manager import GeoConfigManager, DEFAULT_LAT_PREDICATES, DEFAULT_LON_PREDICATES
+from ..model.geo_model import GeoConfigOut, UpdateGeoConfigRequest
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
-
-class GeoConfigOut(BaseModel):
-    config_id: int
-    enabled: bool = False
-    auto_sync: bool = False
-    lat_predicates: List[str] = Field(default_factory=lambda: list(DEFAULT_LAT_PREDICATES))
-    lon_predicates: List[str] = Field(default_factory=lambda: list(DEFAULT_LON_PREDICATES))
-    updated_time: Optional[str] = None
-
-
-class UpdateGeoConfigRequest(BaseModel):
-    enabled: Optional[bool] = None
-    auto_sync: Optional[bool] = None
-    lat_predicates: Optional[List[str]] = None
-    lon_predicates: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------

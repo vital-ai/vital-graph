@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
-from ...model.spaces_model import Space
+from ...model.spaces_model import Space, SpaceAnalyticsResponse
 from ..response.client_response import (
     SpaceResponse,
     SpaceInfoResponse,
@@ -218,6 +218,34 @@ class SpacesEndpoint(BaseEndpoint):
                 error_message=str(e)
             )
     
+    async def get_space_analytics(
+        self, space_id: str, refresh: bool = False, graph_uri: Optional[str] = None
+    ) -> SpaceAnalyticsResponse:
+        """Get KG analytics for a space.
+
+        Args:
+            space_id: Space ID
+            refresh: Force fresh analytics computation
+            graph_uri: Optional graph URI to filter analytics to
+
+        Returns:
+            SpaceAnalyticsResponse with entity/frame/relation/property distributions
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id)
+
+        try:
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}/analytics"
+            params = build_query_params(refresh=refresh, graph_uri=graph_uri)
+
+            response = await self._make_authenticated_request('GET', url, params=params)
+            return SpaceAnalyticsResponse.model_validate(response.json())
+        except Exception as e:
+            return SpaceAnalyticsResponse(
+                success=False,
+                message=f"Failed to get space analytics: {e}"
+            )
+
     async def update_space(self, space_id: str, space: Space) -> SpaceUpdateResponse:
         """
         Update a space.

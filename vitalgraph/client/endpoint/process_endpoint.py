@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .base_endpoint import BaseEndpoint
-from ...endpoint.process_endpoint import (
+from ...model.process_model import (
     ProcessListResponse,
     ProcessResponse,
     SchedulerStatusResponse,

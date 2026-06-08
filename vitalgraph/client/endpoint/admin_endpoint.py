@@ -8,7 +8,8 @@ import logging
 from typing import Optional
 
 from .base_endpoint import BaseEndpoint
-from ...endpoint.admin_endpoint import ResyncResponse
+from ..utils.client_utils import build_query_params
+from ...model.admin_model import ResyncResponse, AuditLogResponse
 
 
 logger = logging.getLogger(__name__)
@@ -42,4 +43,38 @@ class AdminClientEndpoint(BaseEndpoint):
             self._url("/resync"),
             ResyncResponse,
             params={"space_id": space_id},
+        )
+
+    async def audit_log(
+        self,
+        event: Optional[str] = None,
+        actor: Optional[str] = None,
+        level: Optional[str] = None,
+        last: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AuditLogResponse:
+        """Query the audit log with filters and pagination (admin only).
+
+        Args:
+            event: Filter by event name (prefix match)
+            actor: Filter by actor username
+            level: Filter by level (INFO, WARN, ERROR)
+            last: Duration filter, e.g. '24h', '7d'
+            limit: Max entries to return (1-500, default 50)
+            offset: Offset for pagination
+
+        Returns:
+            AuditLogResponse with entries and total count
+        """
+        self._check_connection()
+        params = build_query_params(
+            event=event, actor=actor, level=level,
+            last=last, limit=limit, offset=offset,
+        )
+        return await self._make_typed_request(
+            "GET",
+            self._url("/audit"),
+            AuditLogResponse,
+            params=params,
         )
