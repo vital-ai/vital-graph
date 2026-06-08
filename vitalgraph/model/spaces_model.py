@@ -9,6 +9,84 @@ from pydantic import BaseModel, Field
 from .api_model import BasePaginatedResponse, BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BaseOperationResponse
 
 
+# ============================================================
+# Space Analytics Models
+# ============================================================
+
+class TypeCount(BaseModel):
+    """Count of items by type URI."""
+    type_uri: str = Field(..., description="Full type URI")
+    type_name: str = Field("", description="Short display name")
+    count: int = Field(0, description="Number of items of this type")
+
+
+class ConnectedEntity(BaseModel):
+    """Entity with its connection count."""
+    entity_uri: str = Field(..., description="Entity URI")
+    entity_name: Optional[str] = Field(None, description="Entity display name")
+    edge_count: int = Field(0, description="Total edges (in + out)")
+
+
+class PredicateCount(BaseModel):
+    """Predicate usage count."""
+    predicate_uri: str = Field(..., description="Full predicate URI")
+    short_name: str = Field("", description="Short display name")
+    count: int = Field(0, description="Usage count")
+
+
+class EntityAnalytics(BaseModel):
+    """Entity-level analytics."""
+    total_count: int = Field(0, description="Total KGEntity instances")
+    type_distribution: List[TypeCount] = Field(default_factory=list, description="Count per entity vitaltype")
+    with_frames_count: int = Field(0, description="Entities with at least one frame")
+    orphan_count: int = Field(0, description="Entities with no frames")
+    avg_frames_per_entity: float = Field(0.0, description="Average frames per entity")
+
+
+class FrameAnalytics(BaseModel):
+    """Frame and slot analytics."""
+    total_count: int = Field(0, description="Total KGFrame instances")
+    type_distribution: List[TypeCount] = Field(default_factory=list, description="Count per frame vitaltype")
+    total_slot_count: int = Field(0, description="Total slot instances")
+    slot_type_distribution: List[TypeCount] = Field(default_factory=list, description="Count per slot vitaltype")
+    avg_slots_per_frame: float = Field(0.0, description="Average slots per frame")
+    without_slots_count: int = Field(0, description="Frames with no slots")
+
+
+class RelationAnalytics(BaseModel):
+    """Edge/relation analytics."""
+    total_edge_count: int = Field(0, description="Total edge instances")
+    edge_type_distribution: List[TypeCount] = Field(default_factory=list, description="Count per edge vitaltype")
+    inter_entity_relation_count: int = Field(0, description="Edge_hasKGRelation count")
+    entity_frame_edge_count: int = Field(0, description="Edge_hasEntityKGFrame count")
+    frame_slot_edge_count: int = Field(0, description="Edge_hasKGSlot count")
+    most_connected_entities: List[ConnectedEntity] = Field(default_factory=list, description="Top entities by edge count")
+
+
+class PropertyAnalytics(BaseModel):
+    """Predicate/property analytics."""
+    distinct_predicate_count: int = Field(0, description="Number of distinct predicates")
+    top_predicates: List[PredicateCount] = Field(default_factory=list, description="Top predicates by usage")
+    literal_type_distribution: List[TypeCount] = Field(default_factory=list, description="Count by datatype")
+
+
+class SpaceAnalyticsData(BaseModel):
+    """Complete analytics payload for a space."""
+    space_id: str = Field(..., description="Space identifier")
+    computed_at: Optional[str] = Field(None, description="ISO timestamp of computation")
+    computation_time_ms: Optional[int] = Field(None, description="How long computation took")
+    stale: bool = Field(False, description="True if data is older than expected refresh interval")
+    entity_analytics: EntityAnalytics = Field(default_factory=EntityAnalytics)
+    frame_analytics: FrameAnalytics = Field(default_factory=FrameAnalytics)
+    relation_analytics: RelationAnalytics = Field(default_factory=RelationAnalytics)
+    property_analytics: PropertyAnalytics = Field(default_factory=PropertyAnalytics)
+
+
+class SpaceAnalyticsResponse(BaseOperationResponse):
+    """Response model for space analytics endpoint."""
+    analytics: Optional[SpaceAnalyticsData] = Field(None, description="Analytics data (None if never computed)")
+
+
 class Space(BaseModel):
     """Space model for VitalGraph database.
     

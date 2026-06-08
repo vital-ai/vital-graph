@@ -1,25 +1,11 @@
 /**
  * API response types for VitalGraph backend
+ * 
+ * Note: Graph, Space, User, Object, File, Triple types are in their own files.
+ * This file contains types that don't fit neatly into a single domain.
  */
 
-// Graph API types
-export interface GraphInfo {
-  graph_uri: string;
-  triple_count: number;
-  created_time: string | null;
-  updated_time: string | null;
-}
-
-export interface GraphOperationResponse {
-  success: boolean;
-  operation: string;
-  graph_uri?: string;
-  message?: string;
-  operation_time?: number;
-  error?: string;
-}
-
-// Space API types  
+// Space API types (extended info from /api/spaces/{id}/info)
 export interface SpaceInfo {
   id?: number;
   tenant?: string;
@@ -36,10 +22,10 @@ export interface SparqlQueryResponse {
     vars: string[];
   };
   results?: {
-    bindings: any[];
+    bindings: Record<string, unknown>[];
   };
   boolean?: boolean;
-  triples?: any[];
+  triples?: Record<string, unknown>[];
   query_time?: number;
   error?: string;
 }

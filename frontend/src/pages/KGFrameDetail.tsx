@@ -33,12 +33,7 @@ const KGFrameDetail: React.FC = () => {
     properties_count: 3,
     properties: [
       {
-        predicate: '@id',
-        object: '',
-        object_type: 'uri'
-      },
-      {
-        predicate: '@type',
+        predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
         object: config.defaultRdfType,
         object_type: 'uri'
       },
@@ -50,27 +45,17 @@ const KGFrameDetail: React.FC = () => {
     ]
   });
 
-  // Build API request data from object
+  // Build API request data from object properties as quads
   const buildApiRequestData = (object: BaseRDFObject) => {
-    const jsonLdObject: any = {
-      '@context': {}
-    };
-
-    // Add properties from the object
-    if (object.properties) {
-      object.properties.forEach(prop => {
-        if (prop.predicate && prop.object) {
-          jsonLdObject[prop.predicate] = prop.object;
-        }
-      });
-    }
-
-    return {
-      objects: {
-        '@context': {},
-        '@graph': [jsonLdObject]
-      }
-    };
+    const quads = (object.properties || [])
+      .filter(p => p.predicate && p.object)
+      .map(p => ({
+        s: object.object_uri || '',
+        p: p.predicate,
+        o: p.object,
+        o_type: p.object_type,
+      }));
+    return { quads };
   };
 
   // Use the shared hook

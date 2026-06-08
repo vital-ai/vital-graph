@@ -1,23 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams, useLocation, Outlet } from 'react-router-dom';
-import axios from 'axios';
-import { HiCube, HiCollection } from 'react-icons/hi';
+import { apiService } from '../services/ApiService';
+import { HiCube, HiCollection, HiLink } from 'react-icons/hi';
 import { Select, Label } from 'flowbite-react';
+import { type SpaceInfo } from '../types/api';
+import { type GraphInfo } from '../types/graphs';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
 import ObjectIcon from '../components/icons/ObjectIcon';
 import FrameIcon from '../components/icons/FrameIcon';
-
-interface Space {
-  space: string;
-  space_name: string;
-  space_description?: string;
-}
-
-interface Graph {
-  graph_uri: string;
-  graph_name: string;
-  triple_count: number;
-}
 
 const ObjectsLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -25,8 +15,8 @@ const ObjectsLayout: React.FC = () => {
   const location = useLocation();
 
   // Shared state for space and graph selection
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [graphs, setGraphs] = useState<Graph[]>([]);
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
   const [selectedGraph, setSelectedGraph] = useState<string>('');
   const [spacesLoading, setSpacesLoading] = useState<boolean>(true);
@@ -38,6 +28,7 @@ const ObjectsLayout: React.FC = () => {
     const path = location.pathname;
     if (path.includes('/kgentities')) return 'kgentities';
     if (path.includes('/kgframes')) return 'kgframes';
+    if (path.includes('/kgrelations')) return 'kgrelations';
     return 'graphobjects'; // Default to graphobjects
   };
 
@@ -53,13 +44,11 @@ const ObjectsLayout: React.FC = () => {
   const fetchSpaces = useCallback(async () => {
     try {
       setSpacesLoading(true);
-      const response = await axios.get('/api/spaces');
-      const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
+      const spacesData = await apiService.getSpaces();
       setSpaces(spacesData);
       setError(null);
-    } catch (err) {
-      console.error('Error fetching spaces:', err);
-      setError('Failed to load spaces. Please try again later.');
+    } catch {
+      setError('Failed to load spaces.');
       setSpaces([]);
     } finally {
       setSpacesLoading(false);
@@ -70,22 +59,10 @@ const ObjectsLayout: React.FC = () => {
   const fetchGraphs = useCallback(async (space: string) => {
     try {
       setGraphsLoading(true);
-      const response = await axios.get(`/api/graphs/sparql/${space}/graphs`);
-      const graphsData = Array.isArray(response.data) ? response.data : [];
-      
-      const transformedGraphs: Graph[] = graphsData.map((graphInfo: Record<string, unknown>) => ({
-        graph_uri: (graphInfo.graph_uri as string) || '',
-        graph_name: graphInfo.graph_uri
-          ? ((graphInfo.graph_uri as string).split('/').pop() || (graphInfo.graph_uri as string))
-          : 'Unknown',
-        triple_count: (graphInfo.triple_count as number) || 0,
-      }));
-      
-      setGraphs(transformedGraphs);
+      setGraphs(await apiService.getGraphs(space));
       setError(null);
-    } catch (err) {
-      console.error('Error fetching graphs:', err);
-      setError('Failed to load graphs. Please try again later.');
+    } catch {
+      setError('Failed to load graphs.');
       setGraphs([]);
     } finally {
       setGraphsLoading(false);
@@ -186,9 +163,9 @@ const ObjectsLayout: React.FC = () => {
             disabled={!selectedSpace || graphsLoading}
           >
             <option value="">Choose a graph...</option>
-            {graphs.map((graph) => (
-              <option key={graph.graph_uri} value={graph.graph_uri}>
-                {graph.graph_name} ({graph.triple_count} triples)
+            {graphs.map((g) => (
+              <option key={g.graph_uri} value={g.graph_uri}>
+                {g.graph_uri.split('/').pop() || g.graph_uri} ({g.triple_count || 0} triples)
               </option>
             ))}
           </Select>
@@ -196,8 +173,8 @@ const ObjectsLayout: React.FC = () => {
       </div>
 
       {/* Custom Tab Navigation */}
-      <div className="border-b border-gray-200 dark:border-gray-700">
-        <nav className="-mb-px flex space-x-8">
+      <div className="border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+        <nav className="-mb-px flex space-x-4 sm:space-x-8 min-w-max">
           <button
             onClick={() => handleTabChange('graphobjects')}
             className={`flex items-center gap-2 py-2 px-1 border-b-2 font-medium text-sm ${
@@ -230,6 +207,17 @@ const ObjectsLayout: React.FC = () => {
           >
             <FrameIcon className="w-5 h-5" />
             KG Frames
+          </button>
+          <button
+            onClick={() => handleTabChange('kgrelations')}
+            className={`flex items-center gap-2 py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'kgrelations'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-500'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+            }`}
+          >
+            <HiLink className="w-5 h-5" />
+            KG Relations
           </button>
         </nav>
       </div>

@@ -1,0 +1,2 @@
+#!/bin/bash
+python -m vitalgraph.entity_registry_cmd.vitalgraph_entity_registry_cmd "$@"

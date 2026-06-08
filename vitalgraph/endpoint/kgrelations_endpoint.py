@@ -37,6 +37,9 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from fastapi import Response as FastAPIResponse
 
 
+from ..auth.role_dependencies import require_space_read, require_space_write
+
+
 class OperationMode(str, Enum):
     CREATE = "create"
     UPDATE = "update"
@@ -94,6 +97,7 @@ class KGRelationsEndpoint:
             Returns:
                 RelationResponse (if relation_uri provided) or RelationsResponse (for list)
             """
+            require_space_read(current_user, space_id)
             if relation_uri:
                 return await self._get_relation(space_id, graph_id, relation_uri, current_user)
             else:
@@ -117,6 +121,7 @@ class KGRelationsEndpoint:
             - UPDATE: Update existing relations (fails if relation URIs don't exist)
             - UPSERT: Create or update relations (always succeeds)
             """
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_or_update_relations(
                 space_id, graph_id, quads, operation_mode, current_user
@@ -140,6 +145,7 @@ class KGRelationsEndpoint:
             Returns:
                 RelationDeleteResponse with deletion results
             """
+            require_space_write(current_user, space_id)
             return await self._delete_relations(space_id, graph_id, request, current_user)
         
         @self.router.post("/kgrelations/query", response_model=RelationQueryResponse, tags=["KG Relations"])
@@ -160,6 +166,7 @@ class KGRelationsEndpoint:
             Returns:
                 RelationQueryResponse containing matching relation URIs
             """
+            require_space_read(current_user, space_id)
             return await self._query_relations(space_id, graph_id, query_request, current_user)
     
     async def _list_relations(self, space_id: str, graph_id: str, entity_source_uri: Optional[str],

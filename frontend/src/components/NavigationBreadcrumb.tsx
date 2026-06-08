@@ -1,12 +1,14 @@
 import React from 'react';
 import { Breadcrumb, BreadcrumbItem } from 'flowbite-react';
 import { HiHome, HiViewBoards } from 'react-icons/hi';
-import { mockSpaces, mockGraphs } from '../mock';
 import GraphIcon from './icons/GraphIcon';
+import { extractGraphName } from '../utils/QuadUtils';
 
 interface NavigationBreadcrumbProps {
   spaceId?: string;
   graphId?: string;
+  spaceName?: string;
+  graphName?: string;
   currentPageName: string;
   currentPageIcon: React.FC<React.SVGProps<SVGSVGElement>>;
   className?: string;
@@ -18,6 +20,8 @@ interface NavigationBreadcrumbProps {
 const NavigationBreadcrumb: React.FC<NavigationBreadcrumbProps> = ({
   spaceId,
   graphId,
+  spaceName,
+  graphName,
   currentPageName,
   currentPageIcon: CurrentPageIcon,
   className = "mb-6",
@@ -30,15 +34,8 @@ const NavigationBreadcrumb: React.FC<NavigationBreadcrumbProps> = ({
     return null;
   }
 
-  // Look up the space and graph data using IDs
-  const space = mockSpaces.find(s => s.space === spaceId);
-  const graphIdNum = parseInt(graphId);
-  const graph = mockGraphs.find(g => g.id === graphIdNum && g.space_id === spaceId);
-
-  // Don't show if data not found
-  if (!space || !graph) {
-    return null;
-  }
+  const displaySpaceName = spaceName || spaceId;
+  const displayGraphName = graphName || extractGraphName(graphId);
 
   return (
     <Breadcrumb className={className}>
@@ -49,13 +46,13 @@ const NavigationBreadcrumb: React.FC<NavigationBreadcrumbProps> = ({
         Spaces
       </BreadcrumbItem>
       <BreadcrumbItem href={`/space/${spaceId}`}>
-        {space.space_name}
+        {displaySpaceName}
       </BreadcrumbItem>
       <BreadcrumbItem href={`/space/${spaceId}/graphs`} icon={GraphIcon}>
         Graphs
       </BreadcrumbItem>
       <BreadcrumbItem href={`/space/${spaceId}/graph/${graphId}`}>
-        {graph.graph_name}
+        {displayGraphName}
       </BreadcrumbItem>
       {parentPageName && parentPagePath && ParentPageIcon ? (
         <>

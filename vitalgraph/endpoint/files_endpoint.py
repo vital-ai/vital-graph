@@ -28,6 +28,7 @@ from ..model.files_model import (
 from ..storage.s3_file_manager import S3FileManager, create_s3_file_manager_from_config
 from vital_ai_domain.model.FileNode import FileNode
 from .files_streaming_impl import stream_upload_to_s3, stream_download_from_s3
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 class FilesEndpoint:
@@ -96,6 +97,7 @@ class FilesEndpoint:
             """
             List files with pagination, or get specific files by URI(s).
             """
+            require_space_read(current_user, space_id)
             if uri:
                 return await self._get_file_by_uri(space_id, graph_id, uri, current_user)
             
@@ -113,6 +115,7 @@ class FilesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Create file node(s) from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_file_node(space_id, graph_id, quads, current_user)
         
@@ -124,6 +127,7 @@ class FilesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Update file metadata from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._update_file_metadata(space_id, graph_id, quads, current_user)
         
@@ -141,6 +145,7 @@ class FilesEndpoint:
             - If uri is provided: deletes single file
             - If uri_list is provided: deletes multiple files (batch)
             """
+            require_space_write(current_user, space_id)
             # Handle batch deletion
             if uri_list:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
@@ -168,6 +173,7 @@ class FilesEndpoint:
             """
             Upload binary file content to existing file node.
             """
+            require_space_write(current_user, space_id)
             return await self._upload_file_content(space_id, graph_id, uri, file, current_user)
         
         @self.router.get("/files/download", tags=["Files"])
@@ -181,6 +187,7 @@ class FilesEndpoint:
             Download binary file content by URI.
             Returns streaming response with file content.
             """
+            require_space_read(current_user, space_id)
             return await self._download_file_content(space_id, graph_id, uri, current_user)
         
         @self.router.post("/files/stream/upload", response_model=FileUploadResponse, tags=["Files", "Streaming"])
@@ -196,6 +203,7 @@ class FilesEndpoint:
             Upload binary file content using true streaming (chunk-based).
             Does not load entire file into memory.
             """
+            require_space_write(current_user, space_id)
             return await self._upload_file_stream(space_id, graph_id, uri, file, chunk_size, current_user)
         
         @self.router.get("/files/stream/download", tags=["Files", "Streaming"])
@@ -210,6 +218,7 @@ class FilesEndpoint:
             Download binary file content using true streaming (chunk-based).
             Returns streaming response that yields chunks without loading entire file into memory.
             """
+            require_space_read(current_user, space_id)
             return await self._download_file_stream(space_id, graph_id, uri, chunk_size, current_user)
     
     async def _list_files(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, file_filter: Optional[str], current_user: Dict) -> QuadResponse:

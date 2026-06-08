@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -11,25 +11,40 @@ import {
   ModalHeader,
   ModalBody,
   ModalFooter,
-  Textarea
 } from 'flowbite-react';
 import {
   HiDownload,
-  HiPencil,
   HiTrash,
-  HiSave,
-  HiX,
   HiExclamationCircle,
   HiDocument,
   HiDocumentDuplicate
 } from 'react-icons/hi';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
-import { mockFiles, mockSpaces, type File } from '../mock';
+import { formatFileSize, formatDateTime } from '../utils/formatUtils';
+import { apiService } from '../services/ApiService';
+import {
+  groupQuadsBySubject,
+  getFirstValue,
+  shortenUri,
+  RDF_TYPE,
+  HAS_NAME,
+  type Quad,
+} from '../utils/QuadUtils';
 
-interface EditForm {
+const HAS_FILE_TYPE = 'http://vital.ai/ontology/vital-core#hasFileType';
+const HAS_FILE_SIZE = 'http://vital.ai/ontology/vital-core#hasFileLength';
+const HAS_UPLOAD_TIME = 'http://vital.ai/ontology/vital-core#hasTimestamp';
+const HAS_FILE_PATH = 'http://vital.ai/ontology/vital-core#hasFileNodeUri';
+
+interface FileInfo {
+  uri: string;
   filename: string;
   file_type: string;
-  description: string;
+  file_size: number;
+  file_path: string;
+  upload_time: string;
+  rdf_type: string;
+  properties: Map<string, string[]>;
 }
 
 
@@ -41,99 +56,81 @@ const FileDetail: React.FC = () => {
   }>();
   
   const navigate = useNavigate();
-  const [file, setFile] = useState<File | null>(null);
+  const [file, setFile] = useState<FileInfo | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
-  const [error] = useState<string | null>(null);
-  const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [saving] = useState<boolean>(false);
-  const [deleting] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [hasChanges, setHasChanges] = useState(false);
-  const [editForm, setEditForm] = useState<EditForm>({
-    filename: '',
-    file_type: '',
-    description: ''
-  });
+  const [downloading, setDownloading] = useState<boolean>(false);
 
-  // Mock data loading
-  useEffect(() => {
-    // Simulate loading with mock data
-    setTimeout(() => {
-      const fileIdNum = parseInt(fileId || '0');
-      
-      // Find the file by ID
-      const foundFile = mockFiles.find(f => f.id === fileIdNum);
-
-      setFile(foundFile || null);
-      setEditForm({
-        filename: foundFile?.filename || '',
-        file_type: foundFile?.file_type || '',
-        description: '' // Description not available in centralized mock data
-      });
+  const fetchFile = useCallback(async () => {
+    if (!spaceId || !graphId || !fileId) {
+      setError('Missing required parameters');
       setLoading(false);
-    }, 500);
-  }, [fileId, spaceId, graphId]);
-
-  // Check for changes when form values change
-  useEffect(() => {
-    if (!file) return;
-
-    const hasFormChanges = 
-      editForm.filename !== file.filename ||
-      editForm.description !== '' || // Description always starts empty since not in mock data
-      editForm.file_type !== file.file_type;
-    
-    setHasChanges(hasFormChanges);
-  }, [editForm, file]);
-
-  const handleEdit = () => {
-    setIsEditing(true);
-  };
-
-  const handleCancel = () => {
-    // Reset form to original values
-    if (file) {
-      setEditForm({
-        filename: file.filename,
-        description: '', // Description not available in centralized mock data
-        file_type: file.file_type
-      });
+      return;
     }
-    setIsEditing(false);
-  };
-
-  const handleSave = () => {
-    // Mock save - show alert instead of backend call
-    alert('Save functionality will be available when backend is ready');
-    setIsEditing(false);
-  };
-
-  const handleDelete = () => {
-    // Mock delete - show alert instead of backend call
-    alert('Delete functionality will be available when backend is ready');
-    setShowDeleteModal(false);
-  };
-
-  const handleDownload = () => {
-    // Mock download - show alert instead of backend call
-    alert('Download functionality will be available when backend is ready');
-  };
-
-  const formatDate = (dateString: string): string => {
     try {
-      return new Date(dateString).toLocaleString();
-    } catch {
-      return 'Invalid date';
+      setLoading(true);
+      setError(null);
+      const data = await apiService.getFile(spaceId, decodeURIComponent(graphId), decodeURIComponent(fileId));
+      const quads: Quad[] = data.results || [];
+      if (quads.length === 0) {
+        setError('File not found');
+        setFile(null);
+      } else {
+        const subjectMap = groupQuadsBySubject(quads);
+        const [uri, preds] = subjectMap.entries().next().value!;
+        const filename = getFirstValue(preds, HAS_NAME) || shortenUri(uri);
+        const file_type = getFirstValue(preds, HAS_FILE_TYPE) || '';
+        const file_size_str = getFirstValue(preds, HAS_FILE_SIZE) || '0';
+        const file_size = parseInt(file_size_str) || 0;
+        const upload_time = getFirstValue(preds, HAS_UPLOAD_TIME) || '';
+        const file_path = getFirstValue(preds, HAS_FILE_PATH) || '';
+        const rdf_type = getFirstValue(preds, RDF_TYPE) || 'Unknown';
+        setFile({ uri, filename, file_type, file_size, file_path, upload_time, rdf_type, properties: preds });
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load file details');
+    } finally {
+      setLoading(false);
+    }
+  }, [spaceId, graphId, fileId]);
+
+  useEffect(() => { fetchFile(); }, [fetchFile]);
+
+  const handleDelete = async () => {
+    if (!spaceId || !graphId || !file) return;
+    try {
+      setDeleting(true);
+      await apiService.deleteFile(spaceId, decodeURIComponent(graphId), file.uri);
+      navigate(-1);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete file');
+      setShowDeleteModal(false);
+    } finally {
+      setDeleting(false);
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  const handleDownload = async () => {
+    if (!spaceId || !graphId || !file) return;
+    try {
+      setDownloading(true);
+      const blob = await apiService.downloadFile(spaceId, decodeURIComponent(graphId), file.uri);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.filename;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to download file');
+    } finally {
+      setDownloading(false);
+    }
   };
+
+  const formatDate = formatDateTime;
 
   if (loading) {
     return (
@@ -146,9 +143,11 @@ const FileDetail: React.FC = () => {
   if (!file) {
     return (
       <div className="space-y-6">
-        <Alert color="failure">
-          <span className="font-medium">Error:</span> File not found
-        </Alert>
+        {error && <Alert color="failure"><span className="font-medium">Error:</span> {error}</Alert>}
+        {!error && (
+          <Alert color="warning">File not found</Alert>
+        )}
+        <Button color="gray" size="sm" onClick={() => navigate(-1)}>← Go Back</Button>
       </div>
     );
   }
@@ -200,151 +199,90 @@ const FileDetail: React.FC = () => {
             </h1>
           </div>
           <p className="mt-2 text-sm text-gray-700 dark:text-gray-300">
-            View and manage file details
+            {file.rdf_type !== 'Unknown' ? shortenUri(file.rdf_type) : 'File'}
           </p>
         </div>
         
         <div className="flex gap-2 mt-4 sm:mt-0">
-          <Button color="blue" onClick={handleDownload}>
-            <HiDownload className="mr-2 h-4 w-4" />
+          <Button color="blue" onClick={handleDownload} disabled={downloading}>
+            {downloading ? <Spinner size="sm" className="mr-2" /> : <HiDownload className="mr-2 h-4 w-4" />}
             Download
           </Button>
-          {!isEditing && (
-            <Button color="blue" onClick={handleEdit}>
-              <HiPencil className="mr-2 h-4 w-4" />
-              Edit
-            </Button>
-          )}
-          {!isEditing && (
-            <Button color="red" onClick={() => setShowDeleteModal(true)}>
-              <HiTrash className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
-          )}
+          <Button color="red" onClick={() => setShowDeleteModal(true)}>
+            <HiTrash className="mr-2 h-4 w-4" />
+            Delete
+          </Button>
         </div>
       </div>
 
       {/* File Details Card */}
       <Card>
-        <div className="space-y-6">
+        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
+          File Information
+        </h3>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
-              File Information
-            </h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Filename */}
-              <div>
-                <Label htmlFor="filename">Filename</Label>
-                <TextInput
-                  id="filename"
-                  type="text"
-                  value={editForm.filename}
-                  onChange={(e) => setEditForm({ ...editForm, filename: e.target.value })}
-                  disabled={!isEditing}
-                  required
-                />
-              </div>
-
-              {/* File Type */}
-              <div>
-                <Label htmlFor="file_type">File Type</Label>
-                <TextInput
-                  id="file_type"
-                  type="text"
-                  value={editForm.file_type}
-                  onChange={(e) => setEditForm({ ...editForm, file_type: e.target.value })}
-                  disabled={!isEditing}
-                />
-              </div>
-
-              {/* File Size (read-only) */}
-              <div>
-                <Label htmlFor="file_size">File Size</Label>
-                <TextInput
-                  id="file_size"
-                  type="text"
-                  value={formatFileSize(file.file_size)}
-                  disabled
-                />
-              </div>
-
-              {/* Space (read-only) */}
-              {spaceId && (
-                <div>
-                  <Label htmlFor="space">Space</Label>
-                  <TextInput
-                    id="space"
-                    type="text"
-                    value={mockSpaces.find(s => s.space === spaceId)?.space_name || spaceId}
-                    disabled
-                  />
-                </div>
-              )}
-
-              {/* Upload Time (read-only) */}
-              <div>
-                <Label htmlFor="upload_time">Upload Time</Label>
-                <TextInput
-                  id="upload_time"
-                  type="text"
-                  value={formatDate(file.upload_time)}
-                  disabled
-                />
-              </div>
-
-              {/* Last Modified (read-only) */}
-              <div>
-                <Label htmlFor="last_modified">Last Modified</Label>
-                <TextInput
-                  id="last_modified"
-                  type="text"
-                  value={formatDate(file.last_modified)}
-                  disabled
-                />
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="mt-6">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                rows={4}
-                value={editForm.description}
-                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                disabled={!isEditing}
-                placeholder="Enter file description..."
-              />
-            </div>
+            <Label>Filename</Label>
+            <TextInput type="text" value={file.filename} disabled />
           </div>
-
-          {/* Action Buttons */}
-          {isEditing && (
-            <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <Button 
-                color="blue" 
-                onClick={handleSave}
-                disabled={saving || !hasChanges}
-              >
-                {saving ? (
-                  <>
-                    <Spinner size="sm" className="mr-2" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <HiSave className="mr-2 h-4 w-4" />
-                    Save Changes
-                  </>
-                )}
-              </Button>
-              <Button color="gray" onClick={handleCancel} disabled={saving}>
-                <HiX className="mr-2 h-4 w-4" />
-                Cancel
-              </Button>
+          <div>
+            <Label>File Type</Label>
+            <TextInput type="text" value={file.file_type || 'N/A'} disabled />
+          </div>
+          <div>
+            <Label>File Size</Label>
+            <TextInput type="text" value={file.file_size ? formatFileSize(file.file_size) : 'Unknown'} disabled />
+          </div>
+          <div>
+            <Label>Space</Label>
+            <TextInput type="text" value={spaceId || ''} disabled />
+          </div>
+          {file.upload_time && (
+            <div>
+              <Label>Upload Time</Label>
+              <TextInput type="text" value={formatDate(file.upload_time)} disabled />
             </div>
           )}
+          {file.file_path && (
+            <div>
+              <Label>File Path</Label>
+              <TextInput type="text" value={file.file_path} disabled />
+            </div>
+          )}
+          <div>
+            <Label>URI</Label>
+            <TextInput type="text" value={file.uri} disabled className="font-mono text-xs" />
+          </div>
+        </div>
+
+        {/* All properties */}
+        <div className="mt-6">
+          <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">All Properties ({file.properties.size})</h4>
+          <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-4 py-2">Predicate</th>
+                  <th className="px-4 py-2">Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {Array.from(file.properties.entries()).map(([pred, values]) => (
+                  values.map((val, i) => (
+                    <tr key={`${pred}-${i}`} className="bg-white dark:bg-gray-900">
+                      <td className="px-4 py-2 font-mono text-xs text-gray-600 dark:text-gray-400 max-w-[16rem] truncate" title={pred}>
+                        {shortenUri(pred)}
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs max-w-[24rem] truncate" title={val}>
+                        {val}
+                      </td>
+                    </tr>
+                  ))
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </Card>
 
@@ -363,22 +301,16 @@ const FileDetail: React.FC = () => {
               {file.filename}
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Size: {formatFileSize(file.file_size)}
+              {file.file_size ? `Size: ${formatFileSize(file.file_size)}` : ''}
             </p>
           </div>
         </ModalBody>
         <ModalFooter>
           <Button color="red" onClick={handleDelete} disabled={deleting}>
             {deleting ? (
-              <>
-                <Spinner size="sm" className="mr-2" />
-                Deleting...
-              </>
+              <><Spinner size="sm" className="mr-2" />Deleting...</>
             ) : (
-              <>
-                <HiTrash className="mr-2 h-4 w-4" />
-                Delete File
-              </>
+              <><HiTrash className="mr-2 h-4 w-4" />Delete File</>
             )}
           </Button>
           <Button color="gray" onClick={() => setShowDeleteModal(false)} disabled={deleting}>

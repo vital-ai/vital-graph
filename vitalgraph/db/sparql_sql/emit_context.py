@@ -18,7 +18,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .vg_functions import VectorRequest
 
 from .ir import AliasGenerator
 from .sql_type_generation import TypeRegistry
@@ -240,6 +243,13 @@ class EmitContext:
         # filtered, ordered, grouped, etc.).  None = resolve all (safe
         # fallback).  Empty set = resolve none.
         self.text_needed_vars: Optional[set] = text_needed_vars
+        # VectorRequests: vg:vectorSimilarity calls that need server-side
+        # vectorization before SQL execution.  Shared across the entire
+        # pipeline (child contexts reference the same list).
+        self._vector_requests: List['VectorRequest'] = []
+        # vg: optimizer hints — temporarily set by emit_extend when emitting
+        # a BIND with vg_top_k or vg_threshold hints from vg_optimize pass.
+        self.vg_hints: Dict[str, Any] = {}
 
     @property
     def depth(self) -> int:
@@ -310,6 +320,19 @@ class EmitContext:
         ids = [str(self._dt_uri_to_id[u]) for u in uris if u in self._dt_uri_to_id]
         return ", ".join(ids) if ids else "NULL"
 
+    def add_vector_request(self, request: 'VectorRequest') -> None:
+        """Record that this query needs server-side vectorization.
+
+        Called by the vg:vectorSimilarity handler in emit_expressions.
+        The orchestrator inspects vector_requests after SQL generation.
+        """
+        self._vector_requests.append(request)
+
+    @property
+    def vector_requests(self) -> List['VectorRequest']:
+        """Pending vectorization requests for this query."""
+        return self._vector_requests
+
     def child(self, types: Optional[TypeRegistry] = None) -> EmitContext:
         """Create a child context for nested emission.
 
@@ -327,6 +350,8 @@ class EmitContext:
             text_needed_vars=self.text_needed_vars,
         )
         ctx._depth = self._depth + 1
+        # Share vector requests list across parent/child contexts
+        ctx._vector_requests = self._vector_requests
         return ctx
 
     def log(self, plan_kind: str, message: str, **kwargs) -> Optional[TraceStep]:

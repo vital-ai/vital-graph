@@ -115,9 +115,26 @@ class SparqlSQLSchema:
                 user_id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
                 password VARCHAR(255),
+                password_hash VARCHAR(255),
                 email VARCHAR(255),
+                full_name VARCHAR(255),
+                role VARCHAR(50) NOT NULL DEFAULT 'user',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                token_version INTEGER NOT NULL DEFAULT 0,
                 tenant VARCHAR(255),
+                created_time TIMESTAMPTZ DEFAULT now(),
+                last_login TIMESTAMPTZ,
                 update_time TIMESTAMP
+            )
+        '''),
+        ("user_space_access", '''
+            CREATE TABLE IF NOT EXISTS user_space_access (
+                user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL,
+                access_level VARCHAR(2) NOT NULL CHECK (access_level IN ('rw', 'r')),
+                granted_by VARCHAR(255),
+                granted_time TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (user_id, space_id)
             )
         '''),
         ("process", '''
@@ -194,6 +211,68 @@ class SparqlSQLSchema:
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
         '''),
+        ("space_analytics", '''
+            CREATE TABLE IF NOT EXISTS space_analytics (
+                id SERIAL PRIMARY KEY,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                computation_time_ms INTEGER,
+                analytics_json JSONB NOT NULL
+            )
+        '''),
+        ("query_metrics", '''
+            CREATE TABLE IF NOT EXISTS query_metrics (
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                bucket_start TIMESTAMPTZ NOT NULL,
+                bucket_granularity VARCHAR(10) NOT NULL DEFAULT 'minute',
+                endpoint VARCHAR(100) NOT NULL,
+                request_count BIGINT NOT NULL DEFAULT 0,
+                error_count BIGINT NOT NULL DEFAULT 0,
+                total_ms BIGINT NOT NULL DEFAULT 0,
+                max_ms INTEGER NOT NULL DEFAULT 0,
+                p95_ms INTEGER,
+                PRIMARY KEY (space_id, bucket_start, endpoint, bucket_granularity)
+            )
+        '''),
+        ("slow_query_log", '''
+            CREATE TABLE IF NOT EXISTS slow_query_log (
+                id BIGSERIAL PRIMARY KEY,
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                endpoint VARCHAR(100) NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                metadata JSONB
+            )
+        '''),
+        ("import_export_job", '''
+            CREATE TABLE IF NOT EXISTS import_export_job (
+                job_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                job_type TEXT NOT NULL CHECK (job_type IN ('import', 'export')),
+                space_id VARCHAR(255) NOT NULL REFERENCES space(space_id) ON DELETE CASCADE,
+                graph_uri TEXT,
+                status TEXT NOT NULL DEFAULT 'created'
+                    CHECK (status IN ('created','pending','running','completed','failed','cancelled')),
+                mode TEXT NOT NULL DEFAULT 'append'
+                    CHECK (mode IN ('append', 'replace')),
+                progress_pct REAL NOT NULL DEFAULT 0,
+                records_done BIGINT NOT NULL DEFAULT 0,
+                records_total BIGINT,
+                file_s3_key TEXT,
+                file_name TEXT,
+                file_size BIGINT,
+                file_format TEXT,
+                config JSONB,
+                checkpoint_offset BIGINT DEFAULT 0,
+                checkpoint_batch INT DEFAULT 0,
+                error_message TEXT,
+                log_entries JSONB DEFAULT '[]'::jsonb,
+                created_by TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        '''),
     ]
 
     ADMIN_TABLE_NAMES: List[str] = [name.strip('"') for name, _ in ADMIN_TABLE_DDL]
@@ -224,6 +303,18 @@ class SparqlSQLSchema:
         "CREATE INDEX IF NOT EXISTS idx_agent_log_agent ON agent_change_log(agent_id)",
         "CREATE INDEX IF NOT EXISTS idx_agent_log_type ON agent_change_log(change_type)",
         "CREATE INDEX IF NOT EXISTS idx_agent_log_time ON agent_change_log(created_time)",
+        # Space analytics indexes
+        "CREATE INDEX IF NOT EXISTS idx_space_analytics_space ON space_analytics(space_id)",
+        "CREATE INDEX IF NOT EXISTS idx_space_analytics_latest ON space_analytics(space_id, computed_at DESC)",
+        # Query metrics indexes
+        "CREATE INDEX IF NOT EXISTS idx_query_metrics_time ON query_metrics(bucket_start DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_query_metrics_space_gran ON query_metrics(space_id, bucket_granularity, bucket_start DESC)",
+        # Slow query log indexes
+        "CREATE INDEX IF NOT EXISTS idx_slow_query_space_time ON slow_query_log(space_id, recorded_at DESC)",
+        # Import/export job indexes
+        "CREATE INDEX IF NOT EXISTS idx_iej_space_status ON import_export_job(space_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_iej_created ON import_export_job(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_iej_type_status ON import_export_job(job_type, status)",
     ]
 
     ADMIN_SEED_STATEMENTS: List[str] = [
@@ -239,7 +330,7 @@ class SparqlSQLSchema:
 
     # Reverse-dependency order for truncate / drop operations
     ADMIN_DROP_ORDER: List[str] = [
-        'agent_change_log', 'agent_endpoint', 'agent', 'agent_type',
+        'import_export_job', 'slow_query_log', 'query_metrics', 'space_analytics', 'agent_change_log', 'agent_endpoint', 'agent', 'agent_type',
         'process', 'graph', '"user"', 'space', 'install',
     ]
 
@@ -286,6 +377,11 @@ class SparqlSQLSchema:
             'rdf_stats': f'{space_id}_rdf_stats',
             'edge': f'{space_id}_edge',
             'frame_entity': f'{space_id}_frame_entity',
+            'vector_index': f'{space_id}_vector_index',
+            'vector_mapping': f'{space_id}_vector_mapping',
+            'vector_mapping_property': f'{space_id}_vector_mapping_property',
+            'geo': f'{space_id}_geo',
+            'geo_config': f'{space_id}_geo_config',
         }
 
     # ------------------------------------------------------------------
@@ -373,6 +469,83 @@ class SparqlSQLSchema:
             )
         ''')
 
+        # 8. Vector index registry (per-space catalog of named vector indexes)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['vector_index']} (
+                index_id        SERIAL PRIMARY KEY,
+                index_name      VARCHAR(255) NOT NULL UNIQUE,
+                dimensions      INT NOT NULL,
+                distance_metric VARCHAR(20) NOT NULL DEFAULT 'cosine',
+                provider        VARCHAR(50) NOT NULL DEFAULT 'vitalsigns',
+                model_name      VARCHAR(255),
+                provider_config JSONB,
+                description     TEXT,
+                created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 9. Vector mapping (KG concept → vector index association)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['vector_mapping']} (
+                mapping_id          SERIAL PRIMARY KEY,
+                mapping_type        VARCHAR(50) NOT NULL,
+                type_uri            VARCHAR(500),
+                index_name          VARCHAR(255) NOT NULL,
+                enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+                source_type         VARCHAR(20) NOT NULL DEFAULT 'default',
+                separator           VARCHAR(20) DEFAULT '. ',
+                include_pred_name   BOOLEAN DEFAULT FALSE,
+                include_type_desc   BOOLEAN DEFAULT TRUE,
+                created_time        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (index_name) REFERENCES {t['vector_index']}(index_name)
+            )
+        ''')
+
+        # 9b. Vector mapping properties (child: predicates/slot URIs per mapping)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['vector_mapping_property']} (
+                property_id     SERIAL PRIMARY KEY,
+                mapping_id      INTEGER NOT NULL,
+                property_uri    VARCHAR(500) NOT NULL,
+                property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
+                ordinal         INTEGER DEFAULT 0,
+                UNIQUE (mapping_id, property_uri),
+                FOREIGN KEY (mapping_id) REFERENCES {t['vector_mapping']}(mapping_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # 10. Geo config (lightweight per-space config for geo population)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['geo_config']} (
+                config_id       SERIAL PRIMARY KEY,
+                enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+                auto_sync       BOOLEAN NOT NULL DEFAULT FALSE,
+                lat_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
+                    'http://www.w3.org/2003/01/geo/wgs84_pos#lat',
+                    'http://vital.ai/ontology/haley-ai-kg#hasLatitude'
+                ],
+                lon_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
+                    'http://www.w3.org/2003/01/geo/wgs84_pos#long',
+                    'http://vital.ai/ontology/haley-ai-kg#hasLongitude'
+                ],
+                updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 11. Geo side-table (PostGIS geography for spatial queries)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['geo']} (
+                subject_uuid    UUID NOT NULL,
+                predicate_uuid  UUID,
+                location        geography(Point, 4326) NOT NULL,
+                latitude        DOUBLE PRECISION NOT NULL,
+                longitude       DOUBLE PRECISION NOT NULL,
+                context_uuid    UUID NOT NULL,
+                updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (subject_uuid, context_uuid)
+            )
+        ''')
+
         return stmts
 
     def create_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -412,6 +585,11 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_dst_frame ON {t['frame_entity']} (dest_entity_uuid, frame_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_frame ON {t['frame_entity']} (frame_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fe_ctx ON {t['frame_entity']} (context_uuid)",
+
+            # Geo table indexes
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_subj ON {t['geo']} (subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_ctx ON {t['geo']} (context_uuid)",
         ]
 
     def drop_space_tables_sql(self, space_id: str) -> List[str]:
@@ -425,6 +603,11 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['rdf_quad']} CASCADE",
             f"DROP TABLE IF EXISTS {t['term']} CASCADE",
             f"DROP TABLE IF EXISTS {t['datatype']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['geo']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['geo_config']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['vector_mapping_property']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['vector_mapping']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['vector_index']} CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -487,4 +670,67 @@ class SparqlSQLSchema:
             t['term'], t['rdf_quad'],
         )
         return count == 2
+
+    # ==================================================================
+    # Vector index data tables (created dynamically per registered index)
+    # ==================================================================
+
+    @staticmethod
+    def vec_table_name(space_id: str, index_name: str) -> str:
+        """Return the table name for a specific vector index."""
+        return f"{space_id}_vec_{index_name}"
+
+    def create_vector_data_table_sql(
+        self, space_id: str, index_name: str, dimensions: int,
+        distance_metric: str = "cosine",
+    ) -> List[str]:
+        """Return SQL to create a vector data table + indexes for a named index.
+
+        Each registered vector index gets its own table with the correct
+        dimension and appropriate HNSW index.
+        """
+        table = self.vec_table_name(space_id, index_name)
+
+        # Map distance metric to pgvector ops class
+        ops_map = {
+            "cosine": "vector_cosine_ops",
+            "l2": "vector_l2_ops",
+            "inner_product": "vector_ip_ops",
+        }
+        ops_class = ops_map.get(distance_metric, "vector_cosine_ops")
+
+        stmts = [
+            f'''CREATE TABLE IF NOT EXISTS {table} (
+                subject_uuid    UUID NOT NULL,
+                context_uuid    UUID NOT NULL,
+                embedding       vector({dimensions}) NOT NULL,
+                search_text     TEXT,
+                tsv             tsvector GENERATED ALWAYS AS (
+                                    to_tsvector('english'::regconfig, COALESCE(search_text, ''))
+                                ) STORED,
+                updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (subject_uuid, context_uuid)
+            )''',
+            # HNSW index for ANN vector search
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_hnsw
+                ON {table}
+                USING hnsw (embedding {ops_class})
+                WITH (m = 16, ef_construction = 200)''',
+            # GIN index for full-text search
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_fts
+                ON {table}
+                USING gin (tsv)''',
+            # Context index for graph-scoped queries
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_ctx
+                ON {table} (context_uuid)''',
+            # Subject index for joins to rdf_quad
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_subj
+                ON {table} (subject_uuid)''',
+        ]
+        return stmts
+
+    def drop_vector_data_table_sql(self, space_id: str, index_name: str) -> List[str]:
+        """Return SQL to drop a vector data table."""
+        table = self.vec_table_name(space_id, index_name)
+        return [f"DROP TABLE IF EXISTS {table} CASCADE"]
 

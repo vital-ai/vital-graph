@@ -3,3 +3,13 @@
 @source "../.flowbite-react/class-list.json";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+@keyframes top-loader {
+  0% { width: 0%; margin-left: 0; }
+  50% { width: 70%; margin-left: 0; }
+  100% { width: 20%; margin-left: 100%; }
+}
+
+.animate-top-loader {
+  animation: top-loader 1.2s ease-in-out infinite;
+}

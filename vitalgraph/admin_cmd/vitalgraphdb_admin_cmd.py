@@ -26,7 +26,7 @@ from tabulate import tabulate
 # Import VitalGraphDB components
 from vitalgraph.config.config_loader import VitalGraphConfig
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
-from vitalgraph.ops.graph_import_op import GraphImportOp
+# GraphImportOp removed — import is now handled by standalone vitalgraphimport CLI
 
 
 
@@ -142,7 +142,11 @@ class VitalGraphDBAdminREPL:
         elif command == 'unuse':
             return self.cmd_unuse(args)
         elif command == 'import':
-            return self.cmd_import(args)
+            print("\n⚠️  The 'import' command has been removed from vitalgraphadmin.")
+            print("   Use the standalone CLI instead:")
+            print("     vitalgraphimport -s <space_id> -f <file.nt>")
+            print("     vitalgraphimport --help\n")
+            return True
         elif command == 'list':
             return self.cmd_list(args)
         elif command == 'rebuild':
@@ -151,6 +155,12 @@ class VitalGraphDBAdminREPL:
             return self.cmd_rebuild(args)
         elif command == 'set':
             return self.cmd_set(args)
+        elif command == 'user':
+            return self.cmd_user(args)
+        elif command == 'audit':
+            return self.cmd_audit(args)
+        elif command == 'apikey':
+            return self.cmd_apikey(args)
         elif command in ['help', '?']:
             return self.cmd_help(args)
         else:
@@ -244,6 +254,16 @@ class VitalGraphDBAdminREPL:
         
         return True
     
+    async def _notify_token_version_changed(self, username: str, signal_type: str = "revoked"):
+        """Send token version change NOTIFY to all server instances."""
+        try:
+            from vitalgraph.signal.signal_manager import SignalManager
+            sm = SignalManager(self.db_impl)
+            await sm.notify_token_version_changed(username, signal_type)
+            await sm._close_notify_connection()
+        except Exception as e:
+            print(f"  ⚠️  Token version NOTIFY failed: {e}")
+
     async def _list_spaces_async(self) -> list:
         """List spaces, routing through space_backend for sparql_sql or db_impl otherwise."""
         if self.space_backend and hasattr(self.space_backend, 'list_spaces'):
@@ -701,490 +721,16 @@ class VitalGraphDBAdminREPL:
         return True
     
     def cmd_import(self, args: list[str]) -> bool:
-        """Import data into a space with flexible parameter handling."""
-        if not self.connected or not self.db_impl:
-            print("❌ Not connected to database. Use 'connect;' first.")
-            return True
-        
-        # Parse command-line arguments
-        import_params = self._parse_import_args(args)
-        
-        # Interactive mode: prompt for missing parameters
-        if not self._complete_import_params_interactive(import_params):
-            return True  # User cancelled
-        
-        # Validate parameters
-        if not self._validate_import_params(import_params):
-            return True  # Validation failed
-        
-        # Execute import
-        return self._execute_import(import_params)
-    
-    def _parse_import_args(self, args: list[str]) -> dict:
-        """Parse command-line arguments for import command."""
-        params = {
-            'space_id': None,
-            'file_path': None,
-            'file_format': None,
-            'batch_size': 50000,
-            'pre_validate': False,
-            'interactive': True
-        }
-        
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            
-            if arg in ['--space-id', '-s'] and i + 1 < len(args):
-                params['space_id'] = args[i + 1]
-                i += 2
-            elif arg in ['--file', '-f'] and i + 1 < len(args):
-                params['file_path'] = args[i + 1]
-                i += 2
-            elif arg in ['--format', '-t'] and i + 1 < len(args):
-                params['file_format'] = args[i + 1].lower()
-                i += 2
-            elif arg in ['--batch-size', '-b'] and i + 1 < len(args):
-                try:
-                    params['batch_size'] = int(args[i + 1])
-                except ValueError:
-                    print(f"❌ Invalid batch size: {args[i + 1]}")
-                i += 2
-            elif arg in ['--validate', '--pre-validate']:
-                params['pre_validate'] = True
-                i += 1
-            elif arg in ['--no-validate']:
-                params['pre_validate'] = False
-                i += 1
-            elif arg in ['--interactive', '-i'] and i + 1 < len(args):
-                interactive_val = args[i + 1].lower()
-                if interactive_val in ['true', '1', 'yes', 'on']:
-                    params['interactive'] = True
-                elif interactive_val in ['false', '0', 'no', 'off']:
-                    params['interactive'] = False
-                else:
-                    print(f"❌ Invalid interactive value: {args[i + 1]}. Use true/false.")
-                    return {}
-                i += 2
-            else:
-                print(f"❌ Unknown import argument: {arg}")
-                print("Usage: import [--space-id|-s <id>] [--file|-f <path>] [--format|-t <format>]")
-                print("              [--batch-size|-b <size>] [--validate|--no-validate] [--interactive|-i true/false]")
-                return {}
-        
-        return params
-    
-    def _complete_import_params_interactive(self, params: dict) -> bool:
-        """Handle parameter collection based on interactive mode."""
-        if not params.get('interactive', True):
-            # Non-interactive mode: validate required parameters and use defaults
-            return self._handle_non_interactive_params(params)
-        else:
-            # Interactive mode: prompt for missing/invalid parameters with validation
-            return self._handle_interactive_params(params)
-    
-    def _handle_non_interactive_params(self, params: dict) -> bool:
-        """Handle non-interactive mode: use defaults or error for missing required params."""
-        # Check required parameters
-        if not params['space_id']:
-            if self.current_space_id:
-                params['space_id'] = self.current_space_id
-                print(f"ℹ️ Using current space: {self.current_space_id}")
-            else:
-                print("❌ Error: Space ID is required. Use --space-id|-s or set a current space with 'use <space_id>;'")
-                return False
-        
-        if not params['file_path']:
-            print("❌ Error: File path is required. Use --file|-f <path>")
-            return False
-        
-        # Use defaults for optional parameters
-        if not params['file_format']:
-            print("ℹ️ File format not specified - will auto-detect from file extension")
-        
-        print(f"ℹ️ Using batch size: {params['batch_size']:,}")
-        print(f"ℹ️ Pre-validation: {'enabled' if params['pre_validate'] else 'disabled'}")
-        
+        """Deprecated — use standalone vitalgraphimport CLI."""
+        print("\n⚠️  The 'import' command has been removed from vitalgraphadmin.")
+        print("   Use the standalone CLI instead:")
+        print("     vitalgraphimport -s <space_id> -f <file.nt>")
+        print("     vitalgraphimport --help\n")
         return True
     
-    def _handle_interactive_params(self, params: dict) -> bool:
-        """Handle interactive mode with validation and retry logic."""
-        print("\nℹ️ Import Data Wizard")
-        print("===================\n")
-        
-        try:
-            # Space ID with validation and retry
-            if not self._collect_space_id_interactive(params):
-                return False
-            
-            # File path with validation and retry
-            if not self._collect_file_path_interactive(params):
-                return False
-            
-            # File format with validation and retry
-            if not self._collect_file_format_interactive(params):
-                return False
-            
-            # Batch size with validation and retry
-            if not self._collect_batch_size_interactive(params):
-                return False
-            
-            # Pre-validate option
-            if not self._collect_pre_validate_interactive(params):
-                return False
-            
-            # Final confirmation
-            return self._confirm_import_interactive(params)
-            
-        except (EOFError, KeyboardInterrupt):
-            print("\nℹ️ Import cancelled by user.")
-            return False
-    
-    def _collect_space_id_interactive(self, params: dict) -> bool:
-        """Collect and validate space ID interactively."""
-        while True:
-            try:
-                if params['space_id']:
-                    # Already have a value, show it as current
-                    current_val = params['space_id']
-                    user_input = input(f"Space ID [{current_val}]: ").strip()
-                    if not user_input:
-                        # Keep current value
-                        break
-                    params['space_id'] = user_input
-                else:
-                    # No value yet
-                    if self.current_space_id:
-                        default_space = self.current_space_id
-                        user_input = input(f"Space ID [{default_space}]: ").strip()
-                        params['space_id'] = user_input if user_input else default_space
-                    else:
-                        user_input = input("Space ID (required): ").strip()
-                        if not user_input:
-                            print("❌ Space ID is required. Please enter a space ID or press Ctrl+D to cancel.")
-                            continue
-                        params['space_id'] = user_input
-                
-                # Validate space exists
-                if self._validate_space_exists(params['space_id']):
-                    break
-                else:
-                    print(f"❌ Space '{params['space_id']}' not found. Please try again or press Ctrl+D to cancel.")
-                    # Reset the invalid value so user gets prompted again
-                    params['space_id'] = None
-                    
-            except (EOFError, KeyboardInterrupt):
-                raise
-        
-        return True
-    
-    def _collect_file_path_interactive(self, params: dict) -> bool:
-        """Collect and validate file path interactively."""
-        while True:
-            try:
-                if params['file_path']:
-                    # Already have a value, show it as current
-                    current_val = params['file_path']
-                    user_input = input(f"File path [{current_val}]: ").strip()
-                    if not user_input:
-                        # Keep current value
-                        break
-                    params['file_path'] = user_input
-                else:
-                    # No value yet
-                    user_input = input("File path (required): ").strip()
-                    if not user_input:
-                        print("❌ File path is required. Please enter a file path or press Ctrl+D to cancel.")
-                        continue
-                    params['file_path'] = user_input
-                
-                # Validate file exists
-                if self._validate_file_exists(params['file_path']):
-                    break
-                else:
-                    print(f"❌ File '{params['file_path']}' not found or not accessible. Please try again or press Ctrl+D to cancel.")
-                    # Reset the invalid value so user gets prompted again
-                    params['file_path'] = None
-                    
-            except (EOFError, KeyboardInterrupt):
-                raise
-        
-        return True
-    
-    def _collect_file_format_interactive(self, params: dict) -> bool:
-        """Collect and validate file format interactively."""
-        valid_formats = ['turtle', 'xml', 'nt', 'n3', 'auto-detect']
-        
-        while True:
-            try:
-                if params['file_format']:
-                    current_val = params['file_format']
-                    user_input = input(f"File format [{current_val}]: ").strip().lower()
-                    if not user_input:
-                        break
-                    params['file_format'] = user_input if user_input != 'auto-detect' else None
-                else:
-                    user_input = input("File format [auto-detect]: ").strip().lower()
-                    params['file_format'] = user_input if user_input and user_input != 'auto-detect' else None
-                
-                # Validate format if specified
-                if params['file_format'] and params['file_format'] not in valid_formats[:-1]:  # Exclude 'auto-detect'
-                    print(f"❌ Invalid format '{params['file_format']}'. Valid formats: {', '.join(valid_formats)}")
-                    params['file_format'] = None
-                    continue
-                
-                break
-                
-            except (EOFError, KeyboardInterrupt):
-                raise
-        
-        return True
-    
-    def _collect_batch_size_interactive(self, params: dict) -> bool:
-        """Collect and validate batch size interactively."""
-        while True:
-            try:
-                current_val = params['batch_size']
-                user_input = input(f"Batch size [{current_val:,}]: ").strip()
-                
-                if not user_input:
-                    # Keep current value
-                    break
-                
-                try:
-                    batch_size = int(user_input.replace(',', ''))  # Allow comma separators
-                    if batch_size < 1 or batch_size > 1000000:
-                        print("❌ Batch size must be between 1 and 1,000,000. Please try again.")
-                        continue
-                    params['batch_size'] = batch_size
-                    break
-                except ValueError:
-                    print(f"❌ Invalid batch size '{user_input}'. Please enter a number between 1 and 1,000,000.")
-                    continue
-                    
-            except (EOFError, KeyboardInterrupt):
-                raise
-        
-        return True
-    
-    def _collect_pre_validate_interactive(self, params: dict) -> bool:
-        """Collect pre-validate option interactively."""
-        try:
-            current_val = 'yes' if params['pre_validate'] else 'no'
-            user_input = input(f"Pre-validate data [{current_val}]: ").strip().lower()
-            
-            if user_input in ['y', 'yes', 'true', '1']:
-                params['pre_validate'] = True
-            elif user_input in ['n', 'no', 'false', '0']:
-                params['pre_validate'] = False
-            # If empty, keep current value
-            
-        except (EOFError, KeyboardInterrupt):
-            raise
-        
-        return True
-    
-    def _confirm_import_interactive(self, params: dict) -> bool:
-        """Show final confirmation in interactive mode."""
-        try:
-            print(f"\nℹ️ Import Summary:")
-            print(f"  Space ID: {params['space_id']}")
-            print(f"  File: {params['file_path']}")
-            print(f"  Format: {params['file_format'] or 'auto-detect'}")
-            print(f"  Batch Size: {params['batch_size']:,}")
-            print(f"  Pre-validate: {'Yes' if params['pre_validate'] else 'No'}")
-            
-            confirm = input("\nProceed with import? [y/N]: ").strip().lower()
-            return confirm in ['y', 'yes']
-            
-        except (EOFError, KeyboardInterrupt):
-            print("\nℹ️ Import cancelled by user.")
-            return False
-    
-    def _validate_space_exists(self, space_id: str) -> bool:
-        """Validate that a space exists in the database."""
-        try:
-            spaces = self._run_async(self._list_spaces_async())
-            for space in spaces:
-                row = dict(space) if hasattr(space, 'keys') else space
-                if (str(row.get('id')) == space_id or 
-                    row.get('space_id') == space_id or
-                    row.get('space') == space_id or
-                    row.get('space_name') == space_id):
-                    return True
-            return False
-        except Exception:
-            return False
-    
-    def _validate_file_exists(self, file_path: str) -> bool:
-        """Validate that a file exists and is readable."""
-        try:
-            from pathlib import Path
-            path = Path(file_path)
-            return path.exists() and path.is_file()
-        except Exception:
-            return False
-    
-    def _validate_import_params(self, params: dict) -> bool:
-        """Validate import parameters."""
-        if not params:
-            return False
-        
-        # Validate space exists
-        try:
-            spaces = self._run_async(self._list_spaces_async())
-            valid_space = None
-            for space in spaces:
-                row = dict(space) if hasattr(space, 'keys') else space
-                if (str(row.get('id')) == params['space_id'] or 
-                    row.get('space_id') == params['space_id'] or
-                    row.get('space') == params['space_id'] or
-                    row.get('space_name') == params['space_id']):
-                    valid_space = space
-                    break
-            
-            if not valid_space:
-                print(f"❌ Space '{params['space_id']}' not found.")
-                return False
-            
-            # Store the validated space info
-            params['_validated_space'] = valid_space
-            
-        except Exception as e:
-            print(f"❌ Error validating space: {e}")
-            return False
-        
-        # Validate file exists
-        from pathlib import Path
-        file_path = Path(params['file_path'])
-        if not file_path.exists():
-            print(f"❌ File not found: {params['file_path']}")
-            return False
-        
-        if not file_path.is_file():
-            print(f"❌ Path is not a file: {params['file_path']}")
-            return False
-        
-        # Auto-detect format if not specified
-        if not params['file_format']:
-            suffix = file_path.suffix.lower()
-            format_map = {
-                '.ttl': 'turtle',
-                '.turtle': 'turtle',
-                '.rdf': 'xml',
-                '.xml': 'xml',
-                '.nt': 'nt',
-                '.n3': 'n3',
-                '.json': 'nquads'
-            }
-            params['file_format'] = format_map.get(suffix)
-            if params['file_format']:
-                print(f"ℹ️ Auto-detected format: {params['file_format']}")
-            else:
-                print(f"⚠️ Could not auto-detect format for {suffix}. Defaulting to turtle.")
-                params['file_format'] = 'turtle'
-        
-        # Validate batch size
-        if params['batch_size'] < 1 or params['batch_size'] > 1000000:
-            print(f"❌ Invalid batch size: {params['batch_size']}. Must be between 1 and 1,000,000.")
-            return False
-        
-        return True
-    
-    def _execute_import(self, params: dict) -> bool:
-        """Execute the data import using GraphImportOp."""
-        print(f"\n📋 Import Parameters:")
-        print(f"  Space ID: {params['space_id']}")
-        if '_validated_space' in params:
-            space_name = params['_validated_space'].get('space_name', 'N/A')
-            print(f"  Space Name: {space_name}")
-        print(f"  File Path: {params['file_path']}")
-        print(f"  File Format: {params['file_format']}")
-        print(f"  Batch Size: {params['batch_size']:,}")
-        print(f"  Pre-validate: {'Yes' if params['pre_validate'] else 'No'}")
-        print(f"  Interactive Mode: {'Yes' if params['interactive'] else 'No'}")
-        
-        try:
-            # Create GraphImportOp instance
-            import_op = GraphImportOp(
-                file_path=params['file_path'],
-                space_id=params['space_id'],
-                validate_before_import=params['pre_validate'],
-                batch_size=params['batch_size']
-            )
-            
-            print(f"\n🚀 Starting import operation (ID: {import_op.operation_id})")
-            print(f"   Operation: {import_op.get_operation_name()}")
-            
-            # Execute the import operation
-            result = import_op.run()
-            
-            # Display results
-            if result.is_success():
-                print(f"\n✅ Import completed successfully!")
-                print(f"   {result.message}")
-                
-                # Show detailed results
-                if result.details:
-                    details = result.details
-                    
-                    # File information
-                    if 'file_info' in details and details['file_info']:
-                        file_info = details['file_info']
-                        print(f"\n📁 File Information:")
-                        print(f"   Size: {file_info.get('size_mb', 0):.2f} MB")
-                        print(f"   Type: {file_info.get('detected_type', 'unknown')}")
-                        print(f"   Compressed: {'Yes' if file_info.get('is_compressed', False) else 'No'}")
-                    
-                    # Validation results
-                    if 'validation_result' in details and details['validation_result']:
-                        val_result = details['validation_result']
-                        print(f"\n✅ Validation Results:")
-                        print(f"   Format: {val_result.get('format_detected', 'Unknown')}")
-                        print(f"   Triples: {val_result.get('triple_count', 0):,}")
-                        print(f"   File Size: {val_result.get('file_size_mb', 0):.2f} MB")
-                        print(f"   Parse Time: {val_result.get('parsing_time_ms', 0):.2f} ms")
-                        print(f"   Namespaces: {val_result.get('namespaces_count', 0)}")
-                
-                # Show warnings if any
-                if result.warnings:
-                    print(f"\n⚠️  Warnings:")
-                    for warning in result.warnings:
-                        print(f"   - {warning}")
-                
-                # Show operation summary
-                summary = import_op.get_import_summary()
-                duration = summary.get('duration_seconds', 0)
-                if duration:
-                    print(f"\n⏱️  Operation completed in {duration:.2f} seconds")
-                
-                return True
-                
-            else:
-                print(f"\n❌ Import failed!")
-                print(f"   {result.message}")
-                
-                # Show error details
-                if result.details:
-                    details = result.details
-                    if 'validation_result' in details and details['validation_result']:
-                        val_result = details['validation_result']
-                        if val_result.get('error_message'):
-                            print(f"   Validation Error: {val_result['error_message']}")
-                
-                # Show warnings if any
-                if result.warnings:
-                    print(f"\n⚠️  Warnings:")
-                    for warning in result.warnings:
-                        print(f"   - {warning}")
-                
-                return False
-                
-        except Exception as e:
-            print(f"\n❌ Import operation failed with exception:")
-            print(f"   {str(e)}")
-            return False
-    
+    # --- Import helper methods removed (now in vitalgraphimport CLI) ---
+    # --- (cmd_import, _parse_import_args, _execute_import, etc.) ---
+
     def cmd_rebuild_indexes(self, args: list[str]) -> bool:
         """Rebuild database indexes, optionally for a specific space."""
         if not self.connected:
@@ -1501,6 +1047,654 @@ class VitalGraphDBAdminREPL:
             print("Available options: log-level")
             return True
     
+    # ------------------------------------------------------------------
+    # User Management Commands
+    # ------------------------------------------------------------------
+
+    def cmd_user(self, args: list[str]) -> bool:
+        """User management command dispatcher."""
+        if not self.connected or not self.db_impl:
+            print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+
+        if not args:
+            print("Usage: user <subcommand> [args...]")
+            print("Subcommands: list, add, delete, password, role, deactivate, activate, grant, revoke, spaces")
+            return True
+
+        sub = args[0].lower()
+        if sub == 'list':
+            return self._run_async(self._user_list())
+        elif sub == 'add':
+            return self._run_async(self._user_add(args[1:]))
+        elif sub == 'delete':
+            return self._run_async(self._user_delete(args[1:]))
+        elif sub == 'password':
+            return self._run_async(self._user_password(args[1:]))
+        elif sub == 'role':
+            return self._run_async(self._user_role(args[1:]))
+        elif sub == 'deactivate':
+            return self._run_async(self._user_deactivate(args[1:]))
+        elif sub == 'activate':
+            return self._run_async(self._user_activate(args[1:]))
+        elif sub == 'grant':
+            return self._run_async(self._user_grant(args[1:]))
+        elif sub == 'revoke':
+            return self._run_async(self._user_revoke(args[1:]))
+        elif sub == 'spaces':
+            return self._run_async(self._user_spaces(args[1:]))
+        else:
+            print(f"Unknown user subcommand: {sub}")
+            return True
+
+    async def _user_list(self) -> bool:
+        """List all users with role and status."""
+        try:
+            users = await self.db_impl.list_all_users()
+            display = []
+            for u in users:
+                display.append({
+                    'user_id': u.get('user_id', ''),
+                    'username': u.get('username', ''),
+                    'role': u.get('role', 'user'),
+                    'is_active': '✅' if u.get('is_active', True) else '❌',
+                    'email': u.get('email', ''),
+                    'last_login': u.get('last_login', ''),
+                })
+            headers = ['User ID', 'Username', 'Role', 'Is Active', 'Email', 'Last Login']
+            self.format_table(display, headers, "VitalGraphDB Users")
+        except Exception as e:
+            print(f"❌ Error listing users: {e}")
+        return True
+
+    async def _user_add(self, args: list[str]) -> bool:
+        """Create a new user: user add <username> <password> [role]"""
+        if len(args) < 2:
+            print("Usage: user add <username> <password> [role]")
+            print("  role: admin | user | reader (default: user)")
+            return True
+        username = args[0]
+        password = args[1]
+        role = args[2] if len(args) > 2 else 'user'
+
+        if role not in ('admin', 'user', 'reader'):
+            print(f"❌ Invalid role '{role}'. Must be: admin, user, reader")
+            return True
+
+        try:
+            from vitalgraph.auth.password import hash_password
+            hashed = hash_password(password)
+            result = await self.db_impl.create_user(
+                username=username, password_hash=hashed, role=role
+            )
+            if result:
+                from vitalgraph.auth.audit import emit_audit_event
+                emit_audit_event("auth.user.created", "admin-cli",
+                                 target=username, role=role)
+                print(f"✅ User '{username}' created with role '{role}' (id={result.get('user_id')})")
+            else:
+                print(f"❌ Failed to create user '{username}')")
+        except ValueError as e:
+            print(f"❌ {e}")
+        except Exception as e:
+            print(f"❌ Error creating user: {e}")
+        return True
+
+    async def _user_delete(self, args: list[str]) -> bool:
+        """Delete a user: user delete <username>"""
+        if not args:
+            print("Usage: user delete <username>")
+            return True
+        username = args[0]
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            confirm = input(f"Delete user '{username}'? (yes/no): ").strip().lower()
+            if confirm != 'yes':
+                print("Cancelled.")
+                return True
+            await self.db_impl.delete_user(user['user_id'])
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.user.deleted", "admin-cli",
+                             target=username, level="WARN")
+            print(f"✅ User '{username}' deleted")
+        except Exception as e:
+            print(f"❌ Error deleting user: {e}")
+        return True
+
+    async def _user_password(self, args: list[str]) -> bool:
+        """Change password: user password <username> <newpass>"""
+        if len(args) < 2:
+            print("Usage: user password <username> <new_password>")
+            return True
+        username, new_password = args[0], args[1]
+        try:
+            from vitalgraph.auth.password import hash_password
+            hashed = hash_password(new_password)
+            await self.db_impl.update_user_password_hash(username, hashed)
+            await self._notify_token_version_changed(username, "password_changed")
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.password.changed", "admin-cli",
+                             target=username, changed_by="admin-cli")
+            print(f"✅ Password updated for '{username}' (tokens invalidated)")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_role(self, args: list[str]) -> bool:
+        """Change role: user role <username> <role>"""
+        if len(args) < 2:
+            print("Usage: user role <username> <admin|user|reader>")
+            return True
+        username, role = args[0], args[1]
+        if role not in ('admin', 'user', 'reader'):
+            print(f"❌ Invalid role '{role}'. Must be: admin, user, reader")
+            return True
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            await self.db_impl.update_user(user['user_id'], role=role)
+            await self._notify_token_version_changed(username, "role_changed")
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.role.changed", "admin-cli",
+                             target=username, level="WARN",
+                             old_role=user.get('role'), new_role=role)
+            print(f"✅ User '{username}' role changed to '{role}'")
+            if role == 'reader':
+                print("   (All space access downgraded to read-only)")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_deactivate(self, args: list[str]) -> bool:
+        """Deactivate user: user deactivate <username>"""
+        if not args:
+            print("Usage: user deactivate <username>")
+            return True
+        username = args[0]
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            await self.db_impl.update_user(user['user_id'], is_active=False)
+            await self._notify_token_version_changed(username, "deactivated")
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.user.deactivated", "admin-cli",
+                             target=username, level="WARN")
+            print(f"✅ User '{username}' deactivated (all tokens invalidated)")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_activate(self, args: list[str]) -> bool:
+        """Activate user: user activate <username>"""
+        if not args:
+            print("Usage: user activate <username>")
+            return True
+        username = args[0]
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            await self.db_impl.update_user(user['user_id'], is_active=True)
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.user.activated", "admin-cli", target=username)
+            print(f"✅ User '{username}' activated")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_grant(self, args: list[str]) -> bool:
+        """Grant space access: user grant <username> <space_id> <rw|r>"""
+        if len(args) < 3:
+            print("Usage: user grant <username> <space_id> <rw|r>")
+            return True
+        username, space_id, level = args[0], args[1], args[2]
+        if level not in ('rw', 'r'):
+            print(f"❌ Invalid access level '{level}'. Must be: rw, r")
+            return True
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            await self.db_impl.set_user_space_access(
+                user['user_id'], space_id, level, granted_by='admin-cli'
+            )
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.space_access.granted", "admin-cli",
+                             target=username, space_id=space_id, level=level)
+            print(f"✅ Granted '{level}' access on space '{space_id}' to '{username}'")
+        except ValueError as e:
+            print(f"❌ {e}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_revoke(self, args: list[str]) -> bool:
+        """Revoke space access: user revoke <username> <space_id>"""
+        if len(args) < 2:
+            print("Usage: user revoke <username> <space_id>")
+            return True
+        username, space_id = args[0], args[1]
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            await self.db_impl.revoke_user_space_access(user['user_id'], space_id)
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.space_access.revoked", "admin-cli",
+                             target=username, space_id=space_id)
+            print(f"✅ Revoked access on space '{space_id}' from '{username}'")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _user_spaces(self, args: list[str]) -> bool:
+        """Show user's space access: user spaces <username>"""
+        if not args:
+            print("Usage: user spaces <username>")
+            return True
+        username = args[0]
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            spaces = await self.db_impl.get_user_spaces(user['user_id'])
+            if not spaces:
+                print(f"User '{username}' (role={user.get('role', 'user')}): No space access assigned")
+            else:
+                print(f"\nUser '{username}' (role={user.get('role', 'user')}) space access:")
+                print("-" * 40)
+                for space_id, level in spaces.items():
+                    print(f"  {space_id}: {level}")
+                print(f"\nTotal: {len(spaces)} space(s)")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    # ------------------------------------------------------------------
+    # API Key Commands
+    # ------------------------------------------------------------------
+
+    def cmd_apikey(self, args: list[str]) -> bool:
+        """API key management command dispatcher."""
+        if not self.connected or not self.db_impl:
+            print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+
+        if not args:
+            print("Usage: apikey <subcommand> [args...]")
+            print("Subcommands: list, create, revoke, info")
+            return True
+
+        sub = args[0].lower()
+        if sub == 'list':
+            return self._run_async(self._apikey_list(args[1:]))
+        elif sub == 'create':
+            return self._run_async(self._apikey_create(args[1:]))
+        elif sub == 'revoke':
+            return self._run_async(self._apikey_revoke(args[1:]))
+        elif sub == 'info':
+            return self._run_async(self._apikey_info(args[1:]))
+        else:
+            print(f"Unknown apikey subcommand: {sub}")
+            return True
+
+    async def _apikey_list(self, args: list[str]) -> bool:
+        """List API keys: apikey list [username]"""
+        username = args[0] if args else None
+        user_id = None
+        if username:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+            user_id = user['user_id']
+
+        try:
+            keys = await self.db_impl.list_api_keys(user_id=user_id)
+            if not keys:
+                print("No API keys found.")
+                return True
+
+            print(f"\n{'Key ID':<38} {'Prefix':<14} {'Name':<20} {'User':<12} {'Active':<8} {'Last Used'}")
+            print(f"{'─' * 110}")
+            for k in keys:
+                key_id = str(k['key_id'])[:36]
+                prefix = f"vg_{k['key_prefix']}..."
+                name = (k['name'] or '')[:18]
+                user = k.get('username', '')[:10]
+                active = '✓' if k['is_active'] else '✗'
+                last_used = k['last_used'].strftime('%Y-%m-%d %H:%M') if k.get('last_used') else 'never'
+                print(f"{key_id:<38} {prefix:<14} {name:<20} {user:<12} {active:<8} {last_used}")
+            print(f"\nTotal: {len(keys)} key(s)")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _apikey_create(self, args: list[str]) -> bool:
+        """Create API key: apikey create <username> <name> [expires_days]"""
+        if len(args) < 2:
+            print("Usage: apikey create <username> <name> [expires_days]")
+            return True
+
+        username = args[0]
+        name = args[1]
+        expires_days = int(args[2]) if len(args) > 2 else None
+
+        try:
+            user = await self.db_impl.get_user_by_username(username)
+            if not user:
+                print(f"❌ User '{username}' not found")
+                return True
+
+            # Check max keys
+            count = await self.db_impl.count_user_api_keys(user['user_id'])
+            if count >= 10:
+                print(f"❌ Maximum API keys (10) reached for user '{username}'")
+                return True
+
+            from vitalgraph.auth.api_key import generate_api_key, hash_api_key
+            from datetime import datetime, timedelta, timezone
+
+            full_key, prefix = generate_api_key()
+            key_hash = hash_api_key(full_key)
+
+            expires_at = None
+            if expires_days:
+                expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+
+            record = await self.db_impl.create_api_key(
+                user_id=user['user_id'],
+                name=name,
+                key_prefix=prefix,
+                key_hash=key_hash,
+                expires_at=expires_at,
+            )
+
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.apikey.created", "admin-cli",
+                             target=username, key_name=name, key_prefix=prefix)
+
+            print(f"\n✅ API key created for user '{username}':")
+            print(f"   Key:     {full_key}")
+            print(f"   Name:    {name}")
+            print(f"   ID:      {record.get('key_id')}")
+            if expires_at:
+                print(f"   Expires: {expires_at.isoformat()}")
+            print(f"   ⚠️  Save this key now — it cannot be retrieved again.")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _apikey_revoke(self, args: list[str]) -> bool:
+        """Revoke API key: apikey revoke <key_id>"""
+        if not args:
+            print("Usage: apikey revoke <key_id>")
+            return True
+
+        key_id = args[0]
+        try:
+            key = await self.db_impl.get_api_key_by_id(key_id)
+            if not key:
+                print(f"❌ API key '{key_id}' not found")
+                return True
+
+            await self.db_impl.deactivate_api_key(key_id)
+
+            from vitalgraph.auth.audit import emit_audit_event
+            emit_audit_event("auth.apikey.revoked", "admin-cli",
+                             target=key.get('username', ''), level="WARN",
+                             key_id=key_id, key_name=key.get('name', ''))
+
+            print(f"✅ API key '{key.get('name', key_id)}' revoked")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    async def _apikey_info(self, args: list[str]) -> bool:
+        """Show API key details: apikey info <key_id>"""
+        if not args:
+            print("Usage: apikey info <key_id>")
+            return True
+
+        key_id = args[0]
+        try:
+            key = await self.db_impl.get_api_key_by_id(key_id)
+            if not key:
+                print(f"❌ API key '{key_id}' not found")
+                return True
+
+            print(f"\nAPI Key Details:")
+            print(f"  ID:       {key['key_id']}")
+            print(f"  Prefix:   vg_{key['key_prefix']}...")
+            print(f"  Name:     {key['name']}")
+            print(f"  User:     {key['username']}")
+            print(f"  Active:   {key['is_active']}")
+            print(f"  Created:  {key.get('created_time', 'N/A')}")
+            print(f"  Last Used: {key.get('last_used', 'never')}")
+            print(f"  Expires:  {key.get('expires_at', 'never')}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    # ------------------------------------------------------------------
+    # Audit Commands
+    # ------------------------------------------------------------------
+
+    def cmd_audit(self, args: list[str]) -> bool:
+        """Audit log command dispatcher."""
+        if not self.connected or not self.db_impl:
+            print("❌ Not connected to database. Use 'connect;' first.")
+            return True
+
+        if not args:
+            print("Usage: audit <subcommand> [args...]")
+            print("Subcommands: tail, purge, count")
+            return True
+
+        sub = args[0].lower()
+        if sub == 'tail':
+            return self._run_async(self._audit_tail(args[1:]))
+        elif sub == 'purge':
+            return self._run_async(self._audit_purge(args[1:]))
+        elif sub == 'count':
+            return self._run_async(self._audit_count())
+        else:
+            print(f"Unknown audit subcommand: {sub}")
+            return True
+
+    async def _audit_tail(self, args: list[str]) -> bool:
+        """Show recent audit log entries.
+
+        Usage: audit tail [--event <event>] [--user <username>] [--last <duration>] [--limit <n>]
+        Examples:
+            audit tail
+            audit tail --event auth.login.failure --last 24h
+            audit tail --user jsmith --last 7d
+            audit tail --limit 50
+        """
+        import json
+        from datetime import datetime, timedelta, timezone
+
+        # Parse args
+        event_filter = None
+        user_filter = None
+        last_duration = None
+        limit = 25
+        i = 0
+        while i < len(args):
+            if args[i] == '--event' and i + 1 < len(args):
+                event_filter = args[i + 1]
+                i += 2
+            elif args[i] == '--user' and i + 1 < len(args):
+                user_filter = args[i + 1]
+                i += 2
+            elif args[i] == '--last' and i + 1 < len(args):
+                last_duration = args[i + 1]
+                i += 2
+            elif args[i] == '--limit' and i + 1 < len(args):
+                limit = int(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+        # Build query
+        conditions = []
+        params = []
+        idx = 1
+
+        if event_filter:
+            conditions.append(f"event = ${idx}")
+            params.append(event_filter)
+            idx += 1
+
+        if user_filter:
+            conditions.append(f"(actor = ${idx} OR target = ${idx})")
+            params.append(user_filter)
+            idx += 1
+
+        if last_duration:
+            # Parse duration: "24h", "7d", "30m"
+            amount = int(last_duration[:-1])
+            unit = last_duration[-1]
+            if unit == 'h':
+                delta = timedelta(hours=amount)
+            elif unit == 'd':
+                delta = timedelta(days=amount)
+            elif unit == 'm':
+                delta = timedelta(minutes=amount)
+            else:
+                print(f"❌ Invalid duration unit '{unit}'. Use h (hours), d (days), m (minutes)")
+                return True
+            since = datetime.now(timezone.utc) - delta
+            conditions.append(f"timestamp >= ${idx}")
+            params.append(since)
+            idx += 1
+
+        where = ""
+        if conditions:
+            where = "WHERE " + " AND ".join(conditions)
+
+        query = f"SELECT * FROM audit_log {where} ORDER BY timestamp DESC LIMIT {limit}"
+
+        try:
+            pool = getattr(self.db_impl, 'connection_pool', None)
+            if not pool:
+                print("❌ No connection pool available")
+                return True
+            rows = await pool.fetch(query, *params)
+            if not rows:
+                print("No audit log entries found.")
+                return True
+
+            print(f"\n{'─' * 100}")
+            print(f"{'Timestamp':<26} {'Level':<6} {'Event':<28} {'Actor':<12} {'Target':<12} Details")
+            print(f"{'─' * 100}")
+            for row in rows:
+                ts = row['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if row['timestamp'] else ''
+                level = row.get('level', '')
+                event = row.get('event', '')
+                actor = row.get('actor', '') or ''
+                target = row.get('target', '') or ''
+                details = json.dumps(dict(row['details'])) if row.get('details') else ''
+                # Truncate details for display
+                if len(details) > 40:
+                    details = details[:37] + '...'
+                print(f"{ts:<26} {level:<6} {event:<28} {actor:<12} {target:<12} {details}")
+            print(f"{'─' * 100}")
+            print(f"Showing {len(rows)} entries (limit={limit})")
+        except Exception as e:
+            print(f"❌ Error querying audit log: {e}")
+        return True
+
+    async def _audit_purge(self, args: list[str]) -> bool:
+        """Delete old audit log entries.
+
+        Usage: audit purge --older-than <duration>
+        Examples:
+            audit purge --older-than 90d
+            audit purge --older-than 24h
+        """
+        from datetime import datetime, timedelta, timezone
+
+        # Parse --older-than
+        older_than = None
+        i = 0
+        while i < len(args):
+            if args[i] == '--older-than' and i + 1 < len(args):
+                older_than = args[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        if not older_than:
+            print("Usage: audit purge --older-than <duration>")
+            print("Example: audit purge --older-than 90d")
+            return True
+
+        # Parse duration
+        amount = int(older_than[:-1])
+        unit = older_than[-1]
+        if unit == 'h':
+            delta = timedelta(hours=amount)
+        elif unit == 'd':
+            delta = timedelta(days=amount)
+        else:
+            print(f"❌ Invalid duration unit '{unit}'. Use h (hours) or d (days)")
+            return True
+
+        cutoff = datetime.now(timezone.utc) - delta
+
+        try:
+            pool = getattr(self.db_impl, 'connection_pool', None)
+            if not pool:
+                print("❌ No connection pool available")
+                return True
+            result = await pool.execute(
+                "DELETE FROM audit_log WHERE timestamp < $1", cutoff
+            )
+            # asyncpg returns "DELETE N"
+            count = result.split()[-1] if result else '0'
+            print(f"✅ Purged {count} audit log entries older than {older_than}")
+        except Exception as e:
+            print(f"❌ Error purging audit log: {e}")
+        return True
+
+    async def _audit_count(self) -> bool:
+        """Show audit log entry count and breakdown by event type."""
+        try:
+            pool = getattr(self.db_impl, 'connection_pool', None)
+            if not pool:
+                print("❌ No connection pool available")
+                return True
+            total = await pool.fetchval("SELECT COUNT(*) FROM audit_log")
+            print(f"\nAudit Log: {total} total entries")
+
+            rows = await pool.fetch(
+                "SELECT event, level, COUNT(*) as cnt FROM audit_log "
+                "GROUP BY event, level ORDER BY cnt DESC LIMIT 20"
+            )
+            if rows:
+                print(f"\n{'Event':<35} {'Level':<8} {'Count':<8}")
+                print(f"{'─' * 55}")
+                for row in rows:
+                    print(f"{row['event']:<35} {row['level']:<8} {row['cnt']:<8}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    # ------------------------------------------------------------------
+
     def cmd_help(self, args: list[str]) -> bool:
         """Display help information for available commands."""
         help_text = """
@@ -1537,6 +1731,18 @@ class VitalGraphDBAdminREPL:
 
 📥 Data Import:
   import;           - Import RDF data into a space (interactive or with args)
+
+👤 User Management:
+  user list;                          - List all users
+  user add <username> <password> [role]; - Create user (role: admin|user|reader)
+  user delete <username>;             - Delete a user
+  user password <username> <newpass>; - Change user password
+  user role <username> <role>;        - Change user role
+  user deactivate <username>;         - Deactivate user (invalidates tokens)
+  user activate <username>;           - Reactivate user
+  user grant <username> <space_id> <rw|r>; - Grant space access
+  user revoke <username> <space_id>;  - Revoke space access
+  user spaces <username>;             - Show user's space access
 
 ⚙️  Configuration:
   set log-level <level>; - Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -1637,39 +1843,11 @@ Note: All commands must end with a semicolon (;)
                 success = self.cmd_info([])
 
             elif command == 'import':
-                backend_type = self.config.get_backend_config().get('type', 'postgresql')
-                if backend_type == 'sparql_sql':
-                    if not args.space_id:
-                        print("❌ --space-id is required for import")
-                        return False
-                    if not args.file:
-                        print("❌ --file is required for import")
-                        return False
-                    graph_uri = args.graph_uri or f"urn:{args.space_id}"
-                    success = self._run_async(
-                        self._cli_import_sparql_sql(
-                            space_id=args.space_id,
-                            file_path=args.file,
-                            graph_uri=graph_uri,
-                            batch_size=args.batch_size or 50000,
-                            force=args.yes,
-                        ))
-                else:
-                    import_args = []
-                    if args.space_id:
-                        import_args += ['--space-id', args.space_id]
-                    if args.file:
-                        import_args += ['--file', args.file]
-                    if args.format:
-                        import_args += ['--format', args.format]
-                    if args.batch_size:
-                        import_args += ['--batch-size', str(args.batch_size)]
-                    if args.validate:
-                        import_args.append('--validate')
-                    if args.no_validate:
-                        import_args.append('--no-validate')
-                    import_args += ['--interactive', 'false']
-                    success = self.cmd_import(import_args)
+                print("\n⚠️  The 'import' command has been removed from vitalgraphadmin.")
+                print("   Use the standalone CLI instead:")
+                print("     vitalgraphimport -s <space_id> -f <file.nt>")
+                print("     vitalgraphimport --help\n")
+                success = False
 
             elif command == 'list-spaces':
                 success = self.cmd_list_spaces([])
@@ -1732,6 +1910,107 @@ Note: All commands must end with a semicolon (;)
 
             elif command == 'delete':
                 success = self.cmd_delete([])
+
+            # --- User management ---
+            elif command == 'user-list':
+                success = self._run_async(self._user_list())
+
+            elif command == 'user-add':
+                if not args.username or not args.password:
+                    print("❌ --username and --password are required for user-add")
+                    return False
+                role = args.role or 'user'
+                success = self._run_async(self._user_add([args.username, args.password, role]))
+
+            elif command == 'user-delete':
+                if not args.username:
+                    print("❌ --username is required for user-delete")
+                    return False
+                if not args.yes:
+                    confirm = input(
+                        f"⚠️  Delete user '{args.username}'? (yes/no): "
+                    ).strip().lower()
+                    if confirm not in ('yes', 'y'):
+                        print("Cancelled.")
+                        return True
+                success = self._run_async(self._user_delete([args.username]))
+
+            elif command == 'user-password':
+                if not args.username or not args.password:
+                    print("❌ --username and --password are required for user-password")
+                    return False
+                success = self._run_async(self._user_password([args.username, args.password]))
+
+            elif command == 'user-role':
+                if not args.username or not args.role:
+                    print("❌ --username and --role are required for user-role")
+                    return False
+                success = self._run_async(self._user_role([args.username, args.role]))
+
+            elif command == 'user-deactivate':
+                if not args.username:
+                    print("❌ --username is required for user-deactivate")
+                    return False
+                success = self._run_async(self._user_deactivate([args.username]))
+
+            elif command == 'user-activate':
+                if not args.username:
+                    print("❌ --username is required for user-activate")
+                    return False
+                success = self._run_async(self._user_activate([args.username]))
+
+            elif command == 'user-grant':
+                if not args.username or not args.space_id or not args.level:
+                    print("❌ --username, --space-id, and --level are required for user-grant")
+                    return False
+                success = self._run_async(self._user_grant([args.username, args.space_id, args.level]))
+
+            elif command == 'user-revoke':
+                if not args.username or not args.space_id:
+                    print("❌ --username and --space-id are required for user-revoke")
+                    return False
+                success = self._run_async(self._user_revoke([args.username, args.space_id]))
+
+            elif command == 'user-spaces':
+                if not args.username:
+                    print("❌ --username is required for user-spaces")
+                    return False
+                success = self._run_async(self._user_spaces([args.username]))
+
+            # --- API key management ---
+            elif command == 'apikey-list':
+                api_args = [args.username] if args.username else []
+                success = self._run_async(self._apikey_list(api_args))
+
+            elif command == 'apikey-create':
+                if not args.username or not args.key_name:
+                    print("❌ --username and --key-name are required for apikey-create")
+                    return False
+                api_args = [args.username, args.key_name]
+                if args.expires_days:
+                    api_args.append(str(args.expires_days))
+                success = self._run_async(self._apikey_create(api_args))
+
+            elif command == 'apikey-revoke':
+                if not args.key_id:
+                    print("❌ --key-id is required for apikey-revoke")
+                    return False
+                success = self._run_async(self._apikey_revoke([args.key_id]))
+
+            # --- Maintenance ---
+            elif command == 'clear-space':
+                if not args.space_id:
+                    print("❌ --space-id is required for clear-space")
+                    return False
+                if not args.yes:
+                    confirm = input(
+                        f"⚠️  Clear ALL data in space '{args.space_id}'? (yes/no): "
+                    ).strip().lower()
+                    if confirm not in ('yes', 'y'):
+                        print("Cancelled.")
+                        return True
+                self.current_space_id = args.space_id
+                success = self.cmd_clear([])
 
             # Legacy aliases
             elif command == 'reindex':
@@ -1836,240 +2115,6 @@ Note: All commands must end with a semicolon (;)
             import traceback
             traceback.print_exc()
             return False
-
-    async def _cli_import_sparql_sql(
-        self,
-        space_id: str,
-        file_path: str,
-        graph_uri: str,
-        batch_size: int = 50000,
-        force: bool = False,
-    ) -> bool:
-        """Bulk-load an N-Triples file into a sparql_sql space using COPY.
-
-        Algorithm (mirrors load_wordnet_frames.py):
-          1. Parse .nt with pyoxigraph, collect unique terms + deterministic UUIDs
-          2. COPY terms into {space_id}_term
-          3. Parse again, COPY quads into {space_id}_rdf_quad
-          4. ANALYZE both tables
-        """
-        import os
-        import time
-        import uuid as uuid_mod
-
-        _NS = uuid_mod.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
-        def _term_uuid(text, ttype, lang=None, datatype_id=None):
-            parts = [text, ttype]
-            if lang is not None:
-                parts.append(f"lang:{lang}")
-            if datatype_id is not None:
-                parts.append(f"datatype:{datatype_id}")
-            return str(uuid_mod.uuid5(_NS, "\x00".join(parts)))
-
-        # --- validate inputs ---
-        if not os.path.exists(file_path):
-            print(f"❌ File not found: {file_path}")
-            return False
-
-        from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-        t = SparqlSQLSchema.get_table_names(space_id)
-        term_tbl = t['term']
-        quad_tbl = t['rdf_quad']
-
-        file_mb = os.path.getsize(file_path) / (1024 * 1024)
-        print(f"📋 Import Summary")
-        print(f"   File      : {file_path} ({file_mb:.0f} MB)")
-        print(f"   Space     : {space_id}")
-        print(f"   Graph URI : {graph_uri}")
-        print(f"   Tables    : {term_tbl}, {quad_tbl}")
-
-        pool = self.db_impl.connection_pool
-        async with pool.acquire() as conn:
-            # Check tables exist
-            for tbl in (term_tbl, quad_tbl):
-                exists = await conn.fetchval(
-                    "SELECT EXISTS (SELECT FROM information_schema.tables "
-                    "WHERE table_schema='public' AND table_name=$1)", tbl)
-                if not exists:
-                    print(f"❌ Table {tbl} does not exist. Run create-space first.")
-                    return False
-
-            # Check if tables already have data
-            existing_terms = await conn.fetchval(f"SELECT COUNT(*) FROM {term_tbl}")
-            existing_quads = await conn.fetchval(f"SELECT COUNT(*) FROM {quad_tbl}")
-            if existing_terms > 0 or existing_quads > 0:
-                if force:
-                    print(f"⚠️  Truncating tables ({existing_terms:,} terms, {existing_quads:,} quads)")
-                    await conn.execute(f"TRUNCATE {quad_tbl}")
-                    await conn.execute(f"TRUNCATE {term_tbl} CASCADE")
-                else:
-                    print(f"❌ Tables not empty ({existing_terms:,} terms, {existing_quads:,} quads).")
-                    print(f"   Use --yes to truncate before loading.")
-                    return False
-
-            # --- save & drop non-PK indexes for fast bulk loading ---
-            print("\n🔧 Saving and dropping indexes for bulk load...")
-            saved_indexes = await conn.fetch(
-                "SELECT indexname, indexdef FROM pg_indexes "
-                "WHERE schemaname='public' AND tablename = ANY($1::text[]) "
-                "AND indexname NOT LIKE '%_pkey'",
-                [term_tbl, quad_tbl])
-            for row in saved_indexes:
-                await conn.execute(f"DROP INDEX IF EXISTS {row['indexname']}")
-            print(f"   Dropped {len(saved_indexes)} indexes")
-
-        # --- pass 1: collect unique terms ---
-        print("\n📖 Pass 1: Collecting unique terms...")
-        try:
-            from pyoxigraph import parse as ox_parse
-        except ImportError:
-            print("❌ pyoxigraph is required for N-Triples parsing.")
-            print("   Install with: pip install pyoxigraph")
-            return False
-
-        terms = {}  # {(text, type, lang): uuid_str}
-        triple_count = 0
-        t0 = time.time()
-
-        def ensure(text, ttype, lang=None):
-            key = (text, ttype, lang)
-            if key not in terms:
-                terms[key] = _term_uuid(text, ttype, lang=lang)
-            return terms[key]
-
-        ensure(graph_uri, "U")
-
-        with open(file_path, "rb") as f:
-            for triple in ox_parse(f, "application/n-triples"):
-                s_cls = type(triple.subject).__name__
-                ensure(triple.subject.value, "B" if s_cls == "BlankNode" else "U")
-                ensure(triple.predicate.value, "U")
-                obj = triple.object
-                obj_cls = type(obj).__name__
-                if obj_cls == "Literal":
-                    lang = str(obj.language) if obj.language else None
-                    ensure(obj.value, "L", lang)
-                elif obj_cls == "BlankNode":
-                    ensure(obj.value, "B")
-                else:
-                    ensure(obj.value, "U")
-                triple_count += 1
-                if triple_count % 1_000_000 == 0:
-                    print(f"   {triple_count:,} triples, {len(terms):,} unique terms")
-
-        pass1_dt = time.time() - t0
-        print(f"   Pass 1 done: {triple_count:,} triples, {len(terms):,} terms in {pass1_dt:.1f}s")
-
-        # --- COPY terms ---
-        print(f"\n📥 COPY {len(terms):,} terms into {term_tbl}...")
-        t0 = time.time()
-        term_records = [
-            (uid, text, ttype, lang, "primary")
-            for (text, ttype, lang), uid in terms.items()
-        ]
-        async with pool.acquire() as conn:
-            await conn.copy_records_to_table(
-                term_tbl,
-                columns=["term_uuid", "term_text", "term_type", "lang", "dataset"],
-                records=term_records,
-            )
-        term_dt = time.time() - t0
-        print(f"   {len(term_records):,} terms loaded in {term_dt:.1f}s")
-        del term_records  # free memory
-
-        # --- pass 2: COPY quads ---
-        print(f"\n📥 Pass 2: COPY quads into {quad_tbl}...")
-        graph_uuid = terms[(graph_uri, "U", None)]
-        quad_batch = []
-        total_quads = 0
-        t0 = time.time()
-
-        async def flush_quads(batch):
-            nonlocal total_quads
-            if not batch:
-                return
-            async with pool.acquire() as conn:
-                await conn.copy_records_to_table(
-                    quad_tbl,
-                    columns=["subject_uuid", "predicate_uuid", "object_uuid",
-                             "context_uuid", "dataset"],
-                    records=batch,
-                )
-            total_quads += len(batch)
-
-        with open(file_path, "rb") as f:
-            for triple in ox_parse(f, "application/n-triples"):
-                s_cls = type(triple.subject).__name__
-                s_uuid = terms[(triple.subject.value, "B" if s_cls == "BlankNode" else "U", None)]
-                p_uuid = terms[(triple.predicate.value, "U", None)]
-                obj = triple.object
-                obj_cls = type(obj).__name__
-                if obj_cls == "Literal":
-                    lang = str(obj.language) if obj.language else None
-                    o_uuid = terms[(obj.value, "L", lang)]
-                elif obj_cls == "BlankNode":
-                    o_uuid = terms[(obj.value, "B", None)]
-                else:
-                    o_uuid = terms[(obj.value, "U", None)]
-
-                quad_batch.append((s_uuid, p_uuid, o_uuid, graph_uuid, "primary"))
-
-                if len(quad_batch) >= batch_size:
-                    await flush_quads(quad_batch)
-                    quad_batch = []
-                    if total_quads % 1_000_000 == 0:
-                        elapsed = time.time() - t0
-                        rate = total_quads / elapsed if elapsed > 0 else 0
-                        print(f"   {total_quads:,} quads ({rate:,.0f}/s)")
-
-        await flush_quads(quad_batch)
-        quad_dt = time.time() - t0
-        rate = total_quads / quad_dt if quad_dt > 0 else 0
-        print(f"   {total_quads:,} quads loaded in {quad_dt:.1f}s ({rate:,.0f}/s)")
-
-        # --- recreate indexes ---
-        print(f"\n🔧 Recreating {len(saved_indexes)} indexes...")
-        idx_t0 = time.time()
-        async with pool.acquire() as conn:
-            for row in saved_indexes:
-                await conn.execute(row['indexdef'])
-        print(f"   Indexes recreated in {time.time() - idx_t0:.1f}s")
-
-        # --- Resync auxiliary tables (edge, frame_entity, stats) + ANALYZE ---
-        print("\n� Syncing auxiliary tables (edge, frame_entity, stats)...")
-        from vitalgraph.db.sparql_sql.resync_all import resync_all_auxiliary_tables
-        import time as _time
-        resync_t0 = _time.time()
-        async with pool.acquire() as conn:
-            resync_result = await resync_all_auxiliary_tables(conn, space_id)
-        resync_dt = _time.time() - resync_t0
-        print(f"   edge={resync_result['edge_rows']:,}, "
-              f"frame_entity={resync_result['frame_entity_rows']:,}, "
-              f"pred_stats={resync_result['pred_stats_rows']:,}, "
-              f"quad_stats={resync_result['quad_stats_rows']:,}  "
-              f"({resync_dt:.1f}s)")
-
-        # --- register graph in admin tables ---
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO graph (space_id, graph_uri, graph_name, created_time) "
-                "VALUES ($1, $2, $3, NOW()) "
-                "ON CONFLICT DO NOTHING",
-                space_id, graph_uri, graph_uri,
-            )
-
-        # --- verify ---
-        async with pool.acquire() as conn:
-            final_terms = await conn.fetchval(f"SELECT COUNT(*) FROM {term_tbl}")
-            final_quads = await conn.fetchval(f"SELECT COUNT(*) FROM {quad_tbl}")
-
-        total_dt = pass1_dt + term_dt + quad_dt
-        print(f"\n✅ Import complete!")
-        print(f"   Terms: {final_terms:,}")
-        print(f"   Quads: {final_quads:,}")
-        print(f"   Total time: {total_dt:.1f}s")
-        return True
 
     def run_repl(self):
         """Run the interactive REPL."""
@@ -2180,9 +2225,16 @@ Interactive REPL:
             "init", "info",
             "list-spaces", "list-users", "list-graphs",
             "create-space", "drop-space",
-            "import",
             "rebuild-indexes", "rebuild-stats", "rebuild-analyze", "rebuild-vacuum", "rebuild-resync",
             "purge", "delete",
+            # User management
+            "user-list", "user-add", "user-delete", "user-password",
+            "user-role", "user-deactivate", "user-activate",
+            "user-grant", "user-revoke", "user-spaces",
+            # API key management
+            "apikey-list", "apikey-create", "apikey-revoke",
+            # Maintenance
+            "clear-space",
             # Legacy aliases
             "reindex", "stats",
         ],
@@ -2193,46 +2245,12 @@ Interactive REPL:
     parser.add_argument(
         "-s", "--space-id",
         type=str,
-        help="Space ID (required for create-space, drop-space, import; optional for list-graphs, rebuild-indexes)"
+        help="Space ID (required for create-space, drop-space; optional for list-graphs, rebuild-indexes)"
     )
     parser.add_argument(
         "--space-name",
         type=str,
         help="Human-readable space name (for create-space; defaults to space-id)"
-    )
-
-    # Import options
-    parser.add_argument(
-        "--graph-uri", "-g",
-        type=str,
-        help="Graph URI for import (default: urn:<space_id>)"
-    )
-    parser.add_argument(
-        "-f", "--file",
-        type=str,
-        help="File path for import command"
-    )
-    parser.add_argument(
-        "-t", "--format",
-        type=str,
-        choices=["turtle", "xml", "nt", "n3", "nquads"],
-        help="RDF file format (default: auto-detect from extension)"
-    )
-    parser.add_argument(
-        "-b", "--batch-size",
-        type=int,
-        default=50000,
-        help="Batch size for import (default: 50000)"
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Enable pre-validation before import"
-    )
-    parser.add_argument(
-        "--no-validate",
-        action="store_true",
-        help="Disable pre-validation before import"
     )
 
     # Confirmation bypass
@@ -2242,13 +2260,45 @@ Interactive REPL:
         help="Skip confirmation prompts (for drop-space, purge, delete)"
     )
 
-    # Interactive mode (legacy, only affects import wizard)
+    # User management options
     parser.add_argument(
-        "-i", "--interactive",
+        "--username", "-u",
         type=str,
-        choices=["true", "false", "1", "0", "yes", "no", "on", "off"],
-        default="true",
-        help="Enable interactive mode for import wizard (default: true)"
+        help="Username for user/apikey commands"
+    )
+    parser.add_argument(
+        "--password",
+        type=str,
+        help="Password for user-add or user-password"
+    )
+    parser.add_argument(
+        "--role",
+        type=str,
+        choices=["admin", "user", "reader"],
+        help="Role for user-add or user-role"
+    )
+    parser.add_argument(
+        "--level",
+        type=str,
+        choices=["rw", "r"],
+        help="Access level for user-grant (rw or r)"
+    )
+
+    # API key options
+    parser.add_argument(
+        "--key-name",
+        type=str,
+        help="Name for apikey-create"
+    )
+    parser.add_argument(
+        "--key-id",
+        type=str,
+        help="Key ID for apikey-revoke"
+    )
+    parser.add_argument(
+        "--expires-days",
+        type=int,
+        help="Expiration in days for apikey-create"
     )
 
     return parser.parse_args()

@@ -1,39 +1,29 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 import {
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeadCell,
-  TableRow,
-  Alert,
-  TextInput,
-  Select,
-  Label,
-  Pagination,
-  Badge,
-  Spinner,
-  Modal
+  Alert, Badge, Button, Pagination, Select, Spinner, TextInput
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
-import { HiSearch } from 'react-icons/hi';
+import { HiSearch, HiCollection } from 'react-icons/hi';
+import {
+  parseEntitiesFromQuads,
+  buildDeleteAllPayload,
+  shortenUri,
+  type Quad,
+} from '../utils/QuadUtils';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface RDFObject {
-  id: number;
-  object_uri: string;
-  object_type: string;
+  uri: string;
   rdf_type: string;
+  object_type: 'Node' | 'Edge';
   properties_count: number;
-  last_modified: string;
 }
 
 const GraphObjects: React.FC = () => {
   const navigate = useNavigate();
-  
-  // Get shared state from parent ObjectsLayout
+
   const context = useOutletContext<{
     selectedSpace: string;
     selectedGraph: string;
@@ -42,367 +32,223 @@ const GraphObjects: React.FC = () => {
     error: string | null;
   }>();
 
-  // Handle case where context might be undefined initially
-  const {
-    selectedSpace = '',
-    selectedGraph = '',
-    spacesLoading = true,
-  } = context || {};
+  const { selectedSpace = '', selectedGraph = '', spacesLoading = true } = context || {};
 
-  // Local state management
   const [objects, setObjects] = useState<RDFObject[]>([]);
-  const [filteredObjects, setFilteredObjects] = useState<RDFObject[]>([]);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [objectToDelete, setObjectToDelete] = useState<RDFObject | null>(null);
-  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [deletingObject, setDeletingObject] = useState<RDFObject | null>(null);
 
-  // No longer need navigation logic - handled by parent ObjectsLayout
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setCurrentPage(1); }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
-  // Spaces and graphs are now managed by parent ObjectsLayout
-
-  // Fetch objects for selected space and graph
   const fetchObjects = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
-    
     try {
       setLoading(true);
-      setError('');
-      
-      const graphUri = selectedGraph;
-      
-      console.log('Fetching objects for space:', selectedSpace, 'graph:', graphUri);
-      
-      // Call the actual objects API endpoint using axios (handles auth automatically)
-      const response = await axios.get('/api/graphs/objects', {
-        params: {
-          space_id: selectedSpace,
-          graph_id: graphUri,
-          page_size: itemsPerPage,
-          offset: (currentPage - 1) * itemsPerPage
-        }
-      });
-      
-      const data = response.data;
-      console.log('Objects API response:', data);
-      
-      // API returns QuadResponse: { results: [{s, p, o, g}, ...], total_count, page_size, offset }
-      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
-      
-      // Group quads by subject to form objects
-      const subjectMap = new Map<string, { predicates: Map<string, string[]> }>();
-      for (const quad of quads) {
-        const subj = quad.s.replace(/^<|>$/g, ''); // strip angle brackets
-        if (!subjectMap.has(subj)) {
-          subjectMap.set(subj, { predicates: new Map() });
-        }
-        const entry = subjectMap.get(subj)!;
-        const pred = quad.p.replace(/^<|>$/g, '');
-        if (!entry.predicates.has(pred)) {
-          entry.predicates.set(pred, []);
-        }
-        entry.predicates.get(pred)!.push(quad.o);
-      }
-      
-      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
-      const transformedObjects: RDFObject[] = [];
-      let idx = 0;
-      for (const [subjectUri, { predicates }] of subjectMap) {
-        const typeValues = predicates.get(RDF_TYPE) || [];
-        const rdfType = typeValues.length > 0
-          ? typeValues[0].replace(/^<|>$/g, '')
-          : 'Unknown';
-        
-        transformedObjects.push({
-          id: idx++,
-          object_uri: subjectUri,
-          object_type: rdfType.toLowerCase().includes('edge') ? 'Edge' : 'Node',
-          rdf_type: rdfType,
-          last_modified: new Date().toISOString(),
-          properties_count: predicates.size,
-        });
-      }
-      
-      setObjects(transformedObjects);
       setError(null);
-      setTotalCount(data.total_count ?? transformedObjects.length);
-      console.log(`Total objects: ${data.total_count}, showing ${transformedObjects.length}`);
-      
-    } catch (err) {
-      console.error('Error fetching objects:', err);
-      setError('Failed to load objects. Please try again later.');
+      const data = await apiService.getObjects(selectedSpace, selectedGraph, {
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        search: debouncedSearch || undefined,
+      });
+      const quads: Quad[] = data.results || [];
+      const grouped = parseEntitiesFromQuads(quads);
+      const parsed: RDFObject[] = grouped.map(e => ({
+        uri: e.uri,
+        rdf_type: e.rdf_type,
+        object_type: e.rdf_type.toLowerCase().includes('edge') ? 'Edge' as const : 'Node' as const,
+        properties_count: e.properties_count,
+      }));
+
+      setObjects(parsed);
+      setTotalCount(data.total_count ?? parsed.length);
+    } catch {
+      setError('Failed to load objects.');
       setObjects([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch]);
 
-  // Filter objects based on search term
-  useEffect(() => {
-    const filtered = objects.filter(obj =>
-      obj.object_uri.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      obj.rdf_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      obj.object_type.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    setFilteredObjects(filtered);
-    setCurrentPage(1);
-  }, [objects, searchTerm, itemsPerPage]);
+  useEffect(() => { fetchObjects(); }, [fetchObjects]);
 
-  useEffect(() => {
-    fetchObjects();
-    // Reset pagination when component mounts or tab becomes active
-    setCurrentPage(1);
-  }, [fetchObjects]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  const hasSelection = selectedSpace && selectedGraph;
 
-  // Pagination — server-side when not filtering, client-side when searching
-  const isSearching = searchTerm.length > 0;
-  const totalPages = isSearching
-    ? Math.ceil(filteredObjects.length / itemsPerPage)
-    : Math.ceil(totalCount / itemsPerPage);
-  const currentObjects = isSearching
-    ? filteredObjects.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
-    : filteredObjects;
-
-  // Utility functions
-  const extractLocalName = (uri: string): string => {
-    if (!uri) return '';
-    const parts = uri.split(/[#/]/);
-    return parts[parts.length - 1] || uri;
-  };
-
-  const formatDateTime = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getObjectTypeBadge = (type: string) => {
-    const config = type === 'Node' 
-      ? { color: 'blue', text: 'Node' }
-      : { color: 'green', text: 'Edge' };
-    return <Badge color={config.color}>{config.text}</Badge>;
+  const handleDelete = async (obj: RDFObject) => {
+    try {
+      await apiService.deleteTriples(selectedSpace, selectedGraph,
+        buildDeleteAllPayload(obj.uri, selectedGraph)
+      );
+      setDeletingObject(null);
+      await fetchObjects();
+    } catch {
+      setError('Failed to delete object.');
+      setDeletingObject(null);
+    }
   };
 
   return (
-    <>
-
-      {/* Add Object Button */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <Button 
-            onClick={() => {
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/new?mode=create`);
-            }} 
-            color="blue"
-          >
-            <HiPlus className="mr-2 h-4 w-4" />
-            Add Graph Object
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            {hasSelection && !loading && `${totalCount.toLocaleString()} object${totalCount !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+        {hasSelection && (
+          <Button size="sm" color="blue" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/new?mode=create`)}>
+            <HiPlus className="mr-1.5 h-4 w-4" />Add Object
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Search and Filter */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-            <div className="flex-1">
-              <div className="relative">
-                <HiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <TextInput
-                  type="text"
-                  placeholder="Search objects by URI, type, or object type..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <div className="flex-shrink-0">
-              <Label htmlFor="page-size">Items per page</Label>
-              <Select
-                id="page-size"
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(parseInt(e.target.value));
-                  setCurrentPage(1);
-                }}
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </Select>
-            </div>
+      {/* Search + page size */}
+      {hasSelection && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            <TextInput icon={HiSearch} placeholder="Search objects..." value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)} />
+          </div>
+          <div className="w-32 flex-shrink-0">
+            <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
+              <option value={10}>10 / page</option>
+              <option value={25}>25 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </Select>
           </div>
         </div>
       )}
 
-      {/* Selection Required Messages */}
+      {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+
       {!selectedSpace && !spacesLoading && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a space to view graph objects</p>
-            <p className="text-sm">Choose a space from the dropdown above to see available graphs.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCollection className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a space</p>
+          <p className="text-sm mt-1">Choose a space from the dropdown above</p>
         </div>
       )}
-      
       {selectedSpace && !selectedGraph && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a graph to view graph objects</p>
-            <p className="text-sm">Choose a graph from the dropdown above to see its objects.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCollection className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a graph</p>
+          <p className="text-sm mt-1">Choose a graph to browse its objects</p>
         </div>
       )}
 
-      {/* Loading Spinner */}
-      {selectedSpace && selectedGraph && loading && (
-        <div className="mt-8 flex justify-center">
-          <Spinner size="lg" />
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading graph objects...</span>
+      {hasSelection && loading && (
+        <div className="flex justify-center py-12"><Spinner size="xl" /></div>
+      )}
+
+      {hasSelection && !loading && objects.length === 0 && !error && (
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCollection className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          {debouncedSearch ? (
+            <>
+              <p className="text-lg font-medium">No results for &quot;{debouncedSearch}&quot;</p>
+              <p className="text-sm mt-1">Try a different search term</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-medium">No objects yet</p>
+              <p className="text-sm mt-1">Add your first graph object to get started</p>
+            </>
+          )}
         </div>
       )}
 
-      {error && (
-        <Alert color="failure">
-          {error}
-        </Alert>
-      )}
-
-      {/* Objects Table */}
-      {selectedSpace && selectedGraph && !loading && filteredObjects.length === 0 && !error ? (
-        <Alert color="info">
-          {searchTerm ? 
-            `No graph objects found matching "${searchTerm}". Try a different search term.` :
-            'No graph objects found in this graph. Add your first object to get started.'
-          }
-        </Alert>
-      ) : selectedSpace && selectedGraph && !loading && currentObjects.length > 0 && (
+      {/* Objects table */}
+      {hasSelection && !loading && objects.length > 0 && (
         <>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeadCell>Object URI</TableHeadCell>
-                  <TableHeadCell>RDF Type</TableHeadCell>
-                  <TableHeadCell>Object Type</TableHeadCell>
-                  <TableHeadCell>Properties</TableHeadCell>
-                  <TableHeadCell>Last Modified</TableHeadCell>
-                  <TableHeadCell>Actions</TableHeadCell>
-                </TableRow>
-              </TableHead>
-              <TableBody className="divide-y">
-                {currentObjects.map((obj) => (
-                  <TableRow key={obj.id}>
-                    <TableCell className="font-medium">
+          <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-4 py-3">Object</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3 w-20">Kind</th>
+                  <th className="px-4 py-3 w-28">Properties</th>
+                  <th className="px-4 py-3 w-24"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {objects.map((obj) => (
+                  <tr key={obj.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                    <td className="px-4 py-2.5">
                       <div className="max-w-xs">
-                        <div className="font-mono text-sm text-blue-600 truncate">
-                          {extractLocalName(obj.object_uri)}
-                        </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {obj.object_uri}
-                        </div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{shortenUri(obj.uri)}</p>
+                        <p className="text-xs font-mono text-gray-400 truncate" title={obj.uri}>{obj.uri}</p>
                       </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {extractLocalName(obj.rdf_type)}
-                    </TableCell>
-                    <TableCell>
-                      {getObjectTypeBadge(obj.object_type)}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        {obj.properties_count} properties
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-sm text-gray-600 dark:text-gray-400">
-                      {formatDateTime(obj.last_modified)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          size="xs"
-                          color="blue"
-                          onClick={() => {
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/${encodeURIComponent(obj.object_uri)}`);
-                          }}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge color="blue" size="xs">{shortenUri(obj.rdf_type)}</Badge>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge color={obj.object_type === 'Edge' ? 'green' : 'gray'} size="xs">{obj.object_type}</Badge>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                      {obj.properties_count}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/${encodeURIComponent(obj.uri)}`)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-500 transition-colors" title="View"
                         >
-                          <HiEye className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="xs"
-                          color="red"
-                          onClick={() => {
-                            setObjectToDelete(obj);
-                            setShowDeleteModal(true);
-                          }}
+                          <HiEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeletingObject(obj)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-red-500 transition-colors" title="Delete"
                         >
-                          <HiTrash className="h-3 w-3" />
-                        </Button>
+                          <HiTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex justify-center mt-6">
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
-                showIcons
-              />
+            <div className="flex justify-center">
+              <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} showIcons />
             </div>
           )}
         </>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <Modal show={showDeleteModal} onClose={() => setShowDeleteModal(false)} size="md">
-        <div className="p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Delete Object</h3>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Are you sure you want to delete this object? This action cannot be undone.
-          </p>
-          {objectToDelete && (
-            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded mb-6">
-              <p className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                {objectToDelete.object_uri}
-              </p>
-            </div>
-          )}
-          <div className="flex justify-end gap-3">
-            <Button 
-              onClick={() => {
-                // Handle delete logic here
-                console.log('Deleting object:', objectToDelete?.id);
-                setShowDeleteModal(false);
-                setObjectToDelete(null);
-              }} 
-              color="failure"
-            >
-              Delete
-            </Button>
-            <Button 
-              color="gray" 
-              onClick={() => {
-                setShowDeleteModal(false);
-                setObjectToDelete(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
+      {/* Delete Modal */}
+      <ConfirmDialog
+        open={!!deletingObject}
+        onConfirm={() => deletingObject && handleDelete(deletingObject)}
+        onCancel={() => setDeletingObject(null)}
+        title="Delete Object"
+        confirmLabel="Delete"
+        variant="danger"
+        detail={
+          deletingObject && (
+            <>
+              <p className="font-medium text-gray-800 dark:text-gray-200">{shortenUri(deletingObject.uri)}</p>
+              <p className="text-gray-400">{deletingObject.uri}</p>
+            </>
+          )
+        }
+      />
+    </div>
   );
 };
 

@@ -19,7 +19,7 @@ This class composes domain-specific mixins:
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import asyncpg
 
@@ -29,6 +29,7 @@ from .entity_alias_ops import AliasMixin
 from .entity_category_ops import CategoryMixin
 from .entity_changelog_ops import ChangeLogMixin
 from .entity_dedup import EntityDedupIndex, compute_dedup_hash
+from .entity_dedup_pg import EntityDedupIndexPG
 from .entity_dedup_ops import DedupMixin
 from .entity_identifier_ops import IdentifierMixin
 from .entity_location_ops import LocationMixin
@@ -61,14 +62,16 @@ class EntityRegistryImpl(
     Domain-specific operations are provided by the mixin base classes.
     """
 
-    def __init__(self, connection_pool: asyncpg.Pool, dedup_index: Optional[EntityDedupIndex] = None,
+    def __init__(self, connection_pool: asyncpg.Pool,
+                 dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]] = None,
                  signal_manager=None, weaviate_index: Optional[EntityWeaviateIndex] = None):
         """
         Initialize with an asyncpg connection pool.
 
         Args:
             connection_pool: Shared asyncpg pool from FusekiPostgreSQLDbImpl.
-            dedup_index: Optional EntityDedupIndex for near-duplicate detection.
+            dedup_index: Optional dedup index (EntityDedupIndex for Redis/memory,
+                         EntityDedupIndexPG for PostgreSQL backend).
             signal_manager: Optional SignalManager for cross-worker dedup sync.
             weaviate_index: Optional EntityWeaviateIndex for vector search.
         """
@@ -103,7 +106,15 @@ class EntityRegistryImpl(
 
             # Initialize dedup index if configured
             if self.dedup_index:
-                if self.dedup_index.storage_config:
+                if isinstance(self.dedup_index, EntityDedupIndexPG):
+                    # PostgreSQL backend: band tables persist, only need to
+                    # rebuild the in-memory scoring cache on startup
+                    try:
+                        count = await self.dedup_index.initialize(self.pool)
+                        logger.info(f"Entity dedup index (PG) loaded {count} entities")
+                    except Exception as e:
+                        logger.error(f"Failed to initialize entity dedup index (PG): {e}")
+                elif self.dedup_index.storage_config:
                     # Persistent backend (Redis/MemoryDB): skip bulk init at
                     # startup — the index is populated by the standalone
                     # sync_dedup_index.py script. Just mark as initialized
@@ -274,7 +285,10 @@ class EntityRegistryImpl(
                     entity_for_index = dict(entity)
                     entity_for_index['type_key'] = type_key
                     entity_for_index['aliases'] = alias_list
-                    await self.dedup_index.async_add_entity(entity_id, entity_for_index)
+                    if isinstance(self.dedup_index, EntityDedupIndexPG):
+                        await self.dedup_index.add_entity(entity_id, entity_for_index)
+                    else:
+                        await self.dedup_index.async_add_entity(entity_id, entity_for_index)
                     await self._notify_dedup_change('add', entity_id)
 
                 # Sync to Weaviate
@@ -469,7 +483,10 @@ class EntityRegistryImpl(
                     new_hash, entity_id
                 )
             if self.dedup_index:
-                await self.dedup_index.async_add_entity(entity_id, updated)
+                if isinstance(self.dedup_index, EntityDedupIndexPG):
+                    await self.dedup_index.add_entity(entity_id, updated)
+                else:
+                    await self.dedup_index.async_add_entity(entity_id, updated)
                 await self._notify_dedup_change('add', entity_id)
 
         # Sync to Weaviate
@@ -500,7 +517,10 @@ class EntityRegistryImpl(
 
                 # Remove from dedup index and notify other workers
                 if self.dedup_index:
-                    await self.dedup_index.async_remove_entity(entity_id)
+                    if isinstance(self.dedup_index, EntityDedupIndexPG):
+                        await self.dedup_index.remove_entity(entity_id)
+                    else:
+                        await self.dedup_index.async_remove_entity(entity_id)
                     await self._notify_dedup_change('remove', entity_id)
 
                 # Remove from Weaviate

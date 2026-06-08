@@ -167,6 +167,12 @@ class ProcessScheduler:
         handler = None
         if job:
             handler = job.handler
+        # Fallback: find any handler that has a trigger_{process_type} method
+        if handler is None:
+            for j in self._jobs.values():
+                if hasattr(j.handler, f"trigger_{process_type}"):
+                    handler = j.handler
+                    break
         if handler is None:
             logger.warning("ProcessScheduler: no handler for process_type='%s'", process_type)
             return None

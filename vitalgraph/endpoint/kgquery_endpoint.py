@@ -25,6 +25,7 @@ from ..model.kgqueries_model import (
 )
 from ..cache.entity_graph_cache import _entity_graph_cache
 from ..cache.count_cache import _count_cache
+from ..auth.role_dependencies import require_space_read
 
 
 class KGQueriesEndpoint:
@@ -87,6 +88,7 @@ class KGQueriesEndpoint:
             Returns:
                 KGQueryResponse with connections based on query_type
             """
+            require_space_read(current_user, space_id)
             # Debug logging at endpoint entry
             self.logger.info(f"FastAPI received query_request as dict: {query_request.model_dump()}")
             self.logger.info(f"FastAPI endpoint received query_request.criteria.frame_criteria: {query_request.criteria.frame_criteria}")
@@ -365,13 +367,43 @@ class KGQueriesEndpoint:
                     ) for epf in pydantic_epf
                 ]
             
+            # Convert vector/geo criteria from API model to builder dataclass
+            builder_vector_criteria = None
+            builder_geo_criteria = None
+            pydantic_vc = criteria.vector_criteria
+            if not pydantic_vc and criteria.source_entity_criteria:
+                pydantic_vc = getattr(criteria.source_entity_criteria, 'vector_criteria', None)
+            if pydantic_vc:
+                from ..sparql.kg_query_builder import VectorCriteria as BuilderVectorCriteria
+                builder_vector_criteria = BuilderVectorCriteria(
+                    search_text=pydantic_vc.search_text,
+                    vector=pydantic_vc.vector,
+                    index_name=pydantic_vc.index_name,
+                    top_k=pydantic_vc.top_k,
+                    min_score=pydantic_vc.min_score,
+                )
+            pydantic_gc = criteria.geo_criteria
+            if not pydantic_gc and criteria.source_entity_criteria:
+                pydantic_gc = getattr(criteria.source_entity_criteria, 'geo_criteria', None)
+            if pydantic_gc:
+                from ..sparql.kg_query_builder import GeoCriteria as BuilderGeoCriteria
+                builder_geo_criteria = BuilderGeoCriteria(
+                    latitude=pydantic_gc.latitude,
+                    longitude=pydantic_gc.longitude,
+                    radius_m=pydantic_gc.radius_m,
+                    sort_by_distance=pydantic_gc.sort_by_distance,
+                    top_k=pydantic_gc.top_k,
+                )
+            
             entity_criteria = BuilderEntityQueryCriteria(
                 entity_type=criteria.source_entity_criteria.entity_type if criteria.source_entity_criteria else None,
                 entity_uris=criteria.source_entity_uris,
                 frame_criteria=builder_frame_criteria,
                 sort_criteria=builder_sort_criteria,
                 entity_property_filters=builder_entity_property_filters,
-                use_edge_pattern=use_edge_pattern
+                use_edge_pattern=use_edge_pattern,
+                vector_criteria=builder_vector_criteria,
+                geo_criteria=builder_geo_criteria,
             )
             
             # Build paginated query + count query

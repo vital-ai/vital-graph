@@ -11,9 +11,11 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from .entity_dedup import EntityDedupIndex
+from .entity_dedup_pg import EntityDedupIndexPG
 
 if TYPE_CHECKING:
     import asyncpg
+    from typing import Union
     from vitalgraph.signal.signal_manager import SignalManager
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ class DedupMixin:
     """Near-duplicate detection and cross-worker dedup sync methods."""
 
     pool: asyncpg.Pool
-    dedup_index: Optional[EntityDedupIndex]
+    dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]]
     signal_manager: Optional[SignalManager]
 
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
@@ -57,8 +59,11 @@ class DedupMixin:
             'locality': locality,
         }
 
-        # Phase 1: Get candidate IDs from LSH (hits MemoryDB)
-        candidate_ids = self.dedup_index.get_candidate_ids(entity)
+        # Phase 1: Get candidate IDs from LSH
+        if isinstance(self.dedup_index, EntityDedupIndexPG):
+            candidate_ids = await self.dedup_index.get_candidate_ids(entity)
+        else:
+            candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
         if not candidate_ids:
             logger.info("find_similar(%s): 0 LSH candidates", name)
             return []
@@ -131,7 +136,10 @@ class DedupMixin:
             return []
 
         exclude_ids = {entity.get('entity_id')}
-        candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
+        if isinstance(self.dedup_index, EntityDedupIndexPG):
+            candidate_ids = await self.dedup_index.get_candidate_ids(entity)
+        else:
+            candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
         if not candidate_ids:
             return []
 
@@ -199,15 +207,24 @@ class DedupMixin:
                 return
 
             if action == 'remove':
-                await self.dedup_index.async_remove_entity(entity_id)
+                if isinstance(self.dedup_index, EntityDedupIndexPG):
+                    await self.dedup_index.remove_entity(entity_id)
+                else:
+                    await self.dedup_index.async_remove_entity(entity_id)
                 logger.debug(f"Dedup sync: removed {entity_id}")
             elif action == 'add':
                 entity = await self.get_entity(entity_id)
                 if entity:
-                    await self.dedup_index.async_add_entity(entity_id, entity)
+                    if isinstance(self.dedup_index, EntityDedupIndexPG):
+                        await self.dedup_index.add_entity(entity_id, entity)
+                    else:
+                        await self.dedup_index.async_add_entity(entity_id, entity)
                     logger.debug(f"Dedup sync: added/updated {entity_id}")
                 else:
                     # Entity may have been deleted between notify and handler
-                    await self.dedup_index.async_remove_entity(entity_id)
+                    if isinstance(self.dedup_index, EntityDedupIndexPG):
+                        await self.dedup_index.remove_entity(entity_id)
+                    else:
+                        await self.dedup_index.async_remove_entity(entity_id)
         except Exception as e:
             logger.warning(f"Dedup sync error for {data}: {e}")

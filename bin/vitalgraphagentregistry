@@ -1,0 +1,2 @@
+#!/bin/bash
+python -m vitalgraph.agent_registry_cmd.vitalgraph_agent_registry_cmd "$@"

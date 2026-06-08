@@ -20,8 +20,9 @@ import {
   HiExclamationCircle,
   HiCheckCircle
 } from 'react-icons/hi';
-import { mockSpaces, mockGraphs, type Space, type Graph } from '../mock';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
+import { extractGraphName } from '../utils/QuadUtils';
+import { formatFileSize } from '../utils/formatUtils';
 
 interface FileForm {
   name: string;
@@ -34,8 +35,8 @@ const FileUpload: React.FC = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const [space, setSpace] = useState<Space | null>(null);
-  const [graph, setGraph] = useState<Graph | null>(null);
+  const [spaceName, setSpaceName] = useState<string>('');
+  const [graphName, setGraphName] = useState<string>('');
   const [fileForm, setFileForm] = useState<FileForm>({
     name: '',
     description: '',
@@ -48,16 +49,22 @@ const FileUpload: React.FC = () => {
   const [success, setSuccess] = useState(false);
 
   React.useEffect(() => {
-    // Load space and graph data
-    if (spaceId) {
-      const foundSpace = mockSpaces.find(s => s.space === spaceId);
-      setSpace(foundSpace || null);
-    }
-    
-    if (graphId) {
-      const foundGraph = mockGraphs.find(g => g.id === parseInt(graphId));
-      setGraph(foundGraph || null);
-    }
+    // Load space and graph names
+    const loadNames = async () => {
+      if (spaceId) {
+        try {
+          const spaces = await apiService.getSpaces();
+          const found = spaces.find((s: { space: string; space_name?: string }) => s.space === spaceId);
+          setSpaceName(found?.space_name || spaceId);
+        } catch {
+          setSpaceName(spaceId);
+        }
+      }
+      if (graphId) {
+        setGraphName(extractGraphName(graphId));
+      }
+    };
+    loadNames();
   }, [spaceId, graphId]);
 
   const handleFileSelect = (files: FileList | null) => {
@@ -113,23 +120,26 @@ const FileUpload: React.FC = () => {
       formData.append('space_id', spaceId || '');
       formData.append('graph_id', graphId || '');
       
-      const response = await axios.post('/api/files/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            setUploadProgress(progress);
-          }
-        },
+      const params = new URLSearchParams();
+      params.set('space_id', spaceId || '');
+      params.set('graph_id', graphId || '');
+
+      const response = await apiService.makeRequest(`/api/files/upload?${params.toString()}`, {
+        method: 'POST',
+        body: formData,
       });
       
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(errData?.detail || `Upload failed with status ${response.status}`);
+      }
+      
+      setUploadProgress(100);
       setSuccess(true);
-      console.log('Upload successful:', response.data);
-    } catch (err: any) {
-      console.error('Upload failed:', err);
-      setError(err.response?.data?.detail || 'Failed to upload file. Please try again.');
+      const data = await response.json();
+      void data;
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to upload file. Please try again.');
     } finally {
       setIsUploading(false);
     }
@@ -145,14 +155,6 @@ const FileUpload: React.FC = () => {
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
   const isFormValid = fileForm.file && fileForm.name.trim().length > 0;
 
   return (
@@ -162,17 +164,17 @@ const FileUpload: React.FC = () => {
         <BreadcrumbItem href="/" icon={HiHome}>
           Home
         </BreadcrumbItem>
-        {space && (
+        {spaceName && (
           <BreadcrumbItem href={`/spaces/${spaceId}`}>
-            {space.space_name}
+            {spaceName}
           </BreadcrumbItem>
         )}
         <BreadcrumbItem href={`/space/${spaceId}/graphs`}>
           Graphs
         </BreadcrumbItem>
-        {graph && (
+        {graphName && (
           <BreadcrumbItem href={`/space/${spaceId}/graph/${graphId}`}>
-            {graph.graph_name}
+            {graphName}
           </BreadcrumbItem>
         )}
         <BreadcrumbItem href={`/space/${spaceId}/graph/${graphId}/files`}>
@@ -191,10 +193,10 @@ const FileUpload: React.FC = () => {
         </h1>
       </div>
 
-      {space && graph && (
+      {spaceName && graphName && (
         <div className="mb-6">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Uploading to <span className="font-medium">{space.space_name}</span> → <span className="font-medium">{graph.graph_name}</span>
+            Uploading to <span className="font-medium">{spaceName}</span> → <span className="font-medium">{graphName}</span>
           </p>
         </div>
       )}
@@ -254,7 +256,7 @@ const FileUpload: React.FC = () => {
                     Drop a file here or click to browse
                   </h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                    Supported formats: RDF/XML, Turtle, N-Triples, JSON-LD, N-Quads
+                    Supported formats: RDF/XML, Turtle, N-Triples, N-Quads
                   </p>
                   <Button
                     color="blue"
@@ -267,7 +269,7 @@ const FileUpload: React.FC = () => {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".rdf,.xml,.ttl,.nt,.jsonld,.nq,.n3"
+                    accept=".rdf,.xml,.ttl,.nt,.nq,.n3"
                     onChange={(e) => handleFileSelect(e.target.files)}
                     className="hidden"
                   />

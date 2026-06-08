@@ -7,8 +7,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .entity_dedup import compute_dedup_hash, EntityDedupIndex
+from .entity_dedup_pg import EntityDedupIndexPG
 
 if TYPE_CHECKING:
+    from typing import Union
     import asyncpg
 
 
@@ -16,7 +18,7 @@ class AliasMixin:
     """Alias CRUD methods."""
 
     pool: asyncpg.Pool
-    dedup_index: Optional[EntityDedupIndex]
+    dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]]
 
     async def _log_change(self, conn: asyncpg.Connection, entity_id: str,
                           change_type: str, details: Dict[str, Any],
@@ -74,7 +76,10 @@ class AliasMixin:
                         new_hash, entity_id
                     )
                     if self.dedup_index:
-                        await self.dedup_index.async_add_entity(entity_id, entity)
+                        if isinstance(self.dedup_index, EntityDedupIndexPG):
+                            await self.dedup_index.add_entity(entity_id, entity)
+                        else:
+                            await self.dedup_index.async_add_entity(entity_id, entity)
                         await self._notify_dedup_change('add', entity_id)
 
                 # Sync to Weaviate (aliases changed)
@@ -108,7 +113,10 @@ class AliasMixin:
                         new_hash, row['entity_id']
                     )
                     if self.dedup_index:
-                        await self.dedup_index.async_add_entity(row['entity_id'], entity)
+                        if isinstance(self.dedup_index, EntityDedupIndexPG):
+                            await self.dedup_index.add_entity(row['entity_id'], entity)
+                        else:
+                            await self.dedup_index.async_add_entity(row['entity_id'], entity)
                         await self._notify_dedup_change('add', row['entity_id'])
 
                 # Sync to Weaviate (aliases changed)

@@ -28,6 +28,7 @@ from vitalgraph.model.kgtypes_model import (
     KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse,
     KGTypeCreateRequest, KGTypeUpdateRequest, KGTypeBatchDeleteRequest
 )
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 class KGTypesEndpoint:
@@ -69,6 +70,7 @@ class KGTypesEndpoint:
             uri_list: Optional[str] = Query(None, description="Get multiple types by comma-separated URI list"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_read(current_user, space_id)
             # Handle specific URI request
             if uri:
                 return await self._get_kgtype_by_uri(space_id, graph_id, uri, current_user)
@@ -99,6 +101,7 @@ class KGTypesEndpoint:
             body: QuadRequest = Body(..., description="KGType objects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_kgtypes(space_id, graph_id, quads, current_user)
         
@@ -116,6 +119,7 @@ class KGTypesEndpoint:
             body: QuadRequest = Body(..., description="KGType objects serialized as JSON Quads"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._update_kgtypes(space_id, graph_id, quads, current_user)
         
@@ -135,6 +139,7 @@ class KGTypesEndpoint:
             request: Optional[KGTypeBatchDeleteRequest] = Body(None, description="Batch delete request with Union data support"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._delete_kgtypes(space_id, graph_id, uri, uri_list, request.data if request else None, current_user)
     
     async def _list_kgtypes(

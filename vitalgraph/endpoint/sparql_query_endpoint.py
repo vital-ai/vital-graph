@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLQueryRequest,
     SPARQLQueryResponse
 )
+from ..auth.role_dependencies import require_space_read
 
 
 class SPARQLQueryEndpoint:
@@ -42,6 +43,7 @@ class SPARQLQueryEndpoint:
             request: SPARQLQueryRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_read(current_user, space_id)
             return await self._execute_query(space_id, request.query, current_user, request.format)
         
         # GET endpoint for SPARQL queries (for simple queries)
@@ -61,6 +63,7 @@ class SPARQLQueryEndpoint:
             ),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_read(current_user, space_id)
             return await self._execute_query(space_id, query, current_user, format)
     
     async def _execute_query(

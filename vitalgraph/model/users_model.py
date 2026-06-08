@@ -25,14 +25,14 @@ class User(BaseModel):
         description="Unique username for authentication (required)",
         example="admin"
     )
-    full_name: str = Field(
-        ..., 
+    full_name: Optional[str] = Field(
+        "", 
         description="Full display name of the user",
         example="Admin User"
     )
-    email: str = Field(
-        ..., 
-        description="User email address for notifications and recovery (required)",
+    email: Optional[str] = Field(
+        "", 
+        description="User email address for notifications and recovery",
         example="admin@example.com"
     )
     profile_image: Optional[str] = Field(
@@ -82,3 +82,15 @@ class UserDeleteResponse(BaseDeleteResponse):
 class UserOperationResponse(BaseOperationResponse):
     """Response model for general user operations."""
     pass
+
+
+class PasswordChangeRequest(BaseModel):
+    """Request model for self-service password change."""
+    current_password: str = Field(..., description="Current password (must match stored hash)")
+    new_password: str = Field(..., min_length=8, description="New password (minimum 8 characters)")
+
+
+class PasswordChangeResponse(BaseModel):
+    """Response model for self-service password change."""
+    message: str = "Password changed successfully"
+    tokens_invalidated: bool = True

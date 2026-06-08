@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLUpdateRequest,
     SPARQLUpdateResponse
 )
+from ..auth.role_dependencies import require_space_write
 
 
 class SPARQLUpdateEndpoint:
@@ -42,6 +43,7 @@ class SPARQLUpdateEndpoint:
             request: SPARQLUpdateRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_update(space_id, request.update, current_user)
         
         # Form-based endpoint for SPARQL updates (SPARQL 1.1 Protocol compatibility)
@@ -57,6 +59,7 @@ class SPARQLUpdateEndpoint:
             update: str = Form(..., description="SPARQL update string"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_update(space_id, update, current_user)
     
     async def _execute_update(

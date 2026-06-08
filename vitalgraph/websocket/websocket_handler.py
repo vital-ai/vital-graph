@@ -40,7 +40,9 @@ class ConnectionManager:
             payload = self.auth.jwt_auth.verify_token(token, "access")
             username = payload.get("sub")
             
-            if username not in self.auth.users_db:
+            # Verify user exists in database
+            user = await self.auth._get_user_from_db(username)
+            if user is None:
                 logger.warning(f"User not found: {username}")
                 return None
             

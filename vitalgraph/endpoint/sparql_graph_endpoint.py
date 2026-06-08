@@ -16,6 +16,7 @@ from ..model.sparql_model import (
     GraphInfo,
     GraphInfoResponse
 )
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 class SPARQLGraphEndpoint:
@@ -45,6 +46,7 @@ class SPARQLGraphEndpoint:
             space_id: str,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_read(current_user, space_id)
             self.logger.info(f"List graphs endpoint called for space: {space_id}")
             return await self._list_graphs(space_id, current_user)
         
@@ -63,6 +65,7 @@ class SPARQLGraphEndpoint:
             request: SPARQLGraphRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_graph_operation(space_id, request, current_user)
         
         # GET endpoint to get graph info (catch-all route - must come after specific routes)
@@ -78,6 +81,7 @@ class SPARQLGraphEndpoint:
             graph_uri: str,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_read(current_user, space_id)
             return await self._get_graph_info(space_id, graph_uri, current_user)
         
         # PUT endpoint to create graph
@@ -93,6 +97,7 @@ class SPARQLGraphEndpoint:
             graph_uri: str,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             request = SPARQLGraphRequest(
                 operation="CREATE",
                 target_graph_uri=graph_uri
@@ -113,6 +118,7 @@ class SPARQLGraphEndpoint:
             silent: bool = Query(False, description="Execute silently"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             request = SPARQLGraphRequest(
                 operation="DROP",
                 target_graph_uri=graph_uri,

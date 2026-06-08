@@ -5,22 +5,48 @@ database:
   database: vitalgraphdb
   username: vitalgraph_user
   password: vitalgraph_password
-  
+
   pool_size: 10
   max_overflow: 20
   pool_timeout: 30
   pool_recycle: 3600
-  
+
 tables:
   prefix: "vitalgraph1_"
-  
- 
+
 auth:
   root_username: "admin"
   root_password: "admin"
-  
+
+# Object storage for import/export file staging
+file_storage:
+  backend: minio                          # "minio" or "s3"
+  minio:
+    endpoint_url: http://localhost:9000
+    access_key_id: minioadmin
+    secret_access_key: minioadmin
+    bucket_name: vitalgraph-files
+    use_ssl: false
+  s3:
+    endpoint_url: ""
+    access_key_id: ""
+    secret_access_key: ""
+    bucket_name: vitalgraph-files
+    region: us-east-1
+    use_ssl: true
+
+# Import/export job settings
+import_export:
+  max_concurrent_jobs: 2
+  default_batch_size: 5000
+  staging_bucket: vitalgraph-staging
+  job_retention_days: 30                  # Cleanup completed/failed jobs older than this
+  cleanup_interval_seconds: 86400         # How often the cleanup job runs (24h)
+
+# Periodic maintenance
+maintenance:
+  enabled: true
+  interval_seconds: 300
 
 app:
   log_level: INFO
-  
- 

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from starlette.middleware.sessions import SessionMiddleware
+from vitalgraph.metrics.metrics_middleware import MetricsMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -85,7 +86,18 @@ class VitalGraphAppImpl:
             raise ValueError("JWT_SECRET_KEY environment variable is required but not set")
         
         self.logger.info("✅ Using JWT secret key from environment variable")
-        self.auth = VitalGraphAuth(secret_key=jwt_secret)
+        auth_config = self.config.get_auth_config() if self.config else {}
+        token_cache_ttl = auth_config.get("token_version_cache_ttl_seconds", 60)
+        self.auth = VitalGraphAuth(
+            secret_key=jwt_secret, db_impl=self.db_impl,
+            token_version_cache_ttl=token_cache_ttl,
+        )
+        
+        # Configure bootstrap admin from config/env (only if credentials are explicitly set)
+        bootstrap_user = auth_config.get("root_username", os.getenv("AUTH_ROOT_USERNAME", ""))
+        bootstrap_pass = auth_config.get("root_password", os.getenv("AUTH_ROOT_PASSWORD", ""))
+        if bootstrap_user and bootstrap_pass:
+            self.auth.set_bootstrap_admin(bootstrap_user, bootstrap_pass)
         
         # Initialize WebSocket connection manager
         self.websocket_manager = ConnectionManager(self.auth)
@@ -123,6 +135,15 @@ class VitalGraphAppImpl:
     def _setup_middleware(self):
         """Setup CORS and session middleware"""
         
+        # Add audit context middleware (captures IP/UA for audit events)
+        @self.app.middleware("http")
+        async def audit_context_middleware(request: Request, call_next):
+            from vitalgraph.auth.request_context import set_request_context
+            ip = request.client.host if request.client else None
+            ua = request.headers.get("user-agent")
+            set_request_context(ip, ua)
+            return await call_next(request)
+
         # Add request logging middleware
         @self.app.middleware("http")
         async def log_requests(request: Request, call_next):
@@ -142,6 +163,9 @@ class VitalGraphAppImpl:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+        # Add query metrics middleware (reads collector from app.state during requests)
+        self.app.add_middleware(MetricsMiddleware)
+        
         # Add session middleware for authentication
         self.app.add_middleware(
             SessionMiddleware,
@@ -187,6 +211,8 @@ class VitalGraphAppImpl:
                     
                     # Refresh db_impl reference (sparql_sql backend sets it during connect)
                     self.db_impl = self.vital_graph_impl.get_db_impl()
+                    self.auth.set_db_impl(self.db_impl)
+                    self.api.db = self.db_impl
                     
                     # Update space_manager reference after database connection
                     self.space_manager = self.vital_graph_impl.get_space_manager()
@@ -200,6 +226,13 @@ class VitalGraphAppImpl:
                         self.logger.debug(f"🔍 STARTUP: Endpoints already registered during init - they will use this updated API instance")
                     else:
                         self.logger.error(f"❌ STARTUP ERROR: space_manager is still None after database connection")
+
+                    # Set signal_manager on VitalGraphAPI for endpoint-level NOTIFY
+                    sm = self.vital_graph_impl.signal_manager
+                    if sm is None:
+                        sm = self.db_impl.get_signal_manager() if self.db_impl else None
+                    if sm:
+                        self.api.signal_manager = sm
                     
                     # Ensure SpaceManager is initialized from database after connection
                     self.logger.debug("Checking SpaceManager for initialization...")
@@ -236,8 +269,15 @@ class VitalGraphAppImpl:
                         if pool:
                             from vitalgraph.entity_registry.entity_registry_impl import EntityRegistryImpl
                             from vitalgraph.entity_registry.entity_dedup import EntityDedupIndex
+                            from vitalgraph.entity_registry.entity_dedup_pg import EntityDedupIndexPG
                             from vitalgraph.entity_registry.entity_weaviate import EntityWeaviateIndex
-                            dedup_index = EntityDedupIndex.from_env()
+                            from vitalgraph.config.config_loader import get_scoped_env
+
+                            dedup_backend = get_scoped_env('ENTITY_DEDUP_BACKEND', 'memory').lower()
+                            if dedup_backend == 'postgresql':
+                                dedup_index = EntityDedupIndexPG.from_env(pool)
+                            else:
+                                dedup_index = EntityDedupIndex.from_env()
                             self.logger.info("Initializing Weaviate index (profile=%s)...",
                                              os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper())
                             weaviate_index = await EntityWeaviateIndex.from_env()
@@ -285,6 +325,8 @@ class VitalGraphAppImpl:
                             from vitalgraph.process.process_tracker import ProcessTracker
                             from vitalgraph.process.process_scheduler import ProcessScheduler
                             from vitalgraph.process.maintenance_job import MaintenanceJob
+                            from vitalgraph.process.analytics_job import AnalyticsJob
+                            from vitalgraph.process.metrics_rollup_job import MetricsRollupJob
                             
                             # Get PostgreSQL config for lock manager connection
                             backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
@@ -308,8 +350,62 @@ class VitalGraphAppImpl:
                                 handler=maintenance_job,
                                 process_type="maintenance",
                             )
+                            
+                            # Register analytics job (default: once per day)
+                            analytics_config = self.config.config_data.get('analytics', {})
+                            analytics_interval = analytics_config.get('interval_seconds', 86400)
+                            analytics_job = AnalyticsJob(pool)
+                            self.process_scheduler.register_job(
+                                name="space_analytics",
+                                interval_seconds=analytics_interval,
+                                handler=analytics_job,
+                                process_type="analytics",
+                            )
+                            
+                            # Initialize PostgreSQL-based metrics collector and rollup job
+                            try:
+                                from vitalgraph.metrics.postgres_metrics_collector import PostgresMetricsCollector
+                                metrics_collector = PostgresMetricsCollector(pool)
+                                await metrics_collector.start()
+                                # Store on app.state for middleware access
+                                self.app.state.metrics_collector = metrics_collector
+                                # Store on API for endpoint access
+                                self.api._metrics_collector = metrics_collector
+                                # Register rollup job (hourly) — aggregates minute→hour, purges old data
+                                metrics_rollup = MetricsRollupJob(pool)
+                                self.process_scheduler.register_job(
+                                    name="metrics_rollup",
+                                    interval_seconds=3600,
+                                    handler=metrics_rollup,
+                                    process_type="metrics",
+                                )
+                                self.logger.info("✅ Query metrics collector initialized (PostgreSQL-backed)")
+                            except Exception as e:
+                                self.logger.warning(f"Query metrics initialization failed (non-critical): {e}")
+
+                            # Register import/export cleanup job
+                            try:
+                                from vitalgraph.process.import_export_cleanup_job import ImportExportCleanupJob
+                                ie_config = self.config.get_import_export_config()
+                                ie_retention = ie_config.get('job_retention_days', 30)
+                                ie_interval = ie_config.get('cleanup_interval_seconds', 86400)
+                                cleanup_job = ImportExportCleanupJob(
+                                    pool,
+                                    retention_days=ie_retention,
+                                    staging_bucket=ie_config.get('staging_bucket', 'vitalgraph-staging'),
+                                )
+                                self.process_scheduler.register_job(
+                                    name="import_export_cleanup",
+                                    interval_seconds=ie_interval,
+                                    handler=cleanup_job,
+                                    process_type="maintenance",
+                                )
+                                self.logger.info(f"✅ Import/export cleanup job registered (retention={ie_retention}d, interval={ie_interval}s)")
+                            except Exception as e:
+                                self.logger.warning(f"Import/export cleanup job registration failed (non-critical): {e}")
+
                             await self.process_scheduler.start()
-                            self.logger.info(f"✅ Process scheduler started (interval={interval}s, enabled={enabled})")
+                            self.logger.info(f"✅ Process scheduler started (maintenance={interval}s, analytics={analytics_interval}s, enabled={enabled})")
                         else:
                             self.logger.warning("Process scheduler skipped - no connection pool available")
                     except Exception as e:
@@ -403,6 +499,30 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"Cache invalidation signal registration failed (non-critical): {e}")
 
+                    # Register token version cache invalidation for cross-instance auth sync
+                    try:
+                        signal_manager = self.vital_graph_impl.signal_manager
+                        if signal_manager is None:
+                            signal_manager = self.db_impl.get_signal_manager() if self.db_impl else None
+                        if signal_manager:
+                            from vitalgraph.signal.signal_manager import CHANNEL_TOKEN_VERSION
+
+                            async def _handle_token_version_signal(data: dict):
+                                username = data.get("username", "")
+                                if username:
+                                    self.auth.invalidate_token_cache(username)
+                                    self.logger.debug(f"Token version cache invalidated for '{username}' via NOTIFY")
+
+                            signal_manager.register_callback(
+                                CHANNEL_TOKEN_VERSION,
+                                _handle_token_version_signal,
+                            )
+                            self.logger.info("✅ Token version cache cross-instance sync registered on CHANNEL_TOKEN_VERSION")
+                        else:
+                            self.logger.warning("Token version cache signal sync skipped — signal_manager not available")
+                    except Exception as e:
+                        self.logger.warning(f"Token version cache signal registration failed (non-critical): {e}")
+
                     # Register entity graph cache invalidation for cross-instance sync
                     try:
                         signal_manager = self.vital_graph_impl.signal_manager
@@ -462,6 +582,21 @@ class VitalGraphAppImpl:
                             self.logger.warning("SignalManager not available — NOTIFY listener not started")
                     except Exception as e:
                         self.logger.warning(f"SignalManager listener start failed (non-critical): {e}")
+
+                    # Configure audit logging with DB pool
+                    try:
+                        pool = getattr(self.db_impl, 'connection_pool', None)
+                        if pool:
+                            from vitalgraph.auth.audit import configure_audit
+                            audit_enabled = True
+                            if self.config:
+                                audit_cfg = self.config.get_auth_config().get('audit', {})
+                                audit_enabled = audit_cfg.get('enabled', True)
+                            configure_audit(db_pool=pool, enabled=audit_enabled)
+                            self.logger.info("✅ Audit logging configured (db_pool=%s, enabled=%s)",
+                                             pool is not None, audit_enabled)
+                    except Exception as e:
+                        self.logger.warning(f"Audit configuration failed (non-critical): {e}")
 
                     # Start incremental backfill of server-managed entity properties
                     try:
@@ -529,6 +664,14 @@ class VitalGraphAppImpl:
                 except Exception as e:
                     self.logger.warning(f"Error stopping event loop monitor: {e}")
                 
+                # Shut down import/export job manager (cancel running jobs)
+                if hasattr(self, 'import_export_manager') and self.import_export_manager:
+                    try:
+                        await self.import_export_manager.shutdown()
+                        self.logger.info("✅ Import/export job manager shut down")
+                    except Exception as e:
+                        self.logger.warning(f"Error shutting down import/export manager: {e}")
+
                 # Close signal manager (stops listen loops and closes connections)
                 if self.vital_graph_impl and self.vital_graph_impl.signal_manager:
                     self.logger.info("Closing signal manager...")
@@ -594,6 +737,16 @@ class VitalGraphAppImpl:
         self._init_process_routes()
         self.logger.info("Initializing admin routes...")
         self._init_admin_routes()
+        self.logger.info("Initializing vector mapping routes...")
+        self._init_vector_mapping_routes()
+        self.logger.info("Initializing vector index routes...")
+        self._init_vector_index_routes()
+        self.logger.info("Initializing geo config routes...")
+        self._init_geo_config_routes()
+        self.logger.info("Initializing geo points routes...")
+        self._init_geo_points_routes()
+        self.logger.info("Initializing metrics routes...")
+        self._init_metrics_routes()
         self.logger.info("Initializing frontend routes...")
         self._init_frontend_routes()
         self.logger.info("All endpoints initialized successfully!")
@@ -662,17 +815,33 @@ class VitalGraphAppImpl:
     
     def _init_data_routers(self):
         """Initialize data import/export endpoint routers."""
-        # Import data endpoint routers
         from vitalgraph.endpoint.import_endpoint import create_import_router
         from vitalgraph.endpoint.export_endpoint import create_export_router
-        
-        # Create routers with space manager and auth dependency
-        import_router = create_import_router(self.space_manager, self.get_current_user)
-        export_router = create_export_router(self.space_manager, self.get_current_user)
-        
+        from vitalgraph.jobs.import_export_manager import ImportExportJobManager
+
+        # Get the asyncpg pool and signal manager
+        pool = getattr(self.db_impl, 'connection_pool', None)
+        signal_mgr = None
+        if self.vital_graph_impl:
+            signal_mgr = self.vital_graph_impl.signal_manager
+        if signal_mgr is None and self.db_impl:
+            signal_mgr = getattr(self.db_impl, 'get_signal_manager', lambda: None)()
+
+        if pool is None:
+            self.logger.warning("Data import/export routers skipped — no connection pool available")
+            return
+
+        # Create the shared job manager
+        self.import_export_manager = ImportExportJobManager(pool, signal_manager=signal_mgr)
+
+        # Create routers with job manager, space manager and auth dependency
+        import_router = create_import_router(self.import_export_manager, self.space_manager, self.get_current_user)
+        export_router = create_export_router(self.import_export_manager, self.space_manager, self.get_current_user)
+
         # Include routers in the FastAPI app
         self.app.include_router(import_router, prefix="/api/data", tags=["Data"])
         self.app.include_router(export_router, prefix="/api/data", tags=["Data"])
+        self.logger.info("✅ Data import/export routers initialized")
     
     def _init_auth_routes(self):
         """Initialize authentication routes."""
@@ -729,10 +898,15 @@ class VitalGraphAppImpl:
     def _init_user_routes(self):
         """Initialize user management routes."""
         from vitalgraph.endpoint.users_endpoint import create_users_router
+        from vitalgraph.endpoint.api_keys_endpoint import create_api_keys_router
         
         # Create and include users router
         users_router = create_users_router(self.api, self.get_current_user)
         self.app.include_router(users_router, prefix="/api")
+
+        # Create and include API keys router
+        api_keys_router = create_api_keys_router(self.api, self.get_current_user)
+        self.app.include_router(api_keys_router)
     
     def _init_websocket_routes(self):
         """Initialize WebSocket routes."""
@@ -768,6 +942,41 @@ class VitalGraphAppImpl:
         
         admin_router = create_admin_router(self.space_manager, self.get_current_user)
         self.app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
+    
+    def _init_vector_mapping_routes(self):
+        """Initialize vector mapping CRUD endpoint routes."""
+        from vitalgraph.endpoint.vector_mappings_endpoint import create_vector_mappings_router
+        
+        vector_mappings_router = create_vector_mappings_router(self, self.get_current_user)
+        self.app.include_router(vector_mappings_router, prefix="/api", tags=["Vector Mappings"])
+    
+    def _init_vector_index_routes(self):
+        """Initialize vector index CRUD endpoint routes."""
+        from vitalgraph.endpoint.vector_indexes_endpoint import create_vector_indexes_router
+        
+        vector_indexes_router = create_vector_indexes_router(self, self.get_current_user)
+        self.app.include_router(vector_indexes_router, prefix="/api", tags=["Vector Indexes"])
+    
+    def _init_geo_config_routes(self):
+        """Initialize geo config CRUD endpoint routes."""
+        from vitalgraph.endpoint.geo_config_endpoint import create_geo_config_router
+        
+        geo_config_router = create_geo_config_router(self, self.get_current_user)
+        self.app.include_router(geo_config_router, prefix="/api", tags=["Geo Config"])
+
+    def _init_geo_points_routes(self):
+        """Initialize geo points listing/query endpoint routes."""
+        from vitalgraph.endpoint.geo_points_endpoint import create_geo_points_router
+        
+        geo_points_router = create_geo_points_router(self, self.get_current_user)
+        self.app.include_router(geo_points_router, prefix="/api", tags=["Geo"])
+    
+    def _init_metrics_routes(self):
+        """Initialize query metrics endpoint routes."""
+        from vitalgraph.endpoint.metrics_endpoint import MetricsEndpoint
+        
+        metrics_endpoint = MetricsEndpoint(self.api)
+        self.app.include_router(metrics_endpoint.router, prefix="/api", tags=["Metrics"])
     
     def _init_frontend_routes(self):
         """Initialize frontend serving routes."""

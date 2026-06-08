@@ -9,8 +9,12 @@ from fastapi.responses import JSONResponse
 import logging
 
 from ..model.spaces_model import (
-    Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse, SpaceResponse, SpaceInfoResponse
+    Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse, SpaceResponse, SpaceInfoResponse,
+    SpaceAnalyticsResponse, SpaceAnalyticsData,
+    EntityAnalytics, FrameAnalytics, RelationAnalytics, PropertyAnalytics,
+    TypeCount, ConnectedEntity, PredicateCount,
 )
+from ..auth.role_dependencies import require_space_read, require_space_write, require_admin, get_space_access
 
 
 class SpacesEndpoint:
@@ -35,6 +39,9 @@ class SpacesEndpoint:
         try:
             spaces = await self.api.list_spaces(current_user)
             self.logger.debug(f"🔍 ENDPOINT: api.list_spaces returned: {spaces}")
+            
+            # Filter to only spaces the user has access to
+            spaces = self._filter_accessible_spaces(spaces, current_user)
             
             response = SpacesListResponse(
                 spaces=spaces,
@@ -94,8 +101,11 @@ class SpacesEndpoint:
             # Get detailed info from space_manager
             info = await self.api.space_manager.get_space_info(space_id)
             
-            # Extract statistics and quad_dump from info
+            # Extract statistics — some backends nest under 'statistics', others are flat
             statistics = info.get('statistics') if info else None
+            if statistics is None and info:
+                # Use the full info dict as statistics (sparql_sql backend returns flat)
+                statistics = info
             quad_dump = info.get('quad_dump') if info else None
             
             return SpaceInfoResponse(
@@ -116,6 +126,109 @@ class SpacesEndpoint:
                 quad_dump=None
             )
     
+    async def get_space_analytics(self, space_id: str, refresh: bool, graph_uri=None, current_user=None):
+        """Get analytics for a space. Optionally trigger a fresh computation."""
+        try:
+            from datetime import datetime, timezone
+            pool = getattr(self.api, '_pool', None) or getattr(getattr(self.api, 'db_impl', None), 'connection_pool', None)
+            if not pool:
+                # Try getting pool from space_manager backend
+                sm = getattr(self.api, 'space_manager', None)
+                if sm and hasattr(sm, '_backend'):
+                    pool = getattr(sm._backend, '_pool', None)
+                if not pool and sm:
+                    # Try via space records
+                    for sr in getattr(sm, '_spaces', {}).values():
+                        backend = getattr(getattr(sr, 'space_impl', None), 'backend', None)
+                        if backend:
+                            pool = getattr(backend, '_pool', None) or getattr(getattr(backend, '_db', None), '_pool', None)
+                            if pool:
+                                break
+
+            if not pool:
+                return SpaceAnalyticsResponse(
+                    success=False,
+                    message="Database pool not available for analytics"
+                )
+
+            if refresh or graph_uri:
+                from ..process.analytics_job import AnalyticsJob
+                job = AnalyticsJob(pool)
+                result = await job.trigger_compute(space_id, graph_uri=graph_uri)
+                if graph_uri and result and 'analytics' in result:
+                    # Return live-computed graph-filtered analytics
+                    data = result['analytics']
+                    elapsed_ms = result.get('computation_time_ms', 0)
+                    analytics = SpaceAnalyticsData(
+                        space_id=space_id,
+                        computed_at=datetime.now(timezone.utc).isoformat(),
+                        computation_time_ms=elapsed_ms,
+                        stale=False,
+                        entity_analytics=EntityAnalytics(**(data.get("entity_analytics", {}))),
+                        frame_analytics=FrameAnalytics(**(data.get("frame_analytics", {}))),
+                        relation_analytics=RelationAnalytics(**(data.get("relation_analytics", {}))),
+                        property_analytics=PropertyAnalytics(**(data.get("property_analytics", {}))),
+                    )
+                    return SpaceAnalyticsResponse(
+                        success=True,
+                        message=f"Analytics computed for graph: {graph_uri}",
+                        analytics=analytics
+                    )
+
+            # Read latest analytics from space_analytics table
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """SELECT analytics_json, computed_at, computation_time_ms
+                       FROM space_analytics
+                       WHERE space_id = $1
+                       ORDER BY computed_at DESC
+                       LIMIT 1""",
+                    space_id
+                )
+
+            if not row:
+                return SpaceAnalyticsResponse(
+                    success=True,
+                    message="No analytics computed yet for this space",
+                    analytics=None
+                )
+
+            import json
+            data = json.loads(row["analytics_json"]) if isinstance(row["analytics_json"], str) else row["analytics_json"]
+            computed_at = row["computed_at"]
+            computation_time_ms = row["computation_time_ms"]
+
+            # Check staleness (>24h)
+            stale = False
+            if computed_at:
+                age = (datetime.now(timezone.utc) - computed_at).total_seconds()
+                stale = age > 86400
+
+            # Build typed response
+            analytics = SpaceAnalyticsData(
+                space_id=space_id,
+                computed_at=computed_at.isoformat() if computed_at else None,
+                computation_time_ms=computation_time_ms,
+                stale=stale,
+                entity_analytics=EntityAnalytics(**(data.get("entity_analytics", {}))),
+                frame_analytics=FrameAnalytics(**(data.get("frame_analytics", {}))),
+                relation_analytics=RelationAnalytics(**(data.get("relation_analytics", {}))),
+                property_analytics=PropertyAnalytics(**(data.get("property_analytics", {}))),
+            )
+
+            return SpaceAnalyticsResponse(
+                success=True,
+                message="Analytics retrieved successfully",
+                analytics=analytics
+            )
+
+        except Exception as e:
+            self.logger.warning(f"Failed to get space analytics: {space_id} - {e}")
+            return SpaceAnalyticsResponse(
+                success=False,
+                message=f"Failed to get space analytics: {e}"
+            )
+
     async def update_space(self, space_id: str, space: Space, current_user: Dict):
         """Update an existing space."""
         updated_space = await self.api.update_space(space_id, space.dict(), current_user)
@@ -136,12 +249,28 @@ class SpacesEndpoint:
     async def filter_spaces(self, name_filter: str, current_user: Dict):
         """Filter spaces by name."""
         spaces = await self.api.filter_spaces_by_name(name_filter, current_user)
+        # Filter to only spaces the user has access to
+        spaces = self._filter_accessible_spaces(spaces, current_user)
         return SpacesListResponse(
             spaces=spaces,
             total_count=len(spaces),
             page_size=len(spaces),  # No pagination implemented yet
             offset=0
         )
+    
+    def _filter_accessible_spaces(self, spaces: list, current_user: Dict) -> list:
+        """Return only spaces the user has at least read access to.
+        
+        Admins see all spaces. Non-admin users see only spaces
+        listed in their spaces map (including wildcard '*').
+        """
+        if current_user.get('role') == 'admin':
+            return spaces
+        
+        return [
+            s for s in spaces
+            if get_space_access(current_user, s.get('space', '') if isinstance(s, dict) else getattr(s, 'space', '')) is not None
+        ]
 
     def _setup_routes(self):
         """Setup space management routes."""
@@ -176,6 +305,7 @@ class SpacesEndpoint:
             description="Create a new graph space for storing RDF data and knowledge graphs"
         )
         async def add_space_route(space: Space, current_user: Dict = Depends(self.auth_dependency)):
+            require_admin(current_user)
             return await self.add_space(space, current_user)
         
         @self.router.get(
@@ -186,6 +316,7 @@ class SpacesEndpoint:
             description="Retrieve detailed information about a specific graph space by ID"
         )
         async def get_space_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+            require_space_read(current_user, space_id)
             return await self.get_space(space_id, current_user)
         
         @self.router.get(
@@ -196,8 +327,25 @@ class SpacesEndpoint:
             description="Retrieve detailed space information including statistics and metadata"
         )
         async def get_space_info_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+            require_space_read(current_user, space_id)
             return await self.get_space_info(space_id, current_user)
         
+        @self.router.get(
+            "/spaces/{space_id}/analytics",
+            response_model=SpaceAnalyticsResponse,
+            tags=["Spaces"],
+            summary="Get Space Analytics",
+            description="Retrieve KG analytics for a space (entity/frame/relation/property distributions). Use refresh=true to trigger recomputation."
+        )
+        async def get_space_analytics_route(
+            space_id: str,
+            refresh: bool = Query(False, description="Force fresh analytics computation"),
+            graph_uri: str = Query(None, description="Filter analytics to a specific graph URI"),
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            require_space_read(current_user, space_id)
+            return await self.get_space_analytics(space_id, refresh, graph_uri, current_user)
+
         @self.router.put(
             "/spaces/{space_id}",
             response_model=SpaceUpdateResponse,
@@ -206,6 +354,7 @@ class SpacesEndpoint:
             description="Update an existing graph space (requires complete space object)"
         )
         async def update_space_route(space_id: str, space: Space, current_user: Dict = Depends(self.auth_dependency)):
+            require_space_write(current_user, space_id)
             return await self.update_space(space_id, space, current_user)
         
         @self.router.delete(
@@ -216,6 +365,7 @@ class SpacesEndpoint:
             description="Permanently delete a graph space and all associated RDF data"
         )
         async def delete_space_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+            require_admin(current_user)
             return await self.delete_space(space_id, current_user)
         
         @self.router.get(

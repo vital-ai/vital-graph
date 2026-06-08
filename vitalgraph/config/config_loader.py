@@ -178,8 +178,14 @@ class VitalGraphConfig:
                 'prefix': self._get_profile_env('TABLE_PREFIX', 'vg_')
             },
             'auth': {
-                'root_username': self._get_profile_env('AUTH_ROOT_USERNAME', 'admin'),
-                'root_password': self._get_profile_env('AUTH_ROOT_PASSWORD', 'admin')
+                'root_username': self._get_profile_env('AUTH_ROOT_USERNAME', ''),
+                'root_password': self._get_profile_env('AUTH_ROOT_PASSWORD', ''),
+                'token_version_cache_ttl_seconds': int(self._get_profile_env('AUTH_TOKEN_CACHE_TTL', '60')),
+                'audit': {
+                    'enabled': self._get_profile_env('AUTH_AUDIT_ENABLED', 'true').lower() == 'true',
+                    'level': self._get_profile_env('AUTH_AUDIT_LEVEL', 'INFO'),
+                    'retention_days': int(self._get_profile_env('AUTH_AUDIT_RETENTION_DAYS', '90')),
+                },
             },
             'file_storage': {
                 'backend': self._get_profile_env('STORAGE_BACKEND', 'minio'),
@@ -198,6 +204,13 @@ class VitalGraphConfig:
                     'region': self._get_profile_env('STORAGE_REGION', 'us-east-1'),
                     'use_ssl': self._get_profile_env('STORAGE_USE_SSL', 'true').lower() == 'true'
                 }
+            },
+            'import_export': {
+                'max_concurrent_jobs': int(self._get_profile_env('IMPORT_EXPORT_MAX_CONCURRENT', '2')),
+                'default_batch_size': int(self._get_profile_env('IMPORT_EXPORT_BATCH_SIZE', '5000')),
+                'staging_bucket': self._get_profile_env('IMPORT_EXPORT_STAGING_BUCKET', 'vitalgraph-staging'),
+                'job_retention_days': int(self._get_profile_env('IMPORT_EXPORT_RETENTION_DAYS', '30')),
+                'cleanup_interval_seconds': int(self._get_profile_env('IMPORT_EXPORT_CLEANUP_INTERVAL', '86400')),
             },
             'maintenance': {
                 'enabled': self._get_profile_env('MAINTENANCE_ENABLED', 'true').lower() == 'true',
@@ -285,6 +298,14 @@ class VitalGraphConfig:
         """
         return self.config_data.get('auth', {})
     
+    def get_import_export_config(self) -> Dict[str, Any]:
+        """Get import/export job configuration section."""
+        return self.config_data.get('import_export', {})
+
+    def get_file_storage_config(self) -> Dict[str, Any]:
+        """Get file storage configuration section (minio/s3)."""
+        return self.config_data.get('file_storage', {})
+
     def get_app_config(self) -> Dict[str, Any]:
         """
         Get application configuration section.

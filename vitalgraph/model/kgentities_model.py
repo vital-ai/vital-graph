@@ -192,6 +192,39 @@ class SortCriteria(BaseModel):
         return self
 
 
+class VectorSearchCriteria(BaseModel):
+    """Criteria for vector similarity search.
+
+    Generates vg:vectorSimilarity or vg:vectorNearby SPARQL BIND.
+    Results are ordered by similarity score (DESC) and limited to top_k.
+    """
+    search_text: Optional[str] = Field(None, description="Text to vectorize server-side for similarity search")
+    vector: Optional[str] = Field(None, description="Pre-computed vector literal, e.g. '[0.1,0.2,...]'")
+    index_name: str = Field("entity_default", description="Vector index name")
+    top_k: int = Field(10, description="Maximum results (becomes LIMIT)", ge=1, le=1000)
+    min_score: Optional[float] = Field(None, description="Minimum similarity score threshold (0.0–1.0)", ge=0.0, le=1.0)
+
+    @model_validator(mode='after')
+    def validate_vector_criteria(self) -> 'VectorSearchCriteria':
+        if not self.search_text and not self.vector:
+            raise ValueError("Either search_text or vector must be provided")
+        if self.search_text and self.vector:
+            raise ValueError("Only one of search_text or vector may be provided")
+        return self
+
+
+class GeoSearchCriteria(BaseModel):
+    """Criteria for geographic proximity search.
+
+    Generates vg:geoDistance BIND and optional vg:withinRadius FILTER.
+    """
+    latitude: float = Field(..., description="Latitude of search center", ge=-90.0, le=90.0)
+    longitude: float = Field(..., description="Longitude of search center", ge=-180.0, le=180.0)
+    radius_m: Optional[float] = Field(None, description="Filter to within radius (meters)", gt=0)
+    sort_by_distance: bool = Field(False, description="Sort results by distance ascending")
+    top_k: Optional[int] = Field(None, description="Limit results for nearest-N queries", ge=1, le=1000)
+
+
 class EntityQueryCriteria(BaseModel):
     """Criteria for entity queries."""
     search_string: Optional[str] = Field(None, description="Search string for entity name/label")
@@ -201,6 +234,8 @@ class EntityQueryCriteria(BaseModel):
     sort_criteria: Optional[List[SortCriteria]] = Field(None, description="Multi-level sorting criteria")
     filters: Optional[List[QueryFilter]] = Field(None, description="Property-based filters")
     entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
+    vector_criteria: Optional[VectorSearchCriteria] = Field(None, description="Vector similarity search criteria")
+    geo_criteria: Optional[GeoSearchCriteria] = Field(None, description="Geographic proximity search criteria")
 
 
 class EntityQueryRequest(BaseModel):

@@ -1,537 +1,347 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useState, useEffect, useCallback } from 'react';
+import { apiService } from '../services/ApiService';
 import {
-  Button,
-  Card,
-  Textarea,
-  Alert,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeadCell,
-  TableRow,
-  Spinner,
-  Select,
-  Label,
-  ToggleSwitch
+  Alert, Button, Select, Spinner, Textarea, ToggleSwitch
 } from 'flowbite-react';
-import { HiPlay, HiSearch, HiDocumentText, HiDatabase } from 'react-icons/hi';
+import { HiPlay, HiSearch, HiDocumentText, HiDatabase, HiX, HiPencil, HiCheck } from 'react-icons/hi';
+import { type SpaceInfo } from '../types/api';
+import { usePageTitle } from '../hooks/usePageTitle';
 
-interface Space {
-  id: number;
-  tenant: string;
-  space: string;
-  space_name: string;
-  space_description: string;
-  update_time: string;
-}
+type SparqlMode = 'query' | 'update';
 
 interface QueryResult {
-  head?: {
-    vars: string[];
-  };
+  head?: { vars: string[] };
   results?: {
     bindings: Record<string, { type: string; value: string; datatype?: string }>[];
   };
   boolean?: boolean;
-  triples?: any[]; // For CONSTRUCT/DESCRIBE queries
+  triples?: unknown[];
   query_time?: number;
 }
 
-const SPARQL: React.FC = () => {
-  const [query, setQuery] = useState<string>('');
-  const [results, setResults] = useState<QueryResult | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [selectedSpace, setSelectedSpace] = useState<string>('');
-  const [spacesLoading, setSpacesLoading] = useState<boolean>(true);
-  const [pagingEnabled, setPagingEnabled] = useState<boolean>(false);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(20);
-  const [totalResults, setTotalResults] = useState<number>(0);
+interface UpdateResult {
+  success?: boolean;
+  message?: string;
+  update_time?: number;
+}
 
-  // Fetch available spaces
+const SAMPLE_QUERIES = [
+  { name: 'List all triples', query: `SELECT ?subject ?predicate ?object\nWHERE {\n  ?subject ?predicate ?object .\n}\nLIMIT 10` },
+  { name: 'Count triples', query: `SELECT (COUNT(*) as ?count)\nWHERE {\n  ?subject ?predicate ?object .\n}` },
+  { name: 'Find entities with names', query: `PREFIX vital: <http://vital.ai/ontology/vital-core#>\nSELECT ?entity ?name\nWHERE {\n  ?entity vital:hasName ?name .\n}\nLIMIT 10` },
+];
+
+const SAMPLE_UPDATES = [
+  { name: 'Insert triple', query: `INSERT DATA {\n  GRAPH <urn:my-graph> {\n    <http://example.org/subject1> <http://example.org/predicate1> "value1" .\n  }\n}` },
+  { name: 'Delete triple', query: `DELETE DATA {\n  GRAPH <urn:my-graph> {\n    <http://example.org/subject1> <http://example.org/predicate1> "value1" .\n  }\n}` },
+  { name: 'Delete/Insert (modify)', query: `DELETE {\n  GRAPH <urn:my-graph> {\n    ?s <http://example.org/oldPred> ?o .\n  }\n}\nINSERT {\n  GRAPH <urn:my-graph> {\n    ?s <http://example.org/newPred> ?o .\n  }\n}\nWHERE {\n  GRAPH <urn:my-graph> {\n    ?s <http://example.org/oldPred> ?o .\n  }\n}` },
+];
+
+const SPARQL: React.FC = () => {
+  usePageTitle('SPARQL');
+  const [mode, setMode] = useState<SparqlMode>('query');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<QueryResult | null>(null);
+  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const [selectedSpace, setSelectedSpace] = useState('');
+  const [spacesLoading, setSpacesLoading] = useState(true);
+  const [pagingEnabled, setPagingEnabled] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Fetch spaces
   useEffect(() => {
-    const fetchSpaces = async () => {
+    (async () => {
       try {
         setSpacesLoading(true);
-        const response = await axios.get('/api/spaces');
-        const spacesData = Array.isArray(response.data) ? response.data : response.data.spaces || [];
-        setSpaces(spacesData);
-        // Auto-select first space if available
-        if (spacesData.length > 0) {
-          setSelectedSpace(spacesData[0].space);
-        }
-      } catch (err) {
-        console.error('Error fetching spaces:', err);
-        setError('Failed to load spaces. Please try again later.');
-      } finally {
-        setSpacesLoading(false);
-      }
-    };
-
-    fetchSpaces();
+        const data = await apiService.getSpaces();
+        setSpaces(data);
+        if (data.length > 0) setSelectedSpace(data[0].space);
+      } catch { setError('Failed to load spaces.'); }
+      finally { setSpacesLoading(false); }
+    })();
   }, []);
 
-  // Sample SPARQL queries for quick testing
-  const sampleQueries = [
-    {
-      name: 'List all triples',
-      query: `SELECT ?subject ?predicate ?object
-WHERE {
-  ?subject ?predicate ?object .
-}
-LIMIT 10`
-    },
-    {
-      name: 'Count triples',
-      query: `SELECT (COUNT(*) as ?count)
-WHERE {
-  ?subject ?predicate ?object .
-}`
-    },
-    {
-      name: 'Find entities with names',
-      query: `PREFIX vital: <http://vital.ai/ontology/vital-core#>
-SELECT ?entity ?name
-WHERE {
-  ?entity vital:hasName ?name .
-}
-LIMIT 10`
-    }
-  ];
+  // Build paginated query
+  const buildQuery = useCallback((page: number): string => {
+    if (!pagingEnabled) return query;
+    const offset = (page - 1) * pageSize;
+    const cleaned = query.trim().replace(/\s+(LIMIT|OFFSET)\s+\d+/gi, '');
+    return `${cleaned}\nLIMIT ${pageSize} OFFSET ${offset}`;
+  }, [query, pagingEnabled, pageSize]);
 
-  const executeQuery = async () => {
-    if (!query.trim()) {
-      setError('Please enter a SPARQL query');
-      return;
-    }
-
-    if (!selectedSpace) {
-      setError('Please select a space');
-      return;
-    }
-
+  const executeQuery = useCallback(async (page?: number) => {
+    const p = page ?? currentPage;
+    if (!query.trim()) { setError('Please enter a SPARQL query'); return; }
+    if (!selectedSpace) { setError('Please select a space'); return; }
     try {
       setLoading(true);
       setError(null);
-      
-      const paginatedQuery = addPaginationToQuery(query, currentPage, pageSize);
-      
-      const response = await axios.post(`/api/graphs/sparql/${selectedSpace}/query`, {
-        query: paginatedQuery
-      }, {
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      console.log('SPARQL Response:', response.data);
-      console.log('Query sent to backend:', paginatedQuery);
-      console.log('Results count:', response.data.results?.bindings?.length || response.data.triples?.length || 'N/A');
-      console.log('Pagination state:', { currentPage, pageSize, pagingEnabled });
-      console.log('Expected offset:', pagingEnabled ? (currentPage - 1) * pageSize : 'N/A');
-      
-      setResults(response.data);
-      
-      // Update total results count for pagination
-      const currentResultCount = response.data.results?.bindings?.length || response.data.triples?.length || 0;
-      if (currentResultCount > 0) {
-        if (pagingEnabled) {
-          // For paged results, we need to track the actual count
-          // This is an approximation - ideally we'd run a COUNT query
-          if (currentResultCount === pageSize) {
-            // Likely more results available
-            setTotalResults(currentPage * pageSize + 1);
-          } else {
-            // This is the last page
-            setTotalResults((currentPage - 1) * pageSize + currentResultCount);
-          }
-        } else {
-          setTotalResults(currentResultCount);
-        }
-      }
-    } catch (err: any) {
-      console.error('Error executing SPARQL query:', err);
-      
-      // Handle different error response formats
-      let errorMessage = 'Failed to execute SPARQL query. Please check your query syntax.';
-      if (err.response?.data) {
-        if (typeof err.response.data === 'string') {
-          errorMessage = err.response.data;
-        } else if (err.response.data.detail) {
-          errorMessage = Array.isArray(err.response.data.detail) 
-            ? err.response.data.detail.map((d: any) => typeof d === 'object' ? d.msg || JSON.stringify(d) : d).join(', ')
-            : err.response.data.detail;
-        } else if (err.response.data.message) {
-          errorMessage = err.response.data.message;
-        }
-      }
-      
-      setError(errorMessage);
+      setUpdateResult(null);
+      const data = await apiService.executeSparqlQuery(selectedSpace, buildQuery(p));
+      setResults(data);
+      setCurrentPage(p);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to execute query.');
       setResults(null);
-    } finally {
-      setLoading(false);
-    }
-  };
+    } finally { setLoading(false); }
+  }, [query, selectedSpace, buildQuery, currentPage]);
 
-  const loadSampleQuery = (sampleQuery: string) => {
-    setQuery(sampleQuery);
-    setResults(null);
-    setError(null);
-    setCurrentPage(1); // Reset to first page when loading new query
-  };
+  const executeUpdate = useCallback(async () => {
+    if (!query.trim()) { setError('Please enter a SPARQL update'); return; }
+    if (!selectedSpace) { setError('Please select a space'); return; }
+    try {
+      setLoading(true);
+      setError(null);
+      setResults(null);
+      const data = await apiService.executeSparqlUpdate(selectedSpace, query);
+      setUpdateResult(data);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to execute update.');
+      setUpdateResult(null);
+    } finally { setLoading(false); }
+  }, [query, selectedSpace]);
 
-  // Add pagination to SPARQL query
-  const addPaginationToQuery = (originalQuery: string, page: number, size: number): string => {
-    console.log('🔧 addPaginationToQuery called:', { pagingEnabled, page, size });
-    
-    if (!pagingEnabled) {
-      console.log('🔧 Pagination disabled, returning original query');
-      return originalQuery;
-    }
-    
-    const offset = (page - 1) * size;
-    const trimmedQuery = originalQuery.trim();
-    
-    // Check if query already has LIMIT/OFFSET and remove them
-    const queryWithoutPaging = trimmedQuery.replace(/\s+(LIMIT|OFFSET)\s+\d+/gi, '');
-    
-    const paginatedQuery = `${queryWithoutPaging}\nLIMIT ${size} OFFSET ${offset}`;
-    console.log('🔧 Generated paginated query:', paginatedQuery);
-    
-    return paginatedQuery;
-  };
-
-  // Reset pagination when paging is toggled
-  const handlePagingToggle = (enabled: boolean) => {
-    setPagingEnabled(enabled);
-    setCurrentPage(1);
-    if (results) {
-      // If we have results and are enabling paging, re-run the query
-      if (enabled) {
-        executeQuery();
-      }
-    }
-  };
+  const resultCount = results?.results?.bindings?.length || results?.triples?.length || 0;
 
   const renderResults = () => {
     if (!results) return null;
 
-    // Handle ASK queries (boolean results)
+    const queryTimeLabel = results.query_time
+      ? <span className="text-xs text-gray-400">{(results.query_time * 1000).toFixed(1)}ms</span>
+      : null;
+
+    // ASK query
     if (typeof results.boolean === 'boolean') {
       return (
-        <Card>
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Query Result
-            </h3>
-            {results.query_time && (
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Executed in {(results.query_time * 1000).toFixed(2)}ms
-              </div>
-            )}
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="font-semibold text-gray-900 dark:text-white">Result</h3>
+            {queryTimeLabel}
           </div>
-          <div className={`text-xl font-bold ${results.boolean ? 'text-green-600' : 'text-red-600'}`}>
+          <span className={`text-2xl font-bold ${results.boolean ? 'text-green-500' : 'text-red-500'}`}>
             {results.boolean ? 'TRUE' : 'FALSE'}
-          </div>
-        </Card>
+          </span>
+        </div>
       );
     }
 
-    // Handle SELECT queries
+    // SELECT query
     if (results.results?.bindings) {
       const bindings = results.results.bindings;
-      const variables = results.head?.vars || [];
-
+      const vars = results.head?.vars || [];
       if (bindings.length === 0) {
-        return (
-          <Alert color="info">
-            Query executed successfully but returned no results.
-          </Alert>
-        );
+        return <Alert color="info">Query returned no results.</Alert>;
       }
-
       return (
-        <Card>
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Query Results ({bindings.length} result{bindings.length !== 1 ? 's' : ''})
-            </h3>
-            {results.query_time && (
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Executed in {(results.query_time * 1000).toFixed(2)}ms
-              </div>
-            )}
+        <div className="space-y-3">
+          <div className="flex justify-between items-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {bindings.length} result{bindings.length !== 1 ? 's' : ''}
+            </p>
+            {queryTimeLabel}
           </div>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  {variables.map((variable) => (
-                    <TableHeadCell key={variable}>
-                      {variable}
-                    </TableHeadCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody className="divide-y">
-                {bindings.map((binding, index) => (
-                  <TableRow key={index} className="bg-white dark:border-gray-700 dark:bg-gray-800">
-                    {variables.map((variable) => {
-                      // Handle proper SPARQL JSON format
-                      const cellValue = binding[variable];
-                      const displayValue = cellValue?.value || '';
-                      const valueType = cellValue?.type || null;
-                      const datatype = cellValue?.datatype || null;
-                      
+          <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  {vars.map(v => <th key={v} className="px-4 py-3">?{v}</th>)}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {bindings.map((binding, i) => (
+                  <tr key={i} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800">
+                    {vars.map(v => {
+                      const cell = binding[v];
+                      const val = cell?.value || '';
+                      const dt = cell?.datatype;
                       return (
-                        <TableCell key={variable} className="whitespace-nowrap">
-                          <div className="max-w-xs truncate" title={displayValue}>
-                            {displayValue}
-                          </div>
-                          {valueType && (
-                            <div className="text-xs text-gray-400 mt-1">
-                              {valueType}{datatype && ` (${datatype.split('#').pop()})`}
-                            </div>
-                          )}
-                        </TableCell>
+                        <td key={v} className="px-4 py-2 font-mono text-xs max-w-[20rem] truncate" title={val}>
+                          {val}
+                          {dt && <span className="ml-1 text-gray-400 font-sans">({dt.split('#').pop()})</span>}
+                        </td>
                       );
                     })}
-                  </TableRow>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
-        </Card>
+        </div>
       );
     }
 
-    // Handle other result types
+    // Fallback: raw JSON
     return (
-      <Card>
-        <div className="flex justify-between items-center mb-2">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Raw Results
-          </h3>
-          {results.query_time && (
-            <div className="text-sm text-gray-500 dark:text-gray-400">
-              Executed in {(results.query_time * 1000).toFixed(2)}ms
-            </div>
-          )}
+      <div className="space-y-2">
+        <div className="flex justify-between items-center">
+          <p className="text-sm font-medium text-gray-900 dark:text-white">Raw Results</p>
+          {queryTimeLabel}
         </div>
-        <pre className="text-sm bg-gray-100 dark:bg-gray-700 p-4 rounded overflow-auto">
+        <pre className="text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 overflow-auto max-h-96">
           {JSON.stringify(results, null, 2)}
         </pre>
-      </Card>
+      </div>
     );
+  };
+
+  const clearAll = () => {
+    setQuery('');
+    setResults(null);
+    setUpdateResult(null);
+    setError(null);
+    setCurrentPage(1);
   };
 
   return (
     <div className="space-y-6">
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-2">
-          <HiSearch className="w-6 h-6 text-blue-600" />
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            SPARQL Query Interface
-          </h1>
-        </div>
-        <p className="text-gray-600 dark:text-gray-400">
-          Execute SPARQL queries against your RDF data
-        </p>
-      </div>
-
-      {/* Space Selection */}
-      <div className="mb-6">
-        <Card>
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <Label htmlFor="space-select" className="mb-2 block text-sm font-medium text-gray-900 dark:text-white">
-                <HiDatabase className="inline mr-2" />
-                Select Space
-              </Label>
-              <Select
-                id="space-select"
-                value={selectedSpace}
-                onChange={(e) => setSelectedSpace(e.target.value)}
-                disabled={spacesLoading || loading}
-                required
-              >
-                <option value="">Choose a space...</option>
-                {spaces.map((space) => (
-                  <option key={space.id} value={space.space}>
-                    {space.space_name} ({space.space})
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {selectedSpace && (
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                <div className="font-medium">
-                  {spaces.find(s => s.space === selectedSpace)?.space_name}
-                </div>
-                <div className="text-xs">
-                  {spaces.find(s => s.space === selectedSpace)?.space_description || 'No description'}
-                </div>
-              </div>
-            )}
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <HiSearch className="w-6 h-6 text-blue-600" />
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">SPARQL</h1>
           </div>
-          {spacesLoading && (
-            <div className="flex items-center gap-2 mt-2 text-sm text-gray-500">
-              <Spinner size="sm" />
-              Loading spaces...
-            </div>
-          )}
-        </Card>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+            {mode === 'query' ? 'Execute SPARQL queries against your RDF data' : 'Execute SPARQL updates (INSERT, DELETE, LOAD, CLEAR)'}
+          </p>
+        </div>
+        {/* Mode toggle */}
+        <div className="flex rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <button
+            onClick={() => { setMode('query'); clearAll(); }}
+            className={`px-4 py-2 text-sm font-medium flex items-center gap-1.5 transition-colors ${
+              mode === 'query' ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+            }`}
+          >
+            <HiSearch className="w-4 h-4" />Query
+          </button>
+          <button
+            onClick={() => { setMode('update'); clearAll(); }}
+            className={`px-4 py-2 text-sm font-medium flex items-center gap-1.5 transition-colors border-l border-gray-200 dark:border-gray-700 ${
+              mode === 'update' ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+            }`}
+          >
+            <HiPencil className="w-4 h-4" />Update
+          </button>
+        </div>
       </div>
 
-      {/* Sample Queries */}
-      <div className="mb-6">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Sample Queries</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {sampleQueries.map((sample, index) => (
-            <Card key={index} className="cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
-              <div onClick={() => loadSampleQuery(sample.query)}>
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                  <HiDocumentText className="inline mr-2" />
-                  {sample.name}
-                </h3>
-                <pre className="text-xs text-gray-500 dark:text-gray-400 overflow-hidden">
-                  {sample.query.substring(0, 100)}...
-                </pre>
-              </div>
-            </Card>
+      {/* Space selector */}
+      <div className="flex items-center gap-3">
+        <HiDatabase className="text-gray-400 flex-shrink-0" />
+        <Select
+          value={selectedSpace}
+          onChange={(e) => setSelectedSpace(e.target.value)}
+          disabled={spacesLoading || loading}
+          className="flex-1 max-w-xs"
+        >
+          <option value="">Choose a space...</option>
+          {spaces.map((s: SpaceInfo) => (
+            <option key={s.space} value={s.space}>{s.space_name}</option>
+          ))}
+        </Select>
+        {spacesLoading && <Spinner size="sm" />}
+      </div>
+
+      {/* Sample queries/updates */}
+      <div>
+        <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Quick start</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {(mode === 'query' ? SAMPLE_QUERIES : SAMPLE_UPDATES).map((s, i) => (
+            <button
+              key={i}
+              onClick={() => { setQuery(s.query); setResults(null); setUpdateResult(null); setError(null); setCurrentPage(1); }}
+              className={`text-left p-3 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors ${
+                mode === 'query' ? 'hover:border-blue-300 dark:hover:border-blue-600 hover:bg-blue-50 dark:hover:bg-gray-800' : 'hover:border-amber-300 dark:hover:border-amber-600 hover:bg-amber-50 dark:hover:bg-gray-800'
+              }`}
+            >
+              <p className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
+                <HiDocumentText className="text-gray-400 flex-shrink-0" />{s.name}
+              </p>
+              <pre className="text-xs text-gray-400 mt-1 truncate">{s.query.substring(0, 80)}</pre>
+            </button>
           ))}
         </div>
       </div>
 
-      {/* Query Editor */}
-      <div className="mb-6">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">SPARQL Query</h2>
+      {/* Query editor */}
+      <div>
         <Textarea
-          id="sparql-query"
-          placeholder="Enter your SPARQL query here..."
-          rows={10}
+          placeholder={mode === 'query' ? 'Enter your SPARQL query here...' : 'Enter your SPARQL update here (INSERT DATA, DELETE DATA, etc.)...'}
+          rows={8}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="font-mono text-sm"
         />
-        <div className="mt-4 flex gap-4">
-          <Button
-            onClick={() => {
-              setCurrentPage(1); // Reset to first page on new query
-              executeQuery();
-            }}
-            disabled={loading || !query.trim() || !selectedSpace}
-            color="blue"
-          >
-            {loading ? (
-              <>
-                <Spinner size="sm" className="mr-2" />
-                Executing...
-              </>
-            ) : (
-              <>
-                <HiPlay className="mr-2 h-4 w-4" />
-                Execute Query
-              </>
-            )}
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {mode === 'query' ? (
+            <Button
+              onClick={() => executeQuery(1)}
+              disabled={loading || !query.trim() || !selectedSpace}
+              color="blue"
+            >
+              {loading ? <><Spinner size="sm" className="mr-2" />Running...</> : <><HiPlay className="mr-1.5 h-4 w-4" />Execute Query</>}
+            </Button>
+          ) : (
+            <Button
+              onClick={executeUpdate}
+              disabled={loading || !query.trim() || !selectedSpace}
+              color="warning"
+            >
+              {loading ? <><Spinner size="sm" className="mr-2" />Running...</> : <><HiPencil className="mr-1.5 h-4 w-4" />Execute Update</>}
+            </Button>
+          )}
+          <Button color="gray" disabled={loading} onClick={clearAll}>
+            <HiX className="mr-1.5 h-4 w-4" />Clear
           </Button>
-          <Button
-            onClick={() => {
-              setQuery('');
-              setResults(null);
-              setError(null);
-              setCurrentPage(1);
-              setTotalResults(0);
-            }}
-            color="gray"
-            disabled={loading}
-          >
-            Clear
-          </Button>
-        </div>
-        
-        {/* Pagination Controls */}
-        <div className="mt-4 flex items-center gap-4">
-          <ToggleSwitch
-            checked={pagingEnabled}
-            label="Enable Pagination"
-            onChange={handlePagingToggle}
-          />
-          {pagingEnabled && (
-            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-              <span>Page size:</span>
-              <Select
-                value={pageSize.toString()}
-                onChange={(e) => {
-                  setPageSize(parseInt(e.target.value));
-                  setCurrentPage(1);
-                }}
-                sizing="sm"
-                className="w-20"
-              >
-                <option value="10">10</option>
-                <option value="20">20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </Select>
+          {mode === 'query' && (
+            <div className="ml-auto flex items-center gap-3">
+              <ToggleSwitch checked={pagingEnabled} label="Paginate" onChange={(v) => { setPagingEnabled(v); setCurrentPage(1); }} />
+              {pagingEnabled && (
+                <Select value={pageSize.toString()} onChange={(e) => { setPageSize(parseInt(e.target.value)); setCurrentPage(1); }} sizing="sm" className="w-20">
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </Select>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* Pagination Display */}
-      {pagingEnabled && results && (results.results?.bindings || results.triples) && (
-        <div className="mb-4">
-          <Card>
-            <div className="flex justify-between items-center">
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Page {currentPage} • Showing {results.results?.bindings?.length || results.triples?.length || 0} results
-                {totalResults > pageSize && ` • Estimated ${totalResults}+ total`}
-              </div>
-              <div className="flex items-center gap-4">
-                <Button
-                  size="sm"
-                  color="gray"
-                  disabled={currentPage === 1 || loading}
-                  onClick={() => {
-                    setCurrentPage(currentPage - 1);
-                    executeQuery();
-                  }}
-                >
-                  Previous
-                </Button>
-                <span className="text-sm text-gray-600 dark:text-gray-400">
-                  Page {currentPage}
-                </span>
-                <Button
-                  size="sm"
-                  color="gray"
-                  disabled={(results.results?.bindings?.length || results.triples?.length || 0) < pageSize || loading}
-                  onClick={() => {
-                    setCurrentPage(currentPage + 1);
-                    executeQuery();
-                  }}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          </Card>
+      {/* Pagination nav */}
+      {pagingEnabled && results && resultCount > 0 && (
+        <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-lg px-4 py-2">
+          <span className="text-sm text-gray-500 dark:text-gray-400">Page {currentPage} · {resultCount} result{resultCount !== 1 ? 's' : ''}</span>
+          <div className="flex gap-2">
+            <Button size="xs" color="gray" disabled={currentPage === 1 || loading} onClick={() => executeQuery(currentPage - 1)}>Previous</Button>
+            <Button size="xs" color="gray" disabled={resultCount < pageSize || loading} onClick={() => executeQuery(currentPage + 1)}>Next</Button>
+          </div>
         </div>
       )}
-      
-      {/* Error Display */}
-      {error && (
-        <Alert color="failure" className="mb-6">
-          <span className="font-medium">Error:</span> {error}
+
+      {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+
+      {/* Update result */}
+      {updateResult && (
+        <Alert color="success" icon={HiCheck}>
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="font-medium">Update successful.</span>
+              {updateResult.message && <span className="ml-2">{updateResult.message}</span>}
+            </div>
+            {updateResult.update_time != null && (
+              <span className="text-xs text-green-600 dark:text-green-400">{(updateResult.update_time * 1000).toFixed(1)}ms</span>
+            )}
+          </div>
         </Alert>
       )}
 
-      {/* Results Display */}
       {renderResults()}
     </div>
   );

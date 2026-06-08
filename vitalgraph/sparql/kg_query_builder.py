@@ -127,6 +127,46 @@ class SortCriteria:
 
 
 @dataclass
+class VectorCriteria:
+    """Criteria for vector similarity search.
+
+    Generates SPARQL:
+      BIND(vg:vectorSimilarity(?entity, "search_text", "index_name") AS ?vg_score)
+    or with a pre-computed vector:
+      BIND(vg:vectorNearby(?entity, "[0.1,0.2,...]", "index_name") AS ?vg_score)
+
+    When used, results are automatically sorted by similarity (DESC) and
+    limited to top_k results unless sort_criteria overrides.
+    """
+    search_text: Optional[str] = None        # Text to vectorize server-side
+    vector: Optional[str] = None             # Pre-computed vector literal "[0.1,...]"
+    index_name: str = "entity_default"       # Vector index name
+    top_k: int = 10                          # Max results (becomes LIMIT)
+    min_score: Optional[float] = None        # Optional threshold (FILTER ?vg_score > T)
+    score_variable: str = "vg_score"         # SPARQL variable for the score
+
+
+@dataclass
+class GeoCriteria:
+    """Criteria for geographic proximity search.
+
+    Generates SPARQL:
+      BIND(vg:geoDistance(?entity, lat, lon) AS ?vg_distance)
+    and/or:
+      FILTER(vg:withinRadius(?entity, lat, lon, radius_m))
+
+    When radius_m is set, only entities within the radius are returned.
+    When sort_by_distance is True, results are sorted by distance (ASC).
+    """
+    latitude: float = 0.0
+    longitude: float = 0.0
+    radius_m: Optional[float] = None         # Filter to within radius (meters)
+    sort_by_distance: bool = False           # ORDER BY distance ASC
+    top_k: Optional[int] = None             # Limit results (for nearest-N)
+    distance_variable: str = "vg_distance"  # SPARQL variable for distance
+
+
+@dataclass
 class QueryFilter:
     """Simple property-based filter for entity queries."""
     property_name: str
@@ -164,6 +204,8 @@ class EntityQueryCriteria:
     filters: Optional[List[QueryFilter]] = None  # Property-based filters
     entity_property_filters: Optional[List[EntityPropertyFilter]] = None  # Direct entity property filters
     use_edge_pattern: bool = True  # Use edge-based pattern (Edge_hasEntityKGFrame) vs direct property (hasFrame)
+    vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
+    geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
 
 
 @dataclass
@@ -174,6 +216,8 @@ class FrameQueryCriteria:
     entity_type: Optional[str] = None    # Frames must belong to entity of this type
     slot_criteria: Optional[List[SlotCriteria]] = None  # Slot-based filtering
     sort_criteria: Optional[List[SortCriteria]] = None  # Multi-level sorting
+    vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
+    geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
 
 
 class KGGraphSeparationQueryBuilder:
@@ -373,6 +417,7 @@ class KGQueryCriteriaBuilder:
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
         PREFIX vg-direct: <http://vital.ai/vitalgraph/direct#>
+        PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -708,6 +753,19 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                 if requires_group_by:
                     group_by = "GROUP BY ?entity"
                     use_distinct = False
+        
+        # Vector/geo criteria — BIND, FILTER, ORDER BY, LIMIT overrides
+        vg_extra_where, vg_select, vg_order, vg_limit = self._build_vector_geo_clauses(
+            criteria.vector_criteria, criteria.geo_criteria, anchor_var="entity")
+        if vg_extra_where:
+            sort_extra_where += " " + vg_extra_where
+        if vg_select:
+            select_extra += " " + vg_select
+        if vg_order and not criteria.sort_criteria:
+            order_by = vg_order
+        if vg_limit is not None:
+            page_size = vg_limit
+            offset = 0
         
         select_keyword = "SELECT DISTINCT" if use_distinct else "SELECT"
         
@@ -1458,6 +1516,79 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         
         return clauses
     
+    def _build_vector_geo_clauses(
+        self,
+        vector_criteria: Optional[VectorCriteria],
+        geo_criteria: Optional[GeoCriteria],
+        anchor_var: str = "entity",
+    ) -> tuple:
+        """Build SPARQL clauses for vector/geo criteria.
+        
+        Returns:
+            (extra_where, select_extra, order_by_override, limit_override)
+            - extra_where: BIND/FILTER patterns to append to WHERE clause
+            - select_extra: variables to add to SELECT (e.g. "?vg_score")
+            - order_by_override: ORDER BY clause or "" if no override
+            - limit_override: int LIMIT override or None
+        """
+        where_parts = []
+        select_parts = []
+        order_by = ""
+        limit_override = None
+        
+        # Vector similarity
+        if vector_criteria:
+            vc = vector_criteria
+            score_var = vc.score_variable
+            
+            if vc.search_text:
+                # Server-side vectorization: vg:vectorSimilarity
+                escaped_text = vc.search_text.replace('"', '\\"')
+                where_parts.append(
+                    f'BIND(vg:vectorSimilarity(?{anchor_var}, "{escaped_text}", "{vc.index_name}") AS ?{score_var})')
+            elif vc.vector:
+                # Pre-computed vector: vg:vectorNearby
+                where_parts.append(
+                    f'BIND(vg:vectorNearby(?{anchor_var}, "{vc.vector}", "{vc.index_name}") AS ?{score_var})')
+            
+            # Threshold filter
+            if vc.min_score is not None:
+                where_parts.append(f'FILTER(?{score_var} > {vc.min_score})')
+            
+            select_parts.append(f"?{score_var}")
+            order_by = f"ORDER BY DESC(?{score_var})"
+            limit_override = vc.top_k
+        
+        # Geo proximity
+        if geo_criteria:
+            gc = geo_criteria
+            dist_var = gc.distance_variable
+            
+            # Distance calculation
+            where_parts.append(
+                f'BIND(vg:geoDistance(?{anchor_var}, "{gc.latitude}"^^xsd:double, '
+                f'"{gc.longitude}"^^xsd:double) AS ?{dist_var})')
+            
+            # Radius filter
+            if gc.radius_m is not None:
+                where_parts.append(
+                    f'FILTER(vg:withinRadius(?{anchor_var}, "{gc.latitude}"^^xsd:double, '
+                    f'"{gc.longitude}"^^xsd:double, "{gc.radius_m}"^^xsd:double))')
+            
+            select_parts.append(f"?{dist_var}")
+            
+            # Sort by distance (only if vector isn't also sorting)
+            if gc.sort_by_distance and not vector_criteria:
+                order_by = f"ORDER BY ASC(?{dist_var})"
+            
+            if gc.top_k is not None and limit_override is None:
+                limit_override = gc.top_k
+        
+        extra_where = " ".join(where_parts) if where_parts else ""
+        select_extra = " ".join(select_parts) if select_parts else ""
+        
+        return extra_where, select_extra, order_by, limit_override
+
     def _get_property_uri(self, property_name: str) -> str:
         """Convert property name to full URI."""
         property_mappings = {

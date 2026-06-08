@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -21,32 +21,27 @@ import {
   HiPlay,
   HiStop
 } from 'react-icons/hi';
-import { mockDataImports, type DataImport } from '../mock/data';
-import { mockSpaces, mockGraphs, type Space, type Graph } from '../mock';
+import { importExportService, type ImportExportJob } from '../services/ImportExportService';
 import DataIcon from '../components/icons/DataIcon';
+import { formatFileSize, formatDateTime, getJobStatusColor } from '../utils/formatUtils';
 
-const DataImport: React.FC = () => {
+const POLL_INTERVAL_MS = 2000;
+
+const DataImportPage: React.FC = () => {
   const navigate = useNavigate();
-  const [imports, setImports] = useState<DataImport[]>([]);
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [graphs, setGraphs] = useState<Graph[]>([]);
+  const [imports, setImports] = useState<ImportExportJob[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch data
+  // Fetch import jobs from API
   const fetchData = useCallback(async () => {
     try {
-      setLoading(true);
-      // Simulate API calls
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      setImports(mockDataImports);
-      setSpaces(mockSpaces);
-      setGraphs(mockGraphs);
+      const jobs = await importExportService.listImportJobs();
+      setImports(jobs);
       setError(null);
     } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Failed to load data. Please try again later.');
+      setError(err instanceof Error ? err.message : 'Failed to load import jobs.');
     } finally {
       setLoading(false);
     }
@@ -56,61 +51,41 @@ const DataImport: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  // Helper functions
-  const getSpaceName = (spaceId: string) => {
-    const space = spaces.find(s => s.space === spaceId);
-    return space ? space.space_name : spaceId;
-  };
+  // Poll active jobs for progress
+  useEffect(() => {
+    const hasActive = imports.some(j => j.status === 'running' || j.status === 'processing');
+    if (hasActive) {
+      pollRef.current = setInterval(fetchData, POLL_INTERVAL_MS);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [imports, fetchData]);
 
-  const getGraphName = (graphId: number) => {
-    const graph = graphs.find(g => g.id === graphId);
-    return graph ? graph.graph_name : `Graph ${graphId}`;
-  };
+  const formatDate = (s: string | null | undefined) => formatDateTime(s || '');
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
+  const getStatusColor = getJobStatusColor;
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed': return 'success';
-      case 'processing': return 'info';
-      case 'pending': return 'warning';
-      case 'failed': return 'failure';
-      case 'canceled': return 'gray';
-      case 'expired': return 'gray';
-      default: return 'gray';
+  // Action handlers
+  const handleExecuteImport = async (jobId: string) => {
+    try {
+      await importExportService.executeImportJob(jobId);
+      await fetchData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start import');
     }
   };
 
-  // Action handlers
-  const handleStartImport = async (importId: number) => {
-    setImports(prev => prev.map(imp => 
-      imp.id === importId 
-        ? { ...imp, status: 'processing', started_time: new Date().toISOString(), progress: 10 }
-        : imp
-    ));
-  };
-
-  const handleCancelImport = async (importId: number) => {
-    setImports(prev => prev.map(imp => 
-      imp.id === importId 
-        ? { ...imp, status: 'canceled', completed_time: new Date().toISOString() }
-        : imp
-    ));
-  };
-
-  const handleDeleteImport = async (importId: number) => {
-    if (window.confirm('Are you sure you want to delete this import?')) {
-      setImports(prev => prev.filter(imp => imp.id !== importId));
+  const handleDeleteImport = async (jobId: string) => {
+    if (!window.confirm('Are you sure you want to delete this import job?')) return;
+    try {
+      await importExportService.deleteImportJob(jobId);
+      setImports(prev => prev.filter(j => j.job_id !== jobId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete');
     }
   };
 
@@ -137,7 +112,7 @@ const DataImport: React.FC = () => {
       </div>
 
       {error && (
-        <Alert color="failure" className="mb-4">
+        <Alert color="failure" className="mb-4" onDismiss={() => setError(null)}>
           {error}
         </Alert>
       )}
@@ -147,14 +122,14 @@ const DataImport: React.FC = () => {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Data Imports
+                Import Jobs
               </h2>
               <Button
                 color="blue"
                 onClick={() => navigate('/data/import/new')}
               >
                 <HiPlus className="w-4 h-4 mr-2" />
-                Add Data Import
+                New Import
               </Button>
             </div>
 
@@ -162,10 +137,11 @@ const DataImport: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableHeadCell>Name</TableHeadCell>
+                    <TableHeadCell>Job ID</TableHeadCell>
                     <TableHeadCell>Space</TableHeadCell>
                     <TableHeadCell>Graph</TableHeadCell>
                     <TableHeadCell>File</TableHeadCell>
+                    <TableHeadCell>Format</TableHeadCell>
                     <TableHeadCell>Status</TableHeadCell>
                     <TableHeadCell>Progress</TableHeadCell>
                     <TableHeadCell>Created</TableHeadCell>
@@ -173,79 +149,85 @@ const DataImport: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {imports.map((importItem) => (
-                    <TableRow key={importItem.id}>
-                      <TableCell className="font-medium">
-                        {importItem.name}
+                  {imports.map((job) => (
+                    <TableRow key={job.job_id}>
+                      <TableCell className="font-mono text-xs">
+                        {job.job_id.slice(0, 8)}...
                       </TableCell>
-                      <TableCell>{getSpaceName(importItem.space_id)}</TableCell>
-                      <TableCell>{getGraphName(importItem.graph_id)}</TableCell>
+                      <TableCell>{job.space_id}</TableCell>
+                      <TableCell className="text-xs max-w-[120px] truncate">
+                        {job.graph_uri || '-'}
+                      </TableCell>
                       <TableCell>
                         <div>
-                          <div className="font-medium">{importItem.file_name}</div>
-                          <div className="text-sm text-gray-500">
-                            {formatFileSize(importItem.file_size)}
+                          <div className="font-medium text-sm">{job.file_name || '-'}</div>
+                          <div className="text-xs text-gray-500">
+                            {formatFileSize(job.file_size)}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge color={getStatusColor(importItem.status)}>
-                          {importItem.status}
+                        <Badge color="gray">{job.file_format || '-'}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge color={getStatusColor(job.status)}>
+                          {job.status}
                         </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="w-24">
                           <Progress
-                            progress={importItem.progress}
-                            color={importItem.status === 'failed' ? 'red' : 'blue'}
+                            progress={job.progress_pct}
+                            color={job.status === 'failed' ? 'red' : 'blue'}
                             size="sm"
                           />
                           <div className="text-xs text-gray-500 mt-1">
-                            {importItem.progress}%
+                            {job.progress_pct.toFixed(0)}%
+                            {job.records_done > 0 && (
+                              <span className="ml-1">({job.records_done.toLocaleString()})</span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm">
-                        {formatDate(importItem.created_time)}
+                      <TableCell className="text-xs">
+                        {formatDate(job.created_at)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-2">
+                        <div className="flex gap-1">
                           <Button
                             size="xs"
                             color="blue"
-                            onClick={() => navigate(`/data/import/${importItem.id}`)}
+                            onClick={() => navigate(`/data/import/${job.job_id}`)}
                           >
-                            <HiEye className="w-3 h-3 mr-1" />
-                            Details
+                            <HiEye className="w-3 h-3" />
                           </Button>
-                          {importItem.status === 'pending' && (
+                          {job.status === 'created' && job.file_name && (
                             <Button
                               size="xs"
                               color="green"
-                              onClick={() => handleStartImport(importItem.id)}
+                              onClick={() => handleExecuteImport(job.job_id)}
                             >
-                              <HiPlay className="w-3 h-3 mr-1" />
-                              Start
+                              <HiPlay className="w-3 h-3" />
                             </Button>
                           )}
-                          {importItem.status === 'processing' && (
+                          {(job.status === 'running' || job.status === 'processing') && (
                             <Button
                               size="xs"
                               color="red"
-                              onClick={() => handleCancelImport(importItem.id)}
+                              onClick={() => handleDeleteImport(job.job_id)}
                             >
-                              <HiStop className="w-3 h-3 mr-1" />
-                              Cancel
+                              <HiStop className="w-3 h-3" />
                             </Button>
                           )}
-                          <Button
-                            size="xs"
-                            color="red"
-                            onClick={() => handleDeleteImport(importItem.id)}
-                            disabled={importItem.status === 'processing'}
-                          >
-                            <HiTrash className="w-3 h-3" />
-                          </Button>
+                          {job.status !== 'running' && job.status !== 'processing' && (
+                            <Button
+                              size="xs"
+                              color="red"
+                              onClick={() => handleDeleteImport(job.job_id)}
+                            >
+                              <HiTrash className="w-3 h-3" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -256,7 +238,7 @@ const DataImport: React.FC = () => {
 
             {imports.length === 0 && (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                No data imports found. Create your first import to get started.
+                No import jobs found. Create your first import to get started.
               </div>
             )}
           </div>
@@ -266,4 +248,4 @@ const DataImport: React.FC = () => {
   );
 };
 
-export default DataImport;
+export default DataImportPage;

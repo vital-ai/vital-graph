@@ -27,8 +27,8 @@ export default function OutOfDateAlert({
   const handleRefresh = async () => {
     try {
       await onRefresh();
-    } catch (error) {
-      console.error('Failed to refresh:', error);
+    } catch {
+      // Refresh failed
     }
   };
 

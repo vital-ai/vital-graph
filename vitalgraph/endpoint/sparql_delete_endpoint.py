@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLDeleteRequest,
     SPARQLDeleteResponse
 )
+from ..auth.role_dependencies import require_space_write
 
 
 class SPARQLDeleteEndpoint:
@@ -42,6 +43,7 @@ class SPARQLDeleteEndpoint:
             request: SPARQLDeleteRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_delete(space_id, request.update, current_user, request.graph_uri)
         
         # Form-based endpoint for SPARQL deletes
@@ -58,6 +60,7 @@ class SPARQLDeleteEndpoint:
             graph_uri: Optional[str] = Form(None, description="Target graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_delete(space_id, update, current_user, graph_uri)
         
 

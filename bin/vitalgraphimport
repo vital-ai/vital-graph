@@ -1,0 +1,2 @@
+#!/bin/bash
+python -m vitalgraph.cmd.vitalgraph_import_cmd "$@"

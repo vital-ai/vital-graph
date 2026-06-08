@@ -1,722 +1,422 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Button, Card, Badge, Spinner, Breadcrumb, BreadcrumbItem, Label, TextInput, Textarea, Select } from 'flowbite-react';
-import { HiHome, HiDownload, HiPencil, HiTrash, HiChartBar, HiSave, HiX, HiViewBoards, HiExclamation } from 'react-icons/hi';
-import { type Space, type Graph } from '../mock';
-import { type SpaceInfo } from '../types/api';
+import { Alert, Button, Card, Spinner, Breadcrumb, BreadcrumbItem, TextInput } from 'flowbite-react';
+import {
+  HiHome, HiUpload, HiDownload, HiTrash, HiViewBoards, HiExclamation,
+  HiDatabase, HiChevronRight, HiDocumentDuplicate, HiCollection, HiLink, HiSearch
+} from 'react-icons/hi';
+import { type GraphInfo } from '../types/graphs';
 import { apiService } from '../services/ApiService';
 import GraphIcon from '../components/icons/GraphIcon';
+import TriplesIcon from '../components/icons/TriplesIcon';
+import ObjectIcon from '../components/icons/ObjectIcon';
+import { extractGraphName } from '../utils/QuadUtils';
+import ConfirmDialog from '../components/ConfirmDialog';
+import FormField from '../components/FormField';
+import CopyButton from '../components/CopyButton';
 
 interface BannerMessage {
   type: 'success' | 'error';
   message: string;
 }
 
-// Helper functions for graph data conversion (same as in Graphs.tsx)
-const extractGraphName = (graphUri: string): string => {
-  if (!graphUri) return 'Unknown Graph';
-  
-  const parts = graphUri.split(/[/#]/);
-  const name = parts[parts.length - 1];
-  
-  if (!name || name.length === 0) {
-    if (graphUri.includes('global')) return 'Global';
-    if (graphUri.includes('default')) return 'Default';
-    return 'Graph';
-  }
-  
-  return name
-    .replace(/[-_]/g, ' ')
-    .replace(/\b\w/g, l => l.toUpperCase());
-};
-
-const inferGraphType = (graphUri: string): string => {
-  if (!graphUri) return 'Graph';
-  
-  const uri = graphUri.toLowerCase();
-  if (uri.includes('global')) return 'Global Graph';
-  if (uri.includes('ontology')) return 'Ontology';
-  if (uri.includes('knowledge')) return 'Knowledge Graph';
-  if (uri.includes('user')) return 'User Graph';
-  if (uri.includes('entity')) return 'Entity Graph';
-  if (uri.includes('process') || uri.includes('workflow')) return 'Process Graph';
-  if (uri.includes('experiment')) return 'Experimental Graph';
-  if (uri.includes('data') || uri.includes('dataset')) return 'Data Graph';
-  if (uri.includes('result') || uri.includes('analysis')) return 'Results Graph';
-  
-  return 'Graph';
-};
-
 const GraphDetail: React.FC = () => {
   const { spaceId, graphId } = useParams<{ spaceId: string; graphId: string }>();
   const navigate = useNavigate();
-  
-  // Check if this is creation mode
   const isCreating = graphId === 'new';
-  const spaceFromUrl = spaceId;
-  
-  const [graph, setGraph] = useState<Graph | null>(null);
-  const [space, setSpace] = useState<Space | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [isEditing, setIsEditing] = useState<boolean>(isCreating);
-  const [saving, setSaving] = useState<boolean>(false);
-  const [bannerMessage, setBannerMessage] = useState<BannerMessage | null>(null);
-  const [showPurgeModal, setShowPurgeModal] = useState<boolean>(false);
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  
-  // Form state for editing/creating
-  const [editForm, setEditForm] = useState({
-    graph_name: '',
-    graph_uri: '',
-    graph_type: 'Knowledge Graph',
-    description: '',
-    space_id: spaceFromUrl || ''
-  });
-  
-  // Track if form has changes
-  const [hasChanges, setHasChanges] = useState<boolean>(false);
+  const graphUri = graphId ? decodeURIComponent(graphId) : '';
 
-  // Data loading or initialization for creation
+  const [graph, setGraph] = useState<GraphInfo | null>(null);
+  const [spaceName, setSpaceName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [bannerMessage, setBannerMessage] = useState<BannerMessage | null>(null);
+  const [showPurgeModal, setShowPurgeModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [newGraphUri, setNewGraphUri] = useState('');
+  const [graphUriError, setGraphUriError] = useState('');
+  const [entityCount, setEntityCount] = useState<number | null>(null);
+  const [frameCount, setFrameCount] = useState<number | null>(null);
+  const [relationCount, setRelationCount] = useState<number | null>(null);
+
   useEffect(() => {
-    const fetchGraph = async () => {
-      if (!graphId || !spaceId) {
-        setLoading(false);
-        return;
-      }
-      
-      if (isCreating) {
-        // Initialize for creation mode
-        try {
-          // Fetch space info for creation context
-          const spacesData = await apiService.getSpaces();
-          const spaceInfo = spacesData.find((s: SpaceInfo) => s.space === spaceId);
-          
-          if (spaceInfo) {
-            const convertedSpace: Space = {
-              id: spaceInfo.id || 0,
-              tenant: spaceInfo.tenant || 'default',
-              space: spaceInfo.space,
-              space_name: spaceInfo.space_name,
-              description: spaceInfo.space_description || '',
-              created_time: spaceInfo.created_time,
-              last_modified: spaceInfo.updated_time
-            };
-            setSpace(convertedSpace);
-          }
-        } catch (err) {
-          console.error('Error fetching space info:', err);
-        }
-        
-        setGraph(null);
-        setEditForm({
-          graph_name: '',
-          graph_uri: '',
-          graph_type: 'Knowledge Graph',
-          description: '',
-          space_id: spaceFromUrl || ''
-        });
-        setLoading(false);
-        return;
-      }
-      
-      // Load existing graph data from backend
+    const load = async () => {
+      if (!spaceId) { setLoading(false); return; }
+
       try {
-        setLoading(true);
-        
-        // Fetch all graphs for the space and find the one we need
-        const graphsData = await apiService.getGraphs(spaceId);
-        
-        // Since graphId is the index from the frontend, we need to find by URI or position
-        // For now, let's use the index approach (this could be improved with proper graph IDs)
-        const graphIndex = parseInt(graphId);
-        const graphInfo = graphsData[graphIndex];
-        
-        if (!graphInfo) {
-          setBannerMessage({ type: 'error', message: 'Graph not found' });
+        // Fetch space name
+        const spacesData = await apiService.getSpaces();
+        const found = spacesData.find((s: { space: string; space_name?: string }) => s.space === spaceId);
+        setSpaceName(found?.space_name || spaceId);
+
+        if (isCreating) {
           setLoading(false);
           return;
         }
-        
-        // Convert backend format to frontend format
-        const convertedGraph: Graph = {
-          id: graphIndex,
-          space_id: spaceId,
-          graph_name: extractGraphName(graphInfo.graph_uri),
-          graph_uri: graphInfo.graph_uri,
-          graph_type: inferGraphType(graphInfo.graph_uri),
-          triple_count: graphInfo.triple_count || 0,
-          created_time: graphInfo.created_time || new Date().toISOString(),
-          last_modified: graphInfo.updated_time || new Date().toISOString(),
-          description: `Graph containing ${graphInfo.triple_count || 0} triples`,
-          status: 'active'
-        };
-        
-        // Fetch space info
-        const spacesData = await apiService.getSpaces();
-        const spaceInfo = spacesData.find((s: SpaceInfo) => s.space === spaceId);
-        
-        if (spaceInfo) {
-          const convertedSpace: Space = {
-            id: spaceInfo.id || 0,
-            tenant: spaceInfo.tenant || 'default',
-            space: spaceInfo.space,
-            space_name: spaceInfo.space_name,
-            description: spaceInfo.space_description || '',
-            created_time: spaceInfo.created_time,
-            last_modified: spaceInfo.updated_time
-          };
-          setSpace(convertedSpace);
+
+        // Find graph by URI
+        const graphsData = await apiService.getGraphs(spaceId);
+        const match = graphsData.find((g: GraphInfo) => g.graph_uri === graphUri);
+
+        if (!match) {
+          setBannerMessage({ type: 'error', message: `Graph not found: ${graphUri}` });
+        } else {
+          setGraph(match);
+          // Fetch object counts in parallel
+          const [entities, frames, relations] = await Promise.allSettled([
+            apiService.getEntities(spaceId, graphUri, { page_size: 1 }),
+            apiService.getFrames(spaceId, graphUri, { page_size: 1 }),
+            apiService.getRelations(spaceId, graphUri, { page_size: 1 }),
+          ]);
+          if (entities.status === 'fulfilled') setEntityCount(entities.value.total_count ?? 0);
+          if (frames.status === 'fulfilled') setFrameCount(frames.value.total_count ?? 0);
+          if (relations.status === 'fulfilled') setRelationCount(relations.value.total_count ?? 0);
         }
-        
-        setGraph(convertedGraph);
-        
-        // Initialize edit form with existing data
-        setEditForm({
-          graph_name: convertedGraph.graph_name,
-          graph_uri: convertedGraph.graph_uri,
-          graph_type: convertedGraph.graph_type,
-          description: convertedGraph.description,
-          space_id: convertedGraph.space_id
-        });
-        
-      } catch (err) {
-        console.error('Error fetching graph:', err);
+      } catch {
         setBannerMessage({ type: 'error', message: 'Failed to load graph data' });
       } finally {
         setLoading(false);
       }
     };
-    
-    fetchGraph();
-  }, [graphId, isCreating, spaceFromUrl, spaceId]);
+    load();
+  }, [spaceId, graphId, graphUri, isCreating]);
 
-  const formatDateTime = (dateString: string): string => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getStatusBadge = (status: string) => {
-    const statusConfig = {
-      active: { color: 'success', text: 'Active' },
-      inactive: { color: 'failure', text: 'Inactive' },
-      processing: { color: 'warning', text: 'Processing' }
-    };
-
-    const config = statusConfig[status as keyof typeof statusConfig] || statusConfig.inactive;
-    return <Badge color={config.color}>{config.text}</Badge>;
-  };
-
-  const handleInputChange = (field: string, value: string) => {
-    setEditForm(prev => ({ ...prev, [field]: value }));
-    setHasChanges(true);
-  };
-
-  const handleSave = async () => {
+  const handleCreate = async () => {
+    if (!newGraphUri.trim()) {
+      setGraphUriError('Graph URI is required');
+      return;
+    }
+    try {
+      new URL(newGraphUri.trim());
+    } catch {
+      setGraphUriError('Must be a valid URI (e.g., http://vital.ai/graph/my-graph or urn:uuid:123)');
+      return;
+    }
     if (!spaceId) return;
-    
     setSaving(true);
     try {
-      if (isCreating) {
-        // Create new graph
-        await apiService.createGraph(spaceId, editForm.graph_uri);
-        setBannerMessage({ type: 'success', message: 'Graph created successfully!' });
-        
-        // Navigate back to graphs list
-        setTimeout(() => {
-          navigate(`/space/${spaceId}/graphs`);
-        }, 2000);
-      } else {
-        // For updates, we would need an update graph API endpoint
-        // For now, show a message that updates aren't supported yet
-        setBannerMessage({ 
-          type: 'error', 
-          message: 'Graph updates not yet supported by backend API' 
-        });
-        setIsEditing(false);
-        setHasChanges(false);
-      }
-    } catch (error) {
-      console.error('Error saving graph:', error);
-      setBannerMessage({ 
-        type: 'error', 
-        message: `Failed to ${isCreating ? 'create' : 'update'} graph. Please try again.` 
-      });
+      await apiService.createGraph(spaceId, newGraphUri.trim());
+      setBannerMessage({ type: 'success', message: 'Graph created successfully!' });
+      setTimeout(() => navigate(`/space/${spaceId}/graphs`), 1500);
+    } catch {
+      setBannerMessage({ type: 'error', message: 'Failed to create graph.' });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleCancel = () => {
-    if (isCreating) {
-      navigate('/graphs');
-    } else {
-      setIsEditing(false);
-      setHasChanges(false);
-      // Reset form to original values
-      if (graph) {
-        setEditForm({
-          graph_name: graph.graph_name,
-          graph_uri: graph.graph_uri,
-          graph_type: graph.graph_type,
-          description: graph.description,
-          space_id: graph.space_id
-        });
-      }
-    }
-  };
-
   const handlePurge = async () => {
     if (!spaceId || !graph) return;
-    
     try {
-      // Use CLEAR operation to purge graph content
       await apiService.executeGraphOperation(spaceId, 'CLEAR', graph.graph_uri, undefined, true);
       setBannerMessage({ type: 'success', message: 'Graph purged successfully!' });
       setShowPurgeModal(false);
-      
-      // Clear banner after 3 seconds
+      // Refresh graph data
+      const graphsData = await apiService.getGraphs(spaceId);
+      const match = graphsData.find((g: GraphInfo) => g.graph_uri === graph.graph_uri);
+      if (match) setGraph(match);
       setTimeout(() => setBannerMessage(null), 3000);
-    } catch (error) {
-      console.error('Error purging graph:', error);
-      setBannerMessage({ type: 'error', message: 'Failed to purge graph. Please try again.' });
+    } catch {
+      setBannerMessage({ type: 'error', message: 'Failed to purge graph.' });
       setShowPurgeModal(false);
     }
   };
 
   const handleDelete = async () => {
     if (!spaceId || !graph) return;
-    
     try {
-      // Delete the graph
       await apiService.deleteGraph(spaceId, graph.graph_uri, true);
       setBannerMessage({ type: 'success', message: 'Graph deleted successfully!' });
       setShowDeleteModal(false);
-      
-      // Navigate back to graphs list after deletion
       setTimeout(() => navigate(`/space/${spaceId}/graphs`), 1500);
-    } catch (error) {
-      console.error('Error deleting graph:', error);
-      setBannerMessage({ type: 'error', message: 'Failed to delete graph. Please try again.' });
+    } catch {
+      setBannerMessage({ type: 'error', message: 'Failed to delete graph.' });
       setShowDeleteModal(false);
     }
   };
 
-if (loading) {
-  return (
-    <div className="p-6">
+  const graphName = graph ? extractGraphName(graph.graph_uri) : '';
+  const encodedGraphUri = graph ? encodeURIComponent(graph.graph_uri) : '';
+
+  if (loading) {
+    return (
       <div className="flex justify-center items-center h-64">
         <Spinner size="xl" />
-        <span className="ml-3 text-lg text-gray-600 dark:text-gray-400">Loading graph details...</span>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-if (!isCreating && !graph && !loading) {
   return (
-    <div className="mb-6">
-      <div className="flex items-center gap-2 mb-4">
-        <GraphIcon className="w-6 h-6 text-blue-600" />
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-          Graph Details
-        </h1>
-      </div>
-      <Link to="/graphs">
-        <Button>Back to Graphs</Button>
-      </Link>
+    <div className="space-y-6">
+      {/* Breadcrumb */}
+      <Breadcrumb>
+        <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
+        <BreadcrumbItem href="/spaces" icon={HiViewBoards}>Spaces</BreadcrumbItem>
+        <BreadcrumbItem href={`/space/${spaceId}`}>{spaceName}</BreadcrumbItem>
+        <BreadcrumbItem href={`/space/${spaceId}/graphs`} icon={GraphIcon}>Graphs</BreadcrumbItem>
+        <BreadcrumbItem>{isCreating ? 'New Graph' : graphName}</BreadcrumbItem>
+      </Breadcrumb>
+
+      {/* Banner */}
+      {bannerMessage && (
+        <Alert color={bannerMessage.type === 'success' ? 'success' : 'failure'}>
+          {bannerMessage.message}
+        </Alert>
+      )}
+
+      {/* Create Mode */}
+      {isCreating && (
+        <>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Create New Graph</h1>
+            <p className="text-gray-500 dark:text-gray-400 mt-1">in space {spaceName}</p>
+          </div>
+          <Card>
+            <div className="space-y-4 max-w-lg">
+              <FormField
+                label="Graph URI"
+                htmlFor="graph_uri"
+                error={graphUriError}
+                hint="Full URI that identifies this graph"
+                required
+              >
+                <TextInput
+                  id="graph_uri"
+                  type="text"
+                  value={newGraphUri}
+                  onChange={(e) => { setNewGraphUri(e.target.value); setGraphUriError(''); }}
+                  placeholder="http://vital.ai/graph/my-graph"
+                  color={graphUriError ? 'failure' : undefined}
+                />
+              </FormField>
+              <div className="flex gap-2 pt-2">
+                <Button color="blue" onClick={handleCreate} disabled={saving || !newGraphUri.trim()}>
+                  {saving ? 'Creating...' : 'Create Graph'}
+                </Button>
+                <Button color="gray" onClick={() => navigate(`/space/${spaceId}/graphs`)} disabled={saving}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* View Mode */}
+      {!isCreating && graph && (
+        <>
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{graphName}</h1>
+              <p className="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 break-all inline-flex items-center gap-1">{graph.graph_uri}<CopyButton text={graph.graph_uri} /></p>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button size="sm" color="blue" onClick={() => navigate(`/data/import/new?spaceId=${spaceId}&graphUri=${encodedGraphUri}`)}>
+                <HiUpload className="mr-1.5 h-4 w-4" />Import
+              </Button>
+              <Button size="sm" color="gray" onClick={() => navigate(`/data/export/new?spaceId=${spaceId}&graphUri=${encodedGraphUri}`)}>
+                <HiDownload className="mr-1.5 h-4 w-4" />Export
+              </Button>
+              <Button size="sm" color="warning" onClick={() => setShowPurgeModal(true)}>
+                <HiExclamation className="mr-1.5 h-4 w-4" />Purge
+              </Button>
+              <Button size="sm" color="failure" onClick={() => setShowDeleteModal(true)}>
+                <HiTrash className="mr-1.5 h-4 w-4" />Delete
+              </Button>
+            </div>
+          </div>
+
+          {/* Stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Card>
+              <div className="flex items-center gap-3">
+                <HiDatabase className="w-7 h-7 text-indigo-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">
+                    {(graph.triple_count || 0).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Triples</p>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <div className="flex items-center gap-3">
+                <HiCollection className="w-7 h-7 text-blue-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">
+                    {entityCount != null ? entityCount.toLocaleString() : '—'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Entities</p>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <div className="flex items-center gap-3">
+                <ObjectIcon className="w-7 h-7 text-teal-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">
+                    {frameCount != null ? frameCount.toLocaleString() : '—'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Frames</p>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <div className="flex items-center gap-3">
+                <HiLink className="w-7 h-7 text-orange-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">
+                    {relationCount != null ? relationCount.toLocaleString() : '—'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Relations</p>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <div className="flex items-center gap-3">
+                <GraphIcon className="w-7 h-7 text-purple-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white truncate max-w-[100px]" title={spaceName}>
+                    {spaceName}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Space</p>
+                </div>
+              </div>
+            </Card>
+            <Card>
+              <div className="flex items-center gap-3">
+                <HiDatabase className="w-7 h-7 text-green-500" />
+                <div>
+                  <p className="text-xl font-bold text-gray-900 dark:text-white">
+                    {graph.created_time ? new Date(graph.created_time).toLocaleDateString() : 'N/A'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Created</p>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Browse Content */}
+          <Card>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Browse Content</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {[
+                { to: `/space/${spaceId}/graph/${encodedGraphUri}/triples`, icon: <TriplesIcon className="w-5 h-5" />, label: 'Triples', desc: 'RDF statements' },
+                { to: `/space/${spaceId}/graph/${encodedGraphUri}/objects/graphobjects`, icon: <ObjectIcon className="w-5 h-5" />, label: 'Objects', desc: 'Graph objects' },
+                { to: `/space/${spaceId}/graph/${encodedGraphUri}/objects/kgentities`, icon: <HiCollection className="w-5 h-5" />, label: 'Entities', desc: 'KG entities' },
+                { to: `/space/${spaceId}/graph/${encodedGraphUri}/objects/kgframes`, icon: <HiDocumentDuplicate className="w-5 h-5" />, label: 'Frames', desc: 'KG frames' },
+                { to: `/space/${spaceId}/graph/${encodedGraphUri}/objects/kgrelations`, icon: <HiLink className="w-5 h-5" />, label: 'Relations', desc: 'Edge relationships' },
+                { to: `/sparql`, icon: <HiSearch className="w-5 h-5" />, label: 'SPARQL', desc: 'Query this graph' },
+              ].map((item) => (
+                <Link
+                  key={item.label}
+                  to={item.to}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-blue-300 dark:hover:border-blue-600 transition-all group"
+                >
+                  <div className="text-gray-400 group-hover:text-blue-500 transition-colors">{item.icon}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{item.label}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">{item.desc}</p>
+                  </div>
+                  <HiChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-500" />
+                </Link>
+              ))}
+            </div>
+          </Card>
+
+          {/* Details */}
+          <Card>
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Details</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Graph URI</p>
+                <p className="text-sm text-gray-900 dark:text-white font-mono break-all inline-flex items-center gap-1">{graph.graph_uri}<CopyButton text={graph.graph_uri} /></p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Space</p>
+                <Link to={`/space/${spaceId}`} className="text-sm text-blue-600 hover:underline">{spaceName}</Link>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Triple Count</p>
+                <p className="text-sm text-gray-900 dark:text-white">{(graph.triple_count || 0).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Created</p>
+                <p className="text-sm text-gray-900 dark:text-white">
+                  {graph.created_time ? new Date(graph.created_time).toLocaleString() : 'N/A'}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Last Modified</p>
+                <p className="text-sm text-gray-900 dark:text-white">
+                  {graph.updated_time ? new Date(graph.updated_time).toLocaleString() : 'N/A'}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Danger Zone */}
+          <div className="rounded-lg border-2 border-red-200 dark:border-red-900/50 p-5">
+            <h2 className="text-lg font-semibold text-red-700 dark:text-red-400 mb-3">Danger Zone</h2>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 rounded border border-gray-200 dark:border-gray-700">
+                <div>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">Purge all data</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Remove all triples but keep the graph.</p>
+                </div>
+                <Button size="sm" color="warning" onClick={() => setShowPurgeModal(true)}>
+                  <HiExclamation className="mr-1.5 h-4 w-4" />Purge
+                </Button>
+              </div>
+              <div className="flex items-center justify-between p-3 rounded border border-gray-200 dark:border-gray-700">
+                <div>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">Delete this graph</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Permanently remove the graph and all its data.</p>
+                </div>
+                <Button size="sm" color="failure" onClick={() => setShowDeleteModal(true)}>
+                  <HiTrash className="mr-1.5 h-4 w-4" />Delete
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Not found */}
+      {!isCreating && !graph && !loading && (
+        <div className="text-center py-16">
+          <GraphIcon className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium text-gray-500 dark:text-gray-400">Graph not found</p>
+          <Link to={`/space/${spaceId}/graphs`} className="text-blue-600 hover:underline text-sm mt-2 inline-block">
+            Back to Graphs
+          </Link>
+        </div>
+      )}
+
+      {/* Purge Modal */}
+      <ConfirmDialog
+        open={showPurgeModal}
+        onConfirm={handlePurge}
+        onCancel={() => setShowPurgeModal(false)}
+        title="Purge Graph"
+        description={<>Remove all triples from <strong>{graphName}</strong>?</>}
+        confirmLabel="Purge"
+        variant="warning"
+      />
+
+      {/* Delete Modal */}
+      <ConfirmDialog
+        open={showDeleteModal}
+        onConfirm={handleDelete}
+        onCancel={() => setShowDeleteModal(false)}
+        title="Delete Graph"
+        description={<>Permanently delete <strong>{graphName}</strong> and all its data?</>}
+        confirmLabel="Delete"
+        variant="danger"
+      />
     </div>
   );
-}
-
-return (
-  <div className="p-6">
-    {/* Breadcrumb */}
-    <Breadcrumb className="mb-6">
-      <BreadcrumbItem href="/" icon={HiHome}>
-        Home
-      </BreadcrumbItem>
-      <BreadcrumbItem href="/spaces" icon={HiViewBoards}>
-        Spaces
-      </BreadcrumbItem>
-      {spaceId && space && (
-        <BreadcrumbItem href={`/space/${space.id}`}>
-          {space.space_name}
-        </BreadcrumbItem>
-      )}
-      <BreadcrumbItem href={spaceId ? `/space/${spaceId}/graphs` : "/graphs"} icon={GraphIcon}>
-        Graphs
-      </BreadcrumbItem>
-      {!isCreating && graphId && (
-        <BreadcrumbItem>
-          {graph?.graph_name || graphId}
-        </BreadcrumbItem>
-      )}
-      {isCreating && (
-        <BreadcrumbItem>
-          New Graph
-        </BreadcrumbItem>
-      )}
-    </Breadcrumb>
-
-    {/* Banner Message */}
-    {bannerMessage && (
-      <div className={`mb-6 p-4 rounded-lg ${
-        bannerMessage.type === 'success'
-          ? 'bg-green-50 border border-green-200 text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200'
-          : 'bg-red-50 border border-red-200 text-red-800 dark:bg-red-900/20 dark:border-red-800 dark:text-red-200'
-      }`}>
-        {bannerMessage.message}
-      </div>
-    )}
-
-    {/* Header */}
-    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-      <div className="flex items-center gap-2">
-        <GraphIcon className="w-8 h-8 text-blue-600" />
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-          {isCreating ? 'Create New Graph' : (graph?.graph_name || 'Loading...')}
-        </h1>
-        {!isCreating && graph && (
-          <div className="flex items-center gap-3">
-            <Badge color="info">{graph.graph_type}</Badge>
-            {getStatusBadge(graph.status)}
-          </div>
-        )}
-      </div>
-
-      {!isCreating && graph && (
-        <div className="flex gap-2">
-          {isEditing ? (
-            <>
-              <Button
-                color="gray"
-                onClick={handleCancel}
-                disabled={saving}
-              >
-                <HiX className="mr-2 h-4 w-4" />
-                Cancel
-              </Button>
-              <Button
-                color="blue"
-                onClick={handleSave}
-                disabled={saving || !hasChanges}
-              >
-                <HiSave className="mr-2 h-4 w-4" />
-                {saving ? 'Saving...' : 'Save'}
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                color="blue"
-                onClick={() => navigate(`/data/import/new?spaceId=${spaceId}&graphId=${graphId}`)}
-              >
-                <HiDownload className="mr-2 h-4 w-4" />
-                Import
-              </Button>
-              <Button
-                color="gray"
-                onClick={() => navigate(`/data/export/new?spaceId=${spaceId}&graphId=${graphId}`)}
-              >
-                <HiDownload className="mr-2 h-4 w-4" />
-                Export
-              </Button>
-              <Button
-                color="blue"
-                onClick={() => setIsEditing(true)}
-              >
-                <HiPencil className="mr-2 h-4 w-4" />
-                Edit
-              </Button>
-              <Button
-                color="red"
-                onClick={() => setShowPurgeModal(true)}
-              >
-                <HiExclamation className="mr-2 h-4 w-4" />
-                Purge
-              </Button>
-              <Button
-                color="red"
-                onClick={() => setShowDeleteModal(true)}
-              >
-                <HiTrash className="mr-2 h-4 w-4" />
-                Delete
-              </Button>
-            </>
-          )}
-        </div>
-      )}
-
-      {isCreating && (
-        <div className="flex gap-2">
-          <Button
-            color="success"
-            onClick={handleSave}
-            disabled={saving || !editForm.graph_name || !editForm.space_id}
-          >
-            <HiSave className="mr-2 h-4 w-4" />
-            {saving ? 'Creating...' : 'Create Graph'}
-          </Button>
-          <Button
-            color="gray"
-            onClick={handleCancel}
-            disabled={saving}
-          >
-            <HiX className="mr-2 h-4 w-4" />
-            Cancel
-          </Button>
-        </div>
-      )}
-    </div>
-
-    {/* Graph Details */}
-    <div className="mb-6">
-      {/* Basic Information */}
-      {!isCreating && !isEditing && (
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-          Basic Information
-        </h2>
-      )}
-      <Card>
-        {(isCreating || isEditing) && (
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-            Graph Information
-          </h2>
-        )}
-
-        {isCreating || isEditing ? (
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="graph_name">Graph Name *</Label>
-              <TextInput
-                id="graph_name"
-                type="text"
-                value={editForm.graph_name}
-                onChange={(e) => handleInputChange('graph_name', e.target.value)}
-                placeholder="Enter graph name"
-                required
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="graph_uri">Graph URI</Label>
-              <TextInput
-                id="graph_uri"
-                type="text"
-                value={editForm.graph_uri}
-                onChange={(e) => handleInputChange('graph_uri', e.target.value)}
-                placeholder="http://example.com/graph/my-graph"
-              />
-            </div>
-
-            <div>
-              <Label htmlFor="graph_type">Graph Type</Label>
-              <Select
-                id="graph_type"
-                value={editForm.graph_type}
-                onChange={(e) => handleInputChange('graph_type', e.target.value)}
-              >
-                <option value="Knowledge Graph">Knowledge Graph</option>
-                <option value="Ontology">Ontology</option>
-                <option value="Dataset">Dataset</option>
-                <option value="Workflow">Workflow</option>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                rows={3}
-                value={editForm.description}
-                onChange={(e) => handleInputChange('description', e.target.value)}
-                placeholder="Enter graph description"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 w-full">
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Space:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {space?.space_name || 'Unknown Space'} ({space?.space || 'N/A'})
-              </p>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Graph Name:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.graph_name}
-              </p>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Type:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.graph_type}
-              </p>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Status:</span>
-              <div className="text-sm">
-                {graph && getStatusBadge(graph.status)}
-              </div>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Triple Count:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.triple_count.toLocaleString()} triples
-              </p>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Created:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.created_time ? formatDateTime(graph.created_time) : 'N/A'}
-              </p>
-            </div>
-            <div>
-              <span className="font-medium text-gray-700 dark:text-gray-300">Last Modified:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.last_modified ? formatDateTime(graph.last_modified) : 'N/A'}
-              </p>
-            </div>
-            <div className="sm:col-span-2">
-              <span className="font-medium text-gray-700 dark:text-gray-300">Graph URI:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400 font-mono break-all">
-                {graph?.graph_uri}
-              </p>
-            </div>
-            <div className="sm:col-span-2">
-              <span className="font-medium text-gray-700 dark:text-gray-300">Description:</span>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                {graph?.description || 'No description provided'}
-              </p>
-            </div>
-          </div>
-        )}
-      </Card>
-    </div>
-
-    {/* Space Selection for Creation Mode */}
-    {isCreating && (
-      <Card className="mb-6">
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-          Space Assignment
-        </h2>
-        <div>
-          <Label htmlFor="space_id">Target Space *</Label>
-          <Select
-            id="space_id"
-            value={editForm.space_id}
-            onChange={(e) => handleInputChange('space_id', e.target.value)}
-            required
-          >
-            <option value="">Select a space...</option>
-            <option value="space1">Default Space</option>
-            <option value="space2">Project Alpha</option>
-            <option value="space3">Research Data</option>
-          </Select>
-        </div>
-      </Card>
-    )}
-
-    {/* Quick Actions - Only show for existing graphs */}
-    {!isCreating && graph && (
-      <Card>
-        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-          Quick Actions
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Button
-            color="blue"
-            onClick={() => navigate(`/data/import/new?spaceId=${spaceId}&graphId=${graphId}`)}
-            className="w-full"
-          >
-            <HiDownload className="mr-2 h-4 w-4" />
-            Import
-          </Button>
-          <Button
-            color="gray"
-            onClick={() => navigate(`/data/export/new?spaceId=${spaceId}&graphId=${graphId}`)}
-            className="w-full"
-          >
-            <HiDownload className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-          <Button
-            color="purple"
-            onClick={() => navigate(`/space/${spaceId}/graph/${graphId}/analysis`)}
-            className="w-full"
-          >
-            <HiChartBar className="mr-2 h-4 w-4" />
-            Analysis
-          </Button>
-        </div>
-      </Card>
-    )}
-
-    {/* Purge Confirmation Modal */}
-    {showPurgeModal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg max-w-md w-full mx-4">
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Confirm Graph Purge
-            </h3>
-            <div className="space-y-4">
-              <div className="flex justify-center">
-                <HiExclamation className="h-14 w-14 text-yellow-400" />
-              </div>
-              <p className="text-gray-500 dark:text-gray-400">
-                Are you sure you want to purge this graph? This action will remove all data from the graph but keep the graph structure intact.
-              </p>
-              <p className="text-sm text-red-600 dark:text-red-400">
-                <strong>Warning:</strong> This action cannot be undone.
-              </p>
-            </div>
-            <div className="flex gap-2 mt-6">
-              <Button color="red" onClick={handlePurge} className="flex-1">
-                Yes, Purge Graph
-              </Button>
-              <Button color="gray" onClick={() => setShowPurgeModal(false)} className="flex-1">
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Delete Confirmation Modal */}
-    {showDeleteModal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg max-w-md w-full mx-4">
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Confirm Graph Deletion
-            </h3>
-            <div className="space-y-4">
-              <div className="flex justify-center">
-                <HiTrash className="h-14 w-14 text-red-400" />
-              </div>
-              <p className="text-gray-500 dark:text-gray-400">
-                Are you sure you want to delete this graph? This action will permanently remove the graph and all its data.
-              </p>
-              <p className="text-sm text-red-600 dark:text-red-400">
-                <strong>Warning:</strong> This action cannot be undone.
-              </p>
-            </div>
-            <div className="flex gap-2 mt-6">
-              <Button color="red" onClick={handleDelete} className="flex-1">
-                Yes, Delete Graph
-              </Button>
-              <Button color="gray" onClick={() => setShowDeleteModal(false)} className="flex-1">
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
-  </div>
-);
 };
 
 export default GraphDetail;

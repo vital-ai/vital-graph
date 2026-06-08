@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -22,32 +22,27 @@ import {
   HiPlay,
   HiStop
 } from 'react-icons/hi';
-import { mockDataExports, type DataExport } from '../mock/data';
-import { mockSpaces, mockGraphs, type Space, type Graph } from '../mock';
+import { importExportService, type ImportExportJob } from '../services/ImportExportService';
 import DataIcon from '../components/icons/DataIcon';
+import { formatFileSize, formatDateTime, getJobStatusColor } from '../utils/formatUtils';
 
-const DataExport: React.FC = () => {
+const POLL_INTERVAL_MS = 2000;
+
+const DataExportPage: React.FC = () => {
   const navigate = useNavigate();
-  const [exports, setExports] = useState<DataExport[]>([]);
-  const [spaces, setSpaces] = useState<Space[]>([]);
-  const [graphs, setGraphs] = useState<Graph[]>([]);
+  const [exports, setExports] = useState<ImportExportJob[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch data
+  // Fetch export jobs from API
   const fetchData = useCallback(async () => {
     try {
-      setLoading(true);
-      // Simulate API calls
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      setExports(mockDataExports);
-      setSpaces(mockSpaces);
-      setGraphs(mockGraphs);
+      const jobs = await importExportService.listExportJobs();
+      setExports(jobs);
       setError(null);
     } catch (err) {
-      console.error('Error fetching data:', err);
-      setError('Failed to load data. Please try again later.');
+      setError(err instanceof Error ? err.message : 'Failed to load export jobs.');
     } finally {
       setLoading(false);
     }
@@ -57,73 +52,51 @@ const DataExport: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  // Helper functions
-  const getSpaceName = (spaceId: string) => {
-    const space = spaces.find(s => s.space === spaceId);
-    return space ? space.space_name : spaceId;
-  };
-
-  const getGraphName = (graphId: number) => {
-    const graph = graphs.find(g => g.id === graphId);
-    return graph ? graph.graph_name : `Graph ${graphId}`;
-  };
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed': return 'success';
-      case 'processing': return 'info';
-      case 'pending': return 'warning';
-      case 'failed': return 'failure';
-      case 'canceled': return 'gray';
-      case 'expired': return 'gray';
-      default: return 'gray';
+  // Poll active jobs for progress
+  useEffect(() => {
+    const hasActive = exports.some(j => j.status === 'running' || j.status === 'processing');
+    if (hasActive) {
+      pollRef.current = setInterval(fetchData, POLL_INTERVAL_MS);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
-  };
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [exports, fetchData]);
+
+  const formatDate = (s: string | null | undefined) => formatDateTime(s || '');
+
+  const getStatusColor = getJobStatusColor;
 
   // Action handlers
-  const handleStartExport = async (exportId: number) => {
-    setExports(prev => prev.map(exp => 
-      exp.id === exportId 
-        ? { ...exp, status: 'processing', started_time: new Date().toISOString(), progress: 10 }
-        : exp
-    ));
-  };
-
-  const handleCancelExport = async (exportId: number) => {
-    setExports(prev => prev.map(exp => 
-      exp.id === exportId 
-        ? { ...exp, status: 'canceled', completed_time: new Date().toISOString() }
-        : exp
-    ));
-  };
-
-  const handleDownload = (exportItem: DataExport) => {
-    if (exportItem.download_url) {
-      // Create a temporary link and trigger download
-      const link = document.createElement('a');
-      link.href = exportItem.download_url;
-      link.download = `${exportItem.name.replace(/\s+/g, '_')}.${exportItem.export_format}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+  const handleExecuteExport = async (jobId: string) => {
+    try {
+      await importExportService.executeExportJob(jobId);
+      await fetchData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start export');
     }
   };
 
-  const handleDeleteExport = async (exportId: number) => {
-    if (window.confirm('Are you sure you want to delete this export?')) {
-      setExports(prev => prev.filter(exp => exp.id !== exportId));
+  const handleDownload = (job: ImportExportJob) => {
+    const url = importExportService.getExportDownloadUrl(job.job_id);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = job.file_name || 'export';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDeleteExport = async (jobId: string) => {
+    if (!window.confirm('Are you sure you want to delete this export job?')) return;
+    try {
+      await importExportService.deleteExportJob(jobId);
+      setExports(prev => prev.filter(j => j.job_id !== jobId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete');
     }
   };
 
@@ -150,7 +123,7 @@ const DataExport: React.FC = () => {
       </div>
 
       {error && (
-        <Alert color="failure" className="mb-4">
+        <Alert color="failure" className="mb-4" onDismiss={() => setError(null)}>
           {error}
         </Alert>
       )}
@@ -160,14 +133,14 @@ const DataExport: React.FC = () => {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Data Exports
+                Export Jobs
               </h2>
               <Button
                 color="blue"
                 onClick={() => navigate('/data/export/new')}
               >
                 <HiPlus className="w-4 h-4 mr-2" />
-                Add Data Export
+                New Export
               </Button>
             </div>
 
@@ -175,7 +148,7 @@ const DataExport: React.FC = () => {
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableHeadCell>Name</TableHeadCell>
+                    <TableHeadCell>Job ID</TableHeadCell>
                     <TableHeadCell>Space</TableHeadCell>
                     <TableHeadCell>Graph</TableHeadCell>
                     <TableHeadCell>Format</TableHeadCell>
@@ -187,85 +160,89 @@ const DataExport: React.FC = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {exports.map((exportItem) => (
-                    <TableRow key={exportItem.id}>
-                      <TableCell className="font-medium">{exportItem.name}</TableCell>
-                      <TableCell>{getSpaceName(exportItem.space_id)}</TableCell>
-                      <TableCell>{getGraphName(exportItem.graph_id)}</TableCell>
-                      <TableCell>
-                        <Badge color="gray">{exportItem.export_format}</Badge>
+                  {exports.map((job) => (
+                    <TableRow key={job.job_id}>
+                      <TableCell className="font-mono text-xs">
+                        {job.job_id.slice(0, 8)}...
+                      </TableCell>
+                      <TableCell>{job.space_id}</TableCell>
+                      <TableCell className="text-xs max-w-[120px] truncate">
+                        {job.graph_uri || 'All'}
                       </TableCell>
                       <TableCell>
-                        <Badge color={getStatusColor(exportItem.status)}>
-                          {exportItem.status}
+                        <Badge color="gray">{job.file_format || '-'}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge color={getStatusColor(job.status)}>
+                          {job.status}
                         </Badge>
                       </TableCell>
                       <TableCell>
                         <div className="w-24">
                           <Progress
-                            progress={exportItem.progress}
-                            color={exportItem.status === 'failed' ? 'red' : 'blue'}
+                            progress={job.progress_pct}
+                            color={job.status === 'failed' ? 'red' : 'blue'}
                             size="sm"
                           />
                           <div className="text-xs text-gray-500 mt-1">
-                            {exportItem.progress}%
+                            {job.progress_pct.toFixed(0)}%
+                            {job.records_done > 0 && (
+                              <span className="ml-1">({job.records_done.toLocaleString()})</span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">
-                        {exportItem.file_size ? formatFileSize(exportItem.file_size) : '-'}
+                        {formatFileSize(job.file_size)}
                       </TableCell>
-                      <TableCell className="text-sm">
-                        {formatDate(exportItem.created_time)}
+                      <TableCell className="text-xs">
+                        {formatDate(job.created_at)}
                       </TableCell>
                       <TableCell>
-                        <div className="flex gap-2">
+                        <div className="flex gap-1">
                           <Button
                             size="xs"
                             color="blue"
-                            onClick={() => navigate(`/data/export/${exportItem.id}`)}
+                            onClick={() => navigate(`/data/export/${job.job_id}`)}
                           >
-                            <HiEye className="w-3 h-3 mr-1" />
-                            Details
+                            <HiEye className="w-3 h-3" />
                           </Button>
-                          {exportItem.status === 'pending' && (
+                          {job.status === 'created' && (
                             <Button
                               size="xs"
                               color="green"
-                              onClick={() => handleStartExport(exportItem.id)}
+                              onClick={() => handleExecuteExport(job.job_id)}
                             >
-                              <HiPlay className="w-3 h-3 mr-1" />
-                              Start
+                              <HiPlay className="w-3 h-3" />
                             </Button>
                           )}
-                          {exportItem.status === 'processing' && (
+                          {(job.status === 'running' || job.status === 'processing') && (
                             <Button
                               size="xs"
                               color="red"
-                              onClick={() => handleCancelExport(exportItem.id)}
+                              onClick={() => handleDeleteExport(job.job_id)}
                             >
-                              <HiStop className="w-3 h-3 mr-1" />
-                              Cancel
+                              <HiStop className="w-3 h-3" />
                             </Button>
                           )}
-                          {exportItem.status === 'completed' && exportItem.download_url && (
+                          {job.status === 'completed' && (
                             <Button
                               size="xs"
                               color="green"
-                              onClick={() => handleDownload(exportItem)}
+                              onClick={() => handleDownload(job)}
                             >
-                              <HiDownload className="w-3 h-3 mr-1" />
-                              Download
+                              <HiDownload className="w-3 h-3" />
                             </Button>
                           )}
-                          <Button
-                            size="xs"
-                            color="red"
-                            onClick={() => handleDeleteExport(exportItem.id)}
-                            disabled={exportItem.status === 'processing'}
-                          >
-                            <HiTrash className="w-3 h-3" />
-                          </Button>
+                          {job.status !== 'running' && job.status !== 'processing' && (
+                            <Button
+                              size="xs"
+                              color="red"
+                              onClick={() => handleDeleteExport(job.job_id)}
+                            >
+                              <HiTrash className="w-3 h-3" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -276,7 +253,7 @@ const DataExport: React.FC = () => {
 
             {exports.length === 0 && (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                No data exports found. Create your first export to get started.
+                No export jobs found. Create your first export to get started.
               </div>
             )}
           </div>
@@ -286,4 +263,4 @@ const DataExport: React.FC = () => {
   );
 };
 
-export default DataExport;
+export default DataExportPage;

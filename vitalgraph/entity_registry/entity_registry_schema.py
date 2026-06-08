@@ -214,6 +214,31 @@ class EntityRegistrySchema:
                 CONSTRAINT uq_entity_relationship UNIQUE (entity_source, entity_destination, relationship_type_id)
             )
         ''',
+
+        'entity_dedup_band': '''
+            CREATE TABLE IF NOT EXISTS entity_dedup_band (
+                band_id SMALLINT NOT NULL,
+                band_hash BYTEA NOT NULL,
+                entity_key TEXT NOT NULL,
+                PRIMARY KEY (band_id, band_hash, entity_key)
+            )
+        ''',
+
+        'entity_dedup_phonetic_band': '''
+            CREATE TABLE IF NOT EXISTS entity_dedup_phonetic_band (
+                band_id SMALLINT NOT NULL,
+                band_hash BYTEA NOT NULL,
+                entity_key TEXT NOT NULL,
+                PRIMARY KEY (band_id, band_hash, entity_key)
+            )
+        ''',
+
+        'entity_dedup_hash': '''
+            CREATE TABLE IF NOT EXISTS entity_dedup_hash (
+                entity_id VARCHAR(50) PRIMARY KEY,
+                dedup_hash CHAR(32) NOT NULL
+            )
+        ''',
     }
 
     INDEXES = [
@@ -273,6 +298,10 @@ class EntityRegistrySchema:
         'CREATE INDEX IF NOT EXISTS idx_rel_type ON entity_relationship(relationship_type_id)',
         'CREATE INDEX IF NOT EXISTS idx_rel_status ON entity_relationship(status)',
         'CREATE INDEX IF NOT EXISTS idx_rel_dates ON entity_relationship(start_datetime, end_datetime)',
+
+        # Dedup band indexes (covering index for fast band lookups)
+        'CREATE INDEX IF NOT EXISTS idx_dedup_band_lookup ON entity_dedup_band (band_id, band_hash) INCLUDE (entity_key)',
+        'CREATE INDEX IF NOT EXISTS idx_dedup_phonetic_lookup ON entity_dedup_phonetic_band (band_id, band_hash) INCLUDE (entity_key)',
     ]
 
     SEED_ENTITY_TYPES = [

@@ -199,6 +199,9 @@ class PlanV2:
     # graph URI (for OpGraph with constant URI)
     graph_uri: Optional[str] = None
 
+    # optimizer hints (populated by pre-emit optimization passes)
+    hints: Dict[str, Any] = field(default_factory=dict)
+
     # --- Utility ---
 
     @property

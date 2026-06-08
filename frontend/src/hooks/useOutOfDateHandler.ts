@@ -4,7 +4,7 @@ import { useChangeNotification } from '../contexts/ChangeNotificationContext';
 export interface OutOfDateHandlerOptions {
   entityType?: 'user' | 'space';
   entityId?: string;
-  onRefresh?: (data: any) => void;
+  onRefresh?: (data: unknown) => void;
   onCancel?: () => void;
 }
 

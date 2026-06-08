@@ -7,7 +7,7 @@ KG entities represent knowledge graph entities with their associated triples and
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Literal, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends, Request, Response, Body
 from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
@@ -30,6 +30,7 @@ from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGr
 from ..sparql.graph_validation import EntityGraphValidator
 from ..cache.entity_graph_cache import _entity_graph_cache
 from ..cache.count_cache import _count_cache
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 # Import new kg_impl implementation
 from ..kg_impl.kg_backend_utils import create_backend_adapter
@@ -113,6 +114,23 @@ class KGEntitiesEndpoint:
         except Exception as e:
             self.logger.warning(f"⚠️ Entity cache NOTIFY failed: {entity_uri} — {e}")
 
+    def _schedule_auto_sync(self, backend_impl, space_id: str, graph_id: str,
+                            subject_uris: List[str], operation: Literal["upsert", "delete"] = "upsert") -> None:
+        """Schedule background auto-sync for vector and geo data.
+
+        Fire-and-forget: failures are logged but never block the response.
+        """
+        db_impl = getattr(backend_impl, 'db_impl', None)
+        if db_impl and subject_uris:
+            from ..vectorization.auto_sync import schedule_sync
+            schedule_sync(
+                db_impl=db_impl,
+                space_id=space_id,
+                subject_uris=subject_uris,
+                graph_uri=graph_id,
+                operation=operation,
+            )
+
     def _setup_routes(self):
         """Setup FastAPI routes for KG entities management."""
         
@@ -152,6 +170,8 @@ class KGEntitiesEndpoint:
             
             Note: Cannot use both URI-based (uri/uri_list) and ID-based (id/id_list) parameters in the same request.
             """
+            
+            require_space_read(current_user, space_id)
             
             # Validate mutually exclusive parameters
             uri_params_used = bool(uri or uri_list)
@@ -216,6 +236,7 @@ class KGEntitiesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Create or update entities from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_or_update_entities(
                 space_id, graph_id, quads, operation_mode, parent_uri, current_user
@@ -234,6 +255,7 @@ class KGEntitiesEndpoint:
             """
             Delete entities by URI or URI list with optional cascade cleanup.
             """
+            require_space_write(current_user, space_id)
             if uri:
                 return await self._delete_entity_by_uri(space_id, graph_id, uri, delete_entity_graph, current_user)
             elif uri_list:
@@ -264,6 +286,7 @@ class KGEntitiesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Return only the count of entities matching the given filters."""
+            require_space_read(current_user, space_id)
             return await self._count_entities(
                 space_id, graph_id, entity_type_uri, search, sort_by,
                 status=status, exclude_status=exclude_status,
@@ -295,6 +318,7 @@ class KGEntitiesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Return counts for multiple filter combinations in a single call."""
+            require_space_read(current_user, body.space_id)
             return await self._batch_count_entities(body)
         
         @self.router.get("/kgentities/kgframes", response_model=Union[QuadResponse, FrameGraphsResponse], response_model_by_alias=True, tags=["KG Entities"])
@@ -327,6 +351,7 @@ class KGEntitiesEndpoint:
             Returns:
                 Dictionary with entity frames data or N quad-format documents if frame_uris provided
             """
+            require_space_read(current_user, space_id)
             return await self._get_kgentity_frames(space_id, graph_id, entity_uri, frame_uris, page_size, offset, search, current_user, parent_frame_uri)
         
         @self.router.post("/kgentities/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Entities"])
@@ -340,6 +365,7 @@ class KGEntitiesEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Create or update entity frames from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             if operation_mode == OperationMode.UPDATE:
                 return await self._update_entity_frames(space_id, graph_id, entity_uri, quads, current_user, parent_frame_uri)
@@ -365,6 +391,7 @@ class KGEntitiesEndpoint:
                 parent_frame_uri: If provided, validates frames are children of parent before deletion
                 recursive: If true, cascade-delete all descendant frames. If false, fail if children exist.
             """
+            require_space_write(current_user, space_id)
             frame_uri_list = [uri.strip() for uri in frame_uris.split(',') if uri.strip()]
             return await self._delete_entity_frames(space_id, graph_id, entity_uri, frame_uri_list, current_user, parent_frame_uri, recursive)
         
@@ -378,6 +405,7 @@ class KGEntitiesEndpoint:
             """
             Query KGEntities using criteria-based search.
             """
+            require_space_read(current_user, space_id)
             return await self._query_kgentities(space_id, graph_id, query_request, current_user)
         
     
@@ -809,6 +837,11 @@ class KGEntitiesEndpoint:
                 _ent_uri = str(_ent.URI) if hasattr(_ent, 'URI') and _ent.URI else None
                 if _ent_uri:
                     await self._invalidate_entity_cache(space_id, graph_id, _ent_uri)
+
+            # Auto-sync vector/geo data for changed subjects
+            _sync_uris = [str(o.URI) for o in vitalsigns_objects if hasattr(o, 'URI') and o.URI]
+            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
+
             return _result
 
         except Exception as e:
@@ -939,6 +972,13 @@ class KGEntitiesEndpoint:
             # Invalidate entity graph cache for all affected entities
             for _eu in entity_uris:
                 await self._invalidate_entity_cache(space_id, graph_id, _eu)
+
+            # Auto-sync vector/geo data for changed subjects
+            _sync_uris = [str(o.URI) for o in updated_objects if hasattr(o, 'URI') and o.URI]
+            _bi = getattr(backend_adapter, 'backend', None)
+            if _bi:
+                self._schedule_auto_sync(_bi, space_id, graph_id, _sync_uris)
+
             return result
             
         except Exception as e:
@@ -1011,6 +1051,9 @@ class KGEntitiesEndpoint:
 
             if success:
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
+                _bi = getattr(backend_adapter, 'backend', None)
+                if _bi:
+                    self._schedule_auto_sync(_bi, space_id, graph_id, [entity_uri])
                 return EntityUpdateResponse(
                     success=True,
                     message=f"Successfully updated entity (entity_only): {entity_uri}",
@@ -1140,6 +1183,7 @@ class KGEntitiesEndpoint:
             # Invalidate entity graph cache after successful deletion
             if success:
                 await self._invalidate_entity_cache(space_id, graph_id, uri, "deleted")
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, [uri], "delete")
             
             return EntityDeleteResponse(
                 message=f"Successfully deleted KG {deletion_type} '{str(uri)}' from graph '{graph_id}' in space '{space_id}' ({deleted_count} objects)" if success else f"Failed to delete KGEntity '{str(uri)}'",
@@ -1242,6 +1286,10 @@ class KGEntitiesEndpoint:
             for _del_uri in deleted_uris_list:
                 await self._invalidate_entity_cache(space_id, graph_id, _del_uri, "deleted")
             
+            # Auto-sync vector/geo data for deleted entities
+            if deleted_uris_list:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris_list, "delete")
+
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
             return EntityDeleteResponse(

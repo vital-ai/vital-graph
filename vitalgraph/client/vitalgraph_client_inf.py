@@ -36,11 +36,11 @@ from ..model.files_model import (
     FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse
 )
 from ..model.import_model import (
-    ImportJob, ImportJobsResponse, ImportJobResponse, ImportCreateResponse, ImportUpdateResponse, 
+    ImportJobCreate, ImportJob, ImportJobsResponse, ImportJobResponse, ImportCreateResponse,
     ImportDeleteResponse, ImportExecuteResponse, ImportStatusResponse, ImportLogResponse, ImportUploadResponse
 )
 from ..model.export_model import (
-    ExportJob, ExportJobsResponse, ExportJobResponse, ExportCreateResponse, ExportUpdateResponse, 
+    ExportJobCreate, ExportJob, ExportJobsResponse, ExportJobResponse, ExportCreateResponse,
     ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse
 )
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
@@ -363,92 +363,82 @@ class VitalGraphClientInterface(ABC):
         pass
     
     # Import Management Methods
-    
+
     @abstractmethod
-    async def create_import_job(self, import_job: ImportJob) -> ImportCreateResponse:
-        """Create new data import job."""
+    async def create_import_job(self, request: ImportJobCreate) -> ImportCreateResponse:
+        """Create a new import job."""
         pass
-    
+
     @abstractmethod
-    async def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None, 
-                        page_size: int = 100, offset: int = 0) -> ImportJobsResponse:
-        """List all import jobs with optional filtering."""
+    async def list_import_jobs(self, space_id: Optional[str] = None, status: Optional[str] = None,
+                               page_size: int = 50, offset: int = 0) -> ImportJobsResponse:
+        """List import jobs with optional filtering."""
         pass
-    
+
     @abstractmethod
-    async def get_import_job(self, import_id: str) -> ImportJobResponse:
+    async def get_import_job(self, job_id: str) -> ImportJobResponse:
         """Get import job details by ID."""
         pass
-    
+
     @abstractmethod
-    async def update_import_job(self, import_id: str, import_job: ImportJob) -> ImportUpdateResponse:
-        """Update import job."""
+    async def delete_import_job(self, job_id: str) -> ImportDeleteResponse:
+        """Cancel (if running) and delete import job."""
         pass
-    
+
     @abstractmethod
-    async def delete_import_job(self, import_id: str) -> ImportDeleteResponse:
-        """Delete import job."""
+    async def upload_import_file(self, job_id: str, file_path: str) -> ImportUploadResponse:
+        """Upload a file for an import job."""
         pass
-    
+
     @abstractmethod
-    async def execute_import_job(self, import_id: str) -> ImportExecuteResponse:
-        """Execute import job."""
+    async def execute_import_job(self, job_id: str) -> ImportExecuteResponse:
+        """Start background import execution."""
         pass
-    
+
     @abstractmethod
-    async def get_import_status(self, import_id: str) -> ImportStatusResponse:
-        """Get import execution status."""
+    async def get_import_status(self, job_id: str) -> ImportStatusResponse:
+        """Get import progress / status."""
         pass
-    
+
     @abstractmethod
-    async def get_import_log(self, import_id: str) -> ImportLogResponse:
-        """Get import execution log."""
+    async def get_import_log(self, job_id: str) -> ImportLogResponse:
+        """Get import log entries."""
         pass
-    
-    @abstractmethod
-    async def upload_import_file(self, import_id: str, file_path: str) -> ImportUploadResponse:
-        """Upload file to import job."""
-        pass
-    
+
     # Export Management Methods
-    
+
     @abstractmethod
-    async def create_export_job(self, export_job: ExportJob) -> ExportCreateResponse:
-        """Create new data export job."""
+    async def create_export_job(self, request: ExportJobCreate) -> ExportCreateResponse:
+        """Create a new export job."""
         pass
-    
+
     @abstractmethod
-    async def list_export_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None, 
-                        page_size: int = 100, offset: int = 0) -> ExportJobsResponse:
-        """List all export jobs with optional filtering."""
+    async def list_export_jobs(self, space_id: Optional[str] = None, status: Optional[str] = None,
+                               page_size: int = 50, offset: int = 0) -> ExportJobsResponse:
+        """List export jobs with optional filtering."""
         pass
-    
+
     @abstractmethod
-    async def get_export_job(self, export_id: str) -> ExportJobResponse:
+    async def get_export_job(self, job_id: str) -> ExportJobResponse:
         """Get export job details by ID."""
         pass
-    
+
     @abstractmethod
-    async def update_export_job(self, export_id: str, export_job: ExportJob) -> ExportUpdateResponse:
-        """Update export job."""
+    async def delete_export_job(self, job_id: str) -> ExportDeleteResponse:
+        """Cancel (if running) and delete export job."""
         pass
-    
+
     @abstractmethod
-    async def delete_export_job(self, export_id: str) -> ExportDeleteResponse:
-        """Delete export job."""
+    async def execute_export_job(self, job_id: str) -> ExportExecuteResponse:
+        """Start background export execution."""
         pass
-    
+
     @abstractmethod
-    async def execute_export_job(self, export_id: str) -> ExportExecuteResponse:
-        """Execute export job."""
+    async def get_export_status(self, job_id: str) -> ExportStatusResponse:
+        """Get export progress / status."""
         pass
-    
+
     @abstractmethod
-    async def get_export_status(self, export_id: str) -> ExportStatusResponse:
-        """Get export execution status."""
-        pass
-    
-    @abstractmethod
-    async def download_export_results(self, export_id: str, binary_id: str, output_path: str) -> bool:
-        """Download export results by binary ID."""
+    async def download_export_file(self, job_id: str, output_path: str) -> bool:
+        """Download completed export file."""
         pass

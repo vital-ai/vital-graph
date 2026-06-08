@@ -165,6 +165,14 @@ class SparqlOrchestrator:
                     sparql_form=sparql_form, query_type=query_type, timing=timing,
                 )
 
+            # Phase 3b: Resolve vector placeholders (vg:vectorSimilarity)
+            if gen_result.vector_requests:
+                from vitalgraph.db.sparql_sql.vg_resolve import resolve_vector_requests
+                t0 = time.monotonic()
+                sql = await resolve_vector_requests(
+                    sql, gen_result.vector_requests, self.space_id, conn)
+                timing["vectorize_ms"] = (time.monotonic() - t0) * 1000
+
             if sql_only:
                 return QueryResult(
                     ok=True, sql=sql,

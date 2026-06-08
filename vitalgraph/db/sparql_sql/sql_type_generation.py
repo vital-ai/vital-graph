@@ -655,6 +655,22 @@ def _infer_function_type(expr: ExprFunction, registry: TypeRegistry) -> TypedExp
         if iri.startswith(XSD):
             return TypedExpr(sql="", sparql_type="literal", datatype=iri)
 
+        # VitalGraph custom functions
+        from .vg_functions import (
+            VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+            VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
+        )
+        if iri in (VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY, VG_GEO_DISTANCE):
+            return TypedExpr(
+                sql="", sparql_type="literal",
+                datatype=f"{XSD}double",
+            )
+        if iri == VG_WITHIN_RADIUS:
+            return TypedExpr(
+                sql="", sparql_type="literal",
+                datatype=f"{XSD}boolean",
+            )
+
     # IRI/URI constructors → URI
     if fname in ("iri", "uri"):
         return TypedExpr(sql="", sparql_type="uri")

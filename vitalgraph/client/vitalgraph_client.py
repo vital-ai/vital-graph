@@ -57,11 +57,11 @@ if TYPE_CHECKING:
         FileUploadResponse,
     )
     from ..model.import_model import (
-        ImportJobResponse, ImportDeleteResponse, ImportExecuteResponse,
+        ImportJobCreate, ImportJobResponse, ImportDeleteResponse, ImportExecuteResponse,
         ImportStatusResponse, ImportLogResponse, ImportUploadResponse,
     )
     from ..model.export_model import (
-        ExportJobResponse, ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse,
+        ExportJobCreate, ExportJobResponse, ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse,
     )
     from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
 
@@ -79,7 +79,8 @@ class VitalGraphClient(VitalGraphClientInterface):
     def __init__(self, *, config: Optional[VitalGraphClientConfig] = None, 
                  token_expiry_seconds: Optional[int] = None,
                  disable_proactive_refresh: bool = False,
-                 wire_format: ClientWireFormat = ClientWireFormat.JSON_QUADS):
+                 wire_format: ClientWireFormat = ClientWireFormat.JSON_QUADS,
+                 api_key: Optional[str] = None):
         """
         Initialize the VitalGraph client.
         
@@ -90,6 +91,8 @@ class VitalGraphClient(VitalGraphClientInterface):
             config: Pre-configured VitalGraphClientConfig object (optional, for testing)
             token_expiry_seconds: Optional token expiry override in seconds for testing (max 1800 = 30 min)
             disable_proactive_refresh: If True, skip proactive token refresh to test reactive 401 retry (testing only)
+            api_key: Optional API key (vg_...) for authentication. When provided, skips JWT
+                     login entirely — the key is sent as Bearer token on every request.
         
         Environment Variables (profile-prefixed):
             {PROFILE}_CLIENT_SERVER_URL: Server endpoint URL
@@ -99,22 +102,23 @@ class VitalGraphClient(VitalGraphClientInterface):
             {PROFILE}_CLIENT_MAX_RETRIES: Maximum retry attempts
             
         Example:
-            # Use LOCAL profile
+            # Use LOCAL profile with username/password
             export VITALGRAPH_CLIENT_ENVIRONMENT=local
             export LOCAL_CLIENT_SERVER_URL=http://localhost:8001
             export LOCAL_CLIENT_AUTH_USERNAME=admin
             export LOCAL_CLIENT_AUTH_PASSWORD=admin
             client = VitalGraphClient()
             
-            # Use PROD profile
-            export VITALGRAPH_CLIENT_ENVIRONMENT=prod
-            export PROD_CLIENT_SERVER_URL=https://api.production.com
-            client = VitalGraphClient()
+            # Use API key (no login step needed)
+            client = VitalGraphClient(api_key="vg_Ab3kLm92...")
         """
         self.config: Optional[VitalGraphClientConfig] = None
         self.async_session: Optional[httpx.AsyncClient] = None
         self.is_open: bool = False
         self.wire_format: ClientWireFormat = wire_format
+        
+        # API key authentication (alternative to JWT)
+        self._api_key: Optional[str] = api_key
         
         # JWT Authentication data
         self.access_token: Optional[str] = None
@@ -190,15 +194,21 @@ class VitalGraphClient(VitalGraphClientInterface):
                 follow_redirects=True
             )
             
-            # Authenticate with the server using /api/login
-            server_url = self.config.get_server_url()
-            api_base_path = self.config.get_api_base_path()
-            
-            # Perform authentication
-            await self._authenticate(server_url, api_base_path, timeout)
-            
-            self.is_open = True
-            logger.info("VitalGraph client opened successfully")
+            # Authenticate with the server
+            if self._api_key:
+                # API key mode: set Bearer header directly, no login needed
+                auth_header = {'Authorization': f'Bearer {self._api_key}'}
+                self.async_session.headers.update(auth_header)
+                self.access_token = self._api_key
+                self.is_open = True
+                logger.info("VitalGraph client opened with API key authentication")
+            else:
+                # JWT mode: login with username/password
+                server_url = self.config.get_server_url()
+                api_base_path = self.config.get_api_base_path()
+                await self._authenticate(server_url, api_base_path, timeout)
+                self.is_open = True
+                logger.info("VitalGraph client opened successfully")
             
         except Exception as e:
             logger.error(f"Failed to open VitalGraph client: {e}")
@@ -462,12 +472,17 @@ class VitalGraphClient(VitalGraphClientInterface):
     async def _ensure_valid_token(self) -> None:
         """
         Ensure we have a valid access token, refreshing if necessary.
+        API key mode never expires client-side, so we skip refresh entirely.
         
         Raises:
             VitalGraphClientError: If token refresh fails
         """
         if not self.access_token:
             raise VitalGraphClientError("No access token available")
+        
+        # API keys don't need client-side refresh
+        if self._api_key:
+            return
         
         if self._is_token_expired():
             logger.info("Access token expired or expiring soon, attempting refresh...")
@@ -1467,317 +1482,70 @@ class VitalGraphClient(VitalGraphClientInterface):
         return None
     
     # Data Import Methods - Delegated to ImportEndpoint
-    
-    async def create_import_job(self, name: str, import_type: str, space_id: str, 
-                         description: Optional[str] = None, graph_id: Optional[str] = None,
-                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Create new data import job.
-        
-        Args:
-            name: Import job name
-            import_type: Type of import (rdf_turtle, rdf_xml, csv, excel, json)
-            space_id: Target space ID
-            description: Optional job description
-            graph_id: Optional target graph ID
-            config: Optional import configuration
-            
-        Returns:
-            Dictionary containing creation result with import_id and job details
-        """
-        return await self.imports.create_import_job(name, import_type, space_id, description, graph_id, config)
-    
-    async def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                        page_size: int = 100, offset: int = 0) -> Dict[str, Any]:
-        """
-        List import jobs with optional filtering.
-        
-        Args:
-            space_id: Optional space ID filter
-            graph_id: Optional graph ID filter
-            page_size: Number of jobs per page (default: 100, max: 1000)
-            offset: Offset for pagination (default: 0)
-            
-        Returns:
-            Dictionary containing import jobs list and pagination info
-        """
-        return await self.imports.list_import_jobs(space_id, graph_id, page_size, offset)
-    
-    async def get_import_job(self, import_id: str) -> 'ImportJobResponse':
-        """
-        Get import job details by ID.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportJobResponse containing import job details
-        """
-        return await self.imports.get_import_job(import_id)
-    
-    async def update_import_job(self, import_id: str, name: Optional[str] = None, 
-                         description: Optional[str] = None, import_type: Optional[str] = None,
-                         space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Update import job.
-        
-        Args:
-            import_id: Import job ID
-            name: Optional new job name
-            description: Optional new job description
-            import_type: Optional new import type
-            space_id: Optional new target space ID
-            graph_id: Optional new target graph ID
-            config: Optional new import configuration
-            
-        Returns:
-            Dictionary containing update result
-        """
-        return await self.imports.update_import_job(import_id, name, description, import_type, space_id, graph_id, config)
-    
-    async def delete_import_job(self, import_id: str) -> 'ImportDeleteResponse':
-        """
-        Delete import job.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportDeleteResponse containing deletion result
-        """
-        return await self.imports.delete_import_job(import_id)
-    
-    async def execute_import_job(self, import_id: str) -> 'ImportExecuteResponse':
-        """
-        Execute import job.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportExecuteResponse containing execution result
-        """
-        return await self.imports.execute_import_job(import_id)
-    
-    async def get_import_status(self, import_id: str) -> 'ImportStatusResponse':
-        """
-        Get import execution status.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportStatusResponse containing import status
-        """
-        return await self.imports.get_import_status(import_id)
-    
-    async def get_import_log(self, import_id: str) -> 'ImportLogResponse':
-        """
-        Get import execution log.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportLogResponse containing import log
-        """
-        return await self.imports.get_import_log(import_id)
-    
-    async def upload_import_file(self, import_id: str, file_path: str) -> 'ImportUploadResponse':
-        """
-        Upload file to import job.
-        
-        Args:
-            import_id: Import job ID
-            file_path: Path to file to upload
-            
-        Returns:
-            ImportUploadResponse containing upload result
-        """
-        return await self.imports.upload_import_file(import_id, file_path)
-    
-    async def upload_import_from_generator(self, import_id: str, generator) -> Dict[str, Any]:
-        """
-        Upload file to import job from a BinaryGenerator.
-        
-        Args:
-            import_id: Import job ID
-            generator: BinaryGenerator instance
-            
-        Returns:
-            Dictionary containing upload result
-        """
-        return await self.imports.upload_from_generator(import_id, generator)
-    
+
+    async def create_import_job(self, request: 'ImportJobCreate'):
+        """Create a new import job."""
+        return await self.imports.create_import_job(request)
+
+    async def list_import_jobs(self, space_id: Optional[str] = None, status: Optional[str] = None,
+                               page_size: int = 50, offset: int = 0) -> Dict[str, Any]:
+        """List import jobs with optional filtering."""
+        return await self.imports.list_import_jobs(space_id, status, page_size, offset)
+
+    async def get_import_job(self, job_id: str) -> 'ImportJobResponse':
+        """Get import job details by ID."""
+        return await self.imports.get_import_job(job_id)
+
+    async def delete_import_job(self, job_id: str) -> 'ImportDeleteResponse':
+        """Cancel (if running) and delete import job."""
+        return await self.imports.delete_import_job(job_id)
+
+    async def upload_import_file(self, job_id: str, file_path: str) -> 'ImportUploadResponse':
+        """Upload a file for an import job."""
+        return await self.imports.upload_import_file(job_id, file_path)
+
+    async def execute_import_job(self, job_id: str) -> 'ImportExecuteResponse':
+        """Start background import execution."""
+        return await self.imports.execute_import_job(job_id)
+
+    async def get_import_status(self, job_id: str) -> 'ImportStatusResponse':
+        """Get import progress / status."""
+        return await self.imports.get_import_status(job_id)
+
+    async def get_import_log(self, job_id: str) -> 'ImportLogResponse':
+        """Get import log entries."""
+        return await self.imports.get_import_log(job_id)
+
     # Data Export Methods - Delegated to ExportEndpoint
-    
-    async def create_export_job(self, name: str, export_format: str, space_id: str, 
-                         description: Optional[str] = None, graph_id: Optional[str] = None,
-                         query_filter: Optional[str] = None, 
-                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Create new data export job.
-        
-        Args:
-            name: Export job name
-            export_format: Export format (rdf_turtle, rdf_xml, csv, excel, json, parquet)
-            space_id: Source space ID
-            description: Optional job description
-            graph_id: Optional source graph ID
-            query_filter: Optional SPARQL query filter for export
-            config: Optional export configuration
-            
-        Returns:
-            Dictionary containing creation result with export_id and job details
-        """
-        return await self.exports.create_export_job(name, export_format, space_id, description, graph_id, query_filter, config)
-    
-    async def list_export_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                        page_size: int = 100, offset: int = 0) -> Dict[str, Any]:
-        """
-        List export jobs with optional filtering.
-        
-        Args:
-            space_id: Optional space ID filter
-            graph_id: Optional graph ID filter
-            page_size: Number of jobs per page (default: 100, max: 1000)
-            offset: Offset for pagination (default: 0)
-            
-        Returns:
-            Dictionary containing export jobs list and pagination info
-        """
-        return await self.exports.list_export_jobs(space_id, graph_id, page_size, offset)
-    
-    async def get_export_job(self, export_id: str) -> 'ExportJobResponse':
-        """
-        Get export job details by ID.
-        
-        Args:
-            export_id: Export job ID
-            
-        Returns:
-            ExportJobResponse containing export job details
-        """
-        return await self.exports.get_export_job(export_id)
-    
-    async def update_export_job(self, export_id: str, name: Optional[str] = None, 
-                         description: Optional[str] = None, export_format: Optional[str] = None,
-                         space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                         query_filter: Optional[str] = None,
-                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        Update export job.
-        
-        Args:
-            export_id: Export job ID
-            name: Optional new job name
-            description: Optional new job description
-            export_format: Optional new export format
-            space_id: Optional new source space ID
-            graph_id: Optional new source graph ID
-            query_filter: Optional new SPARQL query filter
-            config: Optional new export configuration
-            
-        Returns:
-            Dictionary containing update result
-        """
-        return await self.exports.update_export_job(export_id, name, description, export_format, space_id, graph_id, query_filter, config)
-    
-    async def delete_export_job(self, export_id: str) -> 'ExportDeleteResponse':
-        """
-        Delete export job.
-        
-        Args:
-            export_id: Export job ID
-            
-        Returns:
-            ExportDeleteResponse containing deletion result
-        """
-        return await self.exports.delete_export_job(export_id)
-    
-    async def execute_export_job(self, export_id: str) -> 'ExportExecuteResponse':
-        """
-        Execute export job.
-        
-        Args:
-            export_id: Export job ID
-            
-        Returns:
-            ExportExecuteResponse containing execution result
-        """
-        return await self.exports.execute_export_job(export_id)
-    
-    async def get_export_status(self, export_id: str) -> 'ExportStatusResponse':
-        """
-        Get export execution status.
-        
-        Args:
-            export_id: Export job ID
-            
-        Returns:
-            ExportStatusResponse containing export status
-        """
-        return await self.exports.get_export_status(export_id)
-    
-    async def download_export_results(self, export_id: str, binary_id: str, destination=None, 
-                               chunk_size: int = 8192):
-        """
-        Download export results using streaming consumers.
-        
-        Args:
-            export_id: Export job ID
-            binary_id: Binary file ID to download
-            destination: Optional destination (path, stream, or BinaryConsumer)
-            chunk_size: Size of chunks for streaming (default: 8192)
-            
-        Returns:
-            File content as bytes if destination is None, otherwise operation result dict
-        """
-        return await self.exports.download_export_results(export_id, binary_id, destination, chunk_size)
-    
-    async def download_export_to_consumer(self, export_id: str, binary_id: str, 
-                                   consumer, chunk_size: int = 8192) -> Dict[str, Any]:
-        """
-        Download export results to a BinaryConsumer.
-        
-        Args:
-            export_id: Export job ID
-            binary_id: Binary file ID to download
-            consumer: BinaryConsumer instance
-            chunk_size: Size of chunks for streaming
-            
-        Returns:
-            Dictionary containing download result
-        """
-        return await self.exports.download_to_consumer(export_id, binary_id, consumer, chunk_size)
-    
-    async def get_export_files(self, export_id: str) -> List[Dict[str, Any]]:
-        """
-        Get list of available export output files.
-        
-        Args:
-            export_id: Export job ID
-            
-        Returns:
-            List of output file dictionaries with binary_id, filename, size, mime_type
-        """
-        return await self.exports.get_export_files(export_id)
-    
-    async def download_all_export_files(self, export_id: str, destination_dir, 
-                                 chunk_size: int = 8192) -> Dict[str, Any]:
-        """
-        Download all export output files to a directory.
-        
-        Args:
-            export_id: Export job ID
-            destination_dir: Directory to save files
-            chunk_size: Size of chunks for streaming
-            
-        Returns:
-            Dictionary containing download results for all files
-        """
-        return await self.exports.download_all_export_files(export_id, destination_dir, chunk_size)
+
+    async def create_export_job(self, request: 'ExportJobCreate'):
+        """Create a new export job."""
+        return await self.exports.create_export_job(request)
+
+    async def list_export_jobs(self, space_id: Optional[str] = None, status: Optional[str] = None,
+                               page_size: int = 50, offset: int = 0) -> Dict[str, Any]:
+        """List export jobs with optional filtering."""
+        return await self.exports.list_export_jobs(space_id, status, page_size, offset)
+
+    async def get_export_job(self, job_id: str) -> 'ExportJobResponse':
+        """Get export job details by ID."""
+        return await self.exports.get_export_job(job_id)
+
+    async def delete_export_job(self, job_id: str) -> 'ExportDeleteResponse':
+        """Cancel (if running) and delete export job."""
+        return await self.exports.delete_export_job(job_id)
+
+    async def execute_export_job(self, job_id: str) -> 'ExportExecuteResponse':
+        """Start background export execution."""
+        return await self.exports.execute_export_job(job_id)
+
+    async def get_export_status(self, job_id: str) -> 'ExportStatusResponse':
+        """Get export progress / status."""
+        return await self.exports.get_export_status(job_id)
+
+    async def download_export_file(self, job_id: str, output_path: str) -> bool:
+        """Download completed export file."""
+        return await self.exports.download_export_file(job_id, output_path)
     
     # Graph Management Methods - Delegated to GraphsEndpoint
     

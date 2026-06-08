@@ -15,6 +15,7 @@ from ..endpoint.impl.objects_impl import ObjectsImpl
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from vitalgraph.model.objects_model import ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 class GraphObjectsEndpoint:
@@ -46,6 +47,7 @@ class GraphObjectsEndpoint:
             search: Optional[str] = Query(None, description="Search text in object properties"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
+            require_space_read(current_user, space_id)
             return await self.list_or_get_objects(space_id, graph_id, page_size, offset, uri, uri_list, vitaltype_filter, search, current_user)
         
         @self.router.post("/objects", response_model=ObjectCreateResponse, tags=["Objects"])
@@ -56,6 +58,7 @@ class GraphObjectsEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Create objects from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._create_objects(space_id, graph_id, quads, current_user)
         
@@ -67,6 +70,7 @@ class GraphObjectsEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Update objects from JSON Quads."""
+            require_space_write(current_user, space_id)
             quads = body.quads
             return await self._update_objects(space_id, graph_id, quads, current_user)
         
@@ -78,6 +82,7 @@ class GraphObjectsEndpoint:
             uri_list: Optional[str] = Query(None, description="Comma-separated list of object URIs to delete"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self.delete_objects(space_id, graph_id, uri, uri_list, current_user)
     
     async def list_or_get_objects(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, 

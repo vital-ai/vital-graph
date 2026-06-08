@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import axios, { AxiosError } from 'axios';
+import { apiService } from '../services/ApiService';
+import { type SpaceInfo } from '../types/api';
 import { 
   Alert, 
   Button, 
@@ -23,15 +24,15 @@ import {
   HiHome, 
   HiViewBoards,
   HiTrash,
-  HiExclamationCircle
+  HiExclamationCircle,
+  HiChartBar,
+  HiCog
 } from 'react-icons/hi';
+import SpaceOverview from '../components/SpaceOverview';
+const SpaceAnalytics = React.lazy(() => import('../components/SpaceAnalytics'));
+const SpaceMetrics = React.lazy(() => import('../components/SpaceMetrics'));
 
-interface Space {
-  space: string;
-  space_name: string;
-  space_description?: string;
-  exists?: boolean;
-}
+type Space = SpaceInfo;
 
 interface BannerMessage {
   type: 'success' | 'error';
@@ -53,6 +54,7 @@ const SpaceDetail: React.FC = () => {
   const [bannerMessage, setBannerMessage] = useState<BannerMessage | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
   const [deleting, setDeleting] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'settings' | 'analytics' | 'metrics'>('overview');
   
   // Form state for editing
   const [editForm, setEditForm] = useState({
@@ -86,9 +88,7 @@ const SpaceDetail: React.FC = () => {
 
       try {
         setLoading(true);
-        const response = await axios.get(`/api/spaces/${id}`);
-        // API returns SpaceResponse wrapper: { success, message, space: {...} }
-        const responseData = response.data;
+        const responseData = await apiService.getSpaceInfo(id);
         const spaceData = responseData.space || responseData;
         setSpace(spaceData);
         
@@ -101,22 +101,7 @@ const SpaceDetail: React.FC = () => {
         
         setError(null);
       } catch (err: unknown) {
-        console.error('Error fetching space:', err);
-        
-        // Handle different error response formats
-        let errorMessage = 'Failed to load space details';
-        if (err instanceof AxiosError && err.response?.data) {
-          const data = err.response.data as Record<string, unknown>;
-          if (typeof data === 'string') {
-            errorMessage = data;
-          } else if (data.detail) {
-            errorMessage = Array.isArray(data.detail)
-              ? (data.detail as Array<Record<string, string>>).map((d) => d.msg || String(d)).join(', ')
-              : String(data.detail);
-          } else if (data.message) {
-            errorMessage = String(data.message);
-          }
-        }
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load space details';
         
         setError(errorMessage);
         setSpace(null);
@@ -190,8 +175,7 @@ const SpaceDetail: React.FC = () => {
           ...editForm
         };
 
-        const response = await axios.post('/api/spaces', createData);
-        const responseData = response.data;
+        const responseData = await apiService.createSpace(createData);
         // SpaceCreateResponse has space field
         const createdSpace = responseData.space || responseData;
         
@@ -207,8 +191,7 @@ const SpaceDetail: React.FC = () => {
           ...editForm
         };
 
-        const response = await axios.put(`/api/spaces/${space.space}`, updateData);
-        const updatedSpace = response.data;
+        const updatedSpace = await apiService.updateSpace(space.space, updateData);
         
         setSpace(updatedSpace);
         setIsEditing(false);
@@ -217,10 +200,8 @@ const SpaceDetail: React.FC = () => {
         showBanner('success', 'Space updated successfully!');
       }
     } catch (err: unknown) {
-      console.error('Error saving space:', err);
       const action = isCreating ? 'create' : 'update';
-      const detail = err instanceof AxiosError ? (err.response?.data as Record<string, unknown>)?.detail : undefined;
-      showBanner('error', detail ? String(detail) : `Failed to ${action} space`);
+      showBanner('error', err instanceof Error ? err.message : `Failed to ${action} space`);
     } finally {
       setSaving(false);
     }
@@ -239,7 +220,7 @@ const SpaceDetail: React.FC = () => {
     
     try {
       setDeleting(true);
-      await axios.delete(`/api/spaces/${space.space}`);
+      await apiService.deleteSpace(space.space);
       
       // Show success message and navigate back to spaces list
       showBanner('success', 'Space deleted successfully');
@@ -247,9 +228,7 @@ const SpaceDetail: React.FC = () => {
         navigate('/spaces');
       }, 1000);
     } catch (err: unknown) {
-      console.error('Error deleting space:', err);
-      const detail = err instanceof AxiosError ? (err.response?.data as Record<string, unknown>)?.detail : undefined;
-      showBanner('error', detail ? String(detail) : 'Failed to delete space');
+      showBanner('error', err instanceof Error ? err.message : 'Failed to delete space');
     } finally {
       setDeleting(false);
       setShowDeleteModal(false);
@@ -385,80 +364,150 @@ const SpaceDetail: React.FC = () => {
         </div>
       </div>
 
-      {/* Space Details Card */}
-      <Card>
-        <div className="space-y-6">
-          {/* Space Identifier */}
-          <div>
-            <Label htmlFor="space-identifier">Space Identifier</Label>
-            {isEditing ? (
-              <TextInput
-                id="space-identifier"
-                type="text"
-                value={editForm.space}
-                onChange={(e) => handleInputChange('space', e.target.value)}
-                placeholder="Enter space identifier"
-                className="mt-1"
-              />
-            ) : (
-              <TextInput
-                id="space-identifier"
-                type="text"
-                value={space?.space || ''}
-                disabled
-                className="mt-1"
-              />
-            )}
-          </div>
-
-          {/* Space Name */}
-          <div>
-            <Label htmlFor="space-name">Space Name</Label>
-            {isEditing ? (
-              <TextInput
-                id="space-name"
-                type="text"
-                value={editForm.space_name}
-                onChange={(e) => handleInputChange('space_name', e.target.value)}
-                placeholder="Enter space name"
-                className="mt-1"
-              />
-            ) : (
-              <TextInput
-                id="space-name"
-                type="text"
-                value={space?.space_name || ''}
-                disabled
-                className="mt-1"
-              />
-            )}
-          </div>
-
-          {/* Space Description */}
-          <div>
-            <Label htmlFor="space-description">Description</Label>
-            {isEditing ? (
-              <Textarea
-                id="space-description"
-                value={editForm.space_description}
-                onChange={(e) => handleInputChange('space_description', e.target.value)}
-                placeholder="Enter space description"
-                rows={4}
-                className="mt-1"
-              />
-            ) : (
-              <Textarea
-                id="space-description"
-                value={space?.space_description || ''}
-                disabled
-                rows={4}
-                className="mt-1"
-              />
-            )}
-          </div>
-
+      {/* Tab Navigation */}
+      {!isCreating && (
+        <div className="border-b border-gray-200 dark:border-gray-700 mb-6 overflow-x-auto">
+          <nav className="flex gap-4 min-w-max">
+            <button
+              onClick={() => setActiveTab('overview')}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'overview'
+                  ? 'border-blue-600 text-blue-600 dark:border-blue-500 dark:text-blue-500'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+              }`}
+            >
+              <HiViewBoards className="h-4 w-4" />
+              Overview
+            </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'settings'
+                  ? 'border-blue-600 text-blue-600 dark:border-blue-500 dark:text-blue-500'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+              }`}
+            >
+              <HiCog className="h-4 w-4" />
+              Settings
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'analytics'
+                  ? 'border-blue-600 text-blue-600 dark:border-blue-500 dark:text-blue-500'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+              }`}
+            >
+              <HiChartBar className="h-4 w-4" />
+              Analytics
+            </button>
+            <button
+              onClick={() => setActiveTab('metrics')}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'metrics'
+                  ? 'border-blue-600 text-blue-600 dark:border-blue-500 dark:text-blue-500'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+              }`}
+            >
+              <HiChartBar className="h-4 w-4" />
+              Metrics
+            </button>
+          </nav>
         </div>
-      </Card>
+      )}
+
+      {/* Tab Content */}
+      {activeTab === 'overview' && !isCreating && id && (
+        <SpaceOverview spaceId={id} />
+      )}
+
+      {(activeTab === 'settings' || isCreating) && (
+        <Card>
+          <div className="space-y-6">
+            {/* Space Identifier */}
+            <div>
+              <Label htmlFor="space-identifier">Space Identifier</Label>
+              {isEditing ? (
+                <TextInput
+                  id="space-identifier"
+                  type="text"
+                  value={editForm.space}
+                  onChange={(e) => handleInputChange('space', e.target.value)}
+                  placeholder="Enter space identifier"
+                  className="mt-1"
+                />
+              ) : (
+                <TextInput
+                  id="space-identifier"
+                  type="text"
+                  value={space?.space || ''}
+                  disabled
+                  className="mt-1"
+                />
+              )}
+            </div>
+
+            {/* Space Name */}
+            <div>
+              <Label htmlFor="space-name">Space Name</Label>
+              {isEditing ? (
+                <TextInput
+                  id="space-name"
+                  type="text"
+                  value={editForm.space_name}
+                  onChange={(e) => handleInputChange('space_name', e.target.value)}
+                  placeholder="Enter space name"
+                  className="mt-1"
+                />
+              ) : (
+                <TextInput
+                  id="space-name"
+                  type="text"
+                  value={space?.space_name || ''}
+                  disabled
+                  className="mt-1"
+                />
+              )}
+            </div>
+
+            {/* Space Description */}
+            <div>
+              <Label htmlFor="space-description">Description</Label>
+              {isEditing ? (
+                <Textarea
+                  id="space-description"
+                  value={editForm.space_description}
+                  onChange={(e) => handleInputChange('space_description', e.target.value)}
+                  placeholder="Enter space description"
+                  rows={4}
+                  className="mt-1"
+                />
+              ) : (
+                <Textarea
+                  id="space-description"
+                  value={space?.space_description || ''}
+                  disabled
+                  rows={4}
+                  className="mt-1"
+                />
+              )}
+            </div>
+
+          </div>
+        </Card>
+      )}
+
+      {activeTab === 'analytics' && !isCreating && id && (
+        <React.Suspense fallback={<Spinner size="lg" className="mx-auto mt-8" />}>
+          <SpaceAnalytics spaceId={id} />
+        </React.Suspense>
+      )}
+
+      {activeTab === 'metrics' && !isCreating && id && (
+        <React.Suspense fallback={<Spinner size="lg" className="mx-auto mt-8" />}>
+          <SpaceMetrics spaceId={id} />
+        </React.Suspense>
+      )}
 
       {/* Delete Confirmation Modal */}
       <Modal show={showDeleteModal} onClose={handleDeleteCancel} size="md" dismissible>

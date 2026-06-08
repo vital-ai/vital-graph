@@ -7,7 +7,7 @@ Single endpoint with query criteria that specifies relation, frame, or entity qu
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria
+from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria, VectorSearchCriteria, GeoSearchCriteria
 from .api_model import BasePaginatedResponse
 
 
@@ -44,6 +44,10 @@ class KGQueryCriteria(BaseModel):
     
     # Direct entity property filters
     entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
+    
+    # Vector/geo search criteria
+    vector_criteria: Optional[VectorSearchCriteria] = Field(None, description="Vector similarity search criteria")
+    geo_criteria: Optional[GeoSearchCriteria] = Field(None, description="Geographic proximity search criteria")
     
     # Query constraints
     exclude_self_connections: bool = Field(True, description="Exclude connections from entity to itself")

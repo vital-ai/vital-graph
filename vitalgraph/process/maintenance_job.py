@@ -36,6 +36,11 @@ VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 CLEANUP_RETENTION_DAYS = 30
 _SECONDS_PER_DAY = 86_400
 
+# Vector index REINDEX thresholds
+VECTOR_REINDEX_DEAD_RATIO = 0.20     # reindex if dead_tup / n_live_tup > 20%
+VECTOR_REINDEX_MIN_DEAD = 1_000      # skip if fewer dead tuples than this
+VECTOR_REINDEX_COOLDOWN_HOURS = 24   # skip if reindexed within this many hours
+
 
 def _get_instance_id() -> str:
     """Resolve instance identifier: ECS task ID → hostname fallback."""
@@ -84,7 +89,7 @@ class MaintenanceJob:
 
     async def run(self) -> Dict:
         """Execute one maintenance cycle. Returns summary dict."""
-        summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False}
+        summary: Dict = {"analyze": None, "vacuum": None, "cleanup": False, "vector_reindex": None}
         start = time.monotonic()
 
         try:
@@ -112,6 +117,11 @@ class MaintenanceJob:
             if vacuum_space:
                 summary["vacuum"] = await self._run_vacuum(vacuum_space)
 
+            # --- Vector index REINDEX ---
+            vector_result = await self._run_vector_reindex(list(stats.keys()))
+            if vector_result:
+                summary["vector_reindex"] = vector_result
+
             # --- Cleanup (once per day) ---
             if self._should_cleanup():
                 summary["cleanup"] = await self._run_cleanup()
@@ -121,10 +131,11 @@ class MaintenanceJob:
 
         elapsed = (time.monotonic() - start) * 1000
         logger.info(
-            "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s cleanup=%s",
+            "MaintenanceJob cycle complete in %.0fms — analyze=%s vacuum=%s vector_reindex=%s cleanup=%s",
             elapsed,
             summary["analyze"],
             summary["vacuum"],
+            summary["vector_reindex"],
             summary["cleanup"],
         )
         return summary
@@ -144,6 +155,10 @@ class MaintenanceJob:
     async def trigger_stats_rebuild(self, space_id: str) -> Optional[Dict]:
         """Run stats rebuild on a specific space immediately."""
         return await self._run_stats_rebuild(space_id)
+
+    async def trigger_vector_reindex(self, space_id: str) -> Optional[Dict]:
+        """Run vector index REINDEX on a specific space immediately (bypasses cooldown)."""
+        return await self._run_vector_reindex([space_id], force=True)
 
     # ------------------------------------------------------------------
     # Scoring
@@ -479,6 +494,235 @@ class MaintenanceJob:
         finally:
             await self._pool.release(conn)
         return completed
+
+    # ------------------------------------------------------------------
+    # Vector index REINDEX
+    # ------------------------------------------------------------------
+
+    async def _run_vector_reindex(self, space_ids: List[str], *, force: bool = False) -> Optional[Dict]:
+        """Check vector index HNSW bloat and REINDEX CONCURRENTLY if needed.
+
+        Runs at most ONE reindex operation per cycle (to limit I/O impact).
+        Uses REINDEX INDEX CONCURRENTLY which doesn't block queries.
+
+        Args:
+            space_ids: List of space IDs to check.
+            force: If True, skip cooldown/threshold checks.
+
+        Returns:
+            Result dict or None if nothing was reindexed.
+        """
+        best_index: Optional[str] = None
+        best_space: Optional[str] = None
+        best_score: float = -1.0
+
+        try:
+            if self._pg_config:
+                candidates = await asyncio.to_thread(
+                    self._sync_find_vector_reindex_candidates, space_ids, force
+                )
+            else:
+                candidates = await self._async_find_vector_reindex_candidates(space_ids, force)
+        except Exception as e:
+            logger.debug("Vector reindex candidate scan failed: %s", e)
+            return None
+
+        if not candidates:
+            return None
+
+        # Pick the worst (highest score)
+        for cand in candidates:
+            if cand["score"] > best_score:
+                best_score = cand["score"]
+                best_space = cand["space_id"]
+                best_index = cand["index_name"]
+
+        if best_index is None or best_space is None:
+            return None
+
+        logger.info(
+            "MaintenanceJob: VECTOR REINDEX pick → %s/%s (score=%.2f)",
+            best_space, best_index, best_score,
+        )
+
+        # Execute REINDEX INDEX CONCURRENTLY
+        process_id = None
+        if self._tracker:
+            process_id = await self._tracker.create_process(
+                "vector_reindex", process_subtype=f"{best_space}/{best_index}",
+                instance_id=self._instance_id, status="running",
+            )
+            await self._tracker.mark_running(process_id, self._instance_id)
+
+        hnsw_index_name = f"idx_{best_space}_vec_{best_index}_hnsw"
+        try:
+            if self._pg_config:
+                await asyncio.to_thread(self._sync_reindex_concurrently, hnsw_index_name)
+            else:
+                await self._async_reindex_concurrently(hnsw_index_name)
+
+            result = {
+                "space_id": best_space,
+                "index_name": best_index,
+                "hnsw_index": hnsw_index_name,
+                "status": "reindexed",
+            }
+            if self._tracker and process_id:
+                await self._tracker.mark_completed(process_id, result_details=result)
+            logger.info("VECTOR REINDEX complete: %s", hnsw_index_name)
+            return result
+
+        except Exception as e:
+            if self._tracker and process_id:
+                await self._tracker.mark_failed(process_id, str(e))
+            logger.error("VECTOR REINDEX failed for %s: %s", hnsw_index_name, e)
+            return {"space_id": best_space, "index_name": best_index, "error": str(e)}
+
+    def _sync_find_vector_reindex_candidates(
+        self, space_ids: List[str], force: bool,
+    ) -> List[Dict]:
+        """Thread-safe: scan pg_stat_user_tables for vector tables needing reindex."""
+        import psycopg
+        import psycopg.rows
+        conn = self._make_sync_connection()
+        try:
+            return self._scan_vector_candidates(conn, space_ids, force, sync=True)
+        finally:
+            conn.close()
+
+    async def _async_find_vector_reindex_candidates(
+        self, space_ids: List[str], force: bool,
+    ) -> List[Dict]:
+        """asyncpg-based vector reindex candidate scan."""
+        async with self._pool.acquire() as conn:
+            return await self._scan_vector_candidates_async(conn, space_ids, force)
+
+    def _scan_vector_candidates(
+        self, conn, space_ids: List[str], force: bool, sync: bool = True,
+    ) -> List[Dict]:
+        """Scan for vector table candidates using psycopg sync connection."""
+        import psycopg.rows
+        candidates = []
+        # Build LIKE patterns for vector tables
+        patterns = [f"{sid}_vec_%" for sid in space_ids]
+        if not patterns:
+            return candidates
+
+        # Query pg_stat for all matching vector tables
+        pattern_clauses = " OR ".join(["relname LIKE %s" for _ in patterns])
+        query = f"""
+            SELECT relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum
+            FROM pg_stat_user_tables
+            WHERE {pattern_clauses}
+        """
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(query, patterns)
+            rows = cur.fetchall()
+
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            cand = self._evaluate_vector_candidate(row, space_ids, now, force)
+            if cand:
+                candidates.append(cand)
+        return candidates
+
+    async def _scan_vector_candidates_async(
+        self, conn, space_ids: List[str], force: bool,
+    ) -> List[Dict]:
+        """Scan for vector table candidates using asyncpg connection."""
+        candidates = []
+        patterns = [f"{sid}_vec_%" for sid in space_ids]
+        if not patterns:
+            return candidates
+
+        # Build query with OR clauses
+        conditions = []
+        args = []
+        for i, pat in enumerate(patterns, 1):
+            conditions.append(f"relname LIKE ${i}")
+            args.append(pat)
+
+        query = f"""
+            SELECT relname, n_live_tup, n_dead_tup, last_vacuum, last_autovacuum
+            FROM pg_stat_user_tables
+            WHERE {" OR ".join(conditions)}
+        """
+        rows = await conn.fetch(query, *args)
+
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            cand = self._evaluate_vector_candidate(dict(row), space_ids, now, force)
+            if cand:
+                candidates.append(cand)
+        return candidates
+
+    @staticmethod
+    def _evaluate_vector_candidate(
+        row: Dict, space_ids: List[str], now: datetime, force: bool,
+    ) -> Optional[Dict]:
+        """Evaluate a single vector table row for REINDEX eligibility."""
+        relname = row["relname"]
+        n_live = row["n_live_tup"] or 0
+        n_dead = row["n_dead_tup"] or 0
+
+        # Determine space_id and index_name from table name: {space_id}_vec_{index_name}
+        # Find which space_id prefix matches
+        space_id = None
+        index_name = None
+        for sid in space_ids:
+            prefix = f"{sid}_vec_"
+            if relname.startswith(prefix):
+                space_id = sid
+                index_name = relname[len(prefix):]
+                break
+        if not space_id or not index_name:
+            return None
+
+        # Skip if table is too small or no significant dead tuples
+        if not force:
+            if n_dead < VECTOR_REINDEX_MIN_DEAD:
+                return None
+            if n_live > 0 and (n_dead / n_live) < VECTOR_REINDEX_DEAD_RATIO:
+                return None
+
+            # Cooldown: skip if recently vacuumed (proxy for recently reindexed)
+            last_v = row.get("last_vacuum") or row.get("last_autovacuum")
+            if last_v is not None:
+                hours_since = (now - last_v).total_seconds() / 3600.0
+                if hours_since < VECTOR_REINDEX_COOLDOWN_HOURS:
+                    return None
+
+        # Score: dead tuple ratio weighted by absolute count
+        ratio = (n_dead / max(n_live, 1))
+        score = n_dead * ratio
+
+        return {
+            "space_id": space_id,
+            "index_name": index_name,
+            "table": relname,
+            "n_live": n_live,
+            "n_dead": n_dead,
+            "score": score,
+        }
+
+    def _sync_reindex_concurrently(self, index_name: str) -> None:
+        """Run REINDEX INDEX CONCURRENTLY via psycopg sync (thread-safe)."""
+        from psycopg import sql as psql
+        conn = self._make_sync_connection()
+        try:
+            conn.execute(
+                psql.SQL("REINDEX INDEX CONCURRENTLY {}").format(psql.Identifier(index_name))
+            )
+        finally:
+            conn.close()
+
+    async def _async_reindex_concurrently(self, index_name: str) -> None:
+        """Run REINDEX INDEX CONCURRENTLY via asyncpg (fallback)."""
+        conn = await self._pool.acquire()
+        try:
+            await conn.execute(f"REINDEX INDEX CONCURRENTLY {index_name}")
+        finally:
+            await self._pool.release(conn)
 
     # ------------------------------------------------------------------
     # Cleanup

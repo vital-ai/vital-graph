@@ -14,7 +14,7 @@ Follows MockKGFramesEndpoint patterns with proper VitalSigns integration:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Literal, Optional, Union, Any
 from fastapi import APIRouter, Query, Depends, Request, Response, Body
 from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
@@ -61,6 +61,7 @@ from ..kg_impl.kgframe_query_impl import KGFrameQueryProcessor
 
 # Import backend utilities
 from ..kg_impl.kg_backend_utils import create_backend_adapter
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 
@@ -120,9 +121,21 @@ class KGFramesEndpoint:
             raise ValueError(f"Backend not available for space: {space_id}")
         
         return create_backend_adapter(backend)
-    
-    
-    
+
+    def _schedule_auto_sync(self, backend_impl, space_id: str, graph_id: str,
+                            subject_uris: List[str], operation: Literal["upsert", "delete"] = "upsert") -> None:
+        """Schedule background auto-sync for vector and geo data."""
+        db_impl = getattr(backend_impl, 'db_impl', None)
+        if db_impl and subject_uris:
+            from ..vectorization.auto_sync import schedule_sync
+            schedule_sync(
+                db_impl=db_impl,
+                space_id=space_id,
+                subject_uris=subject_uris,
+                graph_uri=graph_id,
+                operation=operation,
+            )
+
     async def _create_frames(
         self, space_id: str, graph_id: str, quads: List[Quad],
         operation_mode: str, entity_uri: Optional[str] = None,
@@ -188,15 +201,21 @@ class KGFramesEndpoint:
 
             # --- dispatch by mode ---
             if op_mode == OperationMode.CREATE:
-                return await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_create_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.UPDATE:
-                return await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_update_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.UPSERT:
-                return await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_upsert_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             elif op_mode == OperationMode.REPLACE:
-                return await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
+                _result = await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             else:
                 return _fail(f"Invalid operation_mode: {op_mode}")
+
+            # Auto-sync vector/geo data for changed subjects
+            _sync_uris = [str(o.URI) for o in enhanced_objects if hasattr(o, 'URI') and o.URI]
+            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
+
+            return _result
 
         except Exception as e:
             self.logger.error(f"Frame operation from objects failed: {e}")
@@ -543,6 +562,8 @@ class KGFramesEndpoint:
             uri: Optional[str] = Query(None, description="Single frame URI to retrieve"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs"),
             include_frame_graph: bool = Query(False, description="If True, include complete frame graph with slots"),
+            sort_by: Optional[str] = Query(None, description="Sort by: 'name', 'uri', 'created_date', or 'frame_type'"),
+            sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
@@ -554,6 +575,8 @@ class KGFramesEndpoint:
             - include_frame_graph: retrieves complete frame graphs with slots
             """
             
+            require_space_read(current_user, space_id)
+            
             # Handle single URI retrieval
             if uri:
                 return await self._get_frame_by_uri(space_id, graph_id, uri, include_frame_graph, current_user)
@@ -563,8 +586,20 @@ class KGFramesEndpoint:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
                 return await self._get_frames_by_uris(space_id, graph_id, uris, include_frame_graph, current_user)
             
+            # Validate sort_by
+            allowed_sort_fields = ("name", "uri", "created_date", "frame_type")
+            if sort_by and sort_by not in allowed_sort_fields:
+                from fastapi import HTTPException
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"sort_by '{sort_by}' is not valid. Allowed: {', '.join(allowed_sort_fields)}"
+                )
+            if sort_order not in ("asc", "desc"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="sort_order must be 'asc' or 'desc'")
+
             # Handle paginated list of all frames
-            return await self._list_frames(space_id, graph_id, page_size, offset, None, current_user)
+            return await self._list_frames(space_id, graph_id, page_size, offset, search, current_user, sort_by=sort_by, sort_order=sort_order)
 
         @self.router.post("/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Frames"])
         async def create_or_update_frames(
@@ -579,6 +614,7 @@ class KGFramesEndpoint:
             """
             Create or update KG frames from JSON Quads.
             """
+            require_space_write(current_user, space_id)
             self.logger.info(f"🔍 ROUTE: POST /kgframes called with space_id={space_id}, graph_id={graph_id}, operation_mode={operation_mode}")
             
             try:
@@ -603,6 +639,7 @@ class KGFramesEndpoint:
             """
             Query KG frames using enhanced criteria-based search with sorting support.
             """
+            require_space_read(current_user, space_id)
             return await self._query_frames(space_id, graph_id, query_request, current_user)
         
         @self.router.delete("/kgframes", response_model=FrameDeleteResponse, tags=["KG Frames"])
@@ -620,6 +657,7 @@ class KGFramesEndpoint:
             Args:
                 recursive: If true, cascade-delete all descendant frames. If false, fail if children exist.
             """
+            require_space_write(current_user, space_id)
             if uri:
                 return await self._delete_frame_by_uri(space_id, graph_id, uri, current_user, recursive=recursive)
             elif uri_list:
@@ -652,6 +690,7 @@ class KGFramesEndpoint:
             """
             Get frames with their associated slots using pagination.
             """
+            require_space_read(current_user, space_id)
             return await self._get_kgframes_with_slots(space_id, graph_id, frame_uri, page_size, offset, entity_uri, parent_uri, search, kGSlotType, current_user)
         
         @self.router.post("/kgframes/kgslots", response_model=Union[SlotCreateResponse, SlotUpdateResponse], tags=["KG Frame Slots"])
@@ -669,6 +708,7 @@ class KGFramesEndpoint:
             Create or update slots for a specific frame from JSON Quads.
             Operation mode determines behavior: 'create' (fail if exists), 'update' (fail if not exists), 'upsert' (create or update).
             """
+            require_space_write(current_user, space_id)
             quads = body.quads
             if operation_mode == "update":
                 return await self._update_frame_slots(space_id, graph_id, frame_uri, quads, current_user)
@@ -686,12 +726,13 @@ class KGFramesEndpoint:
             """
             Delete specific slots from a frame using Edge_hasKGSlot relationships.
             """
+            require_space_write(current_user, space_id)
             slot_uri_list = [uri.strip() for uri in slot_uris.split(',') if uri.strip()]
             return await self._delete_frame_slots(space_id, graph_id, frame_uri, slot_uri_list, current_user)
     
     # Implementation methods following MockKGFramesEndpoint patterns with VitalSigns integration
     
-    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int, search: Optional[str], current_user: Dict) -> QuadResponse:
+    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int, search: Optional[str], current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc") -> QuadResponse:
         """List KG frames with pagination using backend interface."""
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
@@ -706,7 +747,7 @@ class KGFramesEndpoint:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             # Build SPARQL query for listing frames
-            sparql_query = self._build_list_frames_query(backend, space_id, graph_id, search, page_size, offset)
+            sparql_query = self._build_list_frames_query(backend, space_id, graph_id, search, page_size, offset, sort_by=sort_by, sort_order=sort_order)
             
             # Execute query via backend interface
             results = await backend.execute_sparql_query(space_id, sparql_query)
@@ -1009,6 +1050,10 @@ class KGFramesEndpoint:
                 if success:
                     deleted_uris.append(frame_uri)
             
+            # Auto-sync vector/geo data for deleted frames
+            if deleted_uris:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
+
             return FrameDeleteResponse(
                 message=f"Successfully deleted {len(deleted_uris)} frame(s)",
                 deleted_count=len(deleted_uris),
@@ -1098,6 +1143,10 @@ class KGFramesEndpoint:
                     self.logger.warning(f"Failed to delete frame {uri}: {e}")
                     continue
             
+            # Auto-sync vector/geo data for deleted frames
+            if deleted_uris:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
+
             return FrameDeleteResponse(
                 message=f"Successfully deleted {len(deleted_uris)} frame(s)",
                 deleted_count=len(deleted_uris),
@@ -1207,6 +1256,10 @@ class KGFramesEndpoint:
             # Store slots and edges in backend
             created_uris = await self._store_frame_slots_in_backend(backend, space_id, graph_id, enhanced_objects)
             
+            # Auto-sync vector/geo data for created slots
+            _sync_uris = [str(o.URI) for o in enhanced_objects if hasattr(o, 'URI') and o.URI]
+            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
+
             return SlotCreateResponse(
                 success=True,
                 message=f"Successfully created {len(created_uris)} slots for frame {frame_uri}",
@@ -1286,6 +1339,10 @@ class KGFramesEndpoint:
             # Update slots in backend (delete existing and insert updated)
             updated_uris = await self._update_frame_slots_in_backend(backend, space_id, graph_id, slots)
             
+            # Auto-sync vector/geo data for updated slots
+            _sync_uris = [str(s.URI) for s in slots if hasattr(s, 'URI') and s.URI]
+            self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
+
             return SlotUpdateResponse(
                 message=f"Successfully updated {len(updated_uris)} slots for frame {frame_uri}",
                 updated_count=len(updated_uris),
@@ -1363,6 +1420,10 @@ class KGFramesEndpoint:
             # Delete slots and their edges from backend
             deleted_count = await self._delete_frame_slots_from_backend(backend, space_id, graph_id, frame_uri, validated_slots)
             
+            # Auto-sync vector/geo data for deleted slots
+            if deleted_count > 0:
+                self._schedule_auto_sync(backend_impl, space_id, graph_id, validated_slots[:deleted_count], "delete")
+
             return SlotDeleteResponse(
                 message=f"Successfully deleted {deleted_count} slots from frame {frame_uri}",
                 deleted_count=deleted_count,
@@ -1380,7 +1441,7 @@ class KGFramesEndpoint:
     
     # Helper methods for SPARQL query building and VitalSigns conversion
     
-    def _build_list_frames_query(self, backend, space_id: str, graph_id: str, search: Optional[str], page_size: int, offset: int) -> str:
+    def _build_list_frames_query(self, backend, space_id: str, graph_id: str, search: Optional[str], page_size: int, offset: int, sort_by: Optional[str] = None, sort_order: str = "asc") -> str:
         """Build SPARQL query for listing frame subjects by finding objects with frameGraphURI property."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
@@ -1403,6 +1464,23 @@ class KGFramesEndpoint:
             )
             """
         
+        # Build sort-specific OPTIONAL and ORDER BY
+        sort_optional = ""
+        direction = "DESC" if sort_order == "desc" else "ASC"
+        if sort_by == "name":
+            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}hasName> ?sortName }}"
+            order_clause = f"ORDER BY {direction}(?sortName)"
+        elif sort_by == "created_date":
+            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}hasCreatedDate> ?sortDate }}"
+            order_clause = f"ORDER BY {direction}(?sortDate)"
+        elif sort_by == "frame_type":
+            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}vitaltype> ?sortType }}"
+            order_clause = f"ORDER BY {direction}(?sortType)"
+        elif sort_by == "uri":
+            order_clause = f"ORDER BY {direction}(?frame)"
+        else:
+            order_clause = "ORDER BY ?frame"
+        
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
@@ -1413,9 +1491,10 @@ class KGFramesEndpoint:
                 ?frame haley:hasFrameGraphURI ?frameGraphURI .
                 ?frame a haley:KGFrame .
                 {search_filter}
+                {sort_optional}
             }}
         }}
-        ORDER BY ?frame
+        {order_clause}
         LIMIT {page_size}
         OFFSET {offset}
         """

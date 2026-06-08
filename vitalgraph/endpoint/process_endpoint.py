@@ -51,7 +51,7 @@ class ProcessListResponse(BaseModel):
 
 class TriggerRequest(BaseModel):
     """Request body for triggering a maintenance operation."""
-    process_type: str = Field(..., description="Operation type: analyze, vacuum, stats_rebuild")
+    process_type: str = Field(..., description="Operation type: analyze, vacuum, stats_rebuild, vector_reindex")
     space_id: Optional[str] = Field(None, description="Target space (omit for auto-select)")
 
 

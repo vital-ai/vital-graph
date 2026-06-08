@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { Alert, Button, Card, Checkbox, Label, TextInput } from 'flowbite-react';
 import { useAuth } from '../contexts/AuthContext';
+import FormField from '../components/FormField';
+import { useFormValidation } from '../hooks/useFormValidation';
 
 const Login: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -13,6 +15,13 @@ const Login: React.FC = () => {
   const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
+  const rules = useMemo(() => ({
+    username: { required: 'Username is required' },
+    password: { required: 'Password is required', minLength: [1, 'Password is required'] as [number, string] },
+  }), []);
+
+  const { errors: fieldErrors, validate, clearError } = useFormValidation(rules);
+
   // If user is already authenticated, redirect to home
   if (isAuthenticated) {
     return <Navigate to="/" />;
@@ -21,9 +30,7 @@ const Login: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Validate form
-    if (!username || !password) {
-      setError('Please enter both username and password');
+    if (!validate({ username, password })) {
       return;
     }
     
@@ -39,9 +46,8 @@ const Login: React.FC = () => {
       } else {
         setError('Invalid username or password');
       }
-    } catch (err) {
+    } catch {
       setError('An error occurred during login. Please try again.');
-      console.error('Login error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -73,34 +79,28 @@ const Login: React.FC = () => {
         )}
         
         <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          <div>
-            <div className="mb-2 block">
-              <Label htmlFor="username">Username</Label>
-            </div>
+          <FormField label="Username" htmlFor="username" error={fieldErrors.username} required>
             <TextInput
               id="username"
               placeholder="Enter your username"
-              required
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(e) => { setUsername(e.target.value); clearError('username'); }}
               disabled={isLoading}
+              color={fieldErrors.username ? 'failure' : undefined}
             />
-          </div>
+          </FormField>
           
-          <div>
-            <div className="mb-2 block">
-              <Label htmlFor="password">Password</Label>
-            </div>
+          <FormField label="Password" htmlFor="password" error={fieldErrors.password} required>
             <TextInput
               id="password"
               type="password"
               placeholder="••••••••"
-              required
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); clearError('password'); }}
               disabled={isLoading}
+              color={fieldErrors.password ? 'failure' : undefined}
             />
-          </div>
+          </FormField>
           
           <div className="flex items-center gap-2">
             <Checkbox 

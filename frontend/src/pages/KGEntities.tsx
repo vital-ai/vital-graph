@@ -1,25 +1,25 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 import {
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeadCell,
-  TableRow,
-  Alert,
-  TextInput,
-  Select,
-  Label,
-  Pagination,
-  Badge,
-  Spinner,
-  Modal
+  Alert, Badge, Button, Pagination, Select, Spinner, TextInput
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
-import { HiSearch } from 'react-icons/hi';
+import { HiSearch, HiCube, HiSortAscending, HiSortDescending } from 'react-icons/hi';
+import CopyButton from '../components/CopyButton';
+import {
+  parseEntitiesFromQuads,
+  shortenUri,
+  type Quad,
+} from '../utils/QuadUtils';
+import ConfirmDialog from '../components/ConfirmDialog';
+
+const SORT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Name', value: 'http://vital.ai/ontology/vital-core#hasName' },
+  { label: 'Modified', value: 'http://vital.ai/ontology/vital#hasObjectModificationDateTime' },
+  { label: 'Created', value: 'http://vital.ai/ontology/vital-aimp#hasObjectCreationTime' },
+];
+
 interface KGEntity {
   uri: string;
   rdf_type: string;
@@ -29,8 +29,7 @@ interface KGEntity {
 
 const KGEntities: React.FC = () => {
   const navigate = useNavigate();
-  
-  // Get shared state from parent ObjectsLayout
+
   const context = useOutletContext<{
     selectedSpace: string;
     selectedGraph: string;
@@ -39,325 +38,263 @@ const KGEntities: React.FC = () => {
     error: string | null;
   }>();
 
-  // Handle case where context might be undefined initially
-  const {
-    selectedSpace = '',
-    selectedGraph = '',
-    spacesLoading = true,
-  } = context || {};
+  const { selectedSpace = '', selectedGraph = '', spacesLoading = true } = context || {};
 
-  // Local state management
   const [entities, setEntities] = useState<KGEntity[]>([]);
-  const [filteredEntities, setFilteredEntities] = useState<KGEntity[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [entityToDelete, setEntityToDelete] = useState<KGEntity | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [deletingEntity, setDeletingEntity] = useState<KGEntity | null>(null);
+  const [sortBy, setSortBy] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [entityTypeFilter, setEntityTypeFilter] = useState<string>('');
 
-  // Space and graph selection is now handled by parent ObjectsLayout
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setCurrentPage(1); }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
-  const [totalCount, setTotalCount] = useState<number>(0);
-
-  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
-  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
-
-  // Fetch entities for selected space and graph
   const fetchEntities = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
-    
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await axios.get('/api/graphs/kgentities', {
-        params: {
-          space_id: selectedSpace,
-          graph_id: selectedGraph,
-          page_size: itemsPerPage,
-          offset: (currentPage - 1) * itemsPerPage
-        }
+      const data = await apiService.getEntities(selectedSpace, selectedGraph, {
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        search: debouncedSearch || undefined,
+        entity_type_uri: entityTypeFilter || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
       });
-      
-      const data = response.data;
-      // API returns QuadResponse: { results: [{s,p,o,g}], total_count, page_size, offset }
-      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
-      
-      // Group quads by subject
-      const subjectMap = new Map<string, Map<string, string[]>>();
-      for (const quad of quads) {
-        const subj = stripBrackets(quad.s);
-        if (!subjectMap.has(subj)) subjectMap.set(subj, new Map());
-        const preds = subjectMap.get(subj)!;
-        const pred = stripBrackets(quad.p);
-        if (!preds.has(pred)) preds.set(pred, []);
-        preds.get(pred)!.push(quad.o);
-      }
-      
-      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
-      const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
-      
-      const entities: KGEntity[] = [];
-      for (const [uri, preds] of subjectMap) {
-        const typeVals = preds.get(RDF_TYPE) || [];
-        const rdfType = typeVals.length > 0 ? stripBrackets(typeVals[0]) : 'Unknown';
-        const nameVals = preds.get(HAS_NAME) || [];
-        const name = nameVals.length > 0 ? stripLiteral(nameVals[0]) : uri.split(/[/#]/).pop() || uri;
-        
-        entities.push({
-          uri,
-          rdf_type: rdfType,
-          name,
-          properties_count: preds.size,
-        });
-      }
-      
-      setEntities(entities);
-      setTotalCount(data.total_count ?? entities.length);
-    } catch (err) {
-      console.error('Error fetching KG entities:', err);
-      setError('Failed to load KG entities. Please try again later.');
+      const quads: Quad[] = data.results || [];
+      const grouped = parseEntitiesFromQuads(quads);
+      const parsed: KGEntity[] = grouped.map(e => ({
+        uri: e.uri,
+        rdf_type: e.rdf_type,
+        name: e.name,
+        properties_count: e.properties_count,
+      }));
+
+      setEntities(parsed);
+      setTotalCount(data.total_count ?? parsed.length);
+    } catch {
+      setError('Failed to load KG entities.');
       setEntities([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, entityTypeFilter, sortBy, sortOrder]);
 
-  // Set entities directly since filtering is done server-side
-  useEffect(() => {
-    setFilteredEntities(entities);
-  }, [entities]);
+  useEffect(() => { fetchEntities(); }, [fetchEntities]);
 
-  // Space and graph selection is now handled by parent ObjectsLayout
-
-  useEffect(() => {
-    fetchEntities();
-    // Reset pagination when component mounts or tab becomes active
-    setCurrentPage(1);
-  }, [fetchEntities]);
-
-  const currentEntities = filteredEntities;
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  const hasSelection = selectedSpace && selectedGraph;
 
+  const handleDelete = async (entity: KGEntity) => {
+    try {
+      await apiService.deleteEntity(selectedSpace, selectedGraph, entity.uri);
+      setDeletingEntity(null);
+      await fetchEntities();
+    } catch {
+      setError('Failed to delete entity.');
+      setDeletingEntity(null);
+    }
+  };
+
+  const toggleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder('asc');
+    }
+    setCurrentPage(1);
+  };
+
+  const SortIcon: React.FC<{ field: string }> = ({ field }) => {
+    if (sortBy !== field) return <HiSortAscending className="w-3.5 h-3.5 text-gray-300" />;
+    return sortOrder === 'asc'
+      ? <HiSortAscending className="w-3.5 h-3.5 text-blue-500" />
+      : <HiSortDescending className="w-3.5 h-3.5 text-blue-500" />;
+  };
 
   return (
-    <>
-
-      {/* Add Entity Button */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <Button 
-            onClick={() => {
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/new?mode=create`);
-            }} 
-            color="blue"
-          >
-            <HiPlus className="mr-2 h-4 w-4" />
-            Add KG Entity
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            {hasSelection && !loading && `${totalCount.toLocaleString()} entit${totalCount !== 1 ? 'ies' : 'y'}`}
+          </p>
+        </div>
+        {hasSelection && (
+          <Button size="sm" color="blue" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/new?mode=create`)}>
+            <HiPlus className="mr-1.5 h-4 w-4" />Add Entity
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Search and Filter */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-            <div className="flex-1">
-              <div className="relative">
-                <HiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <TextInput
-                  type="text"
-                  placeholder="Search KG entities by name, description, or URI..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <div className="flex-shrink-0">
-              <Label htmlFor="page-size">Items per page</Label>
-              <Select
-                id="page-size"
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(parseInt(e.target.value));
-                  setCurrentPage(1);
-                }}
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </Select>
-            </div>
+      {/* Search + filters */}
+      {hasSelection && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            <TextInput
+              icon={HiSearch}
+              placeholder="Search entities..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <div className="w-44 flex-shrink-0">
+            <TextInput
+              placeholder="Filter by type URI..."
+              value={entityTypeFilter}
+              onChange={(e) => { setEntityTypeFilter(e.target.value); setCurrentPage(1); }}
+              sizing="md"
+            />
+          </div>
+          <div className="w-36 flex-shrink-0">
+            <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+              <option value="">Sort by...</option>
+              {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </Select>
+          </div>
+          <div className="w-32 flex-shrink-0">
+            <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
+              <option value={10}>10 / page</option>
+              <option value={25}>25 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </Select>
           </div>
         </div>
       )}
 
-      {/* Selection Required Messages */}
+      {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+
+      {/* Empty / prompt states */}
       {!selectedSpace && !spacesLoading && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a space to view KG entities</p>
-            <p className="text-sm">Choose a space from the dropdown above to see available graphs.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCube className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a space</p>
+          <p className="text-sm mt-1">Choose a space from the dropdown above</p>
         </div>
       )}
-      
       {selectedSpace && !selectedGraph && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a graph to view KG entities</p>
-            <p className="text-sm">Choose a graph from the dropdown above to see its entities.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCube className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a graph</p>
+          <p className="text-sm mt-1">Choose a graph to browse its entities</p>
         </div>
       )}
 
-      {/* Loading Spinner */}
-      {selectedSpace && selectedGraph && loading && (
-        <div className="mt-8 flex justify-center">
-          <Spinner size="lg" />
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading KG entities...</span>
+      {hasSelection && loading && (
+        <div className="flex justify-center py-12"><Spinner size="xl" /></div>
+      )}
+
+      {hasSelection && !loading && entities.length === 0 && !error && (
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiCube className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          {debouncedSearch ? (
+            <>
+              <p className="text-lg font-medium">No results for &quot;{debouncedSearch}&quot;</p>
+              <p className="text-sm mt-1">Try a different search term</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-medium">No entities yet</p>
+              <p className="text-sm mt-1">Add your first KG entity to get started</p>
+            </>
+          )}
         </div>
       )}
 
-      {error && (
-        <Alert color="failure">
-          {error}
-        </Alert>
-      )}
-
-      {/* Entities Table */}
-      {selectedSpace && selectedGraph && !loading && filteredEntities.length === 0 && !error ? (
-        <Alert color="info">
-          {searchTerm ? 
-            `No KG entities found matching "${searchTerm}". Try a different search term.` :
-            'No KG entities found in this graph. Add your first entity to get started.'
-          }
-        </Alert>
-      ) : selectedSpace && selectedGraph && !loading && currentEntities.length > 0 && (
+      {/* Entities table */}
+      {hasSelection && !loading && entities.length > 0 && (
         <>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeadCell>Entity URI</TableHeadCell>
-                  <TableHeadCell>RDF Type</TableHeadCell>
-                  <TableHeadCell>Entity Type</TableHeadCell>
-                  <TableHeadCell>Properties</TableHeadCell>
-                  <TableHeadCell>Actions</TableHeadCell>
-                </TableRow>
-              </TableHead>
-              <TableBody className="divide-y">
-                {currentEntities.map((entity) => (
-                  <TableRow key={entity.uri}>
-                    <TableCell className="font-medium">
+          <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-4 py-3">
+                    <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                      Entity <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3 w-28">Properties</th>
+                  <th className="px-4 py-3 w-24"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {entities.map((entity) => (
+                  <tr key={entity.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                    <td className="px-4 py-2.5">
                       <div className="max-w-xs">
-                        <div className="font-mono text-sm text-blue-600 truncate" title={entity.uri}>
-                          {entity.name}
-                        </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {entity.uri}
-                        </div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{entity.name}</p>
+                        <p className="text-xs font-mono text-gray-400 truncate inline-flex items-center gap-0.5" title={entity.uri}><span className="truncate">{entity.uri}</span><CopyButton text={entity.uri} /></p>
                       </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm truncate max-w-xs" title={entity.rdf_type}>
-                      {entity.rdf_type.split(/[/#]/).pop()}
-                    </TableCell>
-                    <TableCell>
-                      <Badge color="blue">KG Entity</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        {entity.properties_count} properties
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          size="xs"
-                          color="blue"
-                          onClick={() => {
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/${encodeURIComponent(entity.uri)}`);
-                          }}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge color="blue" size="xs">{shortenUri(entity.rdf_type)}</Badge>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                      {entity.properties_count}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/${encodeURIComponent(entity.uri)}`)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-500 transition-colors" title="View"
                         >
-                          <HiEye className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="xs"
-                          color="red"
-                          onClick={() => {
-                            setEntityToDelete(entity);
-                            setShowDeleteModal(true);
-                          }}
+                          <HiEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeletingEntity(entity)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-red-500 transition-colors" title="Delete"
                         >
-                          <HiTrash className="h-3 w-3" />
-                        </Button>
+                          <HiTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex justify-center mt-6">
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
-                showIcons
-              />
+            <div className="flex justify-center">
+              <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} showIcons />
             </div>
           )}
         </>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <Modal show={showDeleteModal} onClose={() => setShowDeleteModal(false)} size="md">
-        <div className="p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Delete Entity</h3>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Are you sure you want to delete this KG entity? This action cannot be undone.
-          </p>
-          {entityToDelete && (
-            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded mb-6">
-              <p className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                {entityToDelete.name}
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {entityToDelete.uri}
-              </p>
-            </div>
-          )}
-          <div className="flex justify-end gap-3">
-            <Button 
-              onClick={() => {
-                console.log('Deleting entity:', entityToDelete?.uri);
-                setShowDeleteModal(false);
-                setEntityToDelete(null);
-              }} 
-              color="failure"
-            >
-              Delete
-            </Button>
-            <Button 
-              color="gray" 
-              onClick={() => {
-                setShowDeleteModal(false);
-                setEntityToDelete(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
+      {/* Delete Modal */}
+      <ConfirmDialog
+        open={!!deletingEntity}
+        onConfirm={() => deletingEntity && handleDelete(deletingEntity)}
+        onCancel={() => setDeletingEntity(null)}
+        title="Delete Entity"
+        confirmLabel="Delete"
+        variant="danger"
+        detail={
+          deletingEntity && (
+            <>
+              <p className="font-medium text-gray-800 dark:text-gray-200">{deletingEntity.name}</p>
+              <p className="text-gray-400">{deletingEntity.uri}</p>
+            </>
+          )
+        }
+      />
+    </div>
   );
 };
 

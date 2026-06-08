@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLInsertRequest,
     SPARQLInsertResponse
 )
+from ..auth.role_dependencies import require_space_write
 
 
 class SPARQLInsertEndpoint:
@@ -42,6 +43,7 @@ class SPARQLInsertEndpoint:
             request: SPARQLInsertRequest,
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_insert(space_id, request.update, current_user, request.graph_uri)
         
         # Form-based endpoint for SPARQL inserts
@@ -58,6 +60,7 @@ class SPARQLInsertEndpoint:
             graph_uri: Optional[str] = Form(None, description="Target graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._execute_insert(space_id, update, current_user, graph_uri)
         
         # Direct RDF data insert endpoint
@@ -75,6 +78,7 @@ class SPARQLInsertEndpoint:
             format: str = Body("application/n-triples", description="RDF format"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             # Convert RDF data to INSERT DATA query
             if graph_uri:
                 update_query = f"INSERT DATA {{ GRAPH <{graph_uri}> {{ {rdf_data} }} }}"

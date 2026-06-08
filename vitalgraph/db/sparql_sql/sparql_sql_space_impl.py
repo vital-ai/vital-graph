@@ -1275,6 +1275,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
 
+                # Resolve vector placeholders (vg:vectorSimilarity)
+                if gen.vector_requests:
+                    from .vg_resolve import resolve_vector_requests
+                    sql = await resolve_vector_requests(
+                        sql, gen.vector_requests, space_id, conn)
+
                 if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
                     logger.info("DEBUG multi-value sort SQL:\n%s", sql)
 

@@ -26,6 +26,17 @@ export default defineConfig({
       // Images are now served directly from frontend/images directory
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-flowbite': ['flowbite-react'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
   // Force dependency pre-bundling refresh
   optimizeDeps: {
     force: true,

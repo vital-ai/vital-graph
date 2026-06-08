@@ -58,9 +58,28 @@ class FusekiPostgreSQLSchema:
                 user_id SERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
                 password VARCHAR(255),
+                password_hash VARCHAR(255),
                 email VARCHAR(255),
+                full_name VARCHAR(255),
+                role VARCHAR(50) NOT NULL DEFAULT 'user',
+                is_active BOOLEAN NOT NULL DEFAULT true,
+                token_version INTEGER NOT NULL DEFAULT 0,
                 tenant VARCHAR(255),
+                created_time TIMESTAMPTZ DEFAULT now(),
+                last_login TIMESTAMPTZ,
                 update_time TIMESTAMP
+            )
+        ''',
+
+        # User space access - per-space role assignments
+        'user_space_access': '''
+            CREATE TABLE user_space_access (
+                user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+                space_id VARCHAR(255) NOT NULL,
+                access_level VARCHAR(2) NOT NULL CHECK (access_level IN ('rw', 'r')),
+                granted_by VARCHAR(255),
+                granted_time TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (user_id, space_id)
             )
         ''',
         

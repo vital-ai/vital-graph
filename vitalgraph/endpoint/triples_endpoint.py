@@ -17,6 +17,7 @@ from ..model.triples_model import (
     TripleListResponse,
     TripleOperationResponse
 )
+from ..auth.role_dependencies import require_space_read, require_space_write
 
 
 class TriplesEndpoint:
@@ -51,6 +52,7 @@ class TriplesEndpoint:
             object_filter: Optional[str] = Query(None, description="Keyword to search within object values"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_read(current_user, space_id)
             return await self._list_triples(
                 space_id, graph_id, page_size, offset, subject, predicate, object, object_filter, current_user
             )
@@ -69,6 +71,7 @@ class TriplesEndpoint:
             request: QuadRequest = Body(..., description="Quads to add"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._add_triples(space_id, graph_id, request, current_user)
         
         # DELETE /api/graphs/triples - Delete specific triples
@@ -85,6 +88,7 @@ class TriplesEndpoint:
             request: QuadRequest = Body(..., description="Quads to delete"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
+            require_space_write(current_user, space_id)
             return await self._delete_triples(space_id, graph_id, request, current_user)
     
     async def _list_triples(

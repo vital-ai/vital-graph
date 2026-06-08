@@ -108,6 +108,62 @@ def _patch_concat_companions(
     typed.lang_is_sql = True
 
 
+def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -> Optional[str]:
+    """Attempt vector-driving top-K optimization for this EXTEND node.
+
+    If the plan has vg_top_k hint and the expression is a vector function,
+    emit a JOIN-based query where the vector table drives via HNSW index.
+    Returns the full SQL string, or None to fall back to standard path.
+    """
+    top_k = plan.hints.get('vg_top_k')
+    if not top_k:
+        return None
+
+    from .vg_functions import (
+        vector_top_k_driving_sql, is_vg_vector_function,
+    )
+
+    expr = plan.extend_expr
+    if not isinstance(expr, ExprFunction) or not is_vg_vector_function(expr):
+        return None
+
+    threshold = plan.hints.get('vg_threshold')
+    driving = vector_top_k_driving_sql(
+        expr, ctx, limit=top_k['limit'], threshold=threshold,
+    )
+    if driving is None:
+        return None
+
+    # Record vector request if needed
+    if driving.vec_request is not None:
+        ctx.add_vector_request(driving.vec_request)
+
+    # Allocate names
+    var = plan.extend_var
+    assert var is not None  # guaranteed by caller guard
+    sn = ctx.types.allocate(var)
+    e_alias = ctx.aliases.next("e")
+    v_alias = ctx.aliases.next("vt")
+
+    # Register as numeric extend (xsd:double)
+    from .sql_type_generation import infer_expr_type
+    typed = infer_expr_type(expr, ctx.types)
+    ctx.types.register_extend(var, typed, sn)
+
+    ctx.log("extend", f"BIND ?{var} → {sn} [VECTOR DRIVING top-K={top_k['limit']}]")
+
+    # Emit: child JOIN (vector_subquery) ON uuid match
+    # The vector subquery drives with ORDER BY + LIMIT using HNSW index
+    new_cols = typed.produce_companions(sn, f"{v_alias}.{driving.score_alias}")
+
+    return (
+        f"SELECT {e_alias}.*, {', '.join(new_cols)}\n"
+        f"FROM ({child_sql}) AS {e_alias}\n"
+        f"JOIN ({driving.join_subquery}) AS {v_alias}\n"
+        f"  ON {e_alias}.{driving.uuid_col} = {v_alias}.subject_uuid"
+    )
+
+
 def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
     """Emit SQL for an EXTEND (BIND) modifier.
 
@@ -122,11 +178,23 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
     if not plan.extend_var or plan.extend_expr is None:
         return child_sql
 
+    # Try vector-driving top-K optimization first
+    vd_sql = _try_vector_driving_extend(plan, ctx, child_sql)
+    if vd_sql is not None:
+        return vd_sql
+
     e_alias = ctx.aliases.next("e")
     var = plan.extend_var
+
+    # Pass vg: optimizer hints to expression emitter
+    saved_hints = ctx.vg_hints
+    ctx.vg_hints = plan.hints if plan.hints else {}
+
     sql_expr = expr_to_sql(plan.extend_expr, ctx)
     if not sql_expr:
         sql_expr = "NULL"
+
+    ctx.vg_hints = saved_hints
 
     # Infer type for companion columns
     typed = infer_expr_type(plan.extend_expr, ctx.types)

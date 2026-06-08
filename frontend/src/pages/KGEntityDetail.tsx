@@ -2,6 +2,7 @@ import React from 'react';
 import { HiUser } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
+import EntityGeoMiniMap from '../components/EntityGeoMiniMap';
 
 const KGEntityDetail: React.FC = () => {
   // Configuration for KG Entities
@@ -33,12 +34,7 @@ const KGEntityDetail: React.FC = () => {
     properties_count: 3,
     properties: [
       {
-        predicate: '@id',
-        object: '',
-        object_type: 'uri'
-      },
-      {
-        predicate: '@type',
+        predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
         object: config.defaultRdfType,
         object_type: 'uri'
       },
@@ -50,34 +46,33 @@ const KGEntityDetail: React.FC = () => {
     ]
   });
 
-  // Build API request data from object
+  // Build API request data from object properties as quads
   const buildApiRequestData = (object: BaseRDFObject) => {
-    const jsonLdObject: any = {
-      '@context': {}
-    };
-
-    // Add properties from the object
-    if (object.properties) {
-      object.properties.forEach(prop => {
-        if (prop.predicate && prop.object) {
-          jsonLdObject[prop.predicate] = prop.object;
-        }
-      });
-    }
-
-    return {
-      objects: {
-        '@context': {},
-        '@graph': [jsonLdObject]
-      }
-    };
+    const quads = (object.properties || [])
+      .filter(p => p.predicate && p.object)
+      .map(p => ({
+        s: object.object_uri || '',
+        p: p.predicate,
+        o: p.object,
+        o_type: p.object_type,
+      }));
+    return { quads };
   };
 
   // Use the shared hook
   const hookData = useObjectDetail(config, createDefaultObject, buildApiRequestData);
 
-  // Render with shared component
-  return <ObjectDetailRenderer {...hookData} config={config} />;
+  // Render with shared component + geo mini-map
+  return (
+    <>
+      <ObjectDetailRenderer {...hookData} config={config} />
+      {hookData.spaceId && hookData.object?.object_uri && (
+        <div className="mt-4">
+          <EntityGeoMiniMap spaceId={hookData.spaceId} entityUri={hookData.object.object_uri} />
+        </div>
+      )}
+    </>
+  );
 };
 
 export default KGEntityDetail;

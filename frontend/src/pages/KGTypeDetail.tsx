@@ -33,12 +33,7 @@ const KGTypeDetail: React.FC = () => {
     properties_count: 3,
     properties: [
       {
-        predicate: '@id',
-        object: '',
-        object_type: 'uri'
-      },
-      {
-        predicate: '@type',
+        predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
         object: config.defaultRdfType,
         object_type: 'uri'
       },
@@ -50,38 +45,17 @@ const KGTypeDetail: React.FC = () => {
     ]
   });
 
-  // Build API request data from object (KG Types use special format)
+  // Build API request data from object properties as quads
   const buildApiRequestData = (object: BaseRDFObject) => {
-    const updatedKGType: any = {};
-    
-    // Process properties and convert to KG type format
-    if (object.properties) {
-      object.properties.forEach(prop => {
-        if (prop.predicate && prop.object) {
-          try {
-            // Try to parse as JSON first (for objects)
-            const parsedValue = JSON.parse(prop.object);
-            updatedKGType[prop.predicate] = parsedValue;
-          } catch {
-            // If not JSON, use as string
-            updatedKGType[prop.predicate] = prop.object;
-          }
-        }
-      });
-    }
-
-    // Create JSON-LD document format expected by the backend
-    return {
-      document: {
-        "@context": {
-          "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-          "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
-          "vital": "http://vital.ai/ontology/vital-core#",
-          "haley": "http://vital.ai/ontology/haley-ai-kg#"
-        },
-        "@graph": [updatedKGType]
-      }
-    };
+    const quads = (object.properties || [])
+      .filter(p => p.predicate && p.object)
+      .map(p => ({
+        s: object.object_uri || '',
+        p: p.predicate,
+        o: p.object,
+        o_type: p.object_type,
+      }));
+    return { quads };
   };
 
   // Use the shared hook

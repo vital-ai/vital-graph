@@ -42,6 +42,11 @@ class GenerateResult:
     ok: bool = True
     error: Optional[str] = None
     trace_json: Optional[str] = None
+    # VectorRequests that need server-side vectorization before SQL execution.
+    # Non-empty when the query uses vg:vectorSimilarity with a text argument.
+    # The orchestrator must vectorize each request's search_text and replace
+    # the placeholder token in the SQL with the actual embedding.
+    vector_requests: List[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +427,10 @@ async def generate_sql(
         from .var_scope import compute_text_needed_vars
         text_needed = compute_text_needed_vars(plan)
 
+        # Stage 2d: Vector/geo optimization hints (pure, no I/O)
+        from .vg_optimize import vg_optimize
+        plan = vg_optimize(plan)
+
         # Stage 3: Emit → SQL (pure, no I/O)
         from .emit_context import ProcessingTrace
         sparql_text = getattr(meta, 'sparql', '') if meta else ''
@@ -467,6 +476,7 @@ async def generate_sql(
             var_map=var_map,
             sparql_vars=sparql_vars,
             trace_json=ctx.trace.to_json(),
+            vector_requests=ctx.vector_requests,
         )
 
     except Exception as e:

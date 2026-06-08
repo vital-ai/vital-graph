@@ -4,193 +4,72 @@ Mock implementation of ImportEndpoint for testing.
 """
 
 from typing import Dict, Any, Optional
+from pathlib import Path
+from datetime import datetime
+
 from .mock_base_endpoint import MockBaseEndpoint
 from ....model.import_model import (
-    ImportJob, ImportJobsResponse, ImportJobResponse, ImportCreateResponse, ImportUpdateResponse, 
-    ImportDeleteResponse, ImportExecuteResponse, ImportStatusResponse, ImportLogResponse, ImportUploadResponse,
-    ImportStatus, ImportType
+    JobStatus, ImportJobCreate, ImportJob,
+    ImportJobsResponse, ImportJobResponse, ImportCreateResponse,
+    ImportDeleteResponse, ImportExecuteResponse, ImportStatusResponse,
+    ImportLogResponse, ImportUploadResponse,
 )
-from datetime import datetime
+
+_MOCK_JOB_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class MockImportEndpoint(MockBaseEndpoint):
     """Mock implementation of ImportEndpoint."""
-    
-    def create_import_job(self, import_job: ImportJob) -> ImportCreateResponse:
-        """Create new data import job."""
-        self._log_method_call("create_import_job", import_job=import_job)
-        
-        # Generate mock import job
-        mock_job = ImportJob(
-            import_id="mock_import_001",
-            name=import_job.name,
-            description=import_job.description,
-            import_type=import_job.import_type,
-            space_id=import_job.space_id,
-            graph_id=import_job.graph_id,
-            status=ImportStatus.CREATED,
-            created_date=datetime.utcnow(),
-            updated_date=datetime.utcnow(),
-            progress_percent=0.0,
-            records_processed=0,
-            config=import_job.config or {},
-            uploaded_files=[]
+
+    def _mock_job(self, job_id: str = _MOCK_JOB_ID,
+                  space_id: str = "mock_space",
+                  graph_uri: Optional[str] = None) -> ImportJob:
+        now = datetime.utcnow()
+        return ImportJob(
+            job_id=job_id, job_type="import", space_id=space_id,
+            graph_uri=graph_uri, status=JobStatus.CREATED, mode="append",
+            progress_pct=0.0, records_done=0,
+            created_at=now, updated_at=now,
         )
-        
-        mock_data = {
-            "message": "Successfully created import job",
-            "import_id": "mock_import_001",
-            "import_job": mock_job
-        }
-        
-        return ImportCreateResponse.model_validate(mock_data)
-    
-    def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                        page_size: int = 100, offset: int = 0) -> ImportJobsResponse:
-        """List all import jobs with optional filtering."""
-        self._log_method_call("list_import_jobs", space_id=space_id, graph_id=graph_id, page_size=page_size, offset=offset)
-        
-        # Generate mock import jobs
-        mock_data = {
-            "import_jobs": [],
-            "total_count": 0,
-            "page_size": page_size,
-            "offset": offset
-        }
-        
-        return ImportJobsResponse.model_validate(mock_data)
-    
-    def get_import_job(self, import_id: str) -> ImportJobResponse:
-        """Get import job details by ID."""
-        self._log_method_call("get_import_job", import_id=import_id)
-        
-        # Generate mock import job
-        mock_job = ImportJob(
-            import_id=import_id,
-            name="Mock Import Job",
-            description="Mock import job for testing",
-            import_type=ImportType.JSON,
-            space_id="mock_space_001",
-            graph_id="mock_graph_001",
-            status=ImportStatus.PENDING,
-            created_date=datetime.utcnow(),
-            updated_date=datetime.utcnow(),
-            progress_percent=0.0,
-            records_processed=0,
-            config={},
-            uploaded_files=[]
+
+    def create_import_job(self, request: ImportJobCreate) -> ImportCreateResponse:
+        self._log_method_call("create_import_job", request=request)
+        job = self._mock_job(space_id=request.space_id, graph_uri=request.graph_uri)
+        return ImportCreateResponse(message="Import job created", job_id=job.job_id, job=job)
+
+    def list_import_jobs(self, space_id: Optional[str] = None, status: Optional[str] = None,
+                         page_size: int = 50, offset: int = 0) -> ImportJobsResponse:
+        self._log_method_call("list_import_jobs", space_id=space_id, status=status)
+        return ImportJobsResponse(jobs=[], total_count=0, page_size=page_size, offset=offset)
+
+    def get_import_job(self, job_id: str) -> ImportJobResponse:
+        self._log_method_call("get_import_job", job_id=job_id)
+        return ImportJobResponse(job=self._mock_job(job_id=job_id))
+
+    def delete_import_job(self, job_id: str) -> ImportDeleteResponse:
+        self._log_method_call("delete_import_job", job_id=job_id)
+        return ImportDeleteResponse(message="Import job deleted", job_id=job_id)
+
+    def execute_import_job(self, job_id: str) -> ImportExecuteResponse:
+        self._log_method_call("execute_import_job", job_id=job_id)
+        return ImportExecuteResponse(message="Import job execution started", job_id=job_id, execution_started=True)
+
+    def get_import_status(self, job_id: str) -> ImportStatusResponse:
+        self._log_method_call("get_import_status", job_id=job_id)
+        return ImportStatusResponse(
+            job_id=job_id, status=JobStatus.RUNNING,
+            progress_pct=75.0, records_done=750, records_total=1000,
+            started_at=datetime.utcnow(), completed_at=None, error_message=None,
         )
-        
-        mock_data = {
-            "import_job": mock_job
-        }
-        
-        return ImportJobResponse.model_validate(mock_data)
-    
-    def update_import_job(self, import_id: str, import_job: ImportJob) -> ImportUpdateResponse:
-        """Update import job."""
-        self._log_method_call("update_import_job", import_id=import_id, import_job=import_job)
-        
-        # Generate mock updated job
-        updated_job = ImportJob(
-            import_id=import_id,
-            name=import_job.name,
-            description=import_job.description,
-            import_type=import_job.import_type,
-            space_id=import_job.space_id,
-            graph_id=import_job.graph_id,
-            status=import_job.status or ImportStatus.CREATED,
-            created_date=datetime.utcnow(),
-            updated_date=datetime.utcnow(),
-            progress_percent=import_job.progress_percent or 0.0,
-            records_processed=import_job.records_processed or 0,
-            config=import_job.config or {},
-            uploaded_files=import_job.uploaded_files or []
+
+    def get_import_log(self, job_id: str) -> ImportLogResponse:
+        self._log_method_call("get_import_log", job_id=job_id)
+        return ImportLogResponse(job_id=job_id, log_entries=[], total_entries=0)
+
+    def upload_import_file(self, job_id: str, file_path: str) -> ImportUploadResponse:
+        self._log_method_call("upload_import_file", job_id=job_id, file_path=file_path)
+        fp = Path(file_path)
+        return ImportUploadResponse(
+            message="File uploaded", job_id=job_id,
+            filename=fp.name if fp.exists() else "mock_file.nt", file_size=1024,
         )
-        
-        mock_data = {
-            "message": "Successfully updated import job",
-            "import_job": updated_job
-        }
-        
-        return ImportUpdateResponse.model_validate(mock_data)
-    
-    def delete_import_job(self, import_id: str) -> ImportDeleteResponse:
-        """Delete import job."""
-        self._log_method_call("delete_import_job", import_id=import_id)
-        
-        mock_data = {
-            "message": "Successfully deleted import job",
-            "import_id": import_id
-        }
-        
-        return ImportDeleteResponse.model_validate(mock_data)
-    
-    def execute_import_job(self, import_id: str) -> ImportExecuteResponse:
-        """Execute import job."""
-        self._log_method_call("execute_import_job", import_id=import_id)
-        
-        mock_data = {
-            "message": "Successfully started import job execution",
-            "import_id": import_id,
-            "execution_started": True
-        }
-        
-        return ImportExecuteResponse.model_validate(mock_data)
-    
-    def get_import_status(self, import_id: str) -> ImportStatusResponse:
-        """Get import execution status."""
-        self._log_method_call("get_import_status", import_id=import_id)
-        
-        mock_data = {
-            "import_id": import_id,
-            "status": ImportStatus.RUNNING,
-            "progress_percent": 75.0,
-            "records_processed": 750,
-            "records_total": 1000,
-            "started_date": datetime.utcnow(),
-            "completed_date": None,
-            "error_message": None
-        }
-        
-        return ImportStatusResponse.model_validate(mock_data)
-    
-    def get_import_log(self, import_id: str) -> ImportLogResponse:
-        """Get import execution log."""
-        self._log_method_call("get_import_log", import_id=import_id)
-        
-        mock_data = {
-            "import_id": import_id,
-            "log_entries": [
-                {
-                    "timestamp": "2024-01-01T10:00:00Z",
-                    "level": "INFO",
-                    "message": "Mock import job started",
-                    "details": {"records_total": 1000}
-                }
-            ],
-            "total_entries": 1
-        }
-        
-        return ImportLogResponse.model_validate(mock_data)
-    
-    def upload_import_file(self, import_id: str, file_path: str) -> ImportUploadResponse:
-        """Upload file to import job."""
-        self._log_method_call("upload_import_file", import_id=import_id, file_path=file_path)
-        
-        from pathlib import Path
-        file_path_obj = Path(file_path)
-        
-        mock_data = {
-            "message": "Successfully uploaded file to import job",
-            "import_id": import_id,
-            "filename": file_path_obj.name if file_path_obj.exists() else "mock_file.txt",
-            "file_size": 1024
-        }
-        
-        return ImportUploadResponse.model_validate(mock_data)
-    
-    def upload_from_generator(self, import_id: str, generator) -> Dict[str, Any]:
-        """Upload file to import job from a BinaryGenerator."""
-        self._log_method_call("upload_from_generator", import_id=import_id)
-        return self._create_stub_response("upload_from_generator", import_id=import_id, uploaded_bytes=1024)

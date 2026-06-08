@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Union, Any
 import asyncpg
 
 from ..db_inf import DbImplInterface
+from ..user_management import UserManagementMixin
 from ...utils.resource_manager import track_pool
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class SparqlSQLTransaction:
 # DbImplInterface implementation
 # ---------------------------------------------------------------------------
 
-class SparqlSQLDbImpl(DbImplInterface):
+class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
     """
     Pure-PostgreSQL database implementation for the sparql_sql backend.
 

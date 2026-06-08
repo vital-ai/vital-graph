@@ -22,7 +22,9 @@ import {
   HiPencil
 } from 'react-icons/hi2';
 import { HiSave, HiX } from 'react-icons/hi';
+import type { NavigateFunction } from 'react-router-dom';
 import NavigationBreadcrumb from './NavigationBreadcrumb';
+import ExpandableText from './ExpandableText';
 import { ObjectDetailConfig, BaseRDFObject } from '../pages/AbsObjectDetail';
 
 interface ObjectDetailRendererProps<T extends BaseRDFObject = BaseRDFObject> {
@@ -44,8 +46,8 @@ interface ObjectDetailRendererProps<T extends BaseRDFObject = BaseRDFObject> {
   // Functions
   setShowDeleteObjectModal: (show: boolean) => void;
   setNewProperty: (prop: { predicate: string; value: string; type: 'uri' | 'literal' }) => void;
-  setSearchParams: (params: any) => void;
-  navigate: (path: any) => void;
+  setSearchParams: (params: URLSearchParams | Record<string, string>) => void;
+  navigate: NavigateFunction;
   extractLocalName: (uri: string) => string;
   formatDateTime: (dateString: string) => string;
   getObjectTypeBadge: (type: string) => React.ReactElement;
@@ -53,6 +55,7 @@ interface ObjectDetailRendererProps<T extends BaseRDFObject = BaseRDFObject> {
   removeProperty: (index: number) => void;
   handleAddProperty: () => void;
   handleSave: () => void;
+  handleDelete: () => void;
   getPageTitle: () => string;
   getObjectDisplayName: () => string;
 }
@@ -81,6 +84,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
     removeProperty,
     handleAddProperty,
     handleSave,
+    handleDelete,
     getPageTitle,
     getObjectDisplayName
   } = props;
@@ -131,7 +135,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
         spaceId={spaceId} 
         graphId={graphId} 
         currentPageName={getPageTitle()}
-        currentPageIcon={config.icon as any}
+        currentPageIcon={config.icon as unknown as React.FC<React.SVGProps<SVGSVGElement>>}
       />
 
       {/* Header with Mode Controls */}
@@ -142,11 +146,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
             size="sm"
             onClick={() => {
               const encodedGraphId = encodeURIComponent(graphId || '');
-              const backUrl = `/space/${spaceId}/graph/${encodedGraphId}${config.listRoute}`;
-              console.log('Navigating back to:', backUrl);
-              console.log('Original graphId:', graphId);
-              console.log('Encoded graphId:', encodedGraphId);
-              navigate(backUrl);
+              navigate(`/space/${spaceId}/graph/${encodedGraphId}${config.listRoute}`);
             }}
           >
             ← Back to {config.objectTypeName}s
@@ -302,10 +302,12 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(object?.properties || []).map((prop: any, index: number) => (
+                  {(object?.properties || []).map((prop: { predicate: string; object: string; object_type: string }, index: number) => (
                     <TableRow key={index}>
                       <TableCell className="font-mono text-sm break-all">{prop.predicate}</TableCell>
-                      <TableCell className="text-sm break-all">{prop.object}</TableCell>
+                      <TableCell className="text-sm break-all max-w-md">
+                        <ExpandableText text={prop.object} maxLines={2} />
+                      </TableCell>
                       <TableCell>
                         <Badge color={prop.object_type === 'uri' ? 'blue' : 'green'}>
                           {prop.object_type}
@@ -378,7 +380,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(object?.properties || []).map((prop: any, index: number) => (
+                  {(object?.properties || []).map((prop: { predicate: string; object: string; object_type: string }, index: number) => (
                     <TableRow key={index}>
                       <TableCell>
                         <TextInput
@@ -432,9 +434,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
           </p>
           <div className="flex justify-end gap-3">
             <Button color="red" onClick={() => {
-              // TODO: Implement delete
-              setShowDeleteObjectModal(false);
-              navigate(-1);
+              handleDelete();
             }}>
               Delete
             </Button>

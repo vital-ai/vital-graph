@@ -3,14 +3,17 @@ from fastapi import HTTPException, status, Request, Body
 from fastapi.security import OAuth2PasswordRequestForm
 import logging
 
+from vitalgraph.auth.audit import emit_audit_event
+
 logger = logging.getLogger(__name__)
 
 
 class VitalGraphAPI:
-    def __init__(self, auth_handler, db_impl=None, space_manager=None):
+    def __init__(self, auth_handler, db_impl=None, space_manager=None, signal_manager=None):
         self.auth = auth_handler
         self.db = db_impl
         self.space_manager = space_manager
+        self.signal_manager = signal_manager
     
     async def health(self):
         """Health check endpoint"""
@@ -18,7 +21,7 @@ class VitalGraphAPI:
     
     async def login(self, form_data: OAuth2PasswordRequestForm, token_expiry_seconds: Optional[int] = None):
         """Enhanced login with JWT tokens"""
-        user = self.auth.authenticate_user(form_data.username, form_data.password)
+        user = await self.auth.authenticate_user(form_data.username, form_data.password)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -41,21 +44,26 @@ class VitalGraphAPI:
                 )
             logger.info(f"Creating tokens with custom expiry: {token_expiry_seconds} seconds")
         
+        # Update last login
+        if self.db:
+            await self.db.update_last_login(user["username"])
+        
         # Create JWT tokens with optional custom expiry
         tokens = self.auth.create_tokens(user, token_expiry_seconds=token_expiry_seconds)
         
         return {
             **tokens,
             "username": user["username"],
-            "full_name": user["full_name"],
-            "email": user["email"],
-            "profile_image": user["profile_image"],
-            "role": user["role"]
+            "full_name": user.get("full_name", ""),
+            "email": user.get("email", ""),
+            "profile_image": user.get("profile_image", ""),
+            "role": user.get("role", "user")
         }
     
     async def logout(self, request: Request, current_user: Dict):
         """Logout endpoint"""
         request.session.clear()
+        emit_audit_event("auth.logout", current_user.get("username", "unknown"))
         return {"status": "logged out"}
     
     async def refresh_token(self, refresh_token: str = Body(..., embed=True)):
@@ -64,13 +72,41 @@ class VitalGraphAPI:
             payload = self.auth.jwt_auth.verify_token(refresh_token, "refresh")
             username = payload.get("sub")
             
-            if username not in self.auth.users_db:
+            if not username:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found"
+                    detail="Invalid refresh token"
                 )
             
-            user = self.auth.users_db[username]
+            # Re-fetch user from DB to get current role/spaces
+            user = await self.auth._get_user_from_db(username)
+            if user is None:
+                # Fallback to claims from the refresh token
+                user = {
+                    "username": username,
+                    "full_name": payload.get("full_name", ""),
+                    "email": payload.get("email", ""),
+                    "role": payload.get("role", "user"),
+                    "spaces": payload.get("spaces", {}),
+                    "token_version": payload.get("token_version", 0),
+                }
+            
+            # Check if user is still active
+            if not user.get("is_active", True):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="User account is deactivated"
+                )
+            
+            # Check token_version hasn't been bumped (tokens invalidated)
+            token_ver_in_jwt = payload.get("token_version", 0)
+            token_ver_in_db = user.get("token_version", 0)
+            if token_ver_in_jwt < token_ver_in_db:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked"
+                )
+            
             tokens = self.auth.create_tokens(user)
             
             return {
@@ -134,14 +170,20 @@ class VitalGraphAPI:
             space_records = self.space_manager.list_space_records()
             logger.debug(f"Got {len(space_records)} space records")
             
+            # Filter spaces based on user access
+            user_role = current_user.get('role', 'user')
+            user_spaces = current_user.get('spaces', {})
+            
             spaces = []
             for space_record in space_records:
                 logger.debug(f"Processing space_record: {space_record}")
-                spaces.append({
-                    'space': space_record.space_id,
-                    'space_name': space_record.space_id,  # Use space_id as name for now
-                    'exists': True
-                })
+                # Admin sees all; non-admin sees only assigned (or wildcard) spaces
+                if user_role == 'admin' or '*' in user_spaces or space_record.space_id in user_spaces:
+                    spaces.append({
+                        'space': space_record.space_id,
+                        'space_name': space_record.space_id,  # Use space_id as name for now
+                        'exists': True
+                    })
             logger.debug(f"Returning {len(spaces)} spaces")
             return spaces
         except Exception as e:
@@ -376,22 +418,18 @@ class VitalGraphAPI:
     
     # User management methods
     async def list_users(self, current_user: Dict) -> List[Dict[str, Any]]:
-        """List users for the authenticated user."""
-        if not self.auth:
+        """List users for the authenticated admin user."""
+        if not self.db:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Auth system not configured"
+                detail="Database not configured"
             )
         
         try:
-            # Return users from the auth system's users_db, not from database tables
-            users = []
-            for username, user_data in self.auth.users_db.items():
-                # Remove password from response for security
-                user_dict = {k: v for k, v in user_data.items() if k != 'password'}
-                # Add an ID field for consistency with frontend expectations
-                user_dict['id'] = username
-                users.append(user_dict)
+            users = await self.db.list_all_users()
+            # Add an ID field for consistency with frontend expectations
+            for u in users:
+                u['id'] = u.get('username', '')
             return users
         except Exception as e:
             raise HTTPException(
@@ -400,7 +438,7 @@ class VitalGraphAPI:
             )
     
     async def add_user(self, user_data: Dict[str, Any], current_user: Dict) -> Dict[str, Any]:
-        """Add a new user."""
+        """Add a new user with hashed password."""
         if not self.db:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -408,10 +446,28 @@ class VitalGraphAPI:
             )
         
         try:
-            created_user = await self.db.add_user(user_data)
+            from vitalgraph.auth.password import hash_password
+            username = user_data.get('username', '')
+            password = user_data.get('password', '')
+            role = user_data.get('role', 'user')
+            if not username:
+                raise ValueError("Username is required")
+            if not password:
+                raise ValueError("Password is required")
+            password_hash = hash_password(password)
+            created_user = await self.db.create_user(
+                username=username,
+                password_hash=password_hash,
+                role=role,
+                email=user_data.get('email', ''),
+                full_name=user_data.get('full_name', ''),
+            )
             if created_user:
                 logger.debug(f"Created user result: {created_user}")
-                return created_user  # Return the created user data directly
+                created_user['id'] = username
+                emit_audit_event("auth.user.created", current_user.get("username", "system"),
+                                 target=username, role=role)
+                return created_user
             else:
                 logger.error(f"Add failed - could not create user")
                 raise HTTPException(
@@ -419,12 +475,13 @@ class VitalGraphAPI:
                     detail="Failed to add user"
                 )
         except ValueError as e:
-            # Handle uniqueness constraint violations
             logger.warning(f"Validation error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)
             )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Add exception: {str(e)}")
             raise HTTPException(
@@ -441,8 +498,27 @@ class VitalGraphAPI:
             )
         
         try:
+            # Capture pre-update state for audit
+            old_user = await self.db.get_user_by_username(user_id)
+            old_role = old_user.get("role") if old_user else None
+            old_active = old_user.get("is_active") if old_user else None
+
             updated_user = await self.db.update_user(user_id, user_data)
             if updated_user:
+                actor = current_user.get("username", "system")
+                # Audit role change
+                new_role = user_data.get("role")
+                if new_role and new_role != old_role:
+                    emit_audit_event("auth.role.changed", actor, target=user_id,
+                                     level="WARN", old_role=old_role, new_role=new_role)
+                # Audit activation/deactivation
+                new_active = user_data.get("is_active")
+                if new_active is not None and new_active != old_active:
+                    if new_active:
+                        emit_audit_event("auth.user.activated", actor, target=user_id)
+                    else:
+                        emit_audit_event("auth.user.deactivated", actor, target=user_id,
+                                         level="WARN")
                 return updated_user  # Return the updated user data directly
             else:
                 raise HTTPException(
@@ -462,7 +538,7 @@ class VitalGraphAPI:
             )
     
     async def delete_user(self, user_id: str, current_user: Dict) -> Dict[str, Any]:
-        """Delete a user."""
+        """Delete a user by username."""
         if not self.db:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -470,14 +546,18 @@ class VitalGraphAPI:
             )
         
         try:
-            success = await self.db.remove_user(user_id)
-            if success:
-                return {"message": "user deleted successfully", "id": int(user_id)}
-            else:
+            user = await self.db.get_user_by_username(user_id)
+            if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="User not found or deletion failed"
+                    detail="User not found"
                 )
+            await self.db.delete_user(user['user_id'])
+            emit_audit_event("auth.user.deleted", current_user.get("username", "system"),
+                             target=user_id, level="WARN")
+            return {"message": "user deleted successfully", "id": user_id}
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -485,22 +565,18 @@ class VitalGraphAPI:
             )
     
     async def get_user_by_id(self, user_id: str, current_user: Dict) -> Dict[str, Any]:
-        """Get a specific user by ID."""
-        if not self.auth:
+        """Get a specific user by username or numeric ID."""
+        if not self.db:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Auth system not configured"
+                detail="Database not configured"
             )
         
         try:
-            # Look up user in auth system's users_db by username (which is the ID)
-            if user_id in self.auth.users_db:
-                user_data = self.auth.users_db[user_id]
-                # Remove password from response for security
-                user_dict = {k: v for k, v in user_data.items() if k != 'password'}
-                # Add an ID field for consistency with frontend expectations
-                user_dict['id'] = user_id
-                return user_dict
+            user = await self.db.get_user_by_username(user_id)
+            if user:
+                user['id'] = user.get('username', user_id)
+                return user
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,

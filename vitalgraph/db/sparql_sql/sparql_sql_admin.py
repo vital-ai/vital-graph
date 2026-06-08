@@ -80,6 +80,8 @@ class SparqlSQLAdmin(DbAdminInterface):
         # Ensure extensions + functions (idempotent — always runs)
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pg_trgm")
         await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS vector")
+        await db_impl.execute_update("CREATE EXTENSION IF NOT EXISTS postgis")
         await db_impl.execute_update(_VITALGRAPH_TERM_UUID_DDL)
 
         status = await self.check_admin_tables(db_impl)

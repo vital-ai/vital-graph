@@ -34,7 +34,7 @@ class JWTAuth:
         self.access_token_expire_minutes = 30
         self.refresh_token_expire_days = 7
     
-    def create_access_token(self, data: dict, expiry_seconds: int = None) -> str:
+    def create_access_token(self, data: dict, expiry_seconds: 'int | None' = None) -> str:
         """
         Create JWT access token with expiration.
         

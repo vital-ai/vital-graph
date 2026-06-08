@@ -10,6 +10,7 @@ import asyncpg
 from datetime import datetime, timezone
 
 from ..db_inf import DbImplInterface
+from ..user_management import UserManagementMixin
 from .postgresql_schema import FusekiPostgreSQLSchema
 from ...utils.resource_manager import track_pool
 
@@ -58,7 +59,7 @@ class FusekiPostgreSQLTransaction:
         return self.connection
 
 
-class FusekiPostgreSQLDbImpl(DbImplInterface):
+class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
     """
     PostgreSQL database implementation for FUSEKI_POSTGRESQL hybrid backend.
     Direct PostgreSQL connections without SQLAlchemy for optimal performance.

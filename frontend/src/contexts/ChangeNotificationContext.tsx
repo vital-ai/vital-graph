@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useWebSocket } from './WebSocketContext';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 
 // Define types for change notifications
 export interface ChangeMessage {
@@ -36,8 +36,8 @@ interface ChangeNotificationContextType {
   setEditingState: (isEditing: boolean) => void;
   refreshCurrentData: () => Promise<void>;
   dismissOutOfDate: () => void;
-  onDataRefresh?: (data: any) => void;
-  setOnDataRefresh: (callback: (data: any) => void) => void;
+  onDataRefresh?: (data: unknown) => void;
+  setOnDataRefresh: (callback: (data: unknown) => void) => void;
 }
 
 const ChangeNotificationContext = createContext<ChangeNotificationContextType>({
@@ -61,7 +61,7 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
   const { lastMessage } = useWebSocket();
   const [currentPage, setCurrentPageState] = useState<CurrentPageInfo>({ page: '/' });
   const [outOfDateState, setOutOfDateState] = useState<OutOfDateState>({ isOutOfDate: false });
-  const [onDataRefresh, setOnDataRefresh] = useState<((data: any) => void) | undefined>();
+  const [onDataRefresh, setOnDataRefresh] = useState<((data: unknown) => void) | undefined>();
 
   // Update current page based on route changes
   useEffect(() => {
@@ -103,8 +103,6 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
   useEffect(() => {
     if (lastMessage && lastMessage.type === 'change') {
       const changeMsg = lastMessage as ChangeMessage;
-      console.log('Received change notification:', changeMsg);
-      
       handleChangeNotification(changeMsg);
     }
   }, [lastMessage]);
@@ -113,8 +111,6 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
     const shouldRefresh = isChangeRelevant(changeMsg, currentPage);
     
     if (shouldRefresh) {
-      console.log('Change is relevant to current page, processing...');
-      
       if (currentPage.isEditing) {
         // If currently editing, mark as out of date instead of auto-refreshing
         setOutOfDateState({
@@ -124,14 +120,12 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
             id: changeMsg.userId || changeMsg.spaceId || ''
           } : undefined
         });
-        console.log('Currently editing - marked as out of date');
       } else {
         // Auto-refresh data if not editing
         try {
           await refreshCurrentData();
-          console.log('Data refreshed successfully');
-        } catch (error) {
-          console.error('Failed to refresh data:', error);
+        } catch {
+          // Refresh failed silently
         }
       }
     }
@@ -172,21 +166,16 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
       return;
     }
 
-    try {
-      let response;
-      
-      if (currentPage.entityType === 'space') {
-        response = await axios.get(`/api/spaces/${currentPage.entityId}`);
-      } else if (currentPage.entityType === 'user') {
-        response = await axios.get(`/api/users/${currentPage.entityId}`);
-      }
-      
-      if (response && onDataRefresh) {
-        onDataRefresh(response.data);
-      }
-    } catch (error) {
-      console.error('Failed to refresh current data:', error);
-      throw error;
+    let data;
+    
+    if (currentPage.entityType === 'space') {
+      data = await apiService.getSpaceInfo(currentPage.entityId);
+    } else if (currentPage.entityType === 'user') {
+      data = await apiService.getUser(currentPage.entityId);
+    }
+    
+    if (data && onDataRefresh) {
+      onDataRefresh(data);
     }
   };
 
@@ -212,7 +201,7 @@ export const ChangeNotificationProvider: React.FC<ChangeNotificationProviderProp
     setOutOfDateState({ isOutOfDate: false });
   };
 
-  const setOnDataRefreshCallback = (callback: (data: any) => void) => {
+  const setOnDataRefreshCallback = (callback: (data: unknown) => void) => {
     setOnDataRefresh(() => callback);
   };
 

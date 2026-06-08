@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 
@@ -99,12 +99,37 @@ class UserData:
     user_id: Optional[int] = None
     username: str = ""
     password: Optional[str] = None
+    password_hash: Optional[str] = None
     email: Optional[str] = None
+    full_name: Optional[str] = None
+    role: str = "user"
+    is_active: bool = True
+    token_version: int = 0
     tenant: Optional[str] = None
+    created_time: Optional[datetime] = None
+    last_login: Optional[datetime] = None
     update_time: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Never expose password fields in serialization
+        d.pop("password", None)
+        d.pop("password_hash", None)
+        return d
+
+    def to_safe_dict(self) -> Dict[str, Any]:
+        """Return user data safe for API responses (no secrets)."""
+        return {
+            "user_id": self.user_id,
+            "username": self.username,
+            "email": self.email,
+            "full_name": self.full_name,
+            "role": self.role,
+            "is_active": self.is_active,
+            "tenant": self.tenant,
+            "created_time": self.created_time,
+            "last_login": self.last_login,
+        }
 
     @staticmethod
     def from_row(row: Dict[str, Any]) -> "UserData":
@@ -112,9 +137,43 @@ class UserData:
             user_id=row.get("user_id"),
             username=row.get("username", ""),
             password=row.get("password"),
+            password_hash=row.get("password_hash"),
             email=row.get("email"),
+            full_name=row.get("full_name"),
+            role=row.get("role", "user"),
+            is_active=row.get("is_active", True),
+            token_version=row.get("token_version", 0),
             tenant=row.get("tenant"),
+            created_time=row.get("created_time"),
+            last_login=row.get("last_login"),
             update_time=row.get("update_time"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# User Space Access
+# ---------------------------------------------------------------------------
+
+@dataclass
+class UserSpaceAccess:
+    """Row in the ``user_space_access`` table."""
+    user_id: int = 0
+    space_id: str = ""
+    access_level: str = "r"  # 'rw' or 'r'
+    granted_by: Optional[str] = None
+    granted_time: Optional[datetime] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @staticmethod
+    def from_row(row: Dict[str, Any]) -> "UserSpaceAccess":
+        return UserSpaceAccess(
+            user_id=row.get("user_id", 0),
+            space_id=row.get("space_id", ""),
+            access_level=row.get("access_level", "r"),
+            granted_by=row.get("granted_by"),
+            granted_time=row.get("granted_time"),
         )
 
 

@@ -19,6 +19,7 @@ CHANNEL_ENTITY_DEDUP = "vitalgraph_entity_dedup"
 CHANNEL_PROCESS = "vitalgraph_process"
 CHANNEL_CACHE_INVALIDATE = "vitalgraph_cache_invalidate"
 CHANNEL_ENTITY_GRAPH = "vitalgraph_entity_graph"
+CHANNEL_TOKEN_VERSION = "vitalgraph_token_version"
 
 # Signal types
 SIGNAL_TYPE_CREATED = "created"
@@ -61,6 +62,7 @@ class SignalManager:
             CHANNEL_PROCESS: [],
             CHANNEL_CACHE_INVALIDATE: [],
             CHANNEL_ENTITY_GRAPH: [],
+            CHANNEL_TOKEN_VERSION: [],
         }
         
         # Set of channels we're currently listening to
@@ -469,6 +471,22 @@ class SignalManager:
             "timestamp": str(asyncio.get_event_loop().time()),
         })
         await self._send_notification(CHANNEL_ENTITY_GRAPH, payload)
+
+    async def notify_token_version_changed(self, username: str, signal_type: str = "revoked"):
+        """
+        Send notification that a user's token version has changed.
+        All listening instances will invalidate their local token version cache.
+        
+        Args:
+            username: Username whose token version was bumped
+            signal_type: Type of change (revoked, password_changed, deactivated, role_changed)
+        """
+        payload = json.dumps({
+            "username": username,
+            "type": signal_type,
+            "timestamp": str(asyncio.get_event_loop().time()),
+        })
+        await self._send_notification(CHANNEL_TOKEN_VERSION, payload)
 
     async def notify_cache_invalidate(self, cache_type: str, space_id: str):
         """

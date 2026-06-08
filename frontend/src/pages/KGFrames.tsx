@@ -1,25 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 import {
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeadCell,
-  TableRow,
-  Alert,
-  TextInput,
-  Select,
-  Label,
-  Pagination,
-  Badge,
-  Spinner,
-  Modal
+  Alert, Badge, Button, Pagination, Select, Spinner, TextInput
 } from 'flowbite-react';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
-import { HiSearch } from 'react-icons/hi';
+import { HiSearch, HiViewBoards, HiSortAscending, HiSortDescending } from 'react-icons/hi';
+import CopyButton from '../components/CopyButton';
+import {
+  parseEntitiesFromQuads,
+  shortenUri,
+  type Quad,
+} from '../utils/QuadUtils';
+import ConfirmDialog from '../components/ConfirmDialog';
+
+const FRAME_SORT_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Name', value: 'name' },
+  { label: 'URI', value: 'uri' },
+  { label: 'Created', value: 'created_date' },
+  { label: 'Type', value: 'frame_type' },
+];
+
 interface KGFrame {
   uri: string;
   rdf_type: string;
@@ -29,8 +30,7 @@ interface KGFrame {
 
 const KGFrames: React.FC = () => {
   const navigate = useNavigate();
-  
-  // Get shared state from parent ObjectsLayout
+
   const context = useOutletContext<{
     selectedSpace: string;
     selectedGraph: string;
@@ -39,321 +39,248 @@ const KGFrames: React.FC = () => {
     error: string | null;
   }>();
 
-  // Handle case where context might be undefined initially
-  const {
-    selectedSpace = '',
-    selectedGraph = '',
-    spacesLoading = true,
-  } = context || {};
+  const { selectedSpace = '', selectedGraph = '', spacesLoading = true } = context || {};
 
-  // Local state management
   const [frames, setFrames] = useState<KGFrame[]>([]);
-  const [filteredFrames, setFilteredFrames] = useState<KGFrame[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
-  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
-  const [frameToDelete, setFrameToDelete] = useState<KGFrame | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [deletingFrame, setDeletingFrame] = useState<KGFrame | null>(null);
+  const [sortBy, setSortBy] = useState<string>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Space and graph selection is now handled by parent ObjectsLayout
+  // Debounce search
+  useEffect(() => {
+    const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setCurrentPage(1); }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
-  const [totalCount, setTotalCount] = useState<number>(0);
-
-  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
-  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
-
-  // Fetch KG frames for selected space and graph
   const fetchFrames = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
-    
     try {
       setLoading(true);
       setError(null);
-      
-      const response = await axios.get('/api/graphs/kgframes', {
-        params: {
-          space_id: selectedSpace,
-          graph_id: selectedGraph,
-          page_size: itemsPerPage,
-          offset: (currentPage - 1) * itemsPerPage
-        }
+      const data = await apiService.getFrames(selectedSpace, selectedGraph, {
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        search: debouncedSearch || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortBy ? sortOrder : undefined,
       });
-      
-      const data = response.data;
-      // API returns QuadResponse: { results: [{s,p,o,g}], total_count, page_size, offset }
-      const quads: Array<{s: string; p: string; o: string; g?: string}> = data.results || [];
-      
-      // Group quads by subject
-      const subjectMap = new Map<string, Map<string, string[]>>();
-      for (const quad of quads) {
-        const subj = stripBrackets(quad.s);
-        if (!subjectMap.has(subj)) subjectMap.set(subj, new Map());
-        const preds = subjectMap.get(subj)!;
-        const pred = stripBrackets(quad.p);
-        if (!preds.has(pred)) preds.set(pred, []);
-        preds.get(pred)!.push(quad.o);
-      }
-      
-      const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
-      const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
-      
-      const frames: KGFrame[] = [];
-      for (const [uri, preds] of subjectMap) {
-        const typeVals = preds.get(RDF_TYPE) || [];
-        const rdfType = typeVals.length > 0 ? stripBrackets(typeVals[0]) : 'Unknown';
-        const nameVals = preds.get(HAS_NAME) || [];
-        const name = nameVals.length > 0 ? stripLiteral(nameVals[0]) : uri.split(/[/#]/).pop() || uri;
-        
-        frames.push({
-          uri,
-          rdf_type: rdfType,
-          name,
-          properties_count: preds.size,
-        });
-      }
-      
-      setFrames(frames);
-      setTotalCount(data.total_count ?? frames.length);
-    } catch (err) {
-      console.error('Error fetching KG frames:', err);
-      setError('Failed to load KG frames. Please try again later.');
+      const quads: Quad[] = data.results || [];
+      const grouped = parseEntitiesFromQuads(quads);
+      const parsed: KGFrame[] = grouped.map(e => ({
+        uri: e.uri,
+        rdf_type: e.rdf_type,
+        name: e.name,
+        properties_count: e.properties_count,
+      }));
+
+      setFrames(parsed);
+      setTotalCount(data.total_count ?? parsed.length);
+    } catch {
+      setError('Failed to load KG frames.');
       setFrames([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, sortBy, sortOrder]);
 
-  // Set frames directly since filtering is done server-side
-  useEffect(() => {
-    setFilteredFrames(frames);
-  }, [frames]);
+  useEffect(() => { fetchFrames(); }, [fetchFrames]);
 
-  useEffect(() => {
-    fetchFrames();
-    // Reset pagination when component mounts or tab becomes active
-    setCurrentPage(1);
-  }, [fetchFrames]);
-  const currentFrames = filteredFrames;
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  const hasSelection = selectedSpace && selectedGraph;
+
+  const handleDelete = async (frame: KGFrame) => {
+    try {
+      await apiService.deleteFrame(selectedSpace, selectedGraph, frame.uri);
+      setDeletingFrame(null);
+      await fetchFrames();
+    } catch {
+      setError('Failed to delete frame.');
+      setDeletingFrame(null);
+    }
+  };
+
+  const toggleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder('asc');
+    }
+    setCurrentPage(1);
+  };
+
+  const SortIcon: React.FC<{ field: string }> = ({ field }) => {
+    if (sortBy !== field) return <HiSortAscending className="w-3.5 h-3.5 text-gray-300" />;
+    return sortOrder === 'asc'
+      ? <HiSortAscending className="w-3.5 h-3.5 text-blue-500" />
+      : <HiSortDescending className="w-3.5 h-3.5 text-blue-500" />;
+  };
 
   return (
-    <>
-
-      {/* Add Frame Button */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <Button 
-            onClick={() => {
-              navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/new?mode=create`);
-            }} 
-            color="blue"
-          >
-            <HiPlus className="mr-2 h-4 w-4" />
-            Add KG Frame
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
+            {hasSelection && !loading && `${totalCount.toLocaleString()} frame${totalCount !== 1 ? 's' : ''}`}
+          </p>
+        </div>
+        {hasSelection && (
+          <Button size="sm" color="blue" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/new?mode=create`)}>
+            <HiPlus className="mr-1.5 h-4 w-4" />Add Frame
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Search and Filter */}
-      {selectedSpace && selectedGraph && (
-        <div className="mb-6">
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-            <div className="flex-1">
-              <div className="relative">
-                <HiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <TextInput
-                  type="text"
-                  placeholder="Search KG frames by name, description, or URI..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <div className="flex-shrink-0">
-              <Label htmlFor="page-size">Items per page</Label>
-              <Select
-                id="page-size"
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(parseInt(e.target.value));
-                  setCurrentPage(1);
-                }}
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </Select>
-            </div>
+      {/* Search + filters */}
+      {hasSelection && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1">
+            <TextInput icon={HiSearch} placeholder="Search frames..." value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)} />
+          </div>
+          <div className="w-36 flex-shrink-0">
+            <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+              <option value="">Sort by...</option>
+              {FRAME_SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </Select>
+          </div>
+          <div className="w-32 flex-shrink-0">
+            <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
+              <option value={10}>10 / page</option>
+              <option value={25}>25 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </Select>
           </div>
         </div>
       )}
 
-      {/* Selection Required Messages */}
+      {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+
       {!selectedSpace && !spacesLoading && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a space to view KG frames</p>
-            <p className="text-sm">Choose a space from the dropdown above to see available graphs.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiViewBoards className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a space</p>
+          <p className="text-sm mt-1">Choose a space from the dropdown above</p>
         </div>
       )}
-      
       {selectedSpace && !selectedGraph && (
-        <div className="text-center py-12">
-          <div className="text-gray-500 dark:text-gray-400">
-            <p className="text-lg mb-2">Select a graph to view KG frames</p>
-            <p className="text-sm">Choose a graph from the dropdown above to see its frames.</p>
-          </div>
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiViewBoards className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <p className="text-lg font-medium">Select a graph</p>
+          <p className="text-sm mt-1">Choose a graph to browse its frames</p>
         </div>
       )}
 
-      {/* Loading Spinner */}
-      {selectedSpace && selectedGraph && loading && (
-        <div className="mt-8 flex justify-center">
-          <Spinner size="lg" />
-          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading KG frames...</span>
+      {hasSelection && loading && (
+        <div className="flex justify-center py-12"><Spinner size="xl" /></div>
+      )}
+
+      {hasSelection && !loading && frames.length === 0 && !error && (
+        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
+          <HiViewBoards className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          {debouncedSearch ? (
+            <>
+              <p className="text-lg font-medium">No results for &quot;{debouncedSearch}&quot;</p>
+              <p className="text-sm mt-1">Try a different search term</p>
+            </>
+          ) : (
+            <>
+              <p className="text-lg font-medium">No frames yet</p>
+              <p className="text-sm mt-1">Add your first KG frame to get started</p>
+            </>
+          )}
         </div>
       )}
 
-      {error && (
-        <Alert color="failure">
-          {error}
-        </Alert>
-      )}
-
-      {/* Frames Table */}
-      {selectedSpace && selectedGraph && !loading && filteredFrames.length === 0 && !error ? (
-        <Alert color="info">
-          {searchTerm ? 
-            `No KG frames found matching "${searchTerm}". Try a different search term.` :
-            'No KG frames found in this graph. Add your first frame to get started.'
-          }
-        </Alert>
-      ) : selectedSpace && selectedGraph && !loading && currentFrames.length > 0 && (
+      {/* Frames table */}
+      {hasSelection && !loading && frames.length > 0 && (
         <>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHead>
-                <TableRow>
-                  <TableHeadCell>Frame URI</TableHeadCell>
-                  <TableHeadCell>RDF Type</TableHeadCell>
-                  <TableHeadCell>Frame Type</TableHeadCell>
-                  <TableHeadCell>Properties</TableHeadCell>
-                  <TableHeadCell>Actions</TableHeadCell>
-                </TableRow>
-              </TableHead>
-              <TableBody className="divide-y">
-                {currentFrames.map((frame) => (
-                  <TableRow key={frame.uri}>
-                    <TableCell className="font-medium">
+          <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th className="px-4 py-3">
+                    <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                      Frame <SortIcon field="name" />
+                    </button>
+                  </th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3 w-28">Properties</th>
+                  <th className="px-4 py-3 w-24"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {frames.map((frame) => (
+                  <tr key={frame.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                    <td className="px-4 py-2.5">
                       <div className="max-w-xs">
-                        <div className="font-mono text-sm text-blue-600 truncate" title={frame.uri}>
-                          {frame.name}
-                        </div>
-                        <div className="text-xs text-gray-500 truncate">
-                          {frame.uri}
-                        </div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{frame.name}</p>
+                        <p className="text-xs font-mono text-gray-400 truncate inline-flex items-center gap-0.5" title={frame.uri}><span className="truncate">{frame.uri}</span><CopyButton text={frame.uri} /></p>
                       </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-sm truncate max-w-xs" title={frame.rdf_type}>
-                      {frame.rdf_type.split(/[/#]/).pop()}
-                    </TableCell>
-                    <TableCell>
-                      <Badge color="purple">KG Frame</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-gray-600 dark:text-gray-400">
-                        {frame.properties_count} properties
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          size="xs"
-                          color="blue"
-                          onClick={() => {
-                            navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/${encodeURIComponent(frame.uri)}`);
-                          }}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <Badge color="purple" size="xs">{shortenUri(frame.rdf_type)}</Badge>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                      {frame.properties_count}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/frame/${encodeURIComponent(frame.uri)}`)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-500 transition-colors" title="View"
                         >
-                          <HiEye className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="xs"
-                          color="red"
-                          onClick={() => {
-                            setFrameToDelete(frame);
-                            setShowDeleteModal(true);
-                          }}
+                          <HiEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeletingFrame(frame)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-red-500 transition-colors" title="Delete"
                         >
-                          <HiTrash className="h-3 w-3" />
-                        </Button>
+                          <HiTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
+              </tbody>
+            </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex justify-center mt-6">
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
-                showIcons
-              />
+            <div className="flex justify-center">
+              <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} showIcons />
             </div>
           )}
         </>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <Modal show={showDeleteModal} onClose={() => setShowDeleteModal(false)} size="md">
-        <div className="p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Delete Frame</h3>
-          <p className="text-gray-600 dark:text-gray-400 mb-6">
-            Are you sure you want to delete this KG frame? This action cannot be undone.
-          </p>
-          {frameToDelete && (
-            <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded mb-6">
-              <p className="text-sm font-mono text-gray-800 dark:text-gray-200">
-                {frameToDelete.name}
-              </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {frameToDelete.uri}
-              </p>
-            </div>
-          )}
-          <div className="flex justify-end gap-3">
-            <Button 
-              onClick={() => {
-                console.log('Deleting frame:', frameToDelete?.uri);
-                setShowDeleteModal(false);
-                setFrameToDelete(null);
-              }} 
-              color="failure"
-            >
-              Delete
-            </Button>
-            <Button 
-              color="gray" 
-              onClick={() => {
-                setShowDeleteModal(false);
-                setFrameToDelete(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
+      {/* Delete Modal */}
+      <ConfirmDialog
+        open={!!deletingFrame}
+        onConfirm={() => deletingFrame && handleDelete(deletingFrame)}
+        onCancel={() => setDeletingFrame(null)}
+        title="Delete Frame"
+        confirmLabel="Delete"
+        variant="danger"
+        detail={
+          deletingFrame && (
+            <>
+              <p className="font-medium text-gray-800 dark:text-gray-200">{deletingFrame.name}</p>
+              <p className="text-gray-400">{deletingFrame.uri}</p>
+            </>
+          )
+        }
+      />
+    </div>
   );
 };
 

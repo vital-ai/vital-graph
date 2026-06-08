@@ -22,6 +22,12 @@ from ..jena_sparql.jena_types import (
 
 from .emit_context import EmitContext
 from .collect import _esc
+from .vg_functions import (
+    VG_ALL_FUNCTIONS as _VG_ALL_FUNCTIONS,
+    VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+    VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
+    vector_similarity_sql, geo_distance_sql, within_radius_sql,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +151,11 @@ def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
             sql_type = _XSD_CAST_MAP[expr.function_iri]
             if sql_type not in ("TEXT", "BOOLEAN"):
                 return True
+        # vg: vector/geo functions that return numeric values
+        if expr.function_iri and expr.function_iri in (
+            VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY, VG_GEO_DISTANCE,
+        ):
+            return True
         # Recurse: COALESCE/IF is numeric if any argument is numeric
         if fname in ("coalesce", "if") and expr.args:
             return any(_is_numeric_expr(a, ctx) for a in expr.args)
@@ -300,6 +311,10 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
                 # Other types: plain cast
                 return f"CAST({text_col} AS {sql_type})"
         return None
+
+    # --- VitalGraph custom functions (vg:vectorSimilarity, vg:geoDistance, etc.) ---
+    if expr.function_iri and expr.function_iri in _VG_ALL_FUNCTIONS:
+        return _vg_function_to_sql(expr, ctx)
 
     # --- Comparison operators ---
     # Use numeric columns when either side is numeric to avoid text=integer errors
@@ -1027,3 +1042,32 @@ def _numeric_arg(expr, ctx: EmitContext) -> Optional[str]:
             return "NULL::numeric"
 
     return sql
+
+
+# ---------------------------------------------------------------------------
+# VitalGraph custom function dispatcher
+# ---------------------------------------------------------------------------
+
+def _vg_function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
+    """Convert a vg: custom function to SQL.
+
+    Delegates to the appropriate SQL generation function in vg_functions.py.
+    For vector functions that need server-side vectorization, records a
+    VectorRequest on ctx so the orchestrator can inject the embedding.
+    """
+    iri = expr.function_iri
+
+    if iri in (VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY):
+        sql, vec_request = vector_similarity_sql(expr, ctx)
+        if vec_request is not None:
+            ctx.add_vector_request(vec_request)
+        return sql
+
+    if iri == VG_GEO_DISTANCE:
+        return geo_distance_sql(expr, ctx)
+
+    if iri == VG_WITHIN_RADIUS:
+        return within_radius_sql(expr, ctx)
+
+    logger.warning("Unhandled vg: function IRI: %s", iri)
+    return None

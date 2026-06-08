@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import axios from 'axios';
+import { apiService } from '../services/ApiService';
 import { Badge } from 'flowbite-react';
+import {
+  stripBrackets,
+  parseObjectTerm,
+  shortenUri,
+  RDF_TYPE,
+  type Quad,
+} from '../utils/QuadUtils';
+import { formatDateTime } from '../utils/formatUtils';
 
 // Base RDF Object interface
 export interface BaseRDFObject {
@@ -65,20 +73,8 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   });
 
   // Utility functions
-  const extractLocalName = (uri: string): string => {
-    if (!uri) return '';
-    const parts = uri.split(/[#/]/);
-    return parts[parts.length - 1] || uri;
-  };
+  const extractLocalName = shortenUri;
 
-  const formatDateTime = (dateString: string): string => {
-    if (!dateString) return 'N/A';
-    try {
-      return new Date(dateString).toLocaleString();
-    } catch {
-      return 'Invalid Date';
-    }
-  };
 
   const getObjectTypeBadge = (type: string) => {
     const badgeConfig = type === 'Node' 
@@ -105,16 +101,15 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     try {
       setLoading(true);
       
-      const response = await axios.get(config.apiEndpoint, {
-        params: {
-          space_id: spaceId,
-          graph_id: decodeURIComponent(graphId),
-          uri: decodeURIComponent(objectId)
-        }
-      });
+      const params = new URLSearchParams();
+      params.set('space_id', spaceId);
+      params.set('graph_id', decodeURIComponent(graphId));
+      params.set('uri', decodeURIComponent(objectId));
+      const response = await apiService.get(`${config.apiEndpoint}?${params.toString()}`);
+      const responseData = await response.json();
 
       // All endpoints return QuadResponse: { results: [{s,p,o,g}], total_count }
-      const quads: Array<{s: string; p: string; o: string; g?: string}> = response.data.results || [];
+      const quads: Quad[] = responseData.results || [];
       if (quads.length === 0) {
         setError(`${config.objectTypeName} not found`);
       } else {
@@ -122,42 +117,27 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
         setObject(convertedObject);
       }
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        setError(err.response?.data?.detail || `Failed to load ${config.objectTypeName.toLowerCase()}`);
-      } else {
-        setError(`Failed to load ${config.objectTypeName.toLowerCase()}`);
-      }
+      setError(err instanceof Error ? err.message : `Failed to load ${config.objectTypeName.toLowerCase()}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const stripBrackets = (v: string): string => v.replace(/^<|>$/g, '');
-  const stripLiteral = (v: string): string => v.replace(/^"/, '').replace(/"(@[a-z-]+|\^\^<[^>]+>)?$/, '');
-  const isUriValue = (v: string): boolean => v.startsWith('<') && v.endsWith('>');
-
-  const convertQuadsToObject = (quads: Array<{s: string; p: string; o: string; g?: string}>): T => {
-    const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+  const convertQuadsToObject = (quads: Quad[]): T => {
     const subjectUri = stripBrackets(quads[0].s);
 
-    // Collect all predicate-object pairs
     const properties: Array<{predicate: string; object: string; object_type: 'uri' | 'literal'}> = [];
     let rdfType = 'Unknown';
 
     for (const quad of quads) {
+      const { value, type } = parseObjectTerm(quad.o);
       const pred = stripBrackets(quad.p);
-      const objIsUri = isUriValue(quad.o);
-      const objValue = objIsUri ? stripBrackets(quad.o) : stripLiteral(quad.o);
 
       if (pred === RDF_TYPE) {
-        rdfType = objValue;
+        rdfType = value;
       }
 
-      properties.push({
-        predicate: pred,
-        object: objValue,
-        object_type: objIsUri ? 'uri' : 'literal',
-      });
+      properties.push({ predicate: pred, object: value, object_type: type });
     }
 
     const convertedObject: BaseRDFObject = {
@@ -242,26 +222,24 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
       if (isCreateMode) {
         if (isKGTypesAPI) {
           // KG Types API format for create
-          await axios.post(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
+          await apiService.post(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
         } else {
           // Graph Objects API format for create
-          await axios.post(config.apiEndpoint, requestData, {
-            params: { space_id: spaceId, graph_id: decodeURIComponent(graphId || '') }
-          });
+          const params = new URLSearchParams({ space_id: spaceId!, graph_id: decodeURIComponent(graphId || '') });
+          await apiService.post(`${config.apiEndpoint}?${params.toString()}`, requestData);
         }
       } else {
         if (isKGTypesAPI) {
           // KG Types API format for update
-          await axios.put(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
+          await apiService.put(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
         } else {
           // Graph Objects API format for update
-          await axios.put(config.apiEndpoint, requestData, {
-            params: {
-              space_id: spaceId,
-              graph_id: decodeURIComponent(graphId || ''),
-              uri: decodeURIComponent(objectId!)
-            }
+          const params = new URLSearchParams({
+            space_id: spaceId!,
+            graph_id: decodeURIComponent(graphId || ''),
+            uri: decodeURIComponent(objectId!)
           });
+          await apiService.put(`${config.apiEndpoint}?${params.toString()}`, requestData);
         }
       }
 
@@ -273,13 +251,28 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
         setSearchParams({ mode: 'view' });
       }
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        setError(err.response?.data?.detail || `Failed to save ${config.objectTypeName.toLowerCase()}`);
-      } else {
-        setError(`Failed to save ${config.objectTypeName.toLowerCase()}`);
-      }
+      setError(err instanceof Error ? err.message : `Failed to save ${config.objectTypeName.toLowerCase()}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!spaceId || !graphId || !objectId) return;
+    try {
+      const params = new URLSearchParams({
+        space_id: spaceId,
+        graph_id: decodeURIComponent(graphId),
+        uri: decodeURIComponent(objectId)
+      });
+      const response = await apiService.delete(`${config.apiEndpoint}?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Delete failed: ${response.status} ${response.statusText}`);
+      }
+      navigate(-1);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : `Failed to delete ${config.objectTypeName.toLowerCase()}`);
+      setShowDeleteObjectModal(false);
     }
   };
 
@@ -328,6 +321,7 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     removeProperty,
     handleAddProperty,
     handleSave,
+    handleDelete,
     getPageTitle,
     getObjectDisplayName,
     fetchObject

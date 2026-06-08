@@ -38,17 +38,33 @@ frontend/.vscode
 
 # Build artifacts
 build/
-dist/
 *.egg-info/
+vitalgraph/api/frontend/dist/
+frontend/dist/
 
 # Documentation
 docs/
 notes/
+planning/
+planning_*/
+deploy_docs/
 
 # Test files
 test/
 tests/
 test_scripts/
+test_scripts_misc/
+test_sparql/
+test_sparql_sql_endpoints/
+test_vs/
+test_client_api/
+test_script_kg_impl/
+vitalgraph_client_test/
+vitalgraph_mock_client_test/
+vitalgraph_service_tests/
+vitalgraph_sparql_sql/
+vitalsigns_test_scripts/
+debug_scripts/
 *_test.py
 *_tests.py
 

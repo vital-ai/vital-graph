@@ -5,235 +5,105 @@ Client-side implementation for Data Import operations.
 """
 
 import httpx
-from typing import Dict, Any, Optional, Union, BinaryIO, List
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
-from ..binary.streaming import BinaryGenerator
 from ...model.import_model import (
-    ImportJob, ImportJobsResponse, ImportJobResponse, ImportCreateResponse, ImportUpdateResponse, 
-    ImportDeleteResponse, ImportExecuteResponse, ImportStatusResponse, ImportLogResponse, ImportUploadResponse
+    ImportJobCreate, ImportJob, ImportJobsResponse, ImportJobResponse,
+    ImportCreateResponse, ImportDeleteResponse, ImportExecuteResponse,
+    ImportStatusResponse, ImportLogResponse, ImportUploadResponse,
 )
 
 
 class ImportEndpoint(BaseEndpoint):
     """Client endpoint for Data Import operations."""
-    
-    async def create_import_job(self, import_job: ImportJob) -> ImportCreateResponse:
-        """
-        Create new data import job.
-        
+
+    async def create_import_job(self, request: ImportJobCreate) -> ImportCreateResponse:
+        """Create a new import job.
+
         Args:
-            import_job: ImportJob object with job details
-            
+            request: ImportJobCreate with space_id, graph_uri, mode, etc.
+
         Returns:
-            ImportCreateResponse containing creation result
-            
-        Raises:
-            VitalGraphClientError: If request fails
+            ImportCreateResponse with the created job.
         """
         self._check_connection()
-        validate_required_params(import_job=import_job)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import"
-        
-        return await self._make_typed_request('POST', url, ImportCreateResponse, json=import_job.model_dump())
-    
-    async def list_import_jobs(self, space_id: Optional[str] = None, graph_id: Optional[str] = None,
-                        page_size: int = 100, offset: int = 0) -> ImportJobsResponse:
-        """
-        List all import jobs with optional filtering.
-        
-        Args:
-            space_id: Optional space ID filter
-            graph_id: Optional graph ID filter
-            page_size: Number of jobs per page (default: 100, max: 1000)
-            offset: Offset for pagination (default: 0)
-            
-        Returns:
-            ImportJobsResponse containing import jobs list and pagination info
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import"
+        return await self._make_typed_request('POST', url, ImportCreateResponse, json=request.model_dump())
+
+    async def list_import_jobs(
+        self,
+        space_id: Optional[str] = None,
+        status: Optional[str] = None,
+        page_size: int = 50,
+        offset: int = 0,
+    ) -> ImportJobsResponse:
+        """List import jobs with optional filtering."""
         self._check_connection()
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import"
-        params = build_query_params(
-            space_id=space_id,
-            graph_id=graph_id,
-            page_size=page_size,
-            offset=offset
-        )
-        
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import"
+        params = build_query_params(space_id=space_id, status=status, page_size=page_size, offset=offset)
         return await self._make_typed_request('GET', url, ImportJobsResponse, params=params)
-    
-    async def get_import_job(self, import_id: str) -> ImportJobResponse:
-        """
-        Get import job details by ID.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportJobResponse containing import job details
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
+
+    async def get_import_job(self, job_id: str) -> ImportJobResponse:
+        """Get import job details by ID."""
         self._check_connection()
-        validate_required_params(import_id=import_id)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
-        
+        validate_required_params(job_id=job_id)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}"
         return await self._make_typed_request('GET', url, ImportJobResponse)
-    
-    async def update_import_job(self, import_id: str, import_job: ImportJob) -> ImportUpdateResponse:
-        """
-        Update import job.
-        
-        Args:
-            import_id: Import job ID
-            import_job: ImportJob object with updated job details
-            
-        Returns:
-            ImportUpdateResponse containing update result
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
+
+    async def delete_import_job(self, job_id: str) -> ImportDeleteResponse:
+        """Cancel (if running) and delete import job."""
         self._check_connection()
-        validate_required_params(import_id=import_id, import_job=import_job)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
-        
-        return await self._make_typed_request('PUT', url, ImportUpdateResponse, json=import_job.model_dump())
-    
-    async def delete_import_job(self, import_id: str) -> ImportDeleteResponse:
-        """
-        Delete import job.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportDeleteResponse containing deletion result
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
-        self._check_connection()
-        validate_required_params(import_id=import_id)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}"
-        
+        validate_required_params(job_id=job_id)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}"
         return await self._make_typed_request('DELETE', url, ImportDeleteResponse)
-    
-    async def execute_import_job(self, import_id: str) -> ImportExecuteResponse:
-        """
-        Execute import job.
-        
+
+    async def upload_import_file(self, job_id: str, file_path: str) -> ImportUploadResponse:
+        """Upload a file for an import job.
+
         Args:
-            import_id: Import job ID
-            
+            job_id: Import job UUID.
+            file_path: Local path to file.
+
         Returns:
-            ImportExecuteResponse containing execution result
-            
-        Raises:
-            VitalGraphClientError: If request fails
+            ImportUploadResponse with staged file info.
         """
         self._check_connection()
-        validate_required_params(import_id=import_id)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/execute"
-        
-        return await self._make_typed_request('POST', url, ImportExecuteResponse)
-    
-    async def get_import_status(self, import_id: str) -> ImportStatusResponse:
-        """
-        Get import execution status.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportStatusResponse containing import status and progress
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
-        self._check_connection()
-        validate_required_params(import_id=import_id)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/status"
-        
-        return await self._make_typed_request('GET', url, ImportStatusResponse)
-    
-    async def get_import_log(self, import_id: str) -> ImportLogResponse:
-        """
-        Get import execution log.
-        
-        Args:
-            import_id: Import job ID
-            
-        Returns:
-            ImportLogResponse containing import log entries
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
-        self._check_connection()
-        validate_required_params(import_id=import_id)
-        
-        url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/log"
-        
-        return await self._make_typed_request('GET', url, ImportLogResponse)
-    
-    async def upload_import_file(self, import_id: str, file_path: str) -> ImportUploadResponse:
-        """
-        Upload file to import job.
-        
-        Args:
-            import_id: Import job ID
-            file_path: Path to file to upload
-            
-        Returns:
-            ImportUploadResponse containing upload result
-            
-        Raises:
-            VitalGraphClientError: If request fails
-        """
-        self._check_connection()
-        validate_required_params(import_id=import_id, file_path=file_path)
-        
+        validate_required_params(job_id=job_id, file_path=file_path)
+
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise VitalGraphClientError(f"File not found: {file_path}")
+
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/import/{import_id}/upload"
-            
-            # Read file and prepare for upload
-            file_path_obj = Path(file_path)
-            if not file_path_obj.exists():
-                raise VitalGraphClientError(f"File not found: {file_path}")
-            
+            url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/upload"
             with open(file_path_obj, 'rb') as f:
                 files = {'file': (file_path_obj.name, f, 'application/octet-stream')}
-                # Use authenticated request with token refresh
                 response = await self._make_authenticated_request('POST', url, files=files)
                 response.raise_for_status()
                 return ImportUploadResponse.model_validate(response.json())
-                
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Failed to upload import file: {e}")
-    
-    async def upload_from_generator(self, import_id: str, generator: BinaryGenerator) -> Dict[str, Any]:
-        """
-        Upload file to import job from a BinaryGenerator.
-        
-        Args:
-            import_id: Import job ID
-            generator: BinaryGenerator instance
-            
-        Returns:
-            Dictionary containing upload result
-        """
-        return await self.upload_import_file(import_id, generator)
+
+    async def execute_import_job(self, job_id: str) -> ImportExecuteResponse:
+        """Start background import execution."""
+        self._check_connection()
+        validate_required_params(job_id=job_id)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/execute"
+        return await self._make_typed_request('POST', url, ImportExecuteResponse)
+
+    async def get_import_status(self, job_id: str) -> ImportStatusResponse:
+        """Get import progress / status."""
+        self._check_connection()
+        validate_required_params(job_id=job_id)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/status"
+        return await self._make_typed_request('GET', url, ImportStatusResponse)
+
+    async def get_import_log(self, job_id: str) -> ImportLogResponse:
+        """Get import log entries."""
+        self._check_connection()
+        validate_required_params(job_id=job_id)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/log"
+        return await self._make_typed_request('GET', url, ImportLogResponse)
