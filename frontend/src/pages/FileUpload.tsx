@@ -20,7 +20,7 @@ import {
   HiExclamationCircle,
   HiCheckCircle
 } from 'react-icons/hi';
-import { apiService } from '../services/ApiService';
+import { apiService, vgClient } from '../services/ApiService';
 import { extractGraphName } from '../utils/QuadUtils';
 import { formatFileSize } from '../utils/formatUtils';
 
@@ -113,31 +113,42 @@ const FileUpload: React.FC = () => {
     setUploadProgress(0);
     
     try {
-      const formData = new FormData();
-      formData.append('file', fileForm.file);
-      formData.append('name', fileForm.name.trim());
-      formData.append('description', fileForm.description.trim());
-      formData.append('space_id', spaceId || '');
-      formData.append('graph_id', graphId || '');
-      
-      const params = new URLSearchParams();
-      params.set('space_id', spaceId || '');
-      params.set('graph_id', graphId || '');
+      // Step 1: Create file node with metadata
+      setUploadProgress(20);
+      const fileNodeQuad = {
+        subject: '', // server assigns URI
+        properties: {
+          'http://vital.ai/ontology/vital-core#hasName': fileForm.name.trim(),
+          'http://vital.ai/ontology/vital-core#hasDescription': fileForm.description.trim(),
+          'http://vital.ai/ontology/vital-core#hasFileName': fileForm.file.name,
+          'http://vital.ai/ontology/vital-core#hasFileSize': fileForm.file.size,
+          'http://vital.ai/ontology/vital-core#hasMimeType': fileForm.file.type || 'application/octet-stream',
+        },
+        type: 'http://vital.ai/ontology/vital-core#FileNode',
+      };
+      const createResult = await vgClient.files.create(
+        spaceId || '',
+        graphId || '',
+        { quads: [fileNodeQuad] },
+      ) as { created_uris?: string[]; created_count?: number };
 
-      const response = await apiService.makeRequest(`/api/files/upload?${params.toString()}`, {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!response.ok) {
-        const errData = await response.json().catch(() => null);
-        throw new Error(errData?.detail || `Upload failed with status ${response.status}`);
+      const createdUri = createResult.created_uris?.[0];
+      if (!createdUri) {
+        throw new Error('Failed to create file node — no URI returned');
       }
+
+      // Step 2: Upload file content to the created node
+      setUploadProgress(50);
+      await vgClient.files.upload(
+        spaceId || '',
+        graphId || '',
+        createdUri,
+        fileForm.file,
+        fileForm.file.name,
+      );
       
       setUploadProgress(100);
       setSuccess(true);
-      const data = await response.json();
-      void data;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to upload file. Please try again.');
     } finally {

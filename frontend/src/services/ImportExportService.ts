@@ -1,10 +1,10 @@
 /**
  * Import/Export API Service for VitalGraph frontend.
  *
- * Wraps the REST endpoints at /api/data/import and /api/data/export.
+ * Delegates to @vital-ai/vitalgraph-client via vgClient.
  */
 
-import { apiService } from './ApiService';
+import { vgClient } from './FrontendVitalGraphClient';
 
 // ---------------------------------------------------------------------------
 // Types (aligned with backend Pydantic models)
@@ -87,128 +87,72 @@ class ImportExportService {
   // Import jobs
   // -------------------------------------------------------------------------
 
-  async listImportJobs(spaceId?: string, status?: string): Promise<ImportExportJob[]> {
-    const params = new URLSearchParams();
-    if (spaceId) params.set('space_id', spaceId);
-    if (status) params.set('status', status);
-    const qs = params.toString();
-    const url = `/api/data/import${qs ? '?' + qs : ''}`;
-    const response = await apiService.get(url);
-    if (!response.ok) throw new Error(`Failed to list import jobs: ${response.status}`);
-    const data = await response.json();
-    return data.jobs || [];
+  async listImportJobs(spaceId?: string, _status?: string): Promise<ImportExportJob[]> {
+    if (!spaceId) throw new Error('space_id is required');
+    const data = await vgClient.imports.list(spaceId);
+    return (data as any).jobs || [];
   }
 
   async getImportJob(jobId: string): Promise<ImportExportJob> {
-    const response = await apiService.get(`/api/data/import/${jobId}`);
-    if (!response.ok) throw new Error(`Failed to get import job: ${response.status}`);
-    const data = await response.json();
-    return data.job;
+    const data = await vgClient.imports.get(jobId);
+    return (data as any).job ?? data;
   }
 
   async createImportJob(req: CreateImportRequest): Promise<ImportExportJob> {
-    const response = await apiService.post('/api/data/import', req);
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Failed to create import job: ${response.status}`);
-    }
-    const data = await response.json();
-    return data.job;
+    const data = await vgClient.imports.create(req.space_id, req);
+    return (data as any).job ?? data;
   }
 
   async uploadImportFile(jobId: string, file: File): Promise<{ filename: string; file_size: number }> {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    // Use raw fetch for multipart — ApiService sets Content-Type to JSON
-    const authHeader = (await import('./AuthService')).authService.getAuthHeader();
-    const response = await fetch(`${window.location.origin}/api/data/import/${jobId}/upload`, {
-      method: 'POST',
-      headers: { ...authHeader },
-      body: formData,
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Upload failed: ${response.status}`);
-    }
-    return response.json();
+    return vgClient.imports.upload(jobId, file, file.name) as any;
   }
 
   async executeImportJob(jobId: string): Promise<void> {
-    const response = await apiService.post(`/api/data/import/${jobId}/execute`);
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Execute failed: ${response.status}`);
-    }
+    await vgClient.imports.execute(jobId);
   }
 
   async getImportStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await apiService.get(`/api/data/import/${jobId}/status`);
-    if (!response.ok) throw new Error(`Failed to get status: ${response.status}`);
-    return response.json();
+    return vgClient.imports.status(jobId) as any;
   }
 
   async deleteImportJob(jobId: string): Promise<void> {
-    const response = await apiService.delete(`/api/data/import/${jobId}`);
-    if (!response.ok) throw new Error(`Failed to delete: ${response.status}`);
+    await vgClient.imports.delete(jobId);
   }
 
   async getImportLog(jobId: string): Promise<ImportLogResponse> {
-    const response = await apiService.get(`/api/data/import/${jobId}/log`);
-    if (!response.ok) throw new Error(`Failed to get log: ${response.status}`);
-    return response.json();
+    return vgClient.imports.log(jobId) as any;
   }
 
   // -------------------------------------------------------------------------
   // Export jobs
   // -------------------------------------------------------------------------
 
-  async listExportJobs(spaceId?: string, status?: string): Promise<ImportExportJob[]> {
-    const params = new URLSearchParams();
-    if (spaceId) params.set('space_id', spaceId);
-    if (status) params.set('status', status);
-    const qs = params.toString();
-    const url = `/api/data/export${qs ? '?' + qs : ''}`;
-    const response = await apiService.get(url);
-    if (!response.ok) throw new Error(`Failed to list export jobs: ${response.status}`);
-    const data = await response.json();
-    return data.jobs || [];
+  async listExportJobs(spaceId?: string, _status?: string): Promise<ImportExportJob[]> {
+    if (!spaceId) throw new Error('space_id is required');
+    const data = await vgClient.exports.list(spaceId);
+    return (data as any).jobs || [];
   }
 
   async getExportJob(jobId: string): Promise<ImportExportJob> {
-    const response = await apiService.get(`/api/data/export/${jobId}`);
-    if (!response.ok) throw new Error(`Failed to get export job: ${response.status}`);
-    const data = await response.json();
-    return data.job;
+    const data = await vgClient.exports.get(jobId);
+    return (data as any).job ?? data;
   }
 
   async createExportJob(req: CreateExportRequest): Promise<ImportExportJob> {
-    const response = await apiService.post('/api/data/export', req);
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Failed to create export job: ${response.status}`);
-    }
-    const data = await response.json();
-    return data.job;
+    const data = await vgClient.exports.create(req.space_id, req);
+    return (data as any).job ?? data;
   }
 
   async executeExportJob(jobId: string): Promise<void> {
-    const response = await apiService.post(`/api/data/export/${jobId}/execute`);
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `Execute failed: ${response.status}`);
-    }
+    await vgClient.exports.execute(jobId);
   }
 
   async getExportStatus(jobId: string): Promise<JobStatusResponse> {
-    const response = await apiService.get(`/api/data/export/${jobId}/status`);
-    if (!response.ok) throw new Error(`Failed to get status: ${response.status}`);
-    return response.json();
+    return vgClient.exports.status(jobId) as any;
   }
 
   async deleteExportJob(jobId: string): Promise<void> {
-    const response = await apiService.delete(`/api/data/export/${jobId}`);
-    if (!response.ok) throw new Error(`Failed to delete: ${response.status}`);
+    await vgClient.exports.delete(jobId);
   }
 
   getExportDownloadUrl(jobId: string): string {

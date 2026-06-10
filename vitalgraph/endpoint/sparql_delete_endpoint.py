@@ -5,7 +5,7 @@ following the SPARQL 1.1 Update specification.
 """
 
 from typing import Dict, List, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Form, Body
+from fastapi import APIRouter, HTTPException, Depends, Form, Body, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
@@ -32,15 +32,15 @@ class SPARQLDeleteEndpoint:
         
         # POST endpoint for SPARQL deletes
         @self.router.post(
-            "/{space_id}/delete",
+            "/delete",
             response_model=SPARQLDeleteResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Delete",
             description="Execute a SPARQL delete operation (DELETE DATA or DELETE WHERE) against the specified space"
         )
         async def sparql_delete_post(
-            space_id: str,
-            request: SPARQLDeleteRequest,
+            space_id: str = Query(..., description="Space ID"),
+            request: SPARQLDeleteRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_write(current_user, space_id)
@@ -48,14 +48,14 @@ class SPARQLDeleteEndpoint:
         
         # Form-based endpoint for SPARQL deletes
         @self.router.post(
-            "/{space_id}/delete-form",
+            "/delete-form",
             response_model=SPARQLDeleteResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Delete (Form)",
             description="Execute a SPARQL delete operation via form data"
         )
         async def sparql_delete_form(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             update: str = Form(..., description="SPARQL update string"),
             graph_uri: Optional[str] = Form(None, description="Target graph URI"),
             current_user: Dict = Depends(self.auth_dependency)

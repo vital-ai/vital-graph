@@ -62,10 +62,17 @@ class _SparqlSQLGraphsAdapter:
         # Normalise to the dict shape the endpoint expects
         graphs = []
         for r in rows:
+            graph_uri = r.get('graph_uri')
+            triple_count = 0
+            if graph_uri:
+                try:
+                    triple_count = await self._impl.get_rdf_quad_count(space_id, graph_uri)
+                except Exception:
+                    pass
             graphs.append({
-                'graph_uri': r.get('graph_uri'),
+                'graph_uri': graph_uri,
                 'graph_name': r.get('graph_name'),
-                'triple_count': 0,
+                'triple_count': triple_count,
                 'created_time': r.get('created_time'),
                 'updated_time': None,
             })
@@ -80,10 +87,15 @@ class _SparqlSQLGraphsAdapter:
         if not rows:
             return None
         r = rows[0]
+        triple_count = 0
+        try:
+            triple_count = await self._impl.get_rdf_quad_count(space_id, graph_uri)
+        except Exception:
+            pass
         return {
             'graph_uri': r.get('graph_uri'),
             'graph_name': r.get('graph_name'),
-            'triple_count': 0,
+            'triple_count': triple_count,
             'created_time': r.get('created_time'),
             'updated_time': None,
         }
@@ -1270,7 +1282,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             t_pre_acquire = _time.monotonic()
             async with self._db._pool.acquire() as conn:
                 t_acquired = _time.monotonic()
-                gen = await generate_sql(cr, space_id, conn=conn)
+                gen = await generate_sql(
+                    cr, space_id, conn=conn,
+                    multi_vector_config=kwargs.get('multi_vector_config'),
+                )
                 sql = gen.sql
                 var_map = gen.var_map or {}
                 t_gen = _time.monotonic()
@@ -1426,6 +1441,27 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                         len(targets))
             except Exception as ce:
                 logger.debug("Entity graph cache invalidation after SPARQL UPDATE failed (non-critical): %s", ce)
+
+            # Detect KGDocument content changes → enqueue re-segmentation
+            try:
+                from ...document.segmentation_hooks import (
+                    collect_segmentation_targets_from_update_ops,
+                    schedule_resegmentation,
+                )
+                seg_targets = collect_segmentation_targets_from_update_ops(
+                    cr.update_ops, space_id,
+                )
+                if seg_targets:
+                    schedule_resegmentation(
+                        db_impl=self.db_impl or self._db,
+                        space_id=space_id,
+                        targets=seg_targets,
+                    )
+                    logger.debug(
+                        "Segmentation hook: detected %d document(s) after SPARQL UPDATE",
+                        len(seg_targets))
+            except Exception as se:
+                logger.debug("Segmentation hook after SPARQL UPDATE failed (non-critical): %s", se)
 
             return True
 

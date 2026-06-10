@@ -87,6 +87,18 @@ class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
         try:
             logger.debug("Connecting to PostgreSQL for FUSEKI_POSTGRESQL backend...")
             
+            import json as _json
+
+            async def _init_conn(conn):
+                await conn.set_type_codec(
+                    'jsonb', encoder=_json.dumps, decoder=_json.loads,
+                    schema='pg_catalog',
+                )
+                await conn.set_type_codec(
+                    'json', encoder=_json.dumps, decoder=_json.loads,
+                    schema='pg_catalog',
+                )
+
             # Create connection pool using asyncpg
             self.connection_pool = await asyncpg.create_pool(
                 host=self.config.get('host', 'localhost'),
@@ -96,7 +108,8 @@ class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
                 password=self.config.get('password', 'vitalgraph_pass'),
                 min_size=5,
                 max_size=30,
-                command_timeout=60
+                command_timeout=60,
+                init=_init_conn,
             )
             
             # Track the pool for proper cleanup
@@ -724,6 +737,19 @@ class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
             for statement in space_table_statements:
                 await self.execute_update(statement)
             
+            # Bootstrap document_segments vector index (non-critical)
+            try:
+                from vitalgraph.document.vector_index_setup import (
+                    setup_document_segments_vectorization,
+                )
+                if self.connection_pool:
+                    async with self.connection_pool.acquire() as vec_conn:
+                        ok = await setup_document_segments_vectorization(vec_conn, space_id)
+                        if ok:
+                            logger.info(f"Bootstrapped document_segments vector index for: {space_id}")
+            except Exception as ve:
+                logger.warning(f"document_segments vector bootstrap failed (non-critical): {ve}")
+
             logger.debug(f"Primary data tables created for space: {space_id}")
             return True
             

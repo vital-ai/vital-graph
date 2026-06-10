@@ -26,10 +26,11 @@ _SPACE_PATTERNS = [
     (re.compile(r'^/api/spaces/([^/]+)/info'), 'space_info'),
     (re.compile(r'^/api/spaces/([^/]+)/metrics'), 'space_metrics'),
     (re.compile(r'^/api/spaces/([^/]+)$'), 'space_detail'),
-    # SPARQL and graph endpoints: /api/graphs/sparql/{space_id}/...
-    (re.compile(r'^/api/graphs/sparql/([^/]+)/query'), 'sparql_query'),
-    (re.compile(r'^/api/graphs/sparql/([^/]+)/graphs'), 'graphs_list'),
-    (re.compile(r'^/api/graphs/sparql/([^/]+)/graph'), 'graph_op'),
+    # SPARQL and graph endpoints: /api/graphs/sparql/... (space_id from query param)
+    (re.compile(r'^/api/graphs/sparql/query'), 'sparql_query'),
+    (re.compile(r'^/api/graphs/graphs'), 'graphs_list'),
+    (re.compile(r'^/api/graphs/graph_counts'), 'graph_counts'),
+    (re.compile(r'^/api/graphs/graph'), 'graph_op'),
     # Triples endpoint uses query param space_id
     (re.compile(r'^/api/graphs/triples'), None),  # space_id from query param
     # KG entity/frame/relation endpoints

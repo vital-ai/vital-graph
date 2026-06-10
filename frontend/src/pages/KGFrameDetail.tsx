@@ -2,13 +2,14 @@ import React from 'react';
 import { HiCollection } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
+import { vgClient } from '../services/ApiService';
 
 const KGFrameDetail: React.FC = () => {
   // Configuration for KG Frames
   const config: ObjectDetailConfig = {
     objectTypeName: 'KG Frame',
     objectTypeColor: 'indigo',
-    apiEndpoint: '/api/graphs/kgframes',
+    crudOps: vgClient.kgframes,
     listRoute: '/kg-frames',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGFrame',
     paramName: 'frameId',

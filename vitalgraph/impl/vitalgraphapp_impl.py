@@ -108,6 +108,13 @@ class VitalGraphAppImpl:
         # Process scheduler (initialized in startup_event after DB connection)
         self.process_scheduler: Optional[Any] = None
         
+        # Segmentation background worker
+        self._segmentation_worker: Optional[Any] = None
+        self._segmentation_worker_task: Optional[Any] = None
+        
+        # Import/export job manager (created in startup_event after pool is available)
+        self.import_export_manager = None
+        
         # Get Space Manager from VitalGraphImpl
         self.space_manager = self.vital_graph_impl.get_space_manager()
         self.logger.debug(f"🔍 Retrieved space_manager from VitalGraphImpl: {self.space_manager}")
@@ -598,6 +605,27 @@ class VitalGraphAppImpl:
                     except Exception as e:
                         self.logger.warning(f"Audit configuration failed (non-critical): {e}")
 
+                    # Create the ImportExportJobManager now that the pool exists
+                    try:
+                        self._init_import_export_manager()
+                    except Exception as e:
+                        self.logger.warning(f"ImportExportJobManager init failed (non-critical): {e}")
+
+                    # Start segmentation background worker
+                    try:
+                        if self.space_manager:
+                            import asyncio as _asyncio
+                            from vitalgraph.document.segmentation_worker import SegmentationWorker
+                            self._segmentation_worker = SegmentationWorker(self.space_manager)
+                            self._segmentation_worker_task = _asyncio.create_task(
+                                self._segmentation_worker.run()
+                            )
+                            self.logger.info("✅ Segmentation background worker started")
+                        else:
+                            self.logger.warning("Segmentation worker skipped — no space_manager")
+                    except Exception as e:
+                        self.logger.warning(f"Segmentation worker initialization failed (non-critical): {e}")
+
                     # Start incremental backfill of server-managed entity properties
                     try:
                         pool = getattr(self.db_impl, 'connection_pool', None)
@@ -649,6 +677,16 @@ class VitalGraphAppImpl:
                         self.logger.info("✅ Process scheduler stopped")
                     except Exception as e:
                         self.logger.warning(f"Error stopping process scheduler: {e}")
+
+                # Stop segmentation worker
+                if self._segmentation_worker:
+                    try:
+                        self._segmentation_worker.stop()
+                        if self._segmentation_worker_task:
+                            await self._segmentation_worker_task
+                        self.logger.info("✅ Segmentation worker stopped")
+                    except Exception as e:
+                        self.logger.warning(f"Error stopping segmentation worker: {e}")
 
                 # Stop backfill task
                 if self._backfill_task:
@@ -792,6 +830,7 @@ class VitalGraphAppImpl:
         from vitalgraph.endpoint.kgrelations_endpoint import create_kgrelations_router
         from vitalgraph.endpoint.kgquery_endpoint import create_kgqueries_router
         from vitalgraph.endpoint.files_endpoint import create_files_router
+        from vitalgraph.endpoint.kgdocuments_endpoint import create_kgdocuments_router
         
         # Create routers with space manager and auth dependency
         triples_router = create_triples_router(self.space_manager, self.get_current_user)
@@ -801,6 +840,7 @@ class VitalGraphAppImpl:
         kgframes_router = create_kgframes_router(self.space_manager, self.get_current_user)
         kgrelations_router = create_kgrelations_router(self.space_manager, self.get_current_user)
         kgqueries_router = create_kgqueries_router(self.space_manager, self.get_current_user)
+        kgdocuments_router = create_kgdocuments_router(self.space_manager, self.get_current_user)
         files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config.config_data)
         
         # Include routers in the FastAPI app  
@@ -811,37 +851,51 @@ class VitalGraphAppImpl:
         self.app.include_router(kgframes_router, prefix="/api/graphs")
         self.app.include_router(kgrelations_router, prefix="/api/graphs")
         self.app.include_router(kgqueries_router, prefix="/api/graphs")
+        self.app.include_router(kgdocuments_router, prefix="/api/graphs")
         self.app.include_router(files_router, prefix="/api")
     
     def _init_data_routers(self):
-        """Initialize data import/export endpoint routers."""
+        """Initialize data import/export endpoint routers.
+
+        Routes are registered unconditionally at init time so FastAPI
+        compiles them into the route table.  The actual
+        ImportExportJobManager is created later during the startup
+        event (see ``_init_import_export_manager``) and stored on
+        ``self.import_export_manager``.  The endpoint classes receive
+        ``self`` (the app impl) so they can resolve the manager lazily.
+        """
         from vitalgraph.endpoint.import_endpoint import create_import_router
         from vitalgraph.endpoint.export_endpoint import create_export_router
+
+        # Create routers – pass *self* so endpoints can lazily access
+        # self.import_export_manager once it is created at startup.
+        import_router = create_import_router(self, self.space_manager, self.get_current_user)
+        export_router = create_export_router(self, self.space_manager, self.get_current_user)
+
+        self.app.include_router(import_router, prefix="/api/data", tags=["Data"])
+        self.app.include_router(export_router, prefix="/api/data", tags=["Data"])
+        self.logger.info("✅ Data import/export routers registered (manager created at startup)")
+
+    def _init_import_export_manager(self):
+        """Create the ImportExportJobManager once the DB pool is available.
+
+        Called from the startup event after ``connect_database()``.
+        """
         from vitalgraph.jobs.import_export_manager import ImportExportJobManager
 
-        # Get the asyncpg pool and signal manager
         pool = getattr(self.db_impl, 'connection_pool', None)
+        if pool is None:
+            self.logger.warning("ImportExportJobManager skipped — no connection pool")
+            return
+
         signal_mgr = None
         if self.vital_graph_impl:
             signal_mgr = self.vital_graph_impl.signal_manager
         if signal_mgr is None and self.db_impl:
             signal_mgr = getattr(self.db_impl, 'get_signal_manager', lambda: None)()
 
-        if pool is None:
-            self.logger.warning("Data import/export routers skipped — no connection pool available")
-            return
-
-        # Create the shared job manager
         self.import_export_manager = ImportExportJobManager(pool, signal_manager=signal_mgr)
-
-        # Create routers with job manager, space manager and auth dependency
-        import_router = create_import_router(self.import_export_manager, self.space_manager, self.get_current_user)
-        export_router = create_export_router(self.import_export_manager, self.space_manager, self.get_current_user)
-
-        # Include routers in the FastAPI app
-        self.app.include_router(import_router, prefix="/api/data", tags=["Data"])
-        self.app.include_router(export_router, prefix="/api/data", tags=["Data"])
-        self.logger.info("✅ Data import/export routers initialized")
+        self.logger.info("✅ ImportExportJobManager created")
     
     def _init_auth_routes(self):
         """Initialize authentication routes."""

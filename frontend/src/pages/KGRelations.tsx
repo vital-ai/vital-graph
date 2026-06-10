@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
-  Alert, Badge, Button, Modal, ModalHeader, ModalBody, ModalFooter,
+  Alert, Badge, Button, Label, Modal, ModalHeader, ModalBody, ModalFooter,
   Pagination, Select, Spinner, TextInput,
 } from 'flowbite-react';
+import { type SpaceInfo } from '../types/api';
+import { type GraphInfo } from '../types/graphs';
 import { HiTrash, HiArrowRight } from 'react-icons/hi2';
 import { HiSearch, HiLink } from 'react-icons/hi';
 import {
@@ -26,13 +28,16 @@ interface KGRelation {
   properties_count: number;
 }
 
-interface OutletCtx {
-  selectedSpace: string;
-  selectedGraph: string;
-}
-
 const KGRelations: React.FC = () => {
-  const { selectedSpace, selectedGraph } = useOutletContext<OutletCtx>() || {};
+  const navigate = useNavigate();
+  const { spaceId, graphId } = useParams<{ spaceId?: string; graphId?: string }>();
+
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [selectedSpace, setSelectedSpace] = useState(spaceId || '');
+  const [selectedGraph, setSelectedGraph] = useState(graphId ? decodeURIComponent(graphId) : '');
+  const [spacesLoading, setSpacesLoading] = useState(true);
+  const [graphsLoading, setGraphsLoading] = useState(false);
 
   const [relations, setRelations] = useState<KGRelation[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,6 +50,36 @@ const KGRelations: React.FC = () => {
   const [deletingRelation, setDeletingRelation] = useState<KGRelation | null>(null);
 
   const hasSelection = !!(selectedSpace && selectedGraph);
+
+  // Fetch spaces
+  const fetchSpaces = useCallback(async () => {
+    try {
+      setSpacesLoading(true);
+      setSpaces(await apiService.getSpaces());
+    } catch { /* ignore */ }
+    finally { setSpacesLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchSpaces(); }, [fetchSpaces]);
+
+  // Fetch graphs
+  const fetchGraphs = useCallback(async () => {
+    if (!selectedSpace) { setGraphs([]); return; }
+    try {
+      setGraphsLoading(true);
+      setGraphs(await apiService.getGraphs(selectedSpace));
+    } catch { setGraphs([]); }
+    finally { setGraphsLoading(false); }
+  }, [selectedSpace]);
+
+  useEffect(() => { fetchGraphs(); }, [fetchGraphs]);
+
+  // Navigate to hierarchical URL when selection changes
+  useEffect(() => {
+    if (selectedSpace && selectedGraph && !spaceId) {
+      navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/kgrelations`, { replace: true });
+    }
+  }, [selectedSpace, selectedGraph, navigate, spaceId]);
 
   const fetchRelations = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) return;
@@ -95,14 +130,50 @@ const KGRelations: React.FC = () => {
 
   return (
     <div className="space-y-5">
+      {/* Page Title */}
+      <div className="flex items-center gap-2 mb-2">
+        <HiLink className="w-6 h-6 text-blue-600" />
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Relations</h1>
+      </div>
+
+      {/* Space / Graph selectors */}
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex-1 max-w-xs">
+          <Label htmlFor="space-select" className="text-xs">Space</Label>
+          <Select
+            id="space-select"
+            value={selectedSpace}
+            onChange={(e) => { setSelectedSpace(e.target.value); setSelectedGraph(''); }}
+            disabled={spacesLoading}
+          >
+            <option value="">Choose a space...</option>
+            {spaces.map((s) => (
+              <option key={s.space} value={s.space}>{s.space_name || s.space}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="flex-1 max-w-xs">
+          <Label htmlFor="graph-select" className="text-xs">Graph</Label>
+          <Select
+            id="graph-select"
+            value={selectedGraph}
+            onChange={(e) => setSelectedGraph(e.target.value)}
+            disabled={!selectedSpace || graphsLoading}
+          >
+            <option value="">Choose a graph...</option>
+            {graphs.map((g) => (
+              <option key={g.graph_uri} value={g.graph_uri}>
+                {g.graph_uri.split('/').pop() || g.graph_uri}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <HiLink className="h-6 w-6" />
-            KG Relations
-          </h2>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
             Entity-to-entity edge relationships in the knowledge graph.
           </p>
         </div>

@@ -167,6 +167,34 @@ class GeoCriteria:
 
 
 @dataclass
+class MultiVectorCriteriaInput:
+    """A single weighted vector input for multi-vector search."""
+    search_text: Optional[str] = None    # Text to vectorize server-side
+    vector: Optional[str] = None         # Pre-computed vector literal "[0.1,...]"
+    index_name: str = "entity_default"   # Vector index name
+    weight: float = 1.0                  # Relative weight (auto-normalized)
+
+
+@dataclass
+class MultiVectorCriteria:
+    """Criteria for multi-vector similarity search.
+
+    Generates SPARQL:
+      BIND(vg:multiVectorSimilarity(?entity, text1, idx1, w1, text2, idx2, w2) AS ?vg_score)
+    or with pre-computed vectors:
+      BIND(vg:multiVectorNearby(?entity, vec1, idx1, w1, vec2, idx2, w2) AS ?vg_score)
+
+    Combines scores from multiple vector indexes with weighted fusion.
+    """
+    vectors: List[MultiVectorCriteriaInput] = field(default_factory=list)
+    top_k: int = 10                          # Max results (becomes LIMIT)
+    min_score: Optional[float] = None        # Optional threshold (FILTER ?vg_score > T)
+    score_variable: str = "vg_score"         # SPARQL variable for the score
+    fusion_strategy: str = "weighted_sum"    # weighted_sum | relative_score | ranked
+    oversample_factor: int = 5              # candidates per vector = top_k * factor
+
+
+@dataclass
 class QueryFilter:
     """Simple property-based filter for entity queries."""
     property_name: str
@@ -205,6 +233,7 @@ class EntityQueryCriteria:
     entity_property_filters: Optional[List[EntityPropertyFilter]] = None  # Direct entity property filters
     use_edge_pattern: bool = True  # Use edge-based pattern (Edge_hasEntityKGFrame) vs direct property (hasFrame)
     vector_criteria: Optional[VectorCriteria] = None  # Vector similarity search
+    multi_vector_criteria: Optional[MultiVectorCriteria] = None  # Multi-vector weighted fusion
     geo_criteria: Optional[GeoCriteria] = None  # Geographic proximity search
 
 
@@ -756,7 +785,9 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         
         # Vector/geo criteria — BIND, FILTER, ORDER BY, LIMIT overrides
         vg_extra_where, vg_select, vg_order, vg_limit = self._build_vector_geo_clauses(
-            criteria.vector_criteria, criteria.geo_criteria, anchor_var="entity")
+            criteria.vector_criteria, criteria.geo_criteria,
+            multi_vector_criteria=criteria.multi_vector_criteria,
+            anchor_var="entity")
         if vg_extra_where:
             sort_extra_where += " " + vg_extra_where
         if vg_select:
@@ -1520,6 +1551,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         self,
         vector_criteria: Optional[VectorCriteria],
         geo_criteria: Optional[GeoCriteria],
+        multi_vector_criteria: Optional[MultiVectorCriteria] = None,
         anchor_var: str = "entity",
     ) -> tuple:
         """Build SPARQL clauses for vector/geo criteria.
@@ -1536,8 +1568,43 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
         order_by = ""
         limit_override = None
         
-        # Vector similarity
-        if vector_criteria:
+        # Multi-vector similarity (takes precedence over single vector)
+        if multi_vector_criteria and multi_vector_criteria.vectors:
+            mvc = multi_vector_criteria
+            score_var = mvc.score_variable
+            
+            # Determine function: multiVectorSimilarity vs multiVectorNearby
+            # Use multiVectorNearby only if ALL inputs use pre-computed vectors
+            all_nearby = all(v.vector is not None for v in mvc.vectors)
+            func_name = "multiVectorNearby" if all_nearby else "multiVectorSimilarity"
+            
+            # Build argument list: ?entity, text1/vec1, idx1, w1, text2/vec2, idx2, w2, ...
+            arg_parts = []
+            for v in mvc.vectors:
+                if v.vector:
+                    escaped_val = v.vector.replace('"', '\\"')
+                else:
+                    escaped_val = (v.search_text or "").replace('"', '\\"')
+                arg_parts.append(f'"{escaped_val}", "{v.index_name}", {v.weight}')
+            
+            args_str = ", ".join(arg_parts)
+            where_parts.append(
+                f'BIND(vg:{func_name}(?{anchor_var}, {args_str}) AS ?{score_var})')
+            
+            # INTERSECT semantics: exclude entities missing from any index
+            # (their score is NULL from the SQL CTE)
+            where_parts.append(f'FILTER(BOUND(?{score_var}))')
+            
+            # Threshold filter (additional)
+            if mvc.min_score is not None:
+                where_parts.append(f'FILTER(?{score_var} > {mvc.min_score})')
+            
+            select_parts.append(f"?{score_var}")
+            order_by = f"ORDER BY DESC(?{score_var})"
+            limit_override = mvc.top_k
+        
+        # Single vector similarity (only if multi-vector not used)
+        elif vector_criteria:
             vc = vector_criteria
             score_var = vc.score_variable
             
@@ -1578,7 +1645,7 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
             select_parts.append(f"?{dist_var}")
             
             # Sort by distance (only if vector isn't also sorting)
-            if gc.sort_by_distance and not vector_criteria:
+            if gc.sort_by_distance and not vector_criteria and not multi_vector_criteria:
                 order_by = f"ORDER BY ASC(?{dist_var})"
             
             if gc.top_k is not None and limit_override is None:

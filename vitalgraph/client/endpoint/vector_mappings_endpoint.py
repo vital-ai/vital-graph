@@ -23,8 +23,8 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
     def __init__(self, client):
         super().__init__(client)
 
-    def _url(self, space_id: str, path: str = "") -> str:
-        return f"{self._get_server_url()}/api/spaces/{space_id}/vector-mappings{path}"
+    def _base_url(self) -> str:
+        return f"{self._get_server_url()}/api/vector-mappings"
 
     async def list_mappings(
         self,
@@ -47,10 +47,10 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id)
         params = build_query_params(
-            index_name=index_name, mapping_type=mapping_type, enabled=enabled,
+            space_id=space_id, index_name=index_name, mapping_type=mapping_type, enabled=enabled,
         )
         return await self._make_typed_request(
-            "GET", self._url(space_id), MappingListResponse, params=params,
+            "GET", self._base_url(), MappingListResponse, params=params,
         )
 
     async def create_mapping(
@@ -88,9 +88,10 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
             enabled=enabled, source_type=source_type, separator=separator,
             include_pred_name=include_pred_name, include_type_desc=include_type_desc,
         )
+        params = build_query_params(space_id=space_id)
         return await self._make_typed_request(
-            "POST", self._url(space_id), MappingOut,
-            json=request.model_dump(exclude_none=True),
+            "POST", self._base_url(), MappingOut,
+            json=request.model_dump(exclude_none=True), params=params,
         )
 
     async def get_mapping(self, space_id: str, mapping_id: int) -> MappingOut:
@@ -105,8 +106,9 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id, mapping_id=mapping_id)
+        params = build_query_params(space_id=space_id, mapping_id=mapping_id)
         return await self._make_typed_request(
-            "GET", self._url(space_id, f"/{mapping_id}"), MappingOut,
+            "GET", self._base_url(), MappingOut, params=params,
         )
 
     async def update_mapping(
@@ -139,9 +141,10 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
             enabled=enabled, source_type=source_type, separator=separator,
             include_pred_name=include_pred_name, include_type_desc=include_type_desc,
         )
+        params = build_query_params(space_id=space_id, mapping_id=mapping_id)
         return await self._make_typed_request(
-            "PUT", self._url(space_id, f"/{mapping_id}"), MappingOut,
-            json=request.model_dump(exclude_none=True),
+            "PUT", self._base_url(), MappingOut,
+            json=request.model_dump(exclude_none=True), params=params,
         )
 
     async def delete_mapping(self, space_id: str, mapping_id: int) -> Dict:
@@ -156,8 +159,9 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id, mapping_id=mapping_id)
+        params = build_query_params(space_id=space_id, mapping_id=mapping_id)
         response = await self._make_authenticated_request(
-            "DELETE", self._url(space_id, f"/{mapping_id}"),
+            "DELETE", self._base_url(), params=params,
         )
         return response.json()
 
@@ -186,9 +190,10 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         request = AddPropertyRequest(
             property_uri=property_uri, property_role=property_role, ordinal=ordinal,
         )
+        params = build_query_params(space_id=space_id, mapping_id=mapping_id)
         return await self._make_typed_request(
-            "POST", self._url(space_id, f"/{mapping_id}/properties"), MappingPropertyOut,
-            json=request.model_dump(),
+            "POST", f"{self._base_url()}/properties", MappingPropertyOut,
+            json=request.model_dump(), params=params,
         )
 
     async def remove_property(
@@ -206,7 +211,8 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id, mapping_id=mapping_id, property_id=property_id)
+        params = build_query_params(space_id=space_id, mapping_id=mapping_id, property_id=property_id)
         response = await self._make_authenticated_request(
-            "DELETE", self._url(space_id, f"/{mapping_id}/properties/{property_id}"),
+            "DELETE", f"{self._base_url()}/properties", params=params,
         )
         return response.json()

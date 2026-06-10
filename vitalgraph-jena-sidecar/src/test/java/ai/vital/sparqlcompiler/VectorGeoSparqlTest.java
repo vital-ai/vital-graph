@@ -335,4 +335,170 @@ class VectorGeoSparqlTest {
         }
         assertTrue(resp.ok, "Vector search with pre-computed vector should parse");
     }
+
+    // ================================================================
+    // C) Multi-vector search tests
+    // ================================================================
+
+    @Test
+    void testMultiVectorSimilarity_TwoVectors() {
+        // Test: vg:multiVectorSimilarity with 2 vector triplets (7 args total)
+        // Expected: ExprFunctionN with functionIRI and 7 args
+        String sparql = """
+            PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?entity ?score WHERE {
+                ?entity rdf:type <http://vital.ai/ontology/haley-ai-kg#KGEntity> .
+                BIND(vg:multiVectorSimilarity(
+                    ?entity,
+                    "technology company", "entity_type_default", 0.3,
+                    "renewable energy manufacturing", "entity_default", 0.7
+                ) AS ?score)
+                FILTER(?score > 0.4)
+            }
+            ORDER BY DESC(?score)
+            LIMIT 20
+            """;
+        CompileRequest req = makeRequest(sparql);
+        CompileResponse resp = compiler.compile(req);
+
+        System.out.println("\n=== Multi-vector similarity (2 vectors, 7 args) ===");
+        System.out.println("ok: " + resp.ok);
+        if (resp.ok) {
+            Map<String, Object> algebra = (Map<String, Object>) resp.phases.get("algebraCompiled");
+            System.out.println("pretty: " + algebra.get("pretty"));
+            try {
+                String json = mapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(algebra.get("op"));
+                System.out.println("full op JSON:\n" + json);
+            } catch (Exception e) {
+                System.out.println("(could not serialize op)");
+            }
+        } else {
+            System.out.println("error: " + resp.error);
+        }
+        assertTrue(resp.ok, "multiVectorSimilarity with 2 vectors should parse");
+    }
+
+    @Test
+    void testMultiVectorSimilarity_ThreeVectors() {
+        // Test: vg:multiVectorSimilarity with 3 vector triplets (10 args total)
+        // Verifies ExprFunctionN handles arbitrary N correctly
+        String sparql = """
+            PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?entity ?score WHERE {
+                ?entity rdf:type <http://vital.ai/ontology/haley-ai-kg#KGEntity> .
+                BIND(vg:multiVectorSimilarity(
+                    ?entity,
+                    "technology company", "entity_type_default", 0.2,
+                    "renewable energy", "entity_default", 0.5,
+                    "silicon valley startup", "entity_description", 0.3
+                ) AS ?score)
+                FILTER(?score > 0.5)
+            }
+            ORDER BY DESC(?score)
+            LIMIT 10
+            """;
+        CompileRequest req = makeRequest(sparql);
+        CompileResponse resp = compiler.compile(req);
+
+        System.out.println("\n=== Multi-vector similarity (3 vectors, 10 args) ===");
+        System.out.println("ok: " + resp.ok);
+        if (resp.ok) {
+            Map<String, Object> algebra = (Map<String, Object>) resp.phases.get("algebraCompiled");
+            System.out.println("pretty: " + algebra.get("pretty"));
+            try {
+                String json = mapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(algebra.get("op"));
+                System.out.println("full op JSON:\n" + json);
+            } catch (Exception e) {
+                System.out.println("(could not serialize op)");
+            }
+        } else {
+            System.out.println("error: " + resp.error);
+        }
+        assertTrue(resp.ok, "multiVectorSimilarity with 3 vectors should parse");
+    }
+
+    @Test
+    void testMultiVectorNearby_PrecomputedVectors() {
+        // Test: vg:multiVectorNearby with pre-computed vector literals
+        String sparql = """
+            PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?entity ?score WHERE {
+                ?entity rdf:type <http://vital.ai/ontology/haley-ai-kg#KGEntity> .
+                BIND(vg:multiVectorNearby(
+                    ?entity,
+                    "[0.1, 0.2, 0.3]", "entity_type_default", 0.4,
+                    "[0.4, 0.5, 0.6, 0.7]", "entity_default", 0.6
+                ) AS ?score)
+            }
+            ORDER BY DESC(?score)
+            LIMIT 20
+            """;
+        CompileRequest req = makeRequest(sparql);
+        CompileResponse resp = compiler.compile(req);
+
+        System.out.println("\n=== Multi-vector nearby (pre-computed vectors) ===");
+        System.out.println("ok: " + resp.ok);
+        if (resp.ok) {
+            Map<String, Object> algebra = (Map<String, Object>) resp.phases.get("algebraCompiled");
+            System.out.println("pretty: " + algebra.get("pretty"));
+            try {
+                String json = mapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(algebra.get("op"));
+                System.out.println("full op JSON:\n" + json);
+            } catch (Exception e) {
+                System.out.println("(could not serialize op)");
+            }
+        } else {
+            System.out.println("error: " + resp.error);
+        }
+        assertTrue(resp.ok, "multiVectorNearby with pre-computed vectors should parse");
+    }
+
+    @Test
+    void testMultiVectorSimilarity_CombinedWithOtherPatterns() {
+        // Test: multiVectorSimilarity alongside regular triple patterns and other BINDs
+        // Verifies it integrates cleanly in a real query context
+        String sparql = """
+            PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            PREFIX vital: <http://vital.ai/ontology/vital-core#>
+            SELECT ?entity ?name ?score WHERE {
+                ?entity rdf:type <http://vital.ai/ontology/haley-ai-kg#KGEntity> .
+                ?entity vital:hasName ?name .
+                BIND(vg:multiVectorSimilarity(
+                    ?entity,
+                    "technology company", "entity_type_default", 0.3,
+                    "renewable energy manufacturing", "entity_default", 0.7
+                ) AS ?score)
+                FILTER(?score > 0.4)
+                FILTER(CONTAINS(?name, "Energy"))
+            }
+            ORDER BY DESC(?score)
+            LIMIT 20
+            """;
+        CompileRequest req = makeRequest(sparql);
+        CompileResponse resp = compiler.compile(req);
+
+        System.out.println("\n=== Multi-vector with triple patterns and filters ===");
+        System.out.println("ok: " + resp.ok);
+        if (resp.ok) {
+            Map<String, Object> algebra = (Map<String, Object>) resp.phases.get("algebraCompiled");
+            System.out.println("pretty: " + algebra.get("pretty"));
+            try {
+                String json = mapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(algebra.get("op"));
+                System.out.println("full op JSON:\n" + json);
+            } catch (Exception e) {
+                System.out.println("(could not serialize op)");
+            }
+        } else {
+            System.out.println("error: " + resp.error);
+        }
+        assertTrue(resp.ok, "multiVectorSimilarity combined with other patterns should parse");
+    }
 }

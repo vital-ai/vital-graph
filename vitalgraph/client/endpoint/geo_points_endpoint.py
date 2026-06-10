@@ -20,8 +20,8 @@ class GeoPointsClientEndpoint(BaseEndpoint):
     def __init__(self, client):
         super().__init__(client)
 
-    def _url(self, space_id: str) -> str:
-        return f"{self._get_server_url()}/api/spaces/{space_id}/geo"
+    def _base_url(self) -> str:
+        return f"{self._get_server_url()}/api/geo"
 
     async def list_points(
         self,
@@ -53,9 +53,9 @@ class GeoPointsClientEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id)
         params = build_query_params(
-            near_lat=near_lat, near_lon=near_lon, radius_km=radius_km,
+            space_id=space_id, near_lat=near_lat, near_lon=near_lon, radius_km=radius_km,
             graph_uri=graph_uri, limit=limit, offset=offset,
         )
         return await self._make_typed_request(
-            "GET", self._url(space_id), GeoPointsResponse, params=params,
+            "GET", self._base_url(), GeoPointsResponse, params=params,
         )

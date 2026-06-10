@@ -27,7 +27,6 @@ const Graphs = lazy(() => import('./pages/Graphs'));
 const GraphDetail = lazy(() => import('./pages/GraphDetail'));
 const KGTypes = lazy(() => import('./pages/KGTypes'));
 const KGTypeDetail = lazy(() => import('./pages/KGTypeDetail'));
-const ObjectsLayout = lazy(() => import('./pages/ObjectsLayout'));
 const GraphObjects = lazy(() => import('./pages/GraphObjects'));
 const KGEntities = lazy(() => import('./pages/KGEntities'));
 const KGFrames = lazy(() => import('./pages/KGFrames'));
@@ -52,7 +51,10 @@ const EntityRegistryDetail = lazy(() => import('./pages/EntityRegistryDetail'));
 const AgentRegistry = lazy(() => import('./pages/AgentRegistry'));
 const AgentRegistryDetail = lazy(() => import('./pages/AgentRegistryDetail'));
 const KGRelations = lazy(() => import('./pages/KGRelations'));
+const KGDocuments = lazy(() => import('./pages/KGDocuments'));
+const KGDocumentDetail = lazy(() => import('./pages/KGDocumentDetail'));
 const KGQueryBuilder = lazy(() => import('./pages/KGQueryBuilder'));
+const GraphVisualization = lazy(() => import('./pages/GraphVisualization'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 const PageLoader = () => (
@@ -94,12 +96,11 @@ export default function App() {
               {/* Base selection screens */}
               <Route path="/graphs" element={<Graphs />} />
               <Route path="/objects" element={<Navigate to="/objects/graphobjects" replace />} />
-              <Route path="/objects/*" element={<ObjectsLayout />}>
-                <Route path="graphobjects" element={<GraphObjects />} />
-                <Route path="kgentities" element={<KGEntities />} />
-                <Route path="kgframes" element={<KGFrames />} />
-                <Route path="kgrelations" element={<KGRelations />} />
-              </Route>
+              <Route path="/objects/graphobjects" element={<GraphObjects />} />
+              <Route path="/objects/kgentities" element={<KGEntities />} />
+              <Route path="/objects/kgframes" element={<KGFrames />} />
+              <Route path="/objects/kgrelations" element={<KGRelations />} />
+              <Route path="/objects/kgdocuments" element={<KGDocuments />} />
               <Route path="/files" element={<Files />} />
               <Route path="/triples" element={<Triples />} />
               <Route path="/kg-types" element={<KGTypes />} />
@@ -108,12 +109,12 @@ export default function App() {
               {/* Hierarchical routes */}
               <Route path="/space/:spaceId/graphs" element={<Graphs />} />
               <Route path="/space/:spaceId/graph/:graphId/objects" element={<Navigate to="graphobjects" replace />} />
-              <Route path="/space/:spaceId/graph/:graphId/objects/*" element={<ObjectsLayout />}>
-                <Route path="graphobjects" element={<GraphObjects />} />
-                <Route path="kgentities" element={<KGEntities />} />
-                <Route path="kgframes" element={<KGFrames />} />
-                <Route path="kgrelations" element={<KGRelations />} />
-              </Route>
+              <Route path="/space/:spaceId/graph/:graphId/objects/graphobjects" element={<GraphObjects />} />
+              <Route path="/space/:spaceId/graph/:graphId/objects/kgentities" element={<KGEntities />} />
+              <Route path="/space/:spaceId/graph/:graphId/objects/kgframes" element={<KGFrames />} />
+              <Route path="/space/:spaceId/graph/:graphId/objects/kgrelations" element={<KGRelations />} />
+              <Route path="/space/:spaceId/graph/:graphId/objects/kgdocuments" element={<KGDocuments />} />
+              <Route path="/space/:spaceId/graph/:graphId/kgdocuments" element={<KGDocuments />} />
               <Route path="/space/:spaceId/graph/:graphId/files" element={<Files />} />
               <Route path="/space/:spaceId/graph/:graphId/triples" element={<Triples />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types" element={<KGTypes />} />
@@ -139,6 +140,9 @@ export default function App() {
               <Route path="/agent-registry" element={<AgentRegistry />} />
               <Route path="/agent-registry/:agentId" element={<AgentRegistryDetail />} />
               
+              {/* Visualization */}
+              <Route path="/visualization" element={<GraphVisualization />} />
+
               {/* Vector/Geo routes */}
               <Route path="/vector-indexes" element={<VectorIndexes />} />
               <Route path="/vector-mappings" element={<VectorMappings />} />
@@ -156,6 +160,7 @@ export default function App() {
               <Route path="/space/:spaceId/graph/:graphId/kg-types/:kgTypeId" element={<KGTypeDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/objects/new" element={<ObjectDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/objects/:objectId" element={<ObjectDetail />} />
+              <Route path="/space/:spaceId/graph/:graphId/document/:documentId" element={<KGDocumentDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/file/:fileId" element={<FileDetail />} />
               <Route path="/user/:id" element={<UserDetail />} />
             </Route>

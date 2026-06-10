@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional
 
 from .base_endpoint import BaseEndpoint
-from ..utils.client_utils import VitalGraphClientError, validate_required_params
+from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ...model.geo_model import GeoConfigOut, UpdateGeoConfigRequest
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,8 @@ class GeoConfigClientEndpoint(BaseEndpoint):
     def __init__(self, client):
         super().__init__(client)
 
-    def _url(self, space_id: str) -> str:
-        return f"{self._get_server_url()}/api/spaces/{space_id}/geo-config"
+    def _base_url(self) -> str:
+        return f"{self._get_server_url()}/api/geo-config"
 
     async def get_config(self, space_id: str) -> GeoConfigOut:
         """Get current geo configuration for a space (creates defaults if absent).
@@ -34,8 +34,9 @@ class GeoConfigClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
+        params = build_query_params(space_id=space_id)
         return await self._make_typed_request(
-            "GET", self._url(space_id), GeoConfigOut,
+            "GET", self._base_url(), GeoConfigOut, params=params,
         )
 
     async def update_config(
@@ -64,9 +65,10 @@ class GeoConfigClientEndpoint(BaseEndpoint):
             enabled=enabled, auto_sync=auto_sync,
             lat_predicates=lat_predicates, lon_predicates=lon_predicates,
         )
+        params = build_query_params(space_id=space_id)
         return await self._make_typed_request(
-            "PUT", self._url(space_id), GeoConfigOut,
-            json=request.model_dump(exclude_none=True),
+            "PUT", self._base_url(), GeoConfigOut,
+            json=request.model_dump(exclude_none=True), params=params,
         )
 
     async def delete_config(self, space_id: str) -> Dict:
@@ -80,7 +82,8 @@ class GeoConfigClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
+        params = build_query_params(space_id=space_id)
         response = await self._make_authenticated_request(
-            "DELETE", self._url(space_id),
+            "DELETE", self._base_url(), params=params,
         )
         return response.json()

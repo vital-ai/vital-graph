@@ -20,8 +20,8 @@ class MetricsClientEndpoint(BaseEndpoint):
     def __init__(self, client):
         super().__init__(client)
 
-    def _url(self, space_id: str, path: str = "") -> str:
-        return f"{self._get_server_url()}/api/spaces/{space_id}/metrics{path}"
+    _METRICS_URL = "/api/metrics"
+    _SLOW_URL = "/api/metrics/slow"
 
     async def get_metrics(
         self, space_id: str, range: str = "realtime",
@@ -37,9 +37,10 @@ class MetricsClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
-        params = build_query_params(range=range)
+        url = f"{self._get_server_url()}{self._METRICS_URL}"
+        params = build_query_params(space_id=space_id, range=range)
         response = await self._make_authenticated_request(
-            "GET", self._url(space_id), params=params,
+            "GET", url, params=params,
         )
         return response.json()
 
@@ -57,8 +58,9 @@ class MetricsClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
-        params = build_query_params(limit=limit)
+        url = f"{self._get_server_url()}{self._SLOW_URL}"
+        params = build_query_params(space_id=space_id, limit=limit)
         response = await self._make_authenticated_request(
-            "GET", self._url(space_id, "/slow"), params=params,
+            "GET", url, params=params,
         )
         return response.json()

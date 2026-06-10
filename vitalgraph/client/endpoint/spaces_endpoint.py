@@ -143,9 +143,10 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces/space"
+            params = build_query_params(space_id=space_id)
             
-            response = await self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Server now returns SpaceResponse structure
@@ -187,9 +188,10 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}/info"
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces/info"
+            params = build_query_params(space_id=space_id)
             
-            response = await self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()
             
             # Server now returns SpaceInfoResponse structure
@@ -235,8 +237,8 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
 
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}/analytics"
-            params = build_query_params(refresh=refresh, graph_uri=graph_uri)
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces/analytics"
+            params = build_query_params(space_id=space_id, refresh=refresh, graph_uri=graph_uri)
 
             response = await self._make_authenticated_request('GET', url, params=params)
             return SpaceAnalyticsResponse.model_validate(response.json())
@@ -264,9 +266,10 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, space=space)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces"
+            params = build_query_params(space_id=space_id)
             
-            response = await self._make_authenticated_request('PUT', url, json=space.model_dump())
+            response = await self._make_authenticated_request('PUT', url, params=params, json=space.model_dump())
             response_data = response.json()
             
             # Extract updated space from server response
@@ -307,9 +310,10 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/{space_id}"
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces"
+            params = build_query_params(space_id=space_id)
             
-            response = await self._make_authenticated_request('DELETE', url)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
             
             return SpaceDeleteResponse(
@@ -346,8 +350,8 @@ class SpacesEndpoint(BaseEndpoint):
         validate_required_params(name_filter=name_filter)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/spaces/filter/{name_filter}"
-            params = build_query_params(tenant=tenant)
+            url = f"{self._get_server_url().rstrip('/')}/api/spaces/filter"
+            params = build_query_params(name_filter=name_filter, tenant=tenant)
             
             response = await self._make_authenticated_request('GET', url, params=params)
             response_data = response.json()

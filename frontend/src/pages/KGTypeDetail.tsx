@@ -2,13 +2,14 @@ import React from 'react';
 import { HiCube } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
+import { vgClient } from '../services/ApiService';
 
 const KGTypeDetail: React.FC = () => {
   // Configuration for KG Types
   const config: ObjectDetailConfig = {
     objectTypeName: 'KG Type',
     objectTypeColor: 'purple',
-    apiEndpoint: '/api/graphs/kgtypes',
+    crudOps: vgClient.kgtypes,
     listRoute: '/kg-types',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGEntityType',
     paramName: 'kgTypeId',

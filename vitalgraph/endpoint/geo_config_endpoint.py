@@ -2,7 +2,7 @@
 
 REST API for managing the per-space geo_config table.
 
-Routes (all under /api/spaces/{space_id}/geo-config):
+Routes (all under /api/geo-config):
     GET    /   — get current geo config (or create defaults)
     PUT    /   — update geo config
     DELETE /   — reset geo config (delete row)
@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -96,36 +96,42 @@ class GeoConfigEndpoint:
         auth = self.auth_dependency
 
         @self.router.get(
-            "/spaces/{space_id}/geo-config",
+            "/geo-config",
             response_model=GeoConfigOut,
             tags=["Geo Config"],
             summary="Get Geo Config",
             description="Get or create default geo configuration for a space",
         )
-        async def get_route(space_id: str, current_user: Dict = Depends(auth)):
+        async def get_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(auth),
+        ):
             return await self.get_config(space_id, current_user)
 
         @self.router.put(
-            "/spaces/{space_id}/geo-config",
+            "/geo-config",
             response_model=GeoConfigOut,
             tags=["Geo Config"],
             summary="Update Geo Config",
             description="Update geo configuration (enabled, auto_sync, predicates)",
         )
         async def update_route(
-            space_id: str,
             body: UpdateGeoConfigRequest,
+            space_id: str = Query(..., description="Space ID"),
             current_user: Dict = Depends(auth),
         ):
             return await self.update_config(space_id, body, current_user)
 
         @self.router.delete(
-            "/spaces/{space_id}/geo-config",
+            "/geo-config",
             tags=["Geo Config"],
             summary="Reset Geo Config",
             description="Delete geo config row (resets to unconfigured state)",
         )
-        async def delete_route(space_id: str, current_user: Dict = Depends(auth)):
+        async def delete_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(auth),
+        ):
             return await self.delete_config(space_id, current_user)
 
 

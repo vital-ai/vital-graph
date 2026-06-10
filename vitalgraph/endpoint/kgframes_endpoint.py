@@ -1688,17 +1688,11 @@ class KGFramesEndpoint:
     def _extract_count_from_results(self, count_results) -> int:
         """Extract count from SPARQL count query results."""
         try:
-            # Handle different result formats
             if isinstance(count_results, dict):
-                if count_results.get("bindings"):
-                    for binding in count_results["bindings"]:
-                        count_value = binding.get("count", {}).get("value", "0")
-                        return int(count_value)
-            elif isinstance(count_results, list):
-                # Handle list format results
-                for item in count_results:
-                    if isinstance(item, dict) and "count" in item:
-                        return int(item["count"].get("value", "0"))
+                bindings = count_results.get("results", {}).get("bindings", [])
+                for binding in bindings:
+                    count_value = binding.get("count", {}).get("value", "0")
+                    return int(count_value)
             return 0
         except Exception as e:
             self.logger.warning(f"Error extracting count from results: {e}")

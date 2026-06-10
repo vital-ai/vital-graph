@@ -187,13 +187,20 @@ class FusekiPostgreSQLSpaceGraphs:
             
             results = await self.space_impl.postgresql_impl.execute_query(query, [space_id])
             
-            # Convert to list of dictionaries
+            # Convert to list of dictionaries with real triple counts
             graphs = []
             for result in results:
+                graph_uri = result.get('graph_uri')
+                triple_count = 0
+                if graph_uri:
+                    try:
+                        triple_count = await self.space_impl.postgresql_impl.count_quads(space_id, graph_uri)
+                    except Exception:
+                        pass
                 graph_data = {
-                    'graph_uri': result.get('graph_uri'),
+                    'graph_uri': graph_uri,
                     'graph_name': result.get('graph_name'),
-                    'triple_count': 0,  # Not stored in table, default to 0
+                    'triple_count': triple_count,
                     'created_time': result.get('created_time'),
                     'updated_time': None  # Not stored in table
                 }
@@ -229,10 +236,15 @@ class FusekiPostgreSQLSpaceGraphs:
             
             if results:
                 result = results[0]
+                triple_count = 0
+                try:
+                    triple_count = await self.space_impl.postgresql_impl.count_quads(space_id, graph_uri)
+                except Exception:
+                    pass
                 graph_data = {
                     'graph_uri': result.get('graph_uri'),
                     'graph_name': result.get('graph_name'),
-                    'triple_count': 0,  # Not stored in table, default to 0
+                    'triple_count': triple_count,
                     'created_time': result.get('created_time'),
                     'updated_time': None  # Not stored in table
                 }

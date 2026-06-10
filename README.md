@@ -95,6 +95,24 @@ vitalgraphdb
 vitalgraphdb --config /path/to/vitalgraphdb-config.yaml
 ```
 
+### Data Import/Export
+
+```bash
+# Import RDF data (N-Triples, N-Quads, Turtle, JSONL, VitalSigns Block)
+vitalgraphimport -s my_space -f data.nt
+vitalgraphimport -s my_space -f entities.vital --format vital
+
+# Export RDF data
+vitalgraphexport -s my_space -f backup.nq
+vitalgraphexport -s my_space -f entities.vital --format vital --entity-type-uri urn:PersonEntity
+
+# See all options
+vitalgraphimport --help
+vitalgraphexport --help
+```
+
+Import/export is also available via the REST API (`/api/data/import`, `/api/data/export`) and the frontend Data Management page.
+
 ## Features
 
 - **Full SPARQL 1.1 Support**: SELECT, CONSTRUCT, ASK, DESCRIBE, UPDATE operations
@@ -113,6 +131,7 @@ VitalGraph consists of:
 - **Server** (`vitalgraph.server`): FastAPI-based graph database server
 - **Database Layer** (`vitalgraph.db`): PostgreSQL integration with SPARQL translation
 - **Admin Tools** (`vitalgraphadmin`): Database administration utilities
+- **Import/Export CLIs** (`vitalgraphimport`, `vitalgraphexport`): Standalone data import/export tools
 
 ## Documentation
 

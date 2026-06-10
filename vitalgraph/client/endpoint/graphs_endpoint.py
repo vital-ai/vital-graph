@@ -39,9 +39,9 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graphs"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/graphs"
             
-            response = await self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url, params={'space_id': space_id})
             response_data = response.json()
             
             # Parse each item in the list as a GraphInfo object
@@ -89,9 +89,9 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/graph"
             
-            response = await self._make_authenticated_request('GET', url)
+            response = await self._make_authenticated_request('GET', url, params={'space_id': space_id, 'graph_uri': graph_uri})
             response_data = response.json()
             
             # Handle case where server returns null for non-existent graphs
@@ -166,9 +166,9 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/graph"
             
-            response = await self._make_authenticated_request('PUT', url)
+            response = await self._make_authenticated_request('PUT', url, params={'space_id': space_id, 'graph_uri': graph_uri})
             response_data = response.json()
             
             return GraphCreateResponse(
@@ -206,8 +206,10 @@ class GraphsEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, graph_uri=graph_uri)
         
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph/{graph_uri}"
-            params = {"silent": silent} if silent else None
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/graph"
+            params = {'space_id': space_id, 'graph_uri': graph_uri}
+            if silent:
+                params['silent'] = 'true'
             
             response = await self._make_authenticated_request('DELETE', url, params=params)
             response_data = response.json()
@@ -247,14 +249,14 @@ class GraphsEndpoint(BaseEndpoint):
         
         try:
             # Use the POST endpoint for graph operations with CLEAR operation
-            url = f"{self._get_server_url().rstrip('/')}/api/graphs/{space_id}/graph"
+            url = f"{self._get_server_url().rstrip('/')}/api/graphs/graph"
             
             request_data = SPARQLGraphRequest(
                 operation="CLEAR",
                 target_graph_uri=graph_uri
             )
             
-            response = await self._make_authenticated_request('POST', url, json=request_data.model_dump())
+            response = await self._make_authenticated_request('POST', url, params={'space_id': space_id}, json=request_data.model_dump())
             response_data = response.json()
             
             return GraphClearResponse(

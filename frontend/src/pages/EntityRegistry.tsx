@@ -13,8 +13,9 @@ import TimeAgo from '../components/TimeAgo';
 interface RegistryEntity {
   entity_id: string;
   entity_uri: string;
-  name: string;
-  entity_type: string;
+  primary_name: string;
+  type_key: string | null;
+  type_label: string | null;
   description: string | null;
   status: string;
   created_time: string | null;
@@ -122,11 +123,11 @@ const EntityRegistry: React.FC = () => {
                 {entities.map((entity) => (
                   <TableRow key={entity.entity_id} className="cursor-pointer" onClick={() => navigate(`/entity-registry/${entity.entity_id}`)}>
                     <TableCell className="font-medium text-gray-900 dark:text-white">
-                      {entity.name}
+                      {entity.primary_name}
                       <div className="text-xs text-gray-400 font-mono truncate max-w-[200px]">{entity.entity_uri}</div>
                     </TableCell>
                     <TableCell>
-                      <Badge color="purple" size="xs">{entity.entity_type}</Badge>
+                      <Badge color="purple" size="xs">{entity.type_label || entity.type_key || '—'}</Badge>
                     </TableCell>
                     <TableCell>{statusBadge(entity.status)}</TableCell>
                     <TableCell className="text-sm text-gray-500 max-w-[200px] truncate">

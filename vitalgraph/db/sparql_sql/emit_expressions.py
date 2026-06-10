@@ -25,8 +25,11 @@ from .collect import _esc
 from .vg_functions import (
     VG_ALL_FUNCTIONS as _VG_ALL_FUNCTIONS,
     VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+    VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
+    VG_MULTI_VECTOR_FUNCTIONS,
     VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
     vector_similarity_sql, geo_distance_sql, within_radius_sql,
+    multi_vector_similarity_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -1061,6 +1064,12 @@ def _vg_function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
         sql, vec_request = vector_similarity_sql(expr, ctx)
         if vec_request is not None:
             ctx.add_vector_request(vec_request)
+        return sql
+
+    if iri in VG_MULTI_VECTOR_FUNCTIONS:
+        sql, vec_requests = multi_vector_similarity_sql(expr, ctx)
+        for vr in vec_requests:
+            ctx.add_vector_request(vr)
         return sql
 
     if iri == VG_GEO_DISTANCE:

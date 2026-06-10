@@ -65,24 +65,31 @@ class UsersEndpoint:
             )
         
         @self.router.get(
-            "/users/{user_id}",
+            "/users/user",
             response_model=User,
             tags=["Users"],
             summary="Get User",
             description="Retrieve detailed information about a specific user account (admin only)"
         )
-        async def get_user(user_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def get_user(
+            user_id: str = Query(..., description="User ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
             return await self.api.get_user_by_id(user_id, current_user)
         
         @self.router.put(
-            "/users/{user_id}",
+            "/users",
             response_model=UserUpdateResponse,
             tags=["Users"],
             summary="Update User",
             description="Update an existing user account (admin only)"
         )
-        async def update_user(user_id: str, user: User, current_user: Dict = Depends(self.auth_dependency)):
+        async def update_user(
+            user: User,
+            user_id: str = Query(..., description="User ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
             updated_user = await self.api.update_user(user_id, user.dict(), current_user)
             return UserUpdateResponse(
@@ -91,23 +98,29 @@ class UsersEndpoint:
             )
         
         @self.router.delete(
-            "/users/{user_id}",
+            "/users",
             response_model=UserDeleteResponse,
             tags=["Users"],
             summary="Delete User",
             description="Permanently delete a user account (admin only)"
         )
-        async def delete_user(user_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def delete_user(
+            user_id: str = Query(..., description="User ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
             return await self.api.delete_user(user_id, current_user)
 
         @self.router.get(
-            "/users/{user_id}/spaces",
+            "/users/spaces",
             tags=["Users"],
             summary="Get User Space Access",
             description="Get space access map for a user (admin only)"
         )
-        async def get_user_spaces(user_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def get_user_spaces(
+            user_id: str = Query(..., description="User ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)
             if not user:
@@ -116,16 +129,16 @@ class UsersEndpoint:
             return {"username": user_id, "spaces": spaces}
 
         @self.router.put(
-            "/users/{user_id}/spaces/{space_id}",
+            "/users/spaces",
             tags=["Users"],
             summary="Grant Space Access",
             description="Grant or update space access for a user (admin only)"
         )
         async def grant_space_access(
-            user_id: str,
-            space_id: str,
             body: dict,
-            current_user: Dict = Depends(self.auth_dependency)
+            user_id: str = Query(..., description="User ID"),
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)
@@ -146,15 +159,15 @@ class UsersEndpoint:
             return {"message": f"Access '{access_level}' granted to '{user_id}' for space '{space_id}'"}
 
         @self.router.delete(
-            "/users/{user_id}/spaces/{space_id}",
+            "/users/spaces",
             tags=["Users"],
             summary="Revoke Space Access",
             description="Revoke a user's access to a specific space (admin only)"
         )
         async def revoke_space_access(
-            user_id: str,
-            space_id: str,
-            current_user: Dict = Depends(self.auth_dependency)
+            user_id: str = Query(..., description="User ID"),
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)

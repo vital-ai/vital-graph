@@ -5,7 +5,7 @@ following the SPARQL 1.1 Update specification.
 """
 
 from typing import Dict, List, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Form, Body
+from fastapi import APIRouter, HTTPException, Depends, Form, Body, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
@@ -32,15 +32,15 @@ class SPARQLInsertEndpoint:
         
         # POST endpoint for SPARQL inserts
         @self.router.post(
-            "/{space_id}/insert",
+            "/insert",
             response_model=SPARQLInsertResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Insert",
             description="Execute a SPARQL insert operation (INSERT DATA or INSERT WHERE) against the specified space"
         )
         async def sparql_insert_post(
-            space_id: str,
-            request: SPARQLInsertRequest,
+            space_id: str = Query(..., description="Space ID"),
+            request: SPARQLInsertRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_write(current_user, space_id)
@@ -48,14 +48,14 @@ class SPARQLInsertEndpoint:
         
         # Form-based endpoint for SPARQL inserts
         @self.router.post(
-            "/{space_id}/insert-form",
+            "/insert-form",
             response_model=SPARQLInsertResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Insert (Form)",
             description="Execute a SPARQL insert operation via form data"
         )
         async def sparql_insert_form(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             update: str = Form(..., description="SPARQL update string"),
             graph_uri: Optional[str] = Form(None, description="Target graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
@@ -65,14 +65,14 @@ class SPARQLInsertEndpoint:
         
         # Direct RDF data insert endpoint
         @self.router.post(
-            "/{space_id}/insert-data",
+            "/insert-data",
             response_model=SPARQLInsertResponse,
             tags=["SPARQL"],
             summary="Insert RDF Data Directly",
             description="Insert RDF data directly without SPARQL syntax"
         )
         async def insert_rdf_data(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             rdf_data: str = Body(..., description="RDF data in N-Triples, Turtle, or RDF/XML format"),
             graph_uri: Optional[str] = Body(None, description="Target graph URI"),
             format: str = Body("application/n-triples", description="RDF format"),

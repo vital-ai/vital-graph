@@ -309,73 +309,89 @@ class SpacesEndpoint:
             return await self.add_space(space, current_user)
         
         @self.router.get(
-            "/spaces/{space_id}",
+            "/spaces/space",
             response_model=SpaceResponse,
             tags=["Spaces"],
             summary="Get Space",
             description="Retrieve detailed information about a specific graph space by ID"
         )
-        async def get_space_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def get_space_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_space_read(current_user, space_id)
             return await self.get_space(space_id, current_user)
         
         @self.router.get(
-            "/spaces/{space_id}/info",
+            "/spaces/info",
             response_model=SpaceInfoResponse,
             tags=["Spaces"],
             summary="Get Space Info",
             description="Retrieve detailed space information including statistics and metadata"
         )
-        async def get_space_info_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def get_space_info_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_space_read(current_user, space_id)
             return await self.get_space_info(space_id, current_user)
         
         @self.router.get(
-            "/spaces/{space_id}/analytics",
+            "/spaces/analytics",
             response_model=SpaceAnalyticsResponse,
             tags=["Spaces"],
             summary="Get Space Analytics",
             description="Retrieve KG analytics for a space (entity/frame/relation/property distributions). Use refresh=true to trigger recomputation."
         )
         async def get_space_analytics_route(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             refresh: bool = Query(False, description="Force fresh analytics computation"),
             graph_uri: str = Query(None, description="Filter analytics to a specific graph URI"),
-            current_user: Dict = Depends(self.auth_dependency)
+            current_user: Dict = Depends(self.auth_dependency),
         ):
             require_space_read(current_user, space_id)
             return await self.get_space_analytics(space_id, refresh, graph_uri, current_user)
 
         @self.router.put(
-            "/spaces/{space_id}",
+            "/spaces",
             response_model=SpaceUpdateResponse,
             tags=["Spaces"],
             summary="Update Space",
             description="Update an existing graph space (requires complete space object)"
         )
-        async def update_space_route(space_id: str, space: Space, current_user: Dict = Depends(self.auth_dependency)):
+        async def update_space_route(
+            space: Space,
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_space_write(current_user, space_id)
             return await self.update_space(space_id, space, current_user)
         
         @self.router.delete(
-            "/spaces/{space_id}",
+            "/spaces",
             response_model=SpaceDeleteResponse,
             tags=["Spaces"],
             summary="Delete Space",
             description="Permanently delete a graph space and all associated RDF data"
         )
-        async def delete_space_route(space_id: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def delete_space_route(
+            space_id: str = Query(..., description="Space ID"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
             return await self.delete_space(space_id, current_user)
         
         @self.router.get(
-            "/spaces/filter/{name_filter}",
+            "/spaces/filter",
             response_model=SpacesListResponse,
             tags=["Spaces"],
             summary="Filter Spaces by Name",
             description="Search for spaces whose names contain the specified filter text"
         )
-        async def filter_spaces_route(name_filter: str, current_user: Dict = Depends(self.auth_dependency)):
+        async def filter_spaces_route(
+            name_filter: str = Query(..., description="Name filter text"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             return await self.filter_spaces(name_filter, current_user)
 
 

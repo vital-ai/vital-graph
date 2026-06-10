@@ -24,10 +24,20 @@ import {
   HiCog,
   HiDatabase,
   HiSearch,
+  HiCollection,
+  HiUserGroup,
+  HiDocumentDuplicate,
+  HiDocumentText,
+  HiLink,
+  HiLightningBolt,
+  HiEye,
 } from 'react-icons/hi';
 import { useAuth } from '../contexts/AuthContext';
 import GraphIcon from './icons/GraphIcon';
 import DataIcon from './icons/DataIcon';
+import KGTypesIcon from './icons/KGTypesIcon';
+import ObjectIcon from './icons/ObjectIcon';
+import RdfIcon from './icons/RdfIcon';
 import CommandPalette from './CommandPalette';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 
@@ -179,47 +189,95 @@ const Layout: React.FC = () => {
               </Link>
             </SidebarItemGroup>
 
+            {/* Visualization */}
+            <SidebarItemGroup>
+              <span className="px-3 pt-2 pb-1 text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Visualization</span>
+              <Link to="/visualization" style={{display: 'block'}}>
+                <SidebarItem icon={HiEye} active={location.pathname.startsWith('/visualization')} as="div">
+                  Graph Visualization
+                </SidebarItem>
+              </Link>
+            </SidebarItemGroup>
+
             {/* Knowledge Graph */}
             <SidebarItemGroup>
-              <SidebarCollapse icon={HiDatabase} label="Knowledge Graph" open={location.pathname.startsWith('/objects') || location.pathname.includes('/kg-types') || location.pathname.includes('/kg-query-builder') || location.pathname.includes('/triples') || location.pathname.includes('/files') || location.pathname.includes('/sparql')}>
-                <Link to="/objects" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname.startsWith('/objects') || location.pathname.includes('/objects')} as="div">
-                    Objects
-                  </SidebarItem>
-                </Link>
-                <Link to="/kg-types" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/kg-types'} as="div">
-                    KG Types
-                  </SidebarItem>
-                </Link>
-                <Link to="/triples" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/triples'} as="div">
-                    Triples
-                  </SidebarItem>
-                </Link>
-                <Link to="/files" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/files'} as="div">
-                    Files
-                  </SidebarItem>
-                </Link>
-                <Link to="/kg-query-builder" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/kg-query-builder'} as="div">
-                    Query Builder
-                  </SidebarItem>
-                </Link>
-                <Link to="/sparql" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/sparql'} as="div">
-                    SPARQL
-                  </SidebarItem>
-                </Link>
-              </SidebarCollapse>
+              <span className="px-3 pt-2 pb-1 text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">Knowledge Graph</span>
+              <Link to="/objects/kgentities" style={{display: 'block'}}>
+                <SidebarItem icon={HiCollection} active={location.pathname.includes('/kgentities')} as="div">
+                  KG Entities
+                </SidebarItem>
+              </Link>
+              <Link to="/objects/kgframes" style={{display: 'block'}}>
+                <SidebarItem icon={HiDocumentDuplicate} active={location.pathname.includes('/kgframes')} as="div">
+                  KG Frames
+                </SidebarItem>
+              </Link>
+              <Link to="/objects/kgrelations" style={{display: 'block'}}>
+                <SidebarItem icon={HiLink} active={location.pathname.includes('/kgrelations')} as="div">
+                  KG Relations
+                </SidebarItem>
+              </Link>
+              <Link to="/objects/kgdocuments" style={{display: 'block'}}>
+                <SidebarItem icon={HiDocumentText} active={location.pathname.includes('/kgdocuments')} as="div">
+                  KG Documents
+                </SidebarItem>
+              </Link>
+              <Link to="/kg-types" style={{display: 'block'}}>
+                <SidebarItem icon={KGTypesIcon} active={location.pathname === '/kg-types'} as="div">
+                  KG Types
+                </SidebarItem>
+              </Link>
+              <Link to="/kg-query-builder" style={{display: 'block'}}>
+                <SidebarItem icon={HiLightningBolt} active={location.pathname === '/kg-query-builder'} as="div">
+                  KG Query Builder
+                </SidebarItem>
+              </Link>
+              <Link to="/files" style={{display: 'block'}}>
+                <SidebarItem icon={HiDatabase} active={location.pathname === '/files'} as="div">
+                  Files
+                </SidebarItem>
+              </Link>
+            </SidebarItemGroup>
+
+            {/* RDF */}
+            <SidebarItemGroup>
+              <span className="px-3 pt-2 pb-1 text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">RDF</span>
+              <Link to="/objects/graphobjects" style={{display: 'block'}}>
+                <SidebarItem icon={ObjectIcon} active={location.pathname.includes('/graphobjects')} as="div">
+                  Graph Objects
+                </SidebarItem>
+              </Link>
+              <Link to="/triples" style={{display: 'block'}}>
+                <SidebarItem icon={RdfIcon} active={location.pathname === '/triples'} as="div">
+                  Triples
+                </SidebarItem>
+              </Link>
+              <Link to="/sparql" style={{display: 'block'}}>
+                <SidebarItem icon={HiSearch} active={location.pathname === '/sparql'} as="div">
+                  SPARQL
+                </SidebarItem>
+              </Link>
+            </SidebarItemGroup>
+
+            {/* Registries */}
+            <SidebarItemGroup>
+              <Link to="/entity-registry" style={{display: 'block'}}>
+                <SidebarItem icon={HiCollection} active={location.pathname.startsWith('/entity-registry')} as="div">
+                  Entity Registry
+                </SidebarItem>
+              </Link>
+              <Link to="/agent-registry" style={{display: 'block'}}>
+                <SidebarItem icon={HiUserGroup} active={location.pathname.startsWith('/agent-registry')} as="div">
+                  Agent Registry
+                </SidebarItem>
+              </Link>
             </SidebarItemGroup>
 
             {/* Data */}
             <SidebarItemGroup>
               <Link to="/data" style={{display: 'block'}}>
                 <SidebarItem icon={DataIcon} active={location.pathname.startsWith('/data')} as="div">
-                  Data
+                  Data Management
                 </SidebarItem>
               </Link>
             </SidebarItemGroup>
@@ -253,7 +311,7 @@ const Layout: React.FC = () => {
             {/* Administration (admin only) */}
             {user?.role === 'admin' && (
               <SidebarItemGroup>
-                <SidebarCollapse icon={HiCog} label="Administration" open={location.pathname.startsWith('/users') || location.pathname.startsWith('/api-keys') || location.pathname.startsWith('/admin') || location.pathname.startsWith('/audit-log') || location.pathname.startsWith('/entity-registry') || location.pathname.startsWith('/agent-registry')}>
+                <SidebarCollapse icon={HiCog} label="Administration" open={location.pathname.startsWith('/users') || location.pathname.startsWith('/api-keys') || location.pathname.startsWith('/admin') || location.pathname.startsWith('/audit-log')}>
                   <Link to="/users" style={{display: 'block'}}>
                     <SidebarItem active={location.pathname === '/users'} as="div">
                       Users
@@ -267,16 +325,6 @@ const Layout: React.FC = () => {
                   <Link to="/audit-log" style={{display: 'block'}}>
                     <SidebarItem active={location.pathname === '/audit-log'} as="div">
                       Audit Log
-                    </SidebarItem>
-                  </Link>
-                  <Link to="/entity-registry" style={{display: 'block'}}>
-                    <SidebarItem active={location.pathname.startsWith('/entity-registry')} as="div">
-                      Entity Registry
-                    </SidebarItem>
-                  </Link>
-                  <Link to="/agent-registry" style={{display: 'block'}}>
-                    <SidebarItem active={location.pathname.startsWith('/agent-registry')} as="div">
-                      Agent Registry
                     </SidebarItem>
                   </Link>
                   <Link to="/admin" style={{display: 'block'}}>

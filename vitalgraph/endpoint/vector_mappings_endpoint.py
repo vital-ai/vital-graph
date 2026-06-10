@@ -2,14 +2,13 @@
 
 REST API for managing vector_mapping + vector_mapping_property rows per space.
 
-Routes (all under /api/spaces/{space_id}/vector-mappings):
-    GET    /                         — list mappings (filterable)
-    POST   /                         — create mapping
-    GET    /{mapping_id}             — get mapping + properties
-    PUT    /{mapping_id}             — update mapping fields
-    DELETE /{mapping_id}             — delete mapping (CASCADE)
-    POST   /{mapping_id}/properties  — add property
-    DELETE /{mapping_id}/properties/{property_id} — remove property
+Routes (all under /api/vector-mappings):
+    GET    /             — list mappings (filterable), or get single if mapping_id provided
+    POST   /             — create mapping
+    PUT    /             — update mapping fields
+    DELETE /             — delete mapping (CASCADE)
+    POST   /properties   — add property
+    DELETE /properties   — remove property
 """
 from __future__ import annotations
 
@@ -188,98 +187,88 @@ class VectorMappingsEndpoint:
         auth = self.auth_dependency
 
         @self.router.get(
-            "/spaces/{space_id}/vector-mappings",
+            "/vector-mappings",
             response_model=MappingListResponse,
             tags=["Vector Mappings"],
-            summary="List Vector Mappings",
-            description="List all vector mappings for a space, with optional filters",
+            summary="List or Get Vector Mappings",
+            description="List all vector mappings for a space (with optional filters), or get a single mapping if mapping_id is provided",
         )
         async def list_route(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
+            mapping_id: Optional[int] = Query(None, description="Mapping ID (returns single mapping if provided)"),
             index_name: Optional[str] = Query(None),
             mapping_type: Optional[str] = Query(None),
             enabled: Optional[bool] = Query(None),
             current_user: Dict = Depends(auth),
         ):
+            if mapping_id is not None:
+                return await self.get_mapping(space_id, mapping_id, current_user)
             return await self.list_mappings(space_id, index_name, mapping_type, enabled, current_user)
 
         @self.router.post(
-            "/spaces/{space_id}/vector-mappings",
+            "/vector-mappings",
             response_model=MappingOut,
             status_code=status.HTTP_201_CREATED,
             tags=["Vector Mappings"],
             summary="Create Vector Mapping",
         )
         async def create_route(
-            space_id: str,
-            body: CreateMappingRequest,
+            space_id: str = Query(..., description="Space ID"),
+            body: CreateMappingRequest = None,
             current_user: Dict = Depends(auth),
         ):
             return await self.create_mapping(space_id, body, current_user)
 
-        @self.router.get(
-            "/spaces/{space_id}/vector-mappings/{mapping_id}",
-            response_model=MappingOut,
-            tags=["Vector Mappings"],
-            summary="Get Vector Mapping",
-        )
-        async def get_route(
-            space_id: str,
-            mapping_id: int,
-            current_user: Dict = Depends(auth),
-        ):
-            return await self.get_mapping(space_id, mapping_id, current_user)
-
         @self.router.put(
-            "/spaces/{space_id}/vector-mappings/{mapping_id}",
+            "/vector-mappings",
             response_model=MappingOut,
             tags=["Vector Mappings"],
             summary="Update Vector Mapping",
         )
         async def update_route(
-            space_id: str,
-            mapping_id: int,
             body: UpdateMappingRequest,
+            space_id: str = Query(..., description="Space ID"),
+            mapping_id: int = Query(..., description="Mapping ID to update"),
             current_user: Dict = Depends(auth),
         ):
             return await self.update_mapping(space_id, mapping_id, body, current_user)
 
         @self.router.delete(
-            "/spaces/{space_id}/vector-mappings/{mapping_id}",
+            "/vector-mappings",
             tags=["Vector Mappings"],
             summary="Delete Vector Mapping",
         )
         async def delete_route(
-            space_id: str,
-            mapping_id: int,
+            space_id: str = Query(..., description="Space ID"),
+            mapping_id: int = Query(..., description="Mapping ID to delete"),
             current_user: Dict = Depends(auth),
         ):
             return await self.delete_mapping(space_id, mapping_id, current_user)
 
         @self.router.post(
-            "/spaces/{space_id}/vector-mappings/{mapping_id}/properties",
+            "/vector-mappings/properties",
             response_model=MappingPropertyOut,
             status_code=status.HTTP_201_CREATED,
             tags=["Vector Mappings"],
             summary="Add Mapping Property",
         )
         async def add_prop_route(
-            space_id: str,
-            mapping_id: int,
             body: AddPropertyRequest,
+            space_id: str = Query(..., description="Space ID"),
+            mapping_id: int = Query(..., description="Mapping ID"),
             current_user: Dict = Depends(auth),
         ):
             return await self.add_property(space_id, mapping_id, body, current_user)
 
         @self.router.delete(
-            "/spaces/{space_id}/vector-mappings/{mapping_id}/properties/{property_id}",
+            "/vector-mappings/properties",
             tags=["Vector Mappings"],
             summary="Remove Mapping Property",
         )
         async def remove_prop_route(
-            space_id: str,
-            mapping_id: int,
-            property_id: int,
+            space_id: str = Query(..., description="Space ID"),
+            mapping_id: int = Query(..., description="Mapping ID"),
+            property_id: int = Query(..., description="Property ID to remove"),
             current_user: Dict = Depends(auth),
         ):
             return await self.remove_property(space_id, mapping_id, property_id, current_user)

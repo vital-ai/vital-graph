@@ -39,16 +39,41 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
     # 3. Stats tables
     stats = await resync_stats_tables(conn, space_id)
 
-    # 4. ANALYZE all space tables
+    # 4. Geo table — extract lat/lon from existing quads
+    geo_points = 0
+    try:
+        from ...vectorization.geo_populator import populate_geo
+        # List all graphs in the space
+        graph_rows = await conn.fetch(
+            "SELECT graph_uri FROM graph WHERE space_id = $1", space_id,
+        )
+        term_table = t.get('term', f"{space_id}_term")
+        for gr in graph_rows:
+            graph_uri = gr["graph_uri"]
+            # Resolve graph URI to context_uuid
+            ctx_row = await conn.fetchrow(
+                f"SELECT term_uuid FROM {term_table} "
+                f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                graph_uri,
+            )
+            if ctx_row:
+                geo_stats = await populate_geo(conn, space_id, ctx_row["term_uuid"])
+                geo_points += geo_stats.points_upserted
+        logger.info("resync geo(%s): %d points upserted across %d graphs",
+                     space_id, geo_points, len(graph_rows))
+    except Exception as e:
+        logger.warning("Geo resync failed (non-critical): %s", e)
+
+    # 5. ANALYZE all space tables
     for table_name in t.values():
         await conn.execute(f"ANALYZE {table_name}")
 
-    # 5. Invalidate in-memory stats cache + reset change counter
+    # 6. Invalidate in-memory stats cache + reset change counter
     invalidate_stats_cache(space_id)
     from .auto_analyze import reset_counter
     reset_counter(space_id)
 
-    # 6. Notify other instances to invalidate their stats cache
+    # 7. Notify other instances to invalidate their stats cache
     try:
         from . import db_provider as _db
         impl = _db._impl
@@ -63,6 +88,7 @@ async def resync_all_auxiliary_tables(conn, space_id: str) -> Dict[str, int]:
         'frame_entity_rows': fe_count,
         'pred_stats_rows': stats['pred_stats'],
         'quad_stats_rows': stats['quad_stats'],
+        'geo_points': geo_points,
     }
     logger.info("resync_all_auxiliary_tables(%s): %s", space_id, result)
     return result

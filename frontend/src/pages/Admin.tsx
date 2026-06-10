@@ -115,8 +115,8 @@ const Admin: React.FC = () => {
 
   const fetchSpaces = useCallback(async () => {
     try {
-      const list = await apiService.getSpaces() as { space_id?: string; name?: string }[];
-      setSpaces(list.map((s) => ({ id: s.space_id || '', name: s.name || s.space_id || '' })));
+      const list = await apiService.getSpaces() as { space?: string; space_name?: string }[];
+      setSpaces(list.map((s) => ({ id: s.space || '', name: s.space_name || s.space || '' })));
     } catch {
       // ignore
     }
@@ -283,11 +283,13 @@ const Admin: React.FC = () => {
           <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
             <Table striped>
               <TableHead>
-                <TableHeadCell>Type</TableHeadCell>
-                <TableHeadCell>Status</TableHeadCell>
-                <TableHeadCell>Progress</TableHeadCell>
-                <TableHeadCell>Started</TableHeadCell>
-                <TableHeadCell>Completed</TableHeadCell>
+                <TableRow>
+                  <TableHeadCell>Type</TableHeadCell>
+                  <TableHeadCell>Status</TableHeadCell>
+                  <TableHeadCell>Progress</TableHeadCell>
+                  <TableHeadCell>Started</TableHeadCell>
+                  <TableHeadCell>Completed</TableHeadCell>
+                </TableRow>
               </TableHead>
               <TableBody>
                 {processes.map((p) => (

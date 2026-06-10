@@ -10,17 +10,90 @@ import {
   HiHome, HiCollection, HiPencil, HiTrash, HiSave, HiX,
   HiTag, HiIdentification, HiFolder, HiLocationMarker,
 } from 'react-icons/hi';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { usePageTitle } from '../hooks/usePageTitle';
 import ConfirmDialog from '../components/ConfirmDialog';
+
+// Fix default marker icons for leaflet in bundled apps
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
+
+/** Auto-fit map bounds to markers */
+const FitBounds: React.FC<{ bounds: L.LatLngBoundsExpression }> = ({ bounds }) => {
+  const map = useMap();
+  useEffect(() => { map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 }); }, [map, bounds]);
+  return null;
+};
+
+interface LocationItem {
+  location_id: number;
+  location_name: string | null;
+  location_type_key: string;
+  latitude: number | null;
+  longitude: number | null;
+  formatted_address: string | null;
+}
+
+const LocationsTabContent: React.FC<{ locations: LocationItem[] }> = ({ locations }) => {
+  const geoLocations = locations.filter(l => l.latitude != null && l.longitude != null);
+  const bounds = geoLocations.length > 0
+    ? L.latLngBounds(geoLocations.map(l => [l.latitude!, l.longitude!] as L.LatLngTuple))
+    : null;
+  const center: L.LatLngTuple = geoLocations.length > 0
+    ? [geoLocations[0].latitude!, geoLocations[0].longitude!]
+    : [39.8283, -98.5795];
+
+  return (
+    <div className="space-y-4">
+      {bounds && (
+        <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700" style={{ height: '300px' }}>
+          <MapContainer center={center} zoom={10} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <FitBounds bounds={bounds} />
+            {geoLocations.map(l => (
+              <Marker key={l.location_id} position={[l.latitude!, l.longitude!]}>
+                <Popup>
+                  <strong>{l.location_name || l.location_type_key}</strong>
+                  {l.formatted_address && <><br /><span className="text-xs">{l.formatted_address}</span></>}
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+        </div>
+      )}
+      <Table striped>
+        <TableHead><TableHeadCell>Name</TableHeadCell><TableHeadCell>Type</TableHeadCell><TableHeadCell>Address</TableHeadCell><TableHeadCell>Coordinates</TableHeadCell></TableHead>
+        <TableBody>
+          {locations.map(l => (
+            <TableRow key={l.location_id}>
+              <TableCell>{l.location_name || '\u2014'}</TableCell>
+              <TableCell><Badge color="purple" size="xs">{l.location_type_key}</Badge></TableCell>
+              <TableCell className="text-sm text-gray-500">{l.formatted_address || '\u2014'}</TableCell>
+              <TableCell className="font-mono text-xs">{l.latitude != null && l.longitude != null ? `${l.latitude}, ${l.longitude}` : '\u2014'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+};
 
 interface EntityData {
   entity_id: string;
   entity_uri: string;
-  name: string;
-  entity_type: string;
+  primary_name: string;
+  type_key: string | null;
+  type_label: string | null;
   description: string | null;
   status: string;
-  source: string | null;
   created_time: string | null;
   updated_time: string | null;
 }
@@ -40,13 +113,13 @@ const EntityRegistryDetail: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'aliases' | 'identifiers' | 'categories' | 'locations'>('aliases');
 
   // Form
-  const [form, setForm] = useState({ name: '', entity_uri: '', entity_type: '', description: '', status: 'active' });
+  const [form, setForm] = useState({ primary_name: '', entity_uri: '', type_key: '', description: '', status: 'active' });
 
   // Sub-data
-  const [aliases, setAliases] = useState<{ alias_id: number; alias: string; language: string }[]>([]);
-  const [identifiers, setIdentifiers] = useState<{ identifier_id: number; scheme: string; value: string }[]>([]);
-  const [categories, setCategories] = useState<{ category_id: number; category: string; source: string }[]>([]);
-  const [locations, setLocations] = useState<{ location_id: number; latitude: number; longitude: number; label: string }[]>([]);
+  const [aliases, setAliases] = useState<{ alias_id: number; alias_name: string; alias_type: string; is_primary: boolean }[]>([]);
+  const [identifiers, setIdentifiers] = useState<{ identifier_id: number; identifier_namespace: string; identifier_value: string; is_primary: boolean }[]>([]);
+  const [categories, setCategories] = useState<{ entity_category_id: number; category_key: string; category_label: string | null }[]>([]);
+  const [locations, setLocations] = useState<{ location_id: number; location_name: string | null; location_type_key: string; latitude: number | null; longitude: number | null; formatted_address: string | null }[]>([]);
   const [subLoading, setSubLoading] = useState(false);
 
   const fetchEntity = useCallback(async () => {
@@ -57,9 +130,9 @@ const EntityRegistryDetail: React.FC = () => {
       const e = data.entity || data;
       setEntity(e);
       setForm({
-        name: e.name || '',
+        primary_name: e.primary_name || '',
         entity_uri: e.entity_uri || '',
-        entity_type: e.entity_type || '',
+        type_key: e.type_key || '',
         description: e.description || '',
         status: e.status || 'active',
       });
@@ -80,10 +153,10 @@ const EntityRegistryDetail: React.FC = () => {
         apiService.getEntityCategories(entityId),
         apiService.getEntityLocations(entityId),
       ]);
-      if (aliasData.status === 'fulfilled') setAliases(aliasData.value.aliases || []);
-      if (idData.status === 'fulfilled') setIdentifiers(idData.value.identifiers || []);
-      if (catData.status === 'fulfilled') setCategories(catData.value.categories || []);
-      if (locData.status === 'fulfilled') setLocations(locData.value.locations || []);
+      if (aliasData.status === 'fulfilled') setAliases(Array.isArray(aliasData.value) ? aliasData.value : aliasData.value.aliases || []);
+      if (idData.status === 'fulfilled') setIdentifiers(Array.isArray(idData.value) ? idData.value : idData.value.identifiers || []);
+      if (catData.status === 'fulfilled') setCategories(Array.isArray(catData.value) ? catData.value : catData.value.categories || []);
+      if (locData.status === 'fulfilled') setLocations(Array.isArray(locData.value) ? locData.value : locData.value.locations || []);
     } finally {
       setSubLoading(false);
     }
@@ -149,7 +222,7 @@ const EntityRegistryDetail: React.FC = () => {
       <Breadcrumb>
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem href="/entity-registry" icon={HiCollection}>Entity Registry</BreadcrumbItem>
-        <BreadcrumbItem>{isNew ? 'New Entity' : entity?.name || entityId}</BreadcrumbItem>
+        <BreadcrumbItem>{isNew ? 'New Entity' : entity?.primary_name || entityId}</BreadcrumbItem>
       </Breadcrumb>
 
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
@@ -158,11 +231,11 @@ const EntityRegistryDetail: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {isNew ? 'Create Entity' : entity?.name}
+            {isNew ? 'Create Entity' : entity?.primary_name}
           </h1>
           {!isNew && entity && (
             <div className="flex items-center gap-2 mt-1">
-              <Badge color="purple" size="sm">{entity.entity_type}</Badge>
+              <Badge color="purple" size="sm">{entity.type_label || entity.type_key}</Badge>
               <Badge color={entity.status === 'active' ? 'success' : 'gray'} size="sm">{entity.status}</Badge>
             </div>
           )}
@@ -192,7 +265,7 @@ const EntityRegistryDetail: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
             <div>
               <Label htmlFor="name">Name *</Label>
-              <TextInput id="name" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} />
+              <TextInput id="name" value={form.primary_name} onChange={(e) => setForm(f => ({ ...f, primary_name: e.target.value }))} />
             </div>
             <div>
               <Label htmlFor="uri">Entity URI *</Label>
@@ -200,7 +273,7 @@ const EntityRegistryDetail: React.FC = () => {
             </div>
             <div>
               <Label htmlFor="type">Type</Label>
-              <TextInput id="type" value={form.entity_type} onChange={(e) => setForm(f => ({ ...f, entity_type: e.target.value }))} />
+              <TextInput id="type" value={form.type_key} onChange={(e) => setForm(f => ({ ...f, type_key: e.target.value }))} />
             </div>
             <div>
               <Label htmlFor="status">Status</Label>
@@ -212,7 +285,7 @@ const EntityRegistryDetail: React.FC = () => {
             </div>
             {isNew && (
               <div className="sm:col-span-2">
-                <Button color="blue" onClick={handleSave} disabled={saving || !form.name || !form.entity_uri}>
+                <Button color="blue" onClick={handleSave} disabled={saving || !form.primary_name}>
                   {saving ? 'Creating...' : 'Create Entity'}
                 </Button>
               </div>
@@ -220,9 +293,9 @@ const EntityRegistryDetail: React.FC = () => {
           </div>
         ) : entity && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><p className="text-sm font-medium text-gray-500">Name</p><p className="text-sm text-gray-900 dark:text-white">{entity.name}</p></div>
+            <div><p className="text-sm font-medium text-gray-500">Name</p><p className="text-sm text-gray-900 dark:text-white">{entity.primary_name}</p></div>
             <div><p className="text-sm font-medium text-gray-500">URI</p><p className="text-sm text-gray-900 dark:text-white font-mono text-xs">{entity.entity_uri}</p></div>
-            <div><p className="text-sm font-medium text-gray-500">Type</p><p className="text-sm text-gray-900 dark:text-white">{entity.entity_type}</p></div>
+            <div><p className="text-sm font-medium text-gray-500">Type</p><p className="text-sm text-gray-900 dark:text-white">{entity.type_label || entity.type_key || '—'}</p></div>
             <div><p className="text-sm font-medium text-gray-500">Status</p><Badge color={entity.status === 'active' ? 'success' : 'gray'} size="sm">{entity.status}</Badge></div>
             <div className="sm:col-span-2"><p className="text-sm font-medium text-gray-500">Description</p><p className="text-sm text-gray-900 dark:text-white">{entity.description || '—'}</p></div>
           </div>
@@ -248,9 +321,9 @@ const EntityRegistryDetail: React.FC = () => {
               {activeTab === 'aliases' && (
                 aliases.length === 0 ? <p className="text-sm text-gray-500">No aliases.</p> : (
                   <Table striped>
-                    <TableHead><TableHeadCell>Alias</TableHeadCell><TableHeadCell>Language</TableHeadCell></TableHead>
+                    <TableHead><TableHeadCell>Name</TableHeadCell><TableHeadCell>Type</TableHeadCell><TableHeadCell>Primary</TableHeadCell></TableHead>
                     <TableBody>
-                      {aliases.map(a => <TableRow key={a.alias_id}><TableCell>{a.alias}</TableCell><TableCell><Badge color="gray" size="xs">{a.language}</Badge></TableCell></TableRow>)}
+                      {aliases.map(a => <TableRow key={a.alias_id}><TableCell>{a.alias_name}</TableCell><TableCell><Badge color="gray" size="xs">{a.alias_type}</Badge></TableCell><TableCell>{a.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell></TableRow>)}
                     </TableBody>
                   </Table>
                 )
@@ -258,9 +331,9 @@ const EntityRegistryDetail: React.FC = () => {
               {activeTab === 'identifiers' && (
                 identifiers.length === 0 ? <p className="text-sm text-gray-500">No identifiers.</p> : (
                   <Table striped>
-                    <TableHead><TableHeadCell>Scheme</TableHeadCell><TableHeadCell>Value</TableHeadCell></TableHead>
+                    <TableHead><TableHeadCell>Namespace</TableHeadCell><TableHeadCell>Value</TableHeadCell><TableHeadCell>Primary</TableHeadCell></TableHead>
                     <TableBody>
-                      {identifiers.map(i => <TableRow key={i.identifier_id}><TableCell><Badge color="info" size="xs">{i.scheme}</Badge></TableCell><TableCell className="font-mono text-xs">{i.value}</TableCell></TableRow>)}
+                      {identifiers.map(i => <TableRow key={i.identifier_id}><TableCell><Badge color="info" size="xs">{i.identifier_namespace}</Badge></TableCell><TableCell className="font-mono text-xs">{i.identifier_value}</TableCell><TableCell>{i.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell></TableRow>)}
                     </TableBody>
                   </Table>
                 )
@@ -268,21 +341,16 @@ const EntityRegistryDetail: React.FC = () => {
               {activeTab === 'categories' && (
                 categories.length === 0 ? <p className="text-sm text-gray-500">No categories.</p> : (
                   <Table striped>
-                    <TableHead><TableHeadCell>Category</TableHeadCell><TableHeadCell>Source</TableHeadCell></TableHead>
+                    <TableHead><TableHeadCell>Key</TableHeadCell><TableHeadCell>Label</TableHeadCell></TableHead>
                     <TableBody>
-                      {categories.map(c => <TableRow key={c.category_id}><TableCell>{c.category}</TableCell><TableCell className="text-xs text-gray-500">{c.source}</TableCell></TableRow>)}
+                      {categories.map(c => <TableRow key={c.entity_category_id}><TableCell className="font-mono text-xs">{c.category_key}</TableCell><TableCell>{c.category_label || '\u2014'}</TableCell></TableRow>)}
                     </TableBody>
                   </Table>
                 )
               )}
               {activeTab === 'locations' && (
                 locations.length === 0 ? <p className="text-sm text-gray-500">No locations.</p> : (
-                  <Table striped>
-                    <TableHead><TableHeadCell>Label</TableHeadCell><TableHeadCell>Latitude</TableHeadCell><TableHeadCell>Longitude</TableHeadCell></TableHead>
-                    <TableBody>
-                      {locations.map(l => <TableRow key={l.location_id}><TableCell>{l.label}</TableCell><TableCell className="font-mono text-xs">{l.latitude}</TableCell><TableCell className="font-mono text-xs">{l.longitude}</TableCell></TableRow>)}
-                    </TableBody>
-                  </Table>
+                  <LocationsTabContent locations={locations} />
                 )
               )}
             </Card>
@@ -295,7 +363,7 @@ const EntityRegistryDetail: React.FC = () => {
         onConfirm={handleDelete}
         onCancel={() => setShowDelete(false)}
         title="Delete Entity"
-        description={<>Permanently delete <strong>{entity?.name}</strong> from the registry?</>}
+        description={<>Permanently delete <strong>{entity?.primary_name}</strong> from the registry?</>}
         confirmLabel="Delete"
         variant="danger"
       />

@@ -76,6 +76,8 @@ server = [
     "nltk>=3.8.0",
     "numpy>=1.24.0",
     "sentencepiece>=0.1.99",
+    # VitalSigns ONNX embedding model (paraphrase-multilingual-MiniLM-L12-v2, 384 dims)
+    "vital-model-paraphrase-MiniLM-onnx>=0.2.1",
 ]
 
 # Development dependencies

@@ -77,8 +77,9 @@ class ApiKeysClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(key_id=key_id)
+        params = build_query_params(key_id=key_id)
         return await self._make_typed_request(
-            "GET", self._url(f"/{key_id}"), ApiKeyInfo,
+            "GET", self._url("/key"), ApiKeyInfo, params=params,
         )
 
     async def revoke_key(self, key_id: str) -> ApiKeyDeleteResponse:
@@ -92,6 +93,7 @@ class ApiKeysClientEndpoint(BaseEndpoint):
         """
         self._check_connection()
         validate_required_params(key_id=key_id)
+        params = build_query_params(key_id=key_id)
         return await self._make_typed_request(
-            "DELETE", self._url(f"/{key_id}"), ApiKeyDeleteResponse,
+            "DELETE", self._url(), ApiKeyDeleteResponse, params=params,
         )

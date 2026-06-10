@@ -2,7 +2,7 @@
 
 REST API for listing and querying geo-populated entities in a space.
 
-Routes (all under /api/spaces/{space_id}/geo):
+Routes (all under /api/geo):
     GET /  — list geo points (optionally filtered by spatial radius)
 """
 from __future__ import annotations
@@ -187,7 +187,7 @@ class GeoPointsEndpoint:
         auth = self.auth_dependency
 
         @self.router.get(
-            "/spaces/{space_id}/geo",
+            "/geo",
             response_model=GeoPointsResponse,
             tags=["Geo"],
             summary="List Geo Points",
@@ -198,7 +198,7 @@ class GeoPointsEndpoint:
             ),
         )
         async def list_route(
-            space_id: str,
+            space_id: str = QueryParam(..., description="Space ID"),
             near_lat: Optional[float] = QueryParam(None, description="Latitude of center point"),
             near_lon: Optional[float] = QueryParam(None, description="Longitude of center point"),
             radius_km: Optional[float] = QueryParam(None, ge=0.001, le=40075, description="Radius in km"),

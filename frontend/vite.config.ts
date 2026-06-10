@@ -23,6 +23,11 @@ export default defineConfig({
         secure: false,
         ws: true,  // Enable WebSocket proxy support
       },
+      '/health': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        secure: false,
+      },
       // Images are now served directly from frontend/images directory
     },
   },
@@ -32,6 +37,7 @@ export default defineConfig({
         manualChunks: {
           'vendor-react': ['react', 'react-dom', 'react-router-dom'],
           'vendor-flowbite': ['flowbite-react'],
+          'vendor-kg-model': ['@vital-ai/vital-kg-model-ts'],
         },
       },
     },

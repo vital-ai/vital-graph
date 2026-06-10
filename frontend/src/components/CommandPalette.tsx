@@ -29,6 +29,7 @@ const COMMANDS: CommandItem[] = [
   { id: 'spaces', label: 'Spaces', description: 'Manage spaces', icon: <HiViewBoards className="w-5 h-5" />, path: '/spaces', keywords: ['namespace'] },
   { id: 'graphs', label: 'Graphs', description: 'Named graphs', icon: <GraphIcon className="w-5 h-5" />, path: '/graphs', keywords: ['named'] },
   { id: 'objects', label: 'Objects', description: 'Knowledge Graph objects', icon: <HiCube className="w-5 h-5" />, path: '/objects', keywords: ['entities', 'frames'] },
+  { id: 'kgdocuments', label: 'KG Documents', description: 'Knowledge Graph documents & segments', icon: <HiDocumentDuplicate className="w-5 h-5" />, path: '/objects/kgdocuments', keywords: ['documents', 'segmentation', 'kgdocument', 'segments', 'content'] },
   { id: 'triples', label: 'Triples', description: 'RDF statements', icon: <HiDatabase className="w-5 h-5" />, path: '/triples', keywords: ['rdf', 'quads'] },
   { id: 'files', label: 'Files', description: 'Manage files', icon: <HiDocumentDuplicate className="w-5 h-5" />, path: '/files', keywords: ['documents', 'upload'] },
   { id: 'sparql', label: 'SPARQL', description: 'Query editor', icon: <HiSearch className="w-5 h-5" />, path: '/sparql', keywords: ['query', 'sql'] },

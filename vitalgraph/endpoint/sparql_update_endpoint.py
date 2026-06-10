@@ -5,7 +5,7 @@ following the SPARQL 1.1 Update specification.
 """
 
 from typing import Dict, List, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Form, Body
+from fastapi import APIRouter, HTTPException, Depends, Form, Body, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import logging
@@ -32,15 +32,15 @@ class SPARQLUpdateEndpoint:
         
         # POST endpoint for SPARQL updates
         @self.router.post(
-            "/{space_id}/update",
+            "/update",
             response_model=SPARQLUpdateResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Update",
             description="Execute a SPARQL update operation (INSERT, DELETE, LOAD, CLEAR, etc.) against the specified space"
         )
         async def sparql_update_post(
-            space_id: str,
-            request: SPARQLUpdateRequest,
+            space_id: str = Query(..., description="Space ID"),
+            request: SPARQLUpdateRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_write(current_user, space_id)
@@ -48,14 +48,14 @@ class SPARQLUpdateEndpoint:
         
         # Form-based endpoint for SPARQL updates (SPARQL 1.1 Protocol compatibility)
         @self.router.post(
-            "/{space_id}/update-form",
+            "/update-form",
             response_model=SPARQLUpdateResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Update (Form)",
             description="Execute a SPARQL update operation via form data"
         )
         async def sparql_update_form(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             update: str = Form(..., description="SPARQL update string"),
             current_user: Dict = Depends(self.auth_dependency)
         ):

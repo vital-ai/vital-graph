@@ -50,15 +50,17 @@ class ImportEndpoint(BaseEndpoint):
         """Get import job details by ID."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}"
-        return await self._make_typed_request('GET', url, ImportJobResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/job"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('GET', url, ImportJobResponse, params=params)
 
     async def delete_import_job(self, job_id: str) -> ImportDeleteResponse:
         """Cancel (if running) and delete import job."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}"
-        return await self._make_typed_request('DELETE', url, ImportDeleteResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('DELETE', url, ImportDeleteResponse, params=params)
 
     async def upload_import_file(self, job_id: str, file_path: str) -> ImportUploadResponse:
         """Upload a file for an import job.
@@ -78,7 +80,7 @@ class ImportEndpoint(BaseEndpoint):
             raise VitalGraphClientError(f"File not found: {file_path}")
 
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/upload"
+            url = f"{self._get_server_url().rstrip('/')}/api/data/import/upload?job_id={job_id}"
             with open(file_path_obj, 'rb') as f:
                 files = {'file': (file_path_obj.name, f, 'application/octet-stream')}
                 response = await self._make_authenticated_request('POST', url, files=files)
@@ -91,19 +93,22 @@ class ImportEndpoint(BaseEndpoint):
         """Start background import execution."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/execute"
-        return await self._make_typed_request('POST', url, ImportExecuteResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/execute"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('POST', url, ImportExecuteResponse, params=params)
 
     async def get_import_status(self, job_id: str) -> ImportStatusResponse:
         """Get import progress / status."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/status"
-        return await self._make_typed_request('GET', url, ImportStatusResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/status"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('GET', url, ImportStatusResponse, params=params)
 
     async def get_import_log(self, job_id: str) -> ImportLogResponse:
         """Get import log entries."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/import/{job_id}/log"
-        return await self._make_typed_request('GET', url, ImportLogResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/import/log"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('GET', url, ImportLogResponse, params=params)

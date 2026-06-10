@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { apiService } from '../services/ApiService';
 import { Badge } from 'flowbite-react';
 import {
   stripBrackets,
@@ -33,11 +32,19 @@ export interface BaseRDFObject {
   }>;
 }
 
+// Typed CRUD operations that delegate to the correct vgClient endpoint
+export interface CrudOps {
+  get(spaceId: string, graphId: string, uri: string): Promise<unknown>;
+  create(spaceId: string, graphId: string, data: unknown): Promise<unknown>;
+  update(spaceId: string, graphId: string, uri: string, data: unknown): Promise<unknown>;
+  delete(spaceId: string, graphId: string, uri: string): Promise<unknown>;
+}
+
 // Configuration interface for different object types
 export interface ObjectDetailConfig {
   objectTypeName: string;
   objectTypeColor: string;
-  apiEndpoint: string;
+  crudOps: CrudOps;
   listRoute: string;
   defaultRdfType: string;
   paramName: string;
@@ -101,12 +108,11 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     try {
       setLoading(true);
       
-      const params = new URLSearchParams();
-      params.set('space_id', spaceId);
-      params.set('graph_id', decodeURIComponent(graphId));
-      params.set('uri', decodeURIComponent(objectId));
-      const response = await apiService.get(`${config.apiEndpoint}?${params.toString()}`);
-      const responseData = await response.json();
+      const responseData = await config.crudOps.get(
+        spaceId,
+        decodeURIComponent(graphId),
+        decodeURIComponent(objectId),
+      ) as { results?: Quad[]; total_count?: number };
 
       // All endpoints return QuadResponse: { results: [{s,p,o,g}], total_count }
       const quads: Quad[] = responseData.results || [];
@@ -216,31 +222,19 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
       setError(null);
       const requestData = buildApiRequestData(object);
 
-      // Different API call format for KG Types vs Graph Objects
-      const isKGTypesAPI = config.apiEndpoint.includes('kgtypes');
-
       if (isCreateMode) {
-        if (isKGTypesAPI) {
-          // KG Types API format for create
-          await apiService.post(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
-        } else {
-          // Graph Objects API format for create
-          const params = new URLSearchParams({ space_id: spaceId!, graph_id: decodeURIComponent(graphId || '') });
-          await apiService.post(`${config.apiEndpoint}?${params.toString()}`, requestData);
-        }
+        await config.crudOps.create(
+          spaceId!,
+          decodeURIComponent(graphId || ''),
+          requestData,
+        );
       } else {
-        if (isKGTypesAPI) {
-          // KG Types API format for update
-          await apiService.put(`${config.apiEndpoint}?space_id=${spaceId}&graph_id=${encodeURIComponent(graphId!)}`, requestData);
-        } else {
-          // Graph Objects API format for update
-          const params = new URLSearchParams({
-            space_id: spaceId!,
-            graph_id: decodeURIComponent(graphId || ''),
-            uri: decodeURIComponent(objectId!)
-          });
-          await apiService.put(`${config.apiEndpoint}?${params.toString()}`, requestData);
-        }
+        await config.crudOps.update(
+          spaceId!,
+          decodeURIComponent(graphId || ''),
+          decodeURIComponent(objectId!),
+          requestData,
+        );
       }
 
       if (isCreateMode) {
@@ -260,15 +254,11 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   const handleDelete = async () => {
     if (!spaceId || !graphId || !objectId) return;
     try {
-      const params = new URLSearchParams({
-        space_id: spaceId,
-        graph_id: decodeURIComponent(graphId),
-        uri: decodeURIComponent(objectId)
-      });
-      const response = await apiService.delete(`${config.apiEndpoint}?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(`Delete failed: ${response.status} ${response.statusText}`);
-      }
+      await config.crudOps.delete(
+        spaceId,
+        decodeURIComponent(graphId),
+        decodeURIComponent(objectId),
+      );
       navigate(-1);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : `Failed to delete ${config.objectTypeName.toLowerCase()}`);

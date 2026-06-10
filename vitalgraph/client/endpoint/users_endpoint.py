@@ -74,9 +74,10 @@ class UsersEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(user_id=user_id)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
+        url = f"{self._get_server_url().rstrip('/')}/api/users/user"
+        params = build_query_params(user_id=user_id)
         
-        return await self._make_typed_request('GET', url, User)
+        return await self._make_typed_request('GET', url, User, params=params)
     
     async def update_user(self, user_id: str, user: User) -> UserUpdateResponse:
         """
@@ -95,9 +96,10 @@ class UsersEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(user_id=user_id, user=user)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
+        url = f"{self._get_server_url().rstrip('/')}/api/users"
+        params = build_query_params(user_id=user_id)
         
-        return await self._make_typed_request('PUT', url, UserUpdateResponse, json=user.model_dump())
+        return await self._make_typed_request('PUT', url, UserUpdateResponse, params=params, json=user.model_dump())
     
     async def delete_user(self, user_id: str) -> UserDeleteResponse:
         """
@@ -115,9 +117,10 @@ class UsersEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(user_id=user_id)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/users/{user_id}"
+        url = f"{self._get_server_url().rstrip('/')}/api/users"
+        params = build_query_params(user_id=user_id)
         
-        return await self._make_typed_request('DELETE', url, UserDeleteResponse)
+        return await self._make_typed_request('DELETE', url, UserDeleteResponse, params=params)
     
     async def filter_users(self, name_filter: str, tenant: Optional[str] = None) -> UsersListResponse:
         """
@@ -136,8 +139,8 @@ class UsersEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(name_filter=name_filter)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/users/filter/{name_filter}"
-        params = build_query_params(tenant=tenant)
+        url = f"{self._get_server_url().rstrip('/')}/api/users/filter"
+        params = build_query_params(name_filter=name_filter, tenant=tenant)
         
         return await self._make_typed_request('GET', url, UsersListResponse, params=params)
 

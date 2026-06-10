@@ -144,8 +144,17 @@ class ProcessEndpoint:
     @staticmethod
     def _row_to_response(row: Dict) -> ProcessResponse:
         """Convert a process table row dict to a ProcessResponse."""
+        import json as _json
+
         def _ts(val):
             return val.isoformat() if val is not None else None
+
+        rd = row.get("result_details")
+        if isinstance(rd, str):
+            try:
+                rd = _json.loads(rd)
+            except (ValueError, TypeError):
+                rd = None
 
         return ProcessResponse(
             process_id=str(row.get("process_id", "")),
@@ -156,7 +165,7 @@ class ProcessEndpoint:
             progress_percent=row.get("progress_percent"),
             progress_message=row.get("progress_message"),
             error_message=row.get("error_message"),
-            result_details=row.get("result_details"),
+            result_details=rd,
             created_at=_ts(row.get("created_at")),
             updated_at=_ts(row.get("updated_at")),
             started_at=_ts(row.get("started_at")),

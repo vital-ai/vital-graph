@@ -8,7 +8,7 @@ All responses contain VitalSigns GraphObjects, hiding wire format complexity.
 import httpx
 import time
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Literal, Optional, List, Union, overload
 
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
@@ -89,6 +89,30 @@ class KGEntitiesEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
+    @overload
+    async def list_kgentities(
+        self, space_id: str, graph_id: str, page_size: int = ..., offset: int = ...,
+        entity_type_uri: Optional[str] = ..., search: Optional[str] = ...,
+        include_entity_graph: Literal[False] = ...,
+        sort_by: Optional[str] = ..., sort_order: str = ...,
+        status: Optional[str] = ..., exclude_status: Optional[str] = ...,
+        created_after: Optional[str] = ..., created_before: Optional[str] = ...,
+        modified_after: Optional[str] = ..., modified_before: Optional[str] = ...,
+        action_type: Optional[str] = ..., provenance_type: Optional[str] = ...,
+    ) -> PaginatedGraphObjectResponse: ...
+
+    @overload
+    async def list_kgentities(
+        self, space_id: str, graph_id: str, page_size: int = ..., offset: int = ...,
+        entity_type_uri: Optional[str] = ..., search: Optional[str] = ...,
+        include_entity_graph: Literal[True] = ...,
+        sort_by: Optional[str] = ..., sort_order: str = ...,
+        status: Optional[str] = ..., exclude_status: Optional[str] = ...,
+        created_after: Optional[str] = ..., created_before: Optional[str] = ...,
+        modified_after: Optional[str] = ..., modified_before: Optional[str] = ...,
+        action_type: Optional[str] = ..., provenance_type: Optional[str] = ...,
+    ) -> MultiEntityGraphResponse: ...
+
     async def list_kgentities(
         self, 
         space_id: str, 
@@ -108,7 +132,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         modified_before: Optional[str] = None,
         action_type: Optional[str] = None,
         provenance_type: Optional[str] = None,
-    ):
+    ) -> Union[PaginatedGraphObjectResponse, MultiEntityGraphResponse]:
         """
         List KGEntities with pagination and optional filtering.
         
@@ -213,6 +237,18 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
     
+    @overload
+    async def get_kgentity(
+        self, space_id: str, graph_id: str, uri: Optional[str] = ...,
+        reference_id: Optional[str] = ..., include_entity_graph: Literal[False] = ...,
+    ) -> EntityResponse: ...
+
+    @overload
+    async def get_kgentity(
+        self, space_id: str, graph_id: str, uri: Optional[str] = ...,
+        reference_id: Optional[str] = ..., include_entity_graph: Literal[True] = ...,
+    ) -> EntityGraphResponse: ...
+
     async def get_kgentity(
         self, 
         space_id: str, 
@@ -220,7 +256,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         uri: Optional[str] = None, 
         reference_id: Optional[str] = None, 
         include_entity_graph: bool = False
-    ):
+    ) -> Union[EntityResponse, EntityGraphResponse]:
         """
         Get a specific KGEntity by URI or reference ID with optional complete graph.
         
@@ -495,7 +531,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         graph_id: str, 
         objects: List,
         parent_uri: Optional[str] = None
-    ) -> EntityResponse:
+    ) -> CreateEntityResponse:
         """
         Create KGEntities from GraphObjects.
         
@@ -559,7 +595,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         graph_id: str, 
         objects: List,
         parent_uri: Optional[str] = None
-    ) -> EntityResponse:
+    ) -> UpdateEntityResponse:
         """
         Update KGEntities from GraphObjects.
         

@@ -32,15 +32,15 @@ class SPARQLQueryEndpoint:
         
         # POST endpoint for SPARQL queries (recommended)
         @self.router.post(
-            "/{space_id}/query",
+            "/query",
             response_model=SPARQLQueryResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Query (POST)",
             description="Execute a SPARQL query (SELECT, CONSTRUCT, ASK, DESCRIBE) against the specified space"
         )
         async def sparql_query_post(
-            space_id: str,
-            request: SPARQLQueryRequest,
+            space_id: str = Query(..., description="Space ID"),
+            request: SPARQLQueryRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_read(current_user, space_id)
@@ -48,14 +48,14 @@ class SPARQLQueryEndpoint:
         
         # GET endpoint for SPARQL queries (for simple queries)
         @self.router.get(
-            "/{space_id}/query",
+            "/query",
             response_model=SPARQLQueryResponse,
             tags=["SPARQL"],
             summary="Execute SPARQL Query (GET)",
             description="Execute a simple SPARQL query via GET parameters"
         )
         async def sparql_query_get(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             query: str = Query(..., description="SPARQL query string"),
             format: str = Query(
                 "application/sparql-results+json",

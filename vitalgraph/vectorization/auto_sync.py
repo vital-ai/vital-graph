@@ -33,7 +33,7 @@ _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 
 def _generate_term_uuid(term_text: str, term_type: str = 'U') -> uuid.UUID:
     """Deterministic UUID for a term (same algorithm as sparql_sql_space_impl)."""
-    raw = f"{term_type}:{term_text}"
+    raw = f"{term_text}\x00{term_type}"
     return uuid.uuid5(_VITALGRAPH_NS, raw)
 
 

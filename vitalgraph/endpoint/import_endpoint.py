@@ -4,12 +4,12 @@ Data Import REST API endpoint for VitalGraph.
 Manages import job lifecycle:
   POST   /import              — create job
   GET    /import              — list jobs
-  GET    /import/{id}         — get job
-  DELETE /import/{id}         — cancel & delete job
-  POST   /import/{id}/upload  — upload file to S3 staging
-  POST   /import/{id}/execute — start background import
-  GET    /import/{id}/status  — poll progress
-  GET    /import/{id}/log     — fetch log entries
+  GET    /import/job          — get job (job_id query param)
+  DELETE /import              — cancel & delete job (job_id query param)
+  POST   /import/upload       — upload file to S3 staging (job_id query param)
+  POST   /import/execute      — start background import (job_id query param)
+  GET    /import/status       — poll progress (job_id query param)
+  GET    /import/log          — fetch log entries (job_id query param)
 """
 
 import json
@@ -18,7 +18,7 @@ import os
 import tempfile
 from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Query, Depends, UploadFile, File, Path, HTTPException
+from fastapi import APIRouter, Query, Depends, UploadFile, File, HTTPException
 
 from ..model.import_model import (
     JobStatus,
@@ -80,12 +80,23 @@ def _row_to_import_job(row: Dict[str, Any]) -> ImportJob:
 class ImportEndpoint:
     """Data Import endpoint handler backed by ImportExportJobManager."""
 
-    def __init__(self, job_manager, space_manager, auth_dependency):
-        self.job_manager = job_manager
+    def __init__(self, app_impl, space_manager, auth_dependency):
+        self.app_impl = app_impl
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.router = APIRouter()
         self._setup_routes()
+
+    @property
+    def job_manager(self):
+        """Get the ImportExportJobManager from app_impl (set during startup)."""
+        mgr = getattr(self.app_impl, 'import_export_manager', None)
+        if mgr is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Import/export service is not available (database not connected)",
+            )
+        return mgr
 
     def _setup_routes(self):
         """Setup FastAPI routes for data import management."""
@@ -111,55 +122,55 @@ class ImportEndpoint:
             require_admin(current_user)
             return await self._list_import_jobs(space_id, status, page_size, offset)
 
-        @self.router.get("/import/{job_id}", response_model=ImportJobResponse)
+        @self.router.get("/import/job", response_model=ImportJobResponse)
         async def get_import_job(
-            job_id: str = Path(..., description="Import job ID"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Get import job details by ID."""
             require_admin(current_user)
             return await self._get_import_job(job_id)
 
-        @self.router.delete("/import/{job_id}", response_model=ImportDeleteResponse)
+        @self.router.delete("/import", response_model=ImportDeleteResponse)
         async def delete_import_job(
-            job_id: str = Path(..., description="Import job ID"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Cancel (if running) and delete import job."""
             require_admin(current_user)
             return await self._delete_import_job(job_id)
 
-        @self.router.post("/import/{job_id}/upload", response_model=ImportUploadResponse)
+        @self.router.post("/import/upload", response_model=ImportUploadResponse)
         async def upload_import_file(
-            job_id: str = Path(..., description="Import job ID"),
             file: UploadFile = File(..., description="File to upload"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Upload a file for an import job (staged to temp dir)."""
             require_admin(current_user)
             return await self._upload_import_file(job_id, file, current_user)
 
-        @self.router.post("/import/{job_id}/execute", response_model=ImportExecuteResponse)
+        @self.router.post("/import/execute", response_model=ImportExecuteResponse)
         async def execute_import_job(
-            job_id: str = Path(..., description="Import job ID"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Start background import execution."""
             require_admin(current_user)
             return await self._execute_import_job(job_id)
 
-        @self.router.get("/import/{job_id}/status", response_model=ImportStatusResponse)
+        @self.router.get("/import/status", response_model=ImportStatusResponse)
         async def get_import_status(
-            job_id: str = Path(..., description="Import job ID"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Get import progress / status."""
             require_admin(current_user)
             return await self._get_import_status(job_id)
 
-        @self.router.get("/import/{job_id}/log", response_model=ImportLogResponse)
+        @self.router.get("/import/log", response_model=ImportLogResponse)
         async def get_import_log(
-            job_id: str = Path(..., description="Import job ID"),
+            job_id: str = Query(..., description="Import job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Get import log entries."""

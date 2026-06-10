@@ -370,6 +370,7 @@ class KGQueriesEndpoint:
             # Convert vector/geo criteria from API model to builder dataclass
             builder_vector_criteria = None
             builder_geo_criteria = None
+            builder_multi_vector_criteria = None
             pydantic_vc = criteria.vector_criteria
             if not pydantic_vc and criteria.source_entity_criteria:
                 pydantic_vc = getattr(criteria.source_entity_criteria, 'vector_criteria', None)
@@ -381,6 +382,29 @@ class KGQueriesEndpoint:
                     index_name=pydantic_vc.index_name,
                     top_k=pydantic_vc.top_k,
                     min_score=pydantic_vc.min_score,
+                )
+            pydantic_mvc = criteria.multi_vector_criteria
+            if not pydantic_mvc and criteria.source_entity_criteria:
+                pydantic_mvc = getattr(criteria.source_entity_criteria, 'multi_vector_criteria', None)
+            if pydantic_mvc:
+                from ..sparql.kg_query_builder import (
+                    MultiVectorCriteria as BuilderMultiVectorCriteria,
+                    MultiVectorCriteriaInput as BuilderMultiVectorInput,
+                )
+                builder_multi_vector_criteria = BuilderMultiVectorCriteria(
+                    vectors=[
+                        BuilderMultiVectorInput(
+                            search_text=v.search_text,
+                            vector=v.vector,
+                            index_name=v.index_name,
+                            weight=v.weight,
+                        )
+                        for v in pydantic_mvc.vectors
+                    ],
+                    top_k=pydantic_mvc.top_k,
+                    min_score=pydantic_mvc.min_score,
+                    fusion_strategy=getattr(pydantic_mvc, 'fusion_strategy', 'weighted_sum'),
+                    oversample_factor=getattr(pydantic_mvc, 'oversample_factor', 5),
                 )
             pydantic_gc = criteria.geo_criteria
             if not pydantic_gc and criteria.source_entity_criteria:
@@ -403,9 +427,18 @@ class KGQueriesEndpoint:
                 entity_property_filters=builder_entity_property_filters,
                 use_edge_pattern=use_edge_pattern,
                 vector_criteria=builder_vector_criteria,
+                multi_vector_criteria=builder_multi_vector_criteria,
                 geo_criteria=builder_geo_criteria,
             )
             
+            # Build multi-vector config for SQL generation (fusion strategy, oversample)
+            _mv_config = None
+            if builder_multi_vector_criteria:
+                _mv_config = {
+                    'fusion_strategy': builder_multi_vector_criteria.fusion_strategy,
+                    'oversample_factor': builder_multi_vector_criteria.oversample_factor,
+                }
+
             # Build paginated query + count query
             sparql_query = self.query_builder.build_entity_query_sparql(
                 entity_criteria, graph_id,
@@ -456,11 +489,13 @@ class KGQueriesEndpoint:
                         offset=query_request.offset
                     )
                 # Offset is valid — now run the paginated query
-                results = await backend.execute_sparql_query(space_id, sparql_query)
+                results = await backend.execute_sparql_query(
+                    space_id, sparql_query, multi_vector_config=_mv_config)
             else:
                 # First page: run both in parallel for lowest latency
                 results, count_results = await asyncio.gather(
-                    backend.execute_sparql_query(space_id, sparql_query),
+                    backend.execute_sparql_query(
+                        space_id, sparql_query, multi_vector_config=_mv_config),
                     backend.execute_sparql_query(space_id, count_query),
                 )
                 total_count = self._extract_total_count(count_results)

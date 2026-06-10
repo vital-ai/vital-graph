@@ -3,17 +3,16 @@
  *
  * Provides methods for vector index, vector mapping, geo config,
  * and geo points API endpoints.
+ * Delegates to the @vital-ai/vitalgraph-client via vgClient.
  */
 
-import { apiService } from './ApiService';
+import { vgClient } from './FrontendVitalGraphClient';
 import type {
   VectorIndex,
-  VectorIndexListResponse,
   CreateVectorIndexRequest,
   ReindexRequest,
   ReindexResponse,
   VectorMapping,
-  MappingListResponse,
   CreateVectorMappingRequest,
   UpdateVectorMappingRequest,
   MappingProperty,
@@ -28,49 +27,25 @@ class VectorGeoService {
   // ---------------------------------------------------------------------------
 
   async getVectorIndexes(spaceId: string): Promise<VectorIndex[]> {
-    const response = await apiService.get(`/api/spaces/${spaceId}/vector-indexes`);
-    if (response.ok) {
-      const data: VectorIndexListResponse = await response.json();
-      return data.indexes || [];
-    }
-    throw new Error(`Failed to get vector indexes: ${response.status}`);
+    const data = await vgClient.vectorIndexes.list(spaceId);
+    return (data as any).indexes || [];
   }
 
   async getVectorIndex(spaceId: string, indexName: string): Promise<VectorIndex> {
-    const response = await apiService.get(`/api/spaces/${spaceId}/vector-indexes/${indexName}`);
-    if (response.ok) {
-      return response.json();
-    }
-    throw new Error(`Failed to get vector index: ${response.status}`);
+    const data = await vgClient.vectorIndexes.get(spaceId, indexName);
+    return (data as any).indexes?.[0] ?? data;
   }
 
   async createVectorIndex(spaceId: string, data: CreateVectorIndexRequest): Promise<VectorIndex> {
-    const response = await apiService.post(`/api/spaces/${spaceId}/vector-indexes`, data);
-    if (response.ok) {
-      return response.json();
-    }
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to create vector index: ${response.status}`);
+    return vgClient.vectorIndexes.create(spaceId, data) as any;
   }
 
   async deleteVectorIndex(spaceId: string, indexName: string): Promise<void> {
-    const response = await apiService.delete(`/api/spaces/${spaceId}/vector-indexes/${indexName}`);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `Failed to delete vector index: ${response.status}`);
-    }
+    await vgClient.vectorIndexes.delete(spaceId, indexName);
   }
 
-  async reindex(spaceId: string, indexName: string, data?: ReindexRequest): Promise<ReindexResponse> {
-    const response = await apiService.post(
-      `/api/spaces/${spaceId}/vector-indexes/${indexName}/reindex`,
-      data || {}
-    );
-    if (response.ok) {
-      return response.json();
-    }
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to trigger reindex: ${response.status}`);
+  async reindex(spaceId: string, indexName: string, _data?: ReindexRequest): Promise<ReindexResponse> {
+    return vgClient.vectorIndexes.reindex(spaceId, indexName) as any;
   }
 
   // ---------------------------------------------------------------------------
@@ -81,35 +56,16 @@ class VectorGeoService {
     spaceId: string,
     filters?: { index_name?: string; mapping_type?: string; enabled?: boolean }
   ): Promise<VectorMapping[]> {
-    const params = new URLSearchParams();
-    if (filters?.index_name) params.set('index_name', filters.index_name);
-    if (filters?.mapping_type) params.set('mapping_type', filters.mapping_type);
-    if (filters?.enabled !== undefined) params.set('enabled', String(filters.enabled));
-    const qs = params.toString();
-    const url = `/api/spaces/${spaceId}/vector-mappings${qs ? `?${qs}` : ''}`;
-    const response = await apiService.get(url);
-    if (response.ok) {
-      const data: MappingListResponse = await response.json();
-      return data.mappings || [];
-    }
-    throw new Error(`Failed to get vector mappings: ${response.status}`);
+    const data = await vgClient.vectorMappings.list(spaceId, filters);
+    return (data as any).mappings || [];
   }
 
   async getVectorMapping(spaceId: string, mappingId: number): Promise<VectorMapping> {
-    const response = await apiService.get(`/api/spaces/${spaceId}/vector-mappings/${mappingId}`);
-    if (response.ok) {
-      return response.json();
-    }
-    throw new Error(`Failed to get vector mapping: ${response.status}`);
+    return vgClient.vectorMappings.get(spaceId, mappingId) as any;
   }
 
   async createVectorMapping(spaceId: string, data: CreateVectorMappingRequest): Promise<VectorMapping> {
-    const response = await apiService.post(`/api/spaces/${spaceId}/vector-mappings`, data);
-    if (response.ok) {
-      return response.json();
-    }
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to create vector mapping: ${response.status}`);
+    return vgClient.vectorMappings.create(spaceId, data) as any;
   }
 
   async updateVectorMapping(
@@ -117,20 +73,11 @@ class VectorGeoService {
     mappingId: number,
     data: UpdateVectorMappingRequest
   ): Promise<VectorMapping> {
-    const response = await apiService.put(`/api/spaces/${spaceId}/vector-mappings/${mappingId}`, data);
-    if (response.ok) {
-      return response.json();
-    }
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to update vector mapping: ${response.status}`);
+    return vgClient.vectorMappings.update(spaceId, mappingId, data) as any;
   }
 
   async deleteVectorMapping(spaceId: string, mappingId: number): Promise<void> {
-    const response = await apiService.delete(`/api/spaces/${spaceId}/vector-mappings/${mappingId}`);
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `Failed to delete vector mapping: ${response.status}`);
-    }
+    await vgClient.vectorMappings.delete(spaceId, mappingId);
   }
 
   async addMappingProperty(
@@ -138,25 +85,11 @@ class VectorGeoService {
     mappingId: number,
     data: { property_uri: string; property_role: string; ordinal?: number }
   ): Promise<MappingProperty> {
-    const response = await apiService.post(
-      `/api/spaces/${spaceId}/vector-mappings/${mappingId}/properties`,
-      data
-    );
-    if (response.ok) {
-      return response.json();
-    }
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to add mapping property: ${response.status}`);
+    return vgClient.vectorMappings.addProperty(spaceId, mappingId, data) as any;
   }
 
   async removeMappingProperty(spaceId: string, mappingId: number, propertyId: number): Promise<void> {
-    const response = await apiService.delete(
-      `/api/spaces/${spaceId}/vector-mappings/${mappingId}/properties/${propertyId}`
-    );
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `Failed to remove mapping property: ${response.status}`);
-    }
+    await vgClient.vectorMappings.removeProperty(spaceId, mappingId, propertyId);
   }
 
   // ---------------------------------------------------------------------------
@@ -164,11 +97,7 @@ class VectorGeoService {
   // ---------------------------------------------------------------------------
 
   async getGeoConfig(spaceId: string): Promise<GeoConfig> {
-    const response = await apiService.get(`/api/spaces/${spaceId}/geo-config`);
-    if (response.ok) {
-      return response.json();
-    }
-    throw new Error(`Failed to get geo config: ${response.status}`);
+    return vgClient.geoConfig.get(spaceId) as any;
   }
 
   // ---------------------------------------------------------------------------
@@ -176,20 +105,14 @@ class VectorGeoService {
   // ---------------------------------------------------------------------------
 
   async getGeoPoints(spaceId: string, query?: GeoPointsQuery): Promise<GeoPointsResponse> {
-    const params = new URLSearchParams();
-    if (query?.near_lat !== undefined) params.set('near_lat', String(query.near_lat));
-    if (query?.near_lon !== undefined) params.set('near_lon', String(query.near_lon));
-    if (query?.radius_km !== undefined) params.set('radius_km', String(query.radius_km));
-    if (query?.graph_uri) params.set('graph_uri', query.graph_uri);
-    if (query?.limit !== undefined) params.set('limit', String(query.limit));
-    if (query?.offset !== undefined) params.set('offset', String(query.offset));
-    const qs = params.toString();
-    const url = `/api/spaces/${spaceId}/geo${qs ? `?${qs}` : ''}`;
-    const response = await apiService.get(url);
-    if (response.ok) {
-      return response.json();
-    }
-    throw new Error(`Failed to get geo points: ${response.status}`);
+    const params: Record<string, unknown> = {};
+    if (query?.near_lat !== undefined) params.near_lat = query.near_lat;
+    if (query?.near_lon !== undefined) params.near_lon = query.near_lon;
+    if (query?.radius_km !== undefined) params.radius_km = query.radius_km;
+    if (query?.graph_uri) params.graph_uri = query.graph_uri;
+    if (query?.limit !== undefined) params.limit = query.limit;
+    if (query?.offset !== undefined) params.offset = query.offset;
+    return vgClient.geoPoints.list(spaceId, params) as any;
   }
 }
 

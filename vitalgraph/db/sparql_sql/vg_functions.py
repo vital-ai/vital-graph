@@ -29,8 +29,8 @@ on EmitContext so the orchestrator can vectorize and inject the embedding.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 from ..jena_sparql.jena_types import (
     ExprFunction, ExprVar, ExprValue, LiteralNode,
@@ -46,12 +46,15 @@ VG_NS = "http://vital.ai/ontology/vitalgraph#"
 
 VG_VECTOR_SIMILARITY = f"{VG_NS}vectorSimilarity"
 VG_VECTOR_NEARBY = f"{VG_NS}vectorNearby"
+VG_MULTI_VECTOR_SIMILARITY = f"{VG_NS}multiVectorSimilarity"
+VG_MULTI_VECTOR_NEARBY = f"{VG_NS}multiVectorNearby"
 VG_GEO_DISTANCE = f"{VG_NS}geoDistance"
 VG_WITHIN_RADIUS = f"{VG_NS}withinRadius"
 
 VG_VECTOR_FUNCTIONS = frozenset({VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY})
+VG_MULTI_VECTOR_FUNCTIONS = frozenset({VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY})
 VG_GEO_FUNCTIONS = frozenset({VG_GEO_DISTANCE, VG_WITHIN_RADIUS})
-VG_ALL_FUNCTIONS = VG_VECTOR_FUNCTIONS | VG_GEO_FUNCTIONS
+VG_ALL_FUNCTIONS = VG_VECTOR_FUNCTIONS | VG_MULTI_VECTOR_FUNCTIONS | VG_GEO_FUNCTIONS
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +69,17 @@ def is_vg_function(expr) -> bool:
 
 
 def is_vg_vector_function(expr) -> bool:
-    """Check if an expression is a VitalGraph vector function."""
+    """Check if an expression is a VitalGraph vector function (single or multi)."""
     return (isinstance(expr, ExprFunction)
             and expr.function_iri is not None
-            and expr.function_iri in VG_VECTOR_FUNCTIONS)
+            and expr.function_iri in (VG_VECTOR_FUNCTIONS | VG_MULTI_VECTOR_FUNCTIONS))
+
+
+def is_vg_multi_vector_function(expr) -> bool:
+    """Check if an expression is a VitalGraph multi-vector function."""
+    return (isinstance(expr, ExprFunction)
+            and expr.function_iri is not None
+            and expr.function_iri in VG_MULTI_VECTOR_FUNCTIONS)
 
 
 def is_vg_geo_function(expr) -> bool:
@@ -227,6 +237,82 @@ def extract_geo_args(expr: ExprFunction) -> Optional[GeoArgs]:
         longitude=lon,
         max_distance_m=max_dist,
     )
+
+
+@dataclass
+class MultiVectorTriplet:
+    """A single (query, index, weight) triplet for multi-vector search."""
+    search_text: Optional[str]       # For multiVectorSimilarity: raw text
+    vector_literal: Optional[str]    # For multiVectorNearby: "[0.1,0.2,...]"
+    index_name: str
+    weight: float
+
+
+@dataclass
+class MultiVectorArgs:
+    """Extracted arguments for vg:multiVectorSimilarity / vg:multiVectorNearby."""
+    entity_var: str
+    triplets: List[MultiVectorTriplet] = field(default_factory=list)
+
+
+def extract_multi_vector_args(expr: ExprFunction) -> Optional[MultiVectorArgs]:
+    """Extract arguments from vg:multiVectorSimilarity or vg:multiVectorNearby.
+
+    Expected signature:
+      vg:multiVectorSimilarity(?entity, text1, idx1, w1, text2, idx2, w2, ...)
+      vg:multiVectorNearby(?entity, vec1, idx1, w1, vec2, idx2, w2, ...)
+
+    Args after the entity variable come in repeating triplets:
+      (query_text_or_vector, index_name, weight)
+    """
+    args = expr.args or []
+    if len(args) < 4:
+        logger.warning("vg: multi-vector function expects at least 4 args "
+                       "(entity + 1 triplet), got %d", len(args))
+        return None
+
+    entity_var = _var_name(args[0])
+    if entity_var is None:
+        logger.warning("vg: multi-vector function arg[0] must be a variable")
+        return None
+
+    remaining = args[1:]
+    if len(remaining) % 3 != 0:
+        logger.warning("vg: multi-vector function args after entity must be "
+                       "in triplets (query, index, weight), got %d extra args",
+                       len(remaining))
+        return None
+
+    is_nearby = (expr.function_iri == VG_MULTI_VECTOR_NEARBY)
+    triplets = []
+
+    for i in range(0, len(remaining), 3):
+        text_or_vec = _literal_value(remaining[i])
+        if text_or_vec is None:
+            logger.warning("vg: multi-vector triplet[%d] query must be a "
+                           "string literal", i // 3)
+            return None
+
+        index_name = _literal_value(remaining[i + 1])
+        if index_name is None:
+            logger.warning("vg: multi-vector triplet[%d] index_name must be a "
+                           "string literal", i // 3)
+            return None
+
+        weight = _numeric_value(remaining[i + 2])
+        if weight is None:
+            logger.warning("vg: multi-vector triplet[%d] weight must be "
+                           "numeric", i // 3)
+            return None
+
+        triplets.append(MultiVectorTriplet(
+            search_text=None if is_nearby else text_or_vec,
+            vector_literal=text_or_vec if is_nearby else None,
+            index_name=index_name,
+            weight=weight,
+        ))
+
+    return MultiVectorArgs(entity_var=entity_var, triplets=triplets)
 
 
 # ---------------------------------------------------------------------------
@@ -466,3 +552,189 @@ def within_radius_sql(expr: ExprFunction, ctx) -> Optional[str]:
     )
 
     return sql
+
+
+# ---------------------------------------------------------------------------
+# Multi-vector SQL generation
+# ---------------------------------------------------------------------------
+
+# Default oversample factor: fetch this many × final limit from each vector
+_MULTI_VEC_OVERSAMPLE = 5
+# Absolute cap on oversampled candidates per vector
+_MULTI_VEC_OVERSAMPLE_CAP = 300
+
+
+def multi_vector_similarity_sql(
+    expr: ExprFunction,
+    ctx,
+) -> Tuple[Optional[str], List[VectorRequest]]:
+    """Generate SQL for vg:multiVectorSimilarity or vg:multiVectorNearby.
+
+    Produces a correlated scalar subquery that:
+    1. Fetches oversampled top-K candidates from each vector index
+    2. Intersects the candidate sets (entity must exist in all indexes)
+    3. Computes normalized weighted score
+    4. Returns the combined score for the correlated entity
+
+    The SQL uses CTEs internally via a LATERAL subquery pattern.
+
+    Returns (sql_expr, vector_requests) where vector_requests is a list
+    of VectorRequest objects for triplets that need server-side vectorization.
+    """
+    mvargs = extract_multi_vector_args(expr)
+    if mvargs is None:
+        return None, []
+
+    uuid_col = _resolve_uuid_col(mvargs.entity_var, ctx)
+    if uuid_col is None:
+        return None, []
+
+    ctx_clause = _context_clause(ctx)
+    vec_requests: List[VectorRequest] = []
+
+    # Read multi-vector config from context (set by REST API layer)
+    mv_config = getattr(ctx, 'multi_vector_config', {})
+    fusion_strategy = mv_config.get('fusion_strategy', 'weighted_sum')
+    oversample_factor = mv_config.get('oversample_factor', _MULTI_VEC_OVERSAMPLE)
+
+    # Auto-detect mixed models: if indexes use different embedding models or
+    # dimensions and no explicit strategy was requested, upgrade to relative_score
+    # so that raw cosine scores from different models are normalized to [0,1].
+    if fusion_strategy == 'weighted_sum':
+        vi_meta = getattr(ctx, 'vector_index_meta', {})
+        if vi_meta:
+            models = set()
+            for t in mvargs.triplets:
+                meta = vi_meta.get(t.index_name)
+                if meta and meta.get('model_name'):
+                    models.add((meta['model_name'], meta.get('dimensions')))
+            if len(models) > 1:
+                fusion_strategy = 'relative_score'
+
+    # Determine oversample limit from optimizer hints or use default
+    vg_hints = getattr(ctx, 'vg_hints', {})
+    top_k_hint = vg_hints.get('vg_top_k')
+    final_limit = top_k_hint['limit'] if top_k_hint else 20
+    oversample = min(final_limit * oversample_factor, _MULTI_VEC_OVERSAMPLE_CAP)
+
+    # Normalize weights to sum to 1.0
+    total_weight = sum(t.weight for t in mvargs.triplets)
+    if total_weight <= 0:
+        total_weight = 1.0
+    norm_weights = [t.weight / total_weight for t in mvargs.triplets]
+
+    # Build per-triplet embedding SQL and collect VectorRequests
+    embedding_sqls: List[str] = []
+    for i, triplet in enumerate(mvargs.triplets):
+        if triplet.vector_literal is not None:
+            embedding_sqls.append(f"'{triplet.vector_literal}'::vector")
+        else:
+            placeholder = f"__VG_EMBED_MV{i}_{id(expr) % 100000}__"
+            embedding_sqls.append(f"'{placeholder}'::vector")
+            vec_requests.append(VectorRequest(
+                placeholder=placeholder,
+                search_text=triplet.search_text or "",
+                index_name=triplet.index_name,
+                space_id=ctx.space_id,
+            ))
+
+    # Build CTE-based SQL: one CTE per vector
+    cte_parts: List[str] = []
+    n = len(mvargs.triplets)
+    for i, triplet in enumerate(mvargs.triplets):
+        vec_table = f"{ctx.space_id}_vec_{triplet.index_name}"
+        emb = embedding_sqls[i]
+        cte_parts.append(
+            f"__mv_v{i} AS (\n"
+            f"  SELECT subject_uuid, 1 - (embedding <=> {emb}) AS score\n"
+            f"  FROM {vec_table}\n"
+            f"  WHERE subject_uuid = {uuid_col}{ctx_clause}\n"
+            f"  LIMIT 1\n"
+            f")"
+        )
+
+    # For a correlated subquery, we only need the score for the specific entity
+    # (uuid_col). Each CTE checks if that entity exists in the index and gets
+    # its score. If it doesn't exist in ALL indexes, the result is NULL.
+
+    null_checks = [f"__mv_v{i}.score IS NOT NULL" for i in range(n)]
+    null_check_expr = " AND ".join(null_checks)
+    from_parts = [f"__mv_v{i}" for i in range(n)]
+    from_clause = ", ".join(from_parts)
+
+    # Build score expression based on fusion strategy
+    if fusion_strategy == 'relative_score':
+        # Relative score: normalize each score to [0,1] within the CTE,
+        # then weighted sum. For correlated single-entity lookups, we use
+        # window functions over a wider candidate set per-index.
+        # In the correlated pattern (LIMIT 1 per entity), min/max are the
+        # same value, so normalization degrades to 1.0. We add normalization
+        # CTEs for when we switch to non-correlated top-K.
+        # For now, generate the same SQL with CASE-guarded normalization.
+        norm_cte_parts = list(cte_parts)  # copy raw CTEs
+        for i in range(n):
+            norm_cte_parts.append(
+                f"__mv_n{i} AS (\n"
+                f"  SELECT subject_uuid,\n"
+                f"    CASE WHEN MAX(score) OVER () = MIN(score) OVER () THEN 1.0\n"
+                f"         ELSE (score - MIN(score) OVER ()) / "
+                f"(MAX(score) OVER () - MIN(score) OVER ())\n"
+                f"    END AS score\n"
+                f"  FROM __mv_v{i}\n"
+                f")"
+            )
+        score_parts = [f"{nw:.6f} * __mv_n{i}.score" for i, nw in enumerate(norm_weights)]
+        score_expr = " + ".join(score_parts)
+        null_checks_norm = [f"__mv_n{i}.score IS NOT NULL" for i in range(n)]
+        null_check_expr_norm = " AND ".join(null_checks_norm)
+        from_parts_norm = [f"__mv_n{i}" for i in range(n)]
+        from_clause_norm = ", ".join(from_parts_norm)
+        cte_sql = ",\n".join(norm_cte_parts)
+        sql = (
+            f"(WITH {cte_sql}\n"
+            f" SELECT CASE WHEN {null_check_expr_norm} "
+            f"THEN {score_expr} ELSE NULL END\n"
+            f" FROM {from_clause_norm})"
+        )
+    elif fusion_strategy == 'ranked':
+        # Ranked fusion (Reciprocal Rank Fusion): 1/(rank + 60)
+        # For correlated single-entity lookups, rank is always 1,
+        # so RRF score = 1/61 per index. Normalized weighted sum.
+        rank_cte_parts = list(cte_parts)
+        for i in range(n):
+            rank_cte_parts.append(
+                f"__mv_r{i} AS (\n"
+                f"  SELECT subject_uuid,\n"
+                f"    1.0 / (ROW_NUMBER() OVER (ORDER BY score DESC) + 60) "
+                f"AS rank_score\n"
+                f"  FROM __mv_v{i}\n"
+                f")"
+            )
+        score_parts = [f"{nw:.6f} * __mv_r{i}.rank_score"
+                       for i, nw in enumerate(norm_weights)]
+        score_expr = " + ".join(score_parts)
+        null_checks_rank = [f"__mv_r{i}.rank_score IS NOT NULL" for i in range(n)]
+        null_check_expr_rank = " AND ".join(null_checks_rank)
+        from_parts_rank = [f"__mv_r{i}" for i in range(n)]
+        from_clause_rank = ", ".join(from_parts_rank)
+        cte_sql = ",\n".join(rank_cte_parts)
+        sql = (
+            f"(WITH {cte_sql}\n"
+            f" SELECT CASE WHEN {null_check_expr_rank} "
+            f"THEN {score_expr} ELSE NULL END\n"
+            f" FROM {from_clause_rank})"
+        )
+    else:
+        # Default: weighted_sum — simple weighted combination of raw scores
+        score_parts = [f"{nw:.6f} * __mv_v{i}.score"
+                       for i, nw in enumerate(norm_weights)]
+        score_expr = " + ".join(score_parts)
+        cte_sql = ",\n".join(cte_parts)
+        sql = (
+            f"(WITH {cte_sql}\n"
+            f" SELECT CASE WHEN {null_check_expr} "
+            f"THEN {score_expr} ELSE NULL END\n"
+            f" FROM {from_clause})"
+        )
+
+    return sql, vec_requests

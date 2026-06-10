@@ -30,7 +30,6 @@ class ApiKeysEndpoint:
 
     def __init__(self, api, auth_dependency):
         self.api = api
-        self.db = api.db
         self.auth_dependency = auth_dependency
         self.router = APIRouter(prefix="/api/keys", tags=["API Keys"])
         self._setup_routes()
@@ -50,16 +49,16 @@ class ApiKeysEndpoint:
         ):
             return await self._list_keys(current_user, username)
 
-        @self.router.get("/{key_id}", response_model=ApiKeyInfo)
+        @self.router.get("/key", response_model=ApiKeyInfo)
         async def get_key(
-            key_id: str,
+            key_id: str = Query(..., description="API Key ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             return await self._get_key(key_id, current_user)
 
-        @self.router.delete("/{key_id}", response_model=ApiKeyDeleteResponse)
+        @self.router.delete("", response_model=ApiKeyDeleteResponse)
         async def revoke_key(
-            key_id: str,
+            key_id: str = Query(..., description="API Key ID to revoke"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             return await self._revoke_key(key_id, current_user)
@@ -67,7 +66,7 @@ class ApiKeysEndpoint:
     async def _create_key(
         self, request: ApiKeyCreateRequest, current_user: Dict
     ) -> ApiKeyCreateResponse:
-        if not self.db:
+        if not self.api.db:
             raise HTTPException(status_code=500, detail="Database not configured")
 
         actor = current_user.get("username", "unknown")
@@ -81,7 +80,7 @@ class ApiKeysEndpoint:
             )
 
         # Resolve target user
-        target_user = await self.db.get_user_by_username(target_username)
+        target_user = await self.api.db.get_user_by_username(target_username)
         if not target_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -89,7 +88,7 @@ class ApiKeysEndpoint:
             )
 
         # Enforce max keys
-        count = await self.db.count_user_api_keys(target_user['user_id'])
+        count = await self.api.db.count_user_api_keys(target_user['user_id'])
         if count >= MAX_KEYS_PER_USER:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -106,7 +105,7 @@ class ApiKeysEndpoint:
             expires_at = datetime.now(timezone.utc) + timedelta(days=request.expires_in_days)
 
         # Insert
-        record = await self.db.create_api_key(
+        record = await self.api.db.create_api_key(
             user_id=target_user['user_id'],
             name=request.name,
             key_prefix=prefix,
@@ -131,7 +130,7 @@ class ApiKeysEndpoint:
     async def _list_keys(
         self, current_user: Dict, username: Optional[str] = None
     ) -> ApiKeyListResponse:
-        if not self.db:
+        if not self.api.db:
             raise HTTPException(status_code=500, detail="Database not configured")
 
         actor = current_user.get("username", "unknown")
@@ -143,13 +142,13 @@ class ApiKeysEndpoint:
 
         user_id = None
         if username:
-            user = await self.db.get_user_by_username(username)
+            user = await self.api.db.get_user_by_username(username)
             if user:
                 user_id = user['user_id']
             else:
                 return ApiKeyListResponse(keys=[], total_count=0)
 
-        rows = await self.db.list_api_keys(user_id=user_id)
+        rows = await self.api.db.list_api_keys(user_id=user_id)
 
         keys = [
             ApiKeyInfo(
@@ -168,10 +167,10 @@ class ApiKeysEndpoint:
         return ApiKeyListResponse(keys=keys, total_count=len(keys))
 
     async def _get_key(self, key_id: str, current_user: Dict) -> ApiKeyInfo:
-        if not self.db:
+        if not self.api.db:
             raise HTTPException(status_code=500, detail="Database not configured")
 
-        key = await self.db.get_api_key_by_id(key_id)
+        key = await self.api.db.get_api_key_by_id(key_id)
         if not key:
             raise HTTPException(status_code=404, detail="API key not found")
 
@@ -195,10 +194,10 @@ class ApiKeysEndpoint:
         )
 
     async def _revoke_key(self, key_id: str, current_user: Dict) -> ApiKeyDeleteResponse:
-        if not self.db:
+        if not self.api.db:
             raise HTTPException(status_code=500, detail="Database not configured")
 
-        key = await self.db.get_api_key_by_id(key_id)
+        key = await self.api.db.get_api_key_by_id(key_id)
         if not key:
             raise HTTPException(status_code=404, detail="API key not found")
 
@@ -209,7 +208,7 @@ class ApiKeysEndpoint:
                 detail="Cannot revoke another user's key",
             )
 
-        await self.db.deactivate_api_key(key_id)
+        await self.api.db.deactivate_api_key(key_id)
 
         emit_audit_event("auth.apikey.revoked", actor,
                          target=key['username'], level="WARN",

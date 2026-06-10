@@ -22,7 +22,7 @@ import {
 } from 'flowbite-react';
 import { HiSearch, HiRefresh, HiDocumentText, HiHome } from 'react-icons/hi';
 import { vectorGeoService } from '../services/VectorGeoService';
-import { apiService } from '../services/ApiService';
+import { apiService, vgClient } from '../services/ApiService';
 import type { VectorIndex, ReindexResponse } from '../types/vectorGeo';
 import { type SpaceInfo } from '../types/api';
 
@@ -38,6 +38,8 @@ const VectorSearch: React.FC = () => {
 
   const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
+  const [graphs, setGraphs] = useState<{ graph_id: string; name?: string }[]>([]);
+  const [selectedGraph, setSelectedGraph] = useState<string>('');
   const [indexes, setIndexes] = useState<VectorIndex[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<string>('');
   const [searchText, setSearchText] = useState('');
@@ -72,10 +74,19 @@ const VectorSearch: React.FC = () => {
     loadSpaces();
   }, []);
 
-  // Load indexes when space changes
+  // Load graphs and indexes when space changes
   useEffect(() => {
     if (!selectedSpace) return;
-    const loadIndexes = async () => {
+    const loadGraphsAndIndexes = async () => {
+      try {
+        const graphData = await apiService.getGraphs(selectedSpace);
+        setGraphs(graphData);
+        if (graphData.length > 0 && !selectedGraph) {
+          setSelectedGraph(graphData[0].graph_id);
+        }
+      } catch {
+        setGraphs([]);
+      }
       try {
         const data = await vectorGeoService.getVectorIndexes(selectedSpace);
         setIndexes(data);
@@ -86,12 +97,12 @@ const VectorSearch: React.FC = () => {
         setIndexes([]);
       }
     };
-    loadIndexes();
+    loadGraphsAndIndexes();
   }, [selectedSpace]);
 
   // Execute vector similarity search via KGQuery endpoint
   const handleSearch = async () => {
-    if (!selectedSpace || !searchText.trim()) return;
+    if (!selectedSpace || !selectedGraph || !searchText.trim()) return;
     if (searchMode === 'vector' && !selectedIndex) return;
     setLoading(true);
     setError(null);
@@ -100,47 +111,26 @@ const VectorSearch: React.FC = () => {
 
     try {
       const startTime = performance.now();
-      let response: Response;
 
-      if (searchMode === 'fulltext') {
-        // Full-text search via the vector text_search endpoint
-        response = await apiService.post(`/api/v1/spaces/${selectedSpace}/vector-search/fulltext`, {
-          query: searchText.trim(),
-          index_name: selectedIndex || undefined,
-          limit: topK,
-        });
-      } else {
-        // Vector similarity search via KGQuery
-        response = await apiService.post(`/api/spaces/${selectedSpace}/kgquery`, {
-          query_mode: 'entity',
-          vector_criteria: {
-            search_text: searchText.trim(),
-            index_name: selectedIndex,
-            top_k: topK,
-            min_score: minScore,
-          },
-          page_size: topK,
-        });
-      }
+      const data = await vgClient.kgqueries.vectorSearch(selectedSpace, selectedGraph, {
+        searchText: searchText.trim(),
+        indexName: selectedIndex || undefined,
+        topK,
+        minScore: searchMode === 'vector' ? minScore : undefined,
+      });
 
       const elapsed = performance.now() - startTime;
       setQueryTime(elapsed);
 
-      if (response.ok) {
-        const data = await response.json();
-        // Extract entities from the response
-        const entities = data.entities || data.results || [];
-        const mapped: SearchResult[] = entities.map((e: Record<string, unknown>) => ({
-          entity_uri: (e as Record<string, unknown>).uri || (e as Record<string, unknown>).entity_uri || (e as Record<string, unknown>).subject_uri || '',
-          score: (e as Record<string, unknown>).similarity_score || (e as Record<string, unknown>).score || (e as Record<string, unknown>).rank || 0,
-          type_uri: (e as Record<string, unknown>).type_uri || (e as Record<string, unknown>).kGEntityType || '',
-          name: (e as Record<string, unknown>).name || (e as Record<string, unknown>).kGEntityName || (e as Record<string, unknown>).headline || '',
-        }));
-        setResults(mapped);
-      } else {
-        const errData = await response.json().catch(() => ({}));
-        setError((errData as Record<string, string>).detail || `Search failed: ${response.status}`);
-      }
+      // Extract entities from the response
+      const entities = (data as any).entities || (data as any).results || [];
+      const mapped: SearchResult[] = entities.map((e: Record<string, unknown>) => ({
+        entity_uri: e.uri || e.entity_uri || e.subject_uri || '',
+        score: e.similarity_score || e.score || e.rank || 0,
+        type_uri: e.type_uri || e.kGEntityType || '',
+        name: e.name || e.kGEntityName || e.headline || '',
+      }));
+      setResults(mapped);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Search failed');
     } finally {
@@ -222,6 +212,25 @@ const VectorSearch: React.FC = () => {
                     )}
                   </div>
                 )}
+                <div className="flex-1">
+                  <Label htmlFor="vs-graph">Graph</Label>
+                  <Select
+                    id="vs-graph"
+                    value={selectedGraph}
+                    onChange={(e) => setSelectedGraph(e.target.value)}
+                    disabled={graphs.length === 0}
+                  >
+                    {graphs.length === 0 ? (
+                      <option value="">No graphs available</option>
+                    ) : (
+                      graphs.map((g) => (
+                        <option key={g.graph_id} value={g.graph_id}>
+                          {g.name || g.graph_id}
+                        </option>
+                      ))
+                    )}
+                  </Select>
+                </div>
                 <div className="flex-1">
                   <Label htmlFor="vs-index">Index</Label>
                   <Select

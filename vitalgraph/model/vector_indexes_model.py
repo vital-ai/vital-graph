@@ -55,3 +55,40 @@ class ReindexResponse(BaseModel):
     subjects_skipped: int = 0
     elapsed_seconds: float = 0.0
     errors: List[str] = []
+
+
+# ---------------------------------------------------------------------------
+# Direct vector upsert / get (for testing and client-provided embeddings)
+# ---------------------------------------------------------------------------
+
+class VectorEntry(BaseModel):
+    """A single vector to upsert."""
+    subject_uri: str = Field(..., description="Subject URI of the entity")
+    graph_uri: str = Field(..., description="Graph URI (context)")
+    embedding: List[float] = Field(..., description="Embedding vector")
+    search_text: Optional[str] = Field(None, description="Optional source text (enables hybrid search)")
+
+
+class VectorUpsertRequest(BaseModel):
+    """Batch upsert of pre-computed vectors."""
+    vectors: List[VectorEntry] = Field(..., min_length=1, max_length=1000)
+
+
+class VectorUpsertResponse(BaseModel):
+    message: str
+    upserted: int = 0
+    errors: List[str] = []
+
+
+class VectorGetOut(BaseModel):
+    """A stored vector entry."""
+    subject_uri: str
+    graph_uri: str
+    embedding: List[float]
+    search_text: Optional[str] = None
+    updated_time: Optional[str] = None
+
+
+class VectorGetResponse(BaseModel):
+    vectors: List[VectorGetOut]
+    total_count: int

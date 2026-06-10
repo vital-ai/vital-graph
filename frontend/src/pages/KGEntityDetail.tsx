@@ -2,14 +2,16 @@ import React from 'react';
 import { HiUser } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
+import { vgClient } from '../services/ApiService';
 import EntityGeoMiniMap from '../components/EntityGeoMiniMap';
+import EntityGraphViewer from '../components/entity-graph/EntityGraphViewer';
 
 const KGEntityDetail: React.FC = () => {
   // Configuration for KG Entities
   const config: ObjectDetailConfig = {
     objectTypeName: 'KG Entity',
     objectTypeColor: 'green',
-    apiEndpoint: '/api/graphs/kgentities',
+    crudOps: vgClient.kgentities,
     listRoute: '/kg-entities',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGEntity',
     paramName: 'entityId',
@@ -62,10 +64,23 @@ const KGEntityDetail: React.FC = () => {
   // Use the shared hook
   const hookData = useObjectDetail(config, createDefaultObject, buildApiRequestData);
 
-  // Render with shared component + geo mini-map
   return (
     <>
+      {/* Properties section (breadcrumb, header, properties table) */}
       <ObjectDetailRenderer {...hookData} config={config} />
+
+      {/* Entity Graph section — shown below properties once entity is loaded */}
+      {hookData.spaceId && hookData.object?.object_uri && (
+        <div className="mt-6">
+          <EntityGraphViewer
+            spaceId={hookData.spaceId}
+            graphId={hookData.graphId || 'default'}
+            entityUri={hookData.object.object_uri}
+          />
+        </div>
+      )}
+
+      {/* Geo mini-map */}
       {hookData.spaceId && hookData.object?.object_uri && (
         <div className="mt-4">
           <EntityGeoMiniMap spaceId={hookData.spaceId} entityUri={hookData.object.object_uri} />

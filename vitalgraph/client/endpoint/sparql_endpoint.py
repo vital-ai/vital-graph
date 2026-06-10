@@ -35,9 +35,9 @@ class SparqlEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id, request=request)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/query"
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/query"
         
-        return await self._make_typed_request('POST', url, SPARQLQueryResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLQueryResponse, params={'space_id': space_id}, json=request.model_dump())
     
     async def execute_sparql_insert(self, space_id: str, request: SPARQLInsertRequest) -> SPARQLInsertResponse:
         """
@@ -56,9 +56,9 @@ class SparqlEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id, request=request)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/insert"
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/insert"
         
-        return await self._make_typed_request('POST', url, SPARQLInsertResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLInsertResponse, params={'space_id': space_id}, json=request.model_dump())
     
     async def execute_sparql_update(self, space_id: str, request: SPARQLUpdateRequest) -> SPARQLUpdateResponse:
         """
@@ -77,9 +77,9 @@ class SparqlEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id, request=request)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/update"
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/update"
         
-        return await self._make_typed_request('POST', url, SPARQLUpdateResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLUpdateResponse, params={'space_id': space_id}, json=request.model_dump())
     
     async def execute_sparql_delete(self, space_id: str, request: SPARQLDeleteRequest) -> SPARQLDeleteResponse:
         """
@@ -98,7 +98,7 @@ class SparqlEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id, request=request)
         
-        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/{space_id}/delete"
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/delete"
         
-        return await self._make_typed_request('POST', url, SPARQLDeleteResponse, json=request.model_dump())
+        return await self._make_typed_request('POST', url, SPARQLDeleteResponse, params={'space_id': space_id}, json=request.model_dump())
     

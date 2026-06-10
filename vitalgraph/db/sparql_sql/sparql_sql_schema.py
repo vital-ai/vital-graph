@@ -650,6 +650,21 @@ class SparqlSQLSchema:
             STANDARD_DATATYPES,
         )
 
+        # Bootstrap document_segments vector index + mapping (non-critical)
+        try:
+            from vitalgraph.document.vector_index_setup import (
+                setup_document_segments_vectorization,
+            )
+            ok = await setup_document_segments_vectorization(conn, space_id)
+            if ok:
+                logger.info("Bootstrapped document_segments vector index for: %s", space_id)
+            else:
+                logger.warning("Could not bootstrap document_segments index for: %s", space_id)
+        except Exception as ve:
+            logger.warning(
+                "document_segments vector bootstrap failed (non-critical): %s", ve
+            )
+
         logger.info("Created space tables for: %s", space_id)
 
     @staticmethod

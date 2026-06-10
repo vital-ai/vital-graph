@@ -50,29 +50,33 @@ class ExportEndpoint(BaseEndpoint):
         """Get export job details by ID."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/export/{job_id}"
-        return await self._make_typed_request('GET', url, ExportJobResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/export/job"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('GET', url, ExportJobResponse, params=params)
 
     async def delete_export_job(self, job_id: str) -> ExportDeleteResponse:
         """Cancel (if running) and delete export job."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/export/{job_id}"
-        return await self._make_typed_request('DELETE', url, ExportDeleteResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/export"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('DELETE', url, ExportDeleteResponse, params=params)
 
     async def execute_export_job(self, job_id: str) -> ExportExecuteResponse:
         """Start background export execution."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/export/{job_id}/execute"
-        return await self._make_typed_request('POST', url, ExportExecuteResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/export/execute"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('POST', url, ExportExecuteResponse, params=params)
 
     async def get_export_status(self, job_id: str) -> ExportStatusResponse:
         """Get export progress / status."""
         self._check_connection()
         validate_required_params(job_id=job_id)
-        url = f"{self._get_server_url().rstrip('/')}/api/data/export/{job_id}/status"
-        return await self._make_typed_request('GET', url, ExportStatusResponse)
+        url = f"{self._get_server_url().rstrip('/')}/api/data/export/status"
+        params = build_query_params(job_id=job_id)
+        return await self._make_typed_request('GET', url, ExportStatusResponse, params=params)
 
     async def download_export_file(self, job_id: str, output_path: str) -> bool:
         """Download completed export file.
@@ -88,7 +92,7 @@ class ExportEndpoint(BaseEndpoint):
         validate_required_params(job_id=job_id, output_path=output_path)
 
         try:
-            url = f"{self._get_server_url().rstrip('/')}/api/data/export/{job_id}/download"
+            url = f"{self._get_server_url().rstrip('/')}/api/data/export/download?job_id={job_id}"
             response = await self._make_authenticated_request('GET', url)
             response.raise_for_status()
 

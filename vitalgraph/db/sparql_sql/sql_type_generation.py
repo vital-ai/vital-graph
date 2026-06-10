@@ -658,9 +658,12 @@ def _infer_function_type(expr: ExprFunction, registry: TypeRegistry) -> TypedExp
         # VitalGraph custom functions
         from .vg_functions import (
             VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+            VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
             VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
         )
-        if iri in (VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY, VG_GEO_DISTANCE):
+        if iri in (VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+                   VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
+                   VG_GEO_DISTANCE):
             return TypedExpr(
                 sql="", sparql_type="literal",
                 datatype=f"{XSD}double",

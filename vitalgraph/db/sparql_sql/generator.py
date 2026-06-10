@@ -327,6 +327,7 @@ async def generate_sql(
     conn=None,
     graph_lock_uri: Optional[str] = None,
     default_graph: Optional[str] = None,
+    multi_vector_config: Optional[Dict[str, Any]] = None,
 ) -> GenerateResult:
     """Generate SQL from a compiled SPARQL query using the v2 pipeline.
 
@@ -431,6 +432,24 @@ async def generate_sql(
         from .vg_optimize import vg_optimize
         plan = vg_optimize(plan)
 
+        # Stage 2e: Pre-load vector index metadata (for mixed-model auto-detect)
+        vector_index_meta: Dict[str, Dict[str, Any]] = {}
+        if conn is not None:
+            try:
+                vi_table = f"{space_id}_vector_index"
+                rows = await conn.fetch(
+                    f"SELECT index_name, model_name, dimensions "
+                    f"FROM {vi_table}")
+                vector_index_meta = {
+                    r['index_name']: {
+                        'model_name': r['model_name'],
+                        'dimensions': r['dimensions'],
+                    }
+                    for r in rows
+                }
+            except Exception:
+                pass  # table may not exist for non-vector spaces
+
         # Stage 3: Emit → SQL (pure, no I/O)
         from .emit_context import ProcessingTrace
         sparql_text = getattr(meta, 'sparql', '') if meta else ''
@@ -440,6 +459,9 @@ async def generate_sql(
                           graph_lock_uri=graph_lock_uri, base_uri=base_uri,
                           trace=trace, datatype_cache=datatype_cache,
                           text_needed_vars=text_needed)
+        if multi_vector_config:
+            ctx.multi_vector_config = multi_vector_config
+        ctx.vector_index_meta = vector_index_meta
         sql_str = emit(plan, ctx)
 
         # Stage 4: Substitute constants

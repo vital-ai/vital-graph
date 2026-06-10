@@ -2,13 +2,14 @@ import React from 'react';
 import ObjectIcon from '../components/icons/ObjectIcon';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
+import { vgClient } from '../services/ApiService';
 
 const ObjectDetail: React.FC = () => {
   // Configuration for Graph Objects
   const config: ObjectDetailConfig = {
     objectTypeName: 'Graph Object',
     objectTypeColor: 'blue',
-    apiEndpoint: '/api/graphs/objects',
+    crudOps: vgClient.objects,
     listRoute: '/objects/graphobjects',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#GraphObject',
     paramName: 'objectId',

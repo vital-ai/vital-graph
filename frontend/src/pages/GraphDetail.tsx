@@ -62,20 +62,22 @@ const GraphDetail: React.FC = () => {
           setBannerMessage({ type: 'error', message: `Graph not found: ${graphUri}` });
         } else {
           setGraph(match);
-          // Fetch object counts in parallel
-          const [entities, frames, relations] = await Promise.allSettled([
-            apiService.getEntities(spaceId, graphUri, { page_size: 1 }),
-            apiService.getFrames(spaceId, graphUri, { page_size: 1 }),
-            apiService.getRelations(spaceId, graphUri, { page_size: 1 }),
-          ]);
-          if (entities.status === 'fulfilled') setEntityCount(entities.value.total_count ?? 0);
-          if (frames.status === 'fulfilled') setFrameCount(frames.value.total_count ?? 0);
-          if (relations.status === 'fulfilled') setRelationCount(relations.value.total_count ?? 0);
         }
       } catch {
         setBannerMessage({ type: 'error', message: 'Failed to load graph data' });
       } finally {
         setLoading(false);
+      }
+
+      // Fetch object counts via fast SQL-based endpoint
+      if (!isCreating && graphUri) {
+        apiService.getGraphCounts(spaceId, graphUri).then(counts => {
+          setEntityCount(counts.entity_count ?? 0);
+          setFrameCount(counts.frame_count ?? 0);
+          setRelationCount(counts.relation_count ?? 0);
+        }).catch(() => {
+          // Counts are non-critical; leave as null on failure
+        });
       }
     };
     load();

@@ -4,11 +4,11 @@ Data Export REST API endpoint for VitalGraph.
 Manages export job lifecycle:
   POST   /export              — create job (auto-generates output filename)
   GET    /export              — list jobs
-  GET    /export/{id}         — get job
-  DELETE /export/{id}         — cancel & delete job
-  POST   /export/{id}/execute — start background export
-  GET    /export/{id}/status  — poll progress
-  GET    /export/{id}/download — download completed export file
+  GET    /export/job          — get job (job_id query param)
+  DELETE /export              — cancel & delete job (job_id query param)
+  POST   /export/execute      — start background export (job_id query param)
+  GET    /export/status       — poll progress (job_id query param)
+  GET    /export/download     — download completed export file (job_id query param)
 """
 
 import json
@@ -17,7 +17,7 @@ import os
 import tempfile
 from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Query, Depends, Path, HTTPException
+from fastapi import APIRouter, Query, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from ..model.export_model import (
@@ -88,12 +88,23 @@ _FORMAT_MEDIA_TYPES = {
 class ExportEndpoint:
     """Data Export endpoint handler backed by ImportExportJobManager."""
 
-    def __init__(self, job_manager, space_manager, auth_dependency):
-        self.job_manager = job_manager
+    def __init__(self, app_impl, space_manager, auth_dependency):
+        self.app_impl = app_impl
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
         self.router = APIRouter()
         self._setup_routes()
+
+    @property
+    def job_manager(self):
+        """Get the ImportExportJobManager from app_impl (set during startup)."""
+        mgr = getattr(self.app_impl, 'import_export_manager', None)
+        if mgr is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Import/export service is not available (database not connected)",
+            )
+        return mgr
 
     def _setup_routes(self):
         """Setup FastAPI routes for data export management."""
@@ -119,45 +130,45 @@ class ExportEndpoint:
             require_admin(current_user)
             return await self._list_export_jobs(space_id, status, page_size, offset)
 
-        @self.router.get("/export/{job_id}", response_model=ExportJobResponse)
+        @self.router.get("/export/job", response_model=ExportJobResponse)
         async def get_export_job(
-            job_id: str = Path(..., description="Export job ID"),
+            job_id: str = Query(..., description="Export job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Get export job details by ID."""
             require_admin(current_user)
             return await self._get_export_job(job_id)
 
-        @self.router.delete("/export/{job_id}", response_model=ExportDeleteResponse)
+        @self.router.delete("/export", response_model=ExportDeleteResponse)
         async def delete_export_job(
-            job_id: str = Path(..., description="Export job ID"),
+            job_id: str = Query(..., description="Export job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Cancel (if running) and delete export job."""
             require_admin(current_user)
             return await self._delete_export_job(job_id)
 
-        @self.router.post("/export/{job_id}/execute", response_model=ExportExecuteResponse)
+        @self.router.post("/export/execute", response_model=ExportExecuteResponse)
         async def execute_export_job(
-            job_id: str = Path(..., description="Export job ID"),
+            job_id: str = Query(..., description="Export job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Start background export execution."""
             require_admin(current_user)
             return await self._execute_export_job(job_id)
 
-        @self.router.get("/export/{job_id}/status", response_model=ExportStatusResponse)
+        @self.router.get("/export/status", response_model=ExportStatusResponse)
         async def get_export_status(
-            job_id: str = Path(..., description="Export job ID"),
+            job_id: str = Query(..., description="Export job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Get export progress / status."""
             require_admin(current_user)
             return await self._get_export_status(job_id)
 
-        @self.router.get("/export/{job_id}/download")
+        @self.router.get("/export/download")
         async def download_export_file(
-            job_id: str = Path(..., description="Export job ID"),
+            job_id: str = Query(..., description="Export job ID"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """Download the completed export file."""

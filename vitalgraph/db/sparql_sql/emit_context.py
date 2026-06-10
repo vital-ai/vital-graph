@@ -250,6 +250,13 @@ class EmitContext:
         # vg: optimizer hints — temporarily set by emit_extend when emitting
         # a BIND with vg_top_k or vg_threshold hints from vg_optimize pass.
         self.vg_hints: Dict[str, Any] = {}
+        # Multi-vector config — set by caller for fusion_strategy / oversample.
+        # Keys: 'fusion_strategy' (str), 'oversample_factor' (int).
+        self.multi_vector_config: Dict[str, Any] = {}
+        # Vector index metadata — pre-loaded from {space}_vector_index table.
+        # Maps index_name → {'model_name': str, 'dimensions': int}.
+        # Used by multi_vector_similarity_sql to auto-detect mixed models.
+        self.vector_index_meta: Dict[str, Dict[str, Any]] = {}
 
     @property
     def depth(self) -> int:
@@ -352,6 +359,9 @@ class EmitContext:
         ctx._depth = self._depth + 1
         # Share vector requests list across parent/child contexts
         ctx._vector_requests = self._vector_requests
+        # Share multi-vector config and vector index metadata
+        ctx.multi_vector_config = self.multi_vector_config
+        ctx.vector_index_meta = self.vector_index_meta
         return ctx
 
     def log(self, plan_kind: str, message: str, **kwargs) -> Optional[TraceStep]:

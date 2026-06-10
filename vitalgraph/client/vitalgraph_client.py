@@ -37,31 +37,31 @@ from .endpoint.vector_mappings_endpoint import VectorMappingsClientEndpoint
 from .endpoint.vector_indexes_endpoint import VectorIndexesClientEndpoint
 from .endpoint.geo_config_endpoint import GeoConfigClientEndpoint
 from .endpoint.geo_points_endpoint import GeoPointsClientEndpoint
+from .endpoint.kgdocuments_endpoint import KGDocumentsEndpoint as KGDocumentsClientEndpoint
 from .endpoint.metrics_endpoint import MetricsClientEndpoint
 from .utils.client_utils import VitalGraphClientError
 from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
 from .response.client_response import (
-    GraphResponse, GraphsListResponse, GraphCreateResponse, GraphDeleteResponse, GraphClearResponse
+    GraphResponse, GraphsListResponse, GraphCreateResponse, GraphDeleteResponse, GraphClearResponse,
+    SpaceResponse, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse,
+    KGTypesListResponse, KGTypeResponse, KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse,
+    ObjectsListResponse, ObjectResponse, ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse,
+    PaginatedGraphObjectResponse, FrameGraphResponse, CreateEntityResponse, UpdateEntityResponse, DeleteResponse,
+    EntityResponse,
+    FilesListResponse, FileResponse, FileCreateResponse, FileUpdateResponse, FileDeleteResponse, FileUploadResponse,
 )
 
 if TYPE_CHECKING:
-    from ..model.quad_model import QuadResponse, QuadResultsResponse, QuadRequest
-    from ..model.kgframes_model import FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
-    from ..model.kgtypes_model import KGTypeCreateResponse, KGTypeUpdateResponse, KGTypeDeleteResponse
-    from ..model.objects_model import ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+    from ..model.quad_model import QuadRequest
     from ..model.sparql_model import (
         SPARQLQueryRequest, SPARQLQueryResponse, SPARQLUpdateRequest, SPARQLUpdateResponse,
         SPARQLInsertRequest, SPARQLInsertResponse, SPARQLDeleteRequest, SPARQLDeleteResponse,
     )
     from ..model.triples_model import TripleListResponse, TripleOperationResponse
     from ..model.users_model import User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
-    from ..model.spaces_model import Space, SpacesListResponse, SpaceCreateResponse, SpaceUpdateResponse, SpaceDeleteResponse
-    from ..model.files_model import (
-        FileCreateResponse, FileUpdateResponse, FileDeleteResponse,
-        FileUploadResponse,
-    )
+    from ..model.spaces_model import Space
     from ..model.import_model import (
         ImportJobCreate, ImportJobResponse, ImportDeleteResponse, ImportExecuteResponse,
         ImportStatusResponse, ImportLogResponse, ImportUploadResponse,
@@ -69,7 +69,6 @@ if TYPE_CHECKING:
     from ..model.export_model import (
         ExportJobCreate, ExportJobResponse, ExportDeleteResponse, ExportExecuteResponse, ExportStatusResponse,
     )
-    from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse, EntityDeleteResponse
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +169,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.api_keys = ApiKeysClientEndpoint(self)
         self.vector_mappings = VectorMappingsClientEndpoint(self)
         self.vector_indexes = VectorIndexesClientEndpoint(self)
+        self.kgdocuments = KGDocumentsClientEndpoint(self)
         self.geo_config = GeoConfigClientEndpoint(self)
         self.geo_points = GeoPointsClientEndpoint(self)
         self.metrics = MetricsClientEndpoint(self)
@@ -706,7 +706,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.spaces.add_space(space)
     
-    async def get_space(self, space_id: str) -> 'Space':
+    async def get_space(self, space_id: str) -> SpaceResponse:
         """
         Get a space by ID.
         
@@ -888,7 +888,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGType CRUD Methods - Delegated to KGTypesEndpoint
     
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
+    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
         """
         List KGTypes with pagination and optional search.
         
@@ -904,7 +904,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.list_kgtypes(space_id, graph_id, page_size, offset, search)
     
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
+    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
         """
         Get a specific KGType by URI.
         
@@ -918,7 +918,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.get_kgtype(space_id, graph_id, uri)
     
-    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List) -> 'KGTypeCreateResponse':
+    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List) -> KGTypeCreateResponse:
         """
         Create KGTypes from GraphObjects.
         
@@ -932,7 +932,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.create_kgtypes(space_id, graph_id, objects)
     
-    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List) -> 'KGTypeUpdateResponse':
+    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List) -> KGTypeUpdateResponse:
         """
         Update KGTypes from GraphObjects.
         
@@ -946,7 +946,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.update_kgtypes(space_id, graph_id, objects)
     
-    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> 'KGTypeDeleteResponse':
+    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
         """
         Delete a KGType by URI.
         
@@ -960,7 +960,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.delete_kgtype(space_id, graph_id, uri)
     
-    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> 'KGTypeDeleteResponse':
+    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
         """
         Delete multiple KGTypes by URI list.
         
@@ -974,9 +974,79 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgtypes.delete_kgtypes_batch(space_id, graph_id, uri_list)
     
+    # KGDocument CRUD Methods - Delegated to KGDocumentsEndpoint
+    
+    async def list_kgdocuments(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                               search: Optional[str] = None, include_segments: bool = False,
+                               document_type_uri: Optional[str] = None):
+        """List KGDocuments with pagination and optional filtering."""
+        return await self.kgdocuments.list_kgdocuments(space_id, graph_id, page_size, offset, search, include_segments, document_type_uri)
+    
+    async def get_kgdocument(self, space_id: str, graph_id: str, uri: str):
+        """Get a single KGDocument by URI."""
+        return await self.kgdocuments.get_kgdocument(space_id, graph_id, uri)
+    
+    async def list_kgdocument_segments(self, space_id: str, graph_id: str, parent_uri: str):
+        """List segments for a parent KGDocument."""
+        return await self.kgdocuments.list_segments(space_id, graph_id, parent_uri)
+    
+    async def create_kgdocuments(self, space_id: str, graph_id: str, objects: List):
+        """Create KGDocuments from GraphObjects."""
+        return await self.kgdocuments.create_kgdocuments(space_id, graph_id, objects)
+    
+    async def update_kgdocuments(self, space_id: str, graph_id: str, objects: List):
+        """Update KGDocuments from GraphObjects."""
+        return await self.kgdocuments.update_kgdocuments(space_id, graph_id, objects)
+    
+    async def delete_kgdocument(self, space_id: str, graph_id: str, uri: str):
+        """Delete a KGDocument by URI (cascades to segments)."""
+        return await self.kgdocuments.delete_kgdocument(space_id, graph_id, uri)
+    
+    async def delete_kgdocuments_batch(self, space_id: str, graph_id: str, uri_list: str):
+        """Delete multiple KGDocuments by URI list (cascades to segments)."""
+        return await self.kgdocuments.delete_kgdocuments_batch(space_id, graph_id, uri_list)
+    
+    async def segment_document(self, space_id: str, graph_id: str, document_uri: str,
+                               segment_method_uri: Optional[str] = None,
+                               max_segment_tokens: Optional[int] = None):
+        """Trigger segmentation for a KGDocument."""
+        return await self.kgdocuments.segment_document(space_id, graph_id, document_uri, segment_method_uri, max_segment_tokens)
+    
+    async def get_segmentation_status(self, space_id: str, document_uri: Optional[str] = None,
+                                      status: Optional[str] = None, limit: int = 50, offset: int = 0):
+        """Get segmentation job status for a space or specific document."""
+        return await self.kgdocuments.get_segmentation_status(space_id, document_uri, status, limit, offset)
+    
+    async def list_segmentation_configs(self, space_id: str, enabled_only: bool = False):
+        """List segmentation configs for a space."""
+        return await self.kgdocuments.list_segmentation_configs(space_id, enabled_only)
+
+    async def create_segmentation_config(self, space_id: str, document_type_uri: str,
+                                         segment_method_uri: str, max_segment_tokens: int = 512,
+                                         min_segment_tokens: int = 50, overlap_tokens: int = 0,
+                                         enabled: bool = True, auto_vectorize: bool = True):
+        """Create a segmentation config."""
+        return await self.kgdocuments.create_segmentation_config(
+            space_id, document_type_uri, segment_method_uri,
+            max_segment_tokens, min_segment_tokens, overlap_tokens, enabled, auto_vectorize)
+
+    async def update_segmentation_config(self, space_id: str, config_id: int,
+                                         document_type_uri: str, segment_method_uri: str,
+                                         max_segment_tokens: int = 512, min_segment_tokens: int = 50,
+                                         overlap_tokens: int = 0, enabled: bool = True,
+                                         auto_vectorize: bool = True):
+        """Update an existing segmentation config."""
+        return await self.kgdocuments.update_segmentation_config(
+            space_id, config_id, document_type_uri, segment_method_uri,
+            max_segment_tokens, min_segment_tokens, overlap_tokens, enabled, auto_vectorize)
+
+    async def delete_segmentation_config(self, space_id: str, config_id: int):
+        """Delete a segmentation config."""
+        return await self.kgdocuments.delete_segmentation_config(space_id, config_id)
+
     # KGFrame CRUD Methods - Delegated to KGFramesEndpoint
     
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         List KGFrames with pagination and optional search.
         
@@ -992,7 +1062,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search)
     
-    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
+    async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
         """
         Get a specific KGFrame by URI.
         
@@ -1006,7 +1076,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.get_kgframe(space_id, graph_id, uri)
     
-    async def create_kgframes(self, space_id: str, graph_id: str, objects: List) -> 'FrameCreateResponse':
+    async def create_kgframes(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
         """
         Create KGFrames from GraphObjects.
         
@@ -1020,7 +1090,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.create_kgframes(space_id, graph_id, objects)
     
-    async def update_kgframes(self, space_id: str, graph_id: str, objects: List) -> 'FrameUpdateResponse':
+    async def update_kgframes(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
         """
         Update KGFrames from GraphObjects.
         
@@ -1034,7 +1104,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.update_kgframes(space_id, graph_id, objects)
     
-    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'FrameDeleteResponse':
+    async def delete_kgframe(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
         """
         Delete a KGFrame by URI.
         
@@ -1048,7 +1118,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.delete_kgframe(space_id, graph_id, uri)
     
-    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> 'FrameDeleteResponse':
+    async def delete_kgframes_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
         """
         Delete multiple KGFrames by URI list.
         
@@ -1064,7 +1134,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGFrames with Slots Methods - Delegated to KGFramesEndpoint
     
-    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
+    async def get_kgframes_with_slots(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         Get KGFrames with their associated slots using pagination.
         
@@ -1080,7 +1150,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.get_kgframes_with_slots(space_id, graph_id, page_size, offset, search)
     
-    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> 'FrameCreateResponse':
+    async def create_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
         """
         Create KGFrames with their associated slots from GraphObjects.
         
@@ -1094,7 +1164,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.create_kgframes_with_slots(space_id, graph_id, objects)
     
-    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> 'FrameUpdateResponse':
+    async def update_kgframes_with_slots(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
         """
         Update KGFrames with their associated slots from GraphObjects.
         
@@ -1108,7 +1178,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgframes.update_kgframes_with_slots(space_id, graph_id, objects)
     
-    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> 'FrameDeleteResponse':
+    async def delete_kgframes_with_slots(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
         """
         Delete KGFrames with their associated slots by URI list.
         
@@ -1124,7 +1194,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # KGEntity CRUD Methods - Delegated to KGEntitiesEndpoint
     
-    async def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'EntityListResponse':
+    async def list_kgentities(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
         List KGEntities with pagination and optional search.
         
@@ -1140,7 +1210,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.list_kgentities(space_id, graph_id, page_size, offset, search)
     
-    async def get_kgentity(self, space_id: str, graph_id: str, uri: str) -> 'EntityResponse':
+    async def get_kgentity(self, space_id: str, graph_id: str, uri: str) -> EntityResponse:
         """
         Get a specific KGEntity by URI.
         
@@ -1154,7 +1224,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.get_kgentity(space_id, graph_id, uri)
     
-    async def create_kgentities(self, space_id: str, graph_id: str, objects: List) -> 'EntityCreateResponse':
+    async def create_kgentities(self, space_id: str, graph_id: str, objects: List) -> CreateEntityResponse:
         """
         Create KGEntities from GraphObjects.
         
@@ -1168,7 +1238,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.create_kgentities(space_id, graph_id, objects)
     
-    async def update_kgentities(self, space_id: str, graph_id: str, objects: List) -> 'EntityUpdateResponse':
+    async def update_kgentities(self, space_id: str, graph_id: str, objects: List) -> UpdateEntityResponse:
         """
         Update KGEntities from GraphObjects.
         
@@ -1182,7 +1252,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.update_kgentities(space_id, graph_id, objects)
     
-    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> 'EntityDeleteResponse':
+    async def delete_kgentity(self, space_id: str, graph_id: str, uri: str) -> DeleteResponse:
         """
         Delete a KGEntity by URI.
         
@@ -1196,7 +1266,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.kgentities.delete_kgentity(space_id, graph_id, uri)
     
-    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str) -> 'EntityDeleteResponse':
+    async def delete_kgentities_batch(self, space_id: str, graph_id: str, uri_list: str) -> DeleteResponse:
         """
         Delete multiple KGEntities by URI list.
         
@@ -1230,7 +1300,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # Object CRUD Methods - Delegated to ObjectsEndpoint
     
-    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
+    async def list_objects(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> ObjectsListResponse:
         """
         List Objects with pagination and optional search.
         
@@ -1246,7 +1316,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.list_objects(space_id, graph_id, page_size, offset, search)
     
-    async def get_object(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
+    async def get_object(self, space_id: str, graph_id: str, uri: str) -> ObjectResponse:
         """
         Get a specific Object by URI.
         
@@ -1260,7 +1330,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.get_object(space_id, graph_id, uri)
     
-    async def create_objects(self, space_id: str, graph_id: str, objects: List) -> 'ObjectCreateResponse':
+    async def create_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectCreateResponse:
         """
         Create Objects from GraphObjects.
         
@@ -1274,7 +1344,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.create_objects(space_id, graph_id, objects)
     
-    async def update_objects(self, space_id: str, graph_id: str, objects: List) -> 'ObjectUpdateResponse':
+    async def update_objects(self, space_id: str, graph_id: str, objects: List) -> ObjectUpdateResponse:
         """
         Update Objects from GraphObjects.
         
@@ -1288,7 +1358,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.update_objects(space_id, graph_id, objects)
     
-    async def delete_object(self, space_id: str, graph_id: str, uri: str) -> 'ObjectDeleteResponse':
+    async def delete_object(self, space_id: str, graph_id: str, uri: str) -> ObjectDeleteResponse:
         """
         Delete an Object by URI.
         
@@ -1302,7 +1372,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.objects.delete_object(space_id, graph_id, uri)
     
-    async def delete_objects_batch(self, space_id: str, graph_id: str, uri_list: str) -> 'ObjectDeleteResponse':
+    async def delete_objects_batch(self, space_id: str, graph_id: str, uri_list: str) -> ObjectDeleteResponse:
         """
         Delete multiple Objects by URI list.
         
@@ -1318,7 +1388,7 @@ class VitalGraphClient(VitalGraphClientInterface):
     
     # File Management Methods - Delegated to FilesEndpoint
     
-    async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, offset: int = 0, file_filter: Optional[str] = None) -> 'QuadResponse':
+    async def list_files(self, space_id: str, graph_id: Optional[str] = None, page_size: int = 100, offset: int = 0, file_filter: Optional[str] = None) -> FilesListResponse:
         """
         List files with pagination and optional filtering.
         
@@ -1334,7 +1404,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.list_files(space_id, graph_id, page_size, offset, file_filter)
     
-    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileResponse':
+    async def get_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileResponse:
         """
         Get a specific file by URI.
         
@@ -1348,7 +1418,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.get_file(space_id, uri, graph_id)
     
-    async def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileCreateResponse':
+    async def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> FileCreateResponse:
         """
         Create new file node (metadata only).
         
@@ -1362,7 +1432,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.create_file(space_id, objects, graph_id)
     
-    async def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileUpdateResponse':
+    async def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> FileUpdateResponse:
         """
         Update file metadata.
         
@@ -1376,7 +1446,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.update_file(space_id, objects, graph_id)
     
-    async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileDeleteResponse':
+    async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> FileDeleteResponse:
         """
         Delete file node by URI.
         
@@ -1390,7 +1460,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.delete_file(space_id, uri, graph_id)
     
-    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'FilesListResponse':
+    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> FilesListResponse:
         """
         Get multiple files by URI list.
         
@@ -1404,7 +1474,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.get_files_by_uris(space_id, uri_list, graph_id)
     
-    async def upload_file_content(self, space_id: str, uri: str, file_path: str, graph_id: Optional[str] = None) -> 'FileUploadResponse':
+    async def upload_file_content(self, space_id: str, uri: str, file_path: str, graph_id: Optional[str] = None) -> FileUploadResponse:
         """
         Upload binary file content to existing file node.
         
@@ -1473,25 +1543,6 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.files.pump_file(source_space_id, source_graph_id, source_file_uri,
                                    target_space_id, target_graph_id, target_file_uri, chunk_size)
-    
-    # Interface-required file methods (delegated to existing implementations)
-    
-    async def create_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileCreateResponse':
-        """Create new file node (metadata only) - Interface method."""
-        return await self.files.create_file_node(space_id, graph_id or "default", objects)
-    
-    async def update_file(self, space_id: str, objects: List, graph_id: Optional[str] = None) -> 'FileUpdateResponse':
-        """Update file metadata - Interface method.""" 
-        return await self.files.update_file_metadata(space_id, graph_id or "default", objects)
-    
-    async def delete_file(self, space_id: str, uri: str, graph_id: Optional[str] = None) -> 'FileDeleteResponse':
-        """Delete file node by URI - Interface method."""
-        return await self.files.delete_file_node(space_id, graph_id or "default", uri)
-    
-    async def get_files_by_uris(self, space_id: str, uri_list: str, graph_id: Optional[str] = None) -> 'FilesListResponse':
-        """Get multiple files by URI list - Interface method."""
-        # TODO: Implement proper delegation
-        return None
     
     # Data Import Methods - Delegated to ImportEndpoint
 

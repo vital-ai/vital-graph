@@ -213,6 +213,35 @@ class VectorSearchCriteria(BaseModel):
         return self
 
 
+class WeightedVectorInput(BaseModel):
+    """A single weighted vector input for multi-vector search."""
+    search_text: Optional[str] = Field(None, description="Text to vectorize server-side")
+    vector: Optional[str] = Field(None, description="Pre-computed vector literal '[0.1,0.2,...]'")
+    index_name: str = Field(..., description="Vector index name")
+    weight: float = Field(1.0, description="Relative weight for this vector (auto-normalized)", gt=0)
+
+    @model_validator(mode='after')
+    def validate_input(self) -> 'WeightedVectorInput':
+        if not self.search_text and not self.vector:
+            raise ValueError("Either search_text or vector must be provided")
+        if self.search_text and self.vector:
+            raise ValueError("Only one of search_text or vector may be provided")
+        return self
+
+
+class MultiVectorSearchCriteria(BaseModel):
+    """Criteria for multi-vector similarity search.
+
+    Generates vg:multiVectorSimilarity or vg:multiVectorNearby SPARQL BIND.
+    Combines scores from multiple vector indexes with weighted fusion.
+    """
+    vectors: List[WeightedVectorInput] = Field(..., description="List of weighted vector inputs (min 2)", min_length=2)
+    top_k: int = Field(10, description="Maximum results (becomes LIMIT)", ge=1, le=1000)
+    min_score: Optional[float] = Field(None, description="Minimum combined score threshold (0.0-1.0)", ge=0.0, le=1.0)
+    fusion_strategy: str = Field("weighted_sum", description="Fusion strategy: weighted_sum, relative_score, or ranked")
+    oversample_factor: int = Field(5, description="Oversample factor per vector (candidates = top_k * factor)", ge=1, le=50)
+
+
 class GeoSearchCriteria(BaseModel):
     """Criteria for geographic proximity search.
 
@@ -235,6 +264,7 @@ class EntityQueryCriteria(BaseModel):
     filters: Optional[List[QueryFilter]] = Field(None, description="Property-based filters")
     entity_property_filters: Optional[List[EntityPropertyFilter]] = Field(None, description="Direct entity property filters (datatype-aware)")
     vector_criteria: Optional[VectorSearchCriteria] = Field(None, description="Vector similarity search criteria")
+    multi_vector_criteria: Optional[MultiVectorSearchCriteria] = Field(None, description="Multi-vector weighted fusion search criteria")
     geo_criteria: Optional[GeoSearchCriteria] = Field(None, description="Geographic proximity search criteria")
 
 

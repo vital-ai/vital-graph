@@ -1729,8 +1729,10 @@ class VitalGraphDBAdminREPL:
   use <space-id>;   - Set current space and display space ID in prompt
   unuse;            - Unset the current space
 
-📥 Data Import:
-  import;           - Import RDF data into a space (interactive or with args)
+📥 Data Import/Export (standalone CLIs):
+  vitalgraphimport -s <space_id> -f <file>   - Import RDF data
+  vitalgraphexport -s <space_id> -f <file>   - Export RDF data
+  (Run with --help for full options)
 
 👤 User Management:
   user list;                          - List all users

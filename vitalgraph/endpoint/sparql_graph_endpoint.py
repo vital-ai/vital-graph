@@ -34,51 +34,66 @@ class SPARQLGraphEndpoint:
         
         self.logger.info("Setting up SPARQL graph routes...")
         
-        # GET endpoint to list graphs (must come before catch-all graph/{graph_uri:path})
+        # GET endpoint to list graphs
         @self.router.get(
-            "/{space_id}/graphs",
+            "/graphs",
             response_model=List[GraphInfo],
             tags=["Graphs"],
             summary="List Graphs",
             description="List all graphs in the specified space"
         )
         async def list_graphs(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_read(current_user, space_id)
             self.logger.info(f"List graphs endpoint called for space: {space_id}")
             return await self._list_graphs(space_id, current_user)
         
-        self.logger.info("Registered GET /{space_id}/graphs route")
+        self.logger.info("Registered GET /graphs route")
         
         # POST endpoint for graph operations
         @self.router.post(
-            "/{space_id}/graph",
+            "/graph",
             response_model=SPARQLGraphResponse,
             tags=["Graphs"],
             summary="Execute Graph Operation",
             description="Execute a SPARQL graph operation (CREATE, DROP, CLEAR, COPY, MOVE, ADD)"
         )
         async def sparql_graph_operation(
-            space_id: str,
-            request: SPARQLGraphRequest,
+            space_id: str = Query(..., description="Space ID"),
+            request: SPARQLGraphRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_write(current_user, space_id)
             return await self._execute_graph_operation(space_id, request, current_user)
         
-        # GET endpoint to get graph info (catch-all route - must come after specific routes)
+        # GET endpoint for fast graph object counts
         @self.router.get(
-            "/{space_id}/graph/{graph_uri:path}",
+            "/graph_counts",
+            tags=["Graphs"],
+            summary="Get Graph Object Counts",
+            description="Fast counts of entities, frames, and relations in a graph"
+        )
+        async def graph_counts(
+            space_id: str = Query(..., description="Space ID"),
+            graph_id: str = Query(..., description="Graph URI"),
+            current_user: Dict = Depends(self.auth_dependency)
+        ):
+            require_space_read(current_user, space_id)
+            return await self._get_graph_counts(space_id, graph_id)
+
+        # GET endpoint to get graph info
+        @self.router.get(
+            "/graph",
             response_model=GraphInfoResponse,
             tags=["Graphs"],
             summary="Get Graph Info",
             description="Get information about a specific graph"
         )
         async def get_graph_info(
-            space_id: str,
-            graph_uri: str,
+            space_id: str = Query(..., description="Space ID"),
+            graph_uri: str = Query(..., description="Graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_read(current_user, space_id)
@@ -86,15 +101,15 @@ class SPARQLGraphEndpoint:
         
         # PUT endpoint to create graph
         @self.router.put(
-            "/{space_id}/graph/{graph_uri:path}",
+            "/graph",
             response_model=SPARQLGraphResponse,
             tags=["Graphs"],
             summary="Create Graph",
             description="Create a new empty graph"
         )
         async def create_graph(
-            space_id: str,
-            graph_uri: str,
+            space_id: str = Query(..., description="Space ID"),
+            graph_uri: str = Query(..., description="Graph URI"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
             require_space_write(current_user, space_id)
@@ -106,15 +121,15 @@ class SPARQLGraphEndpoint:
         
         # DELETE endpoint to drop graph
         @self.router.delete(
-            "/{space_id}/graph/{graph_uri:path}",
+            "/graph",
             response_model=SPARQLGraphResponse,
             tags=["Graphs"],
             summary="Drop Graph",
             description="Drop a graph and all its triples"
         )
         async def drop_graph(
-            space_id: str,
-            graph_uri: str,
+            space_id: str = Query(..., description="Space ID"),
+            graph_uri: str = Query(..., description="Graph URI"),
             silent: bool = Query(False, description="Execute silently"),
             current_user: Dict = Depends(self.auth_dependency)
         ):
@@ -403,6 +418,99 @@ class SPARQLGraphEndpoint:
                 error=str(e),
                 message="Error getting graph info"
             )
+
+
+    # ------------------------------------------------------------------
+    # Fast graph counts (single SQL query)
+    # ------------------------------------------------------------------
+
+    # KG type URIs — must stay in sync with kg_impl type clauses
+    _ENTITY_TYPES = frozenset([
+        'http://vital.ai/ontology/haley-ai-kg#KGEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGNewsEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGProductEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGWebEntity',
+    ])
+    _FRAME_TYPES = frozenset([
+        'http://vital.ai/ontology/haley-ai-kg#KGFrame',
+    ])
+    _RELATION_TYPES = frozenset([
+        'http://vital.ai/ontology/haley-ai-kg#KGRelation',
+    ])
+
+    async def _get_graph_counts(self, space_id: str, graph_id: str):
+        """Return entity, frame, and relation counts via one SQL query.
+
+        Counts vitaltype rows per type URI, then classifies them.
+        """
+        try:
+            space_record = await self.space_manager.get_space_or_load(space_id)
+            if not space_record:
+                raise HTTPException(status_code=404, detail="Space not found")
+
+            space_impl = space_record.space_impl
+            db_space_impl = space_impl.get_db_space_impl()
+            if not db_space_impl:
+                raise HTTPException(status_code=500, detail="Backend unavailable")
+
+            from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+
+            t = SparqlSQLSchema.get_table_names(space_id)
+            rdf_quad = t['rdf_quad']
+            term = t['term']
+
+            _VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype'
+
+            async with db_space_impl._db._pool.acquire() as conn:
+                ctx_uuid = await conn.fetchval(
+                    f"SELECT term_uuid FROM {term} "
+                    f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                    graph_id,
+                )
+                if ctx_uuid is None:
+                    return {"entity_count": 0, "frame_count": 0, "relation_count": 0}
+
+                vt_uuid = await conn.fetchval(
+                    f"SELECT term_uuid FROM {term} "
+                    f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                    _VITALTYPE,
+                )
+                if vt_uuid is None:
+                    return {"entity_count": 0, "frame_count": 0, "relation_count": 0}
+
+                # One query: count vitaltype rows grouped by object (type URI)
+                rows = await conn.fetch(f"""
+                    SELECT t_obj.term_text AS type_uri, COUNT(*) AS cnt
+                    FROM {rdf_quad} q
+                    JOIN {term} t_obj ON q.object_uuid = t_obj.term_uuid
+                    WHERE q.context_uuid = $1 AND q.predicate_uuid = $2
+                    GROUP BY t_obj.term_text
+                """, ctx_uuid, vt_uuid)
+
+                entity_count = 0
+                frame_count = 0
+                relation_count = 0
+                for r in rows:
+                    uri = r['type_uri']
+                    cnt = r['cnt']
+                    if uri in self._ENTITY_TYPES:
+                        entity_count += cnt
+                    elif uri in self._FRAME_TYPES:
+                        frame_count += cnt
+                    elif uri in self._RELATION_TYPES:
+                        relation_count += cnt
+
+                return {
+                    "entity_count": entity_count,
+                    "frame_count": frame_count,
+                    "relation_count": relation_count,
+                }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error getting graph counts: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 def create_sparql_graph_router(space_manager, auth_dependency) -> APIRouter:

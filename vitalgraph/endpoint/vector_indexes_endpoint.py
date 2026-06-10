@@ -3,12 +3,11 @@
 REST API for managing per-space vector indexes (the ``{space}_vector_index``
 registry) and their backing data tables (``{space}_vec_{index_name}``).
 
-Routes (all under /api/spaces/{space_id}/vector-indexes):
-    GET    /                         — list indexes
-    POST   /                         — create index (registers + creates data table)
-    GET    /{index_name}             — get index details + row count
-    DELETE /{index_name}             — delete index (drops data table + registry row)
-    POST   /{index_name}/reindex     — trigger full re-population of an index
+Routes (all under /api/vector-indexes):
+    GET    /          — list indexes (or get single if index_name provided)
+    POST   /          — create index (registers + creates data table)
+    DELETE /          — delete index (drops data table + registry row)
+    POST   /reindex   — trigger full re-population of an index
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -24,6 +23,8 @@ from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 from ..model.vector_indexes_model import (
     VectorIndexOut, VectorIndexListResponse,
     CreateVectorIndexRequest, ReindexRequest, ReindexResponse,
+    VectorEntry, VectorUpsertRequest, VectorUpsertResponse,
+    VectorGetOut, VectorGetResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,140 @@ class VectorIndexesEndpoint:
         finally:
             await self._release(conn)
 
+    # ------------------------------------------------------------------
+    # Direct vector upsert / get
+    # ------------------------------------------------------------------
+
+    async def upsert_vectors(
+        self, space_id: str, index_name: str, body: VectorUpsertRequest, current_user: Dict,
+    ):
+        """Upsert pre-computed vectors into a vector index."""
+        require_space_write(current_user, space_id)
+        conn = await self._acquire()
+        try:
+            # Verify index exists and check dimensions
+            table = f"{space_id}_vector_index"
+            idx_row = await conn.fetchrow(
+                f"SELECT dimensions FROM {table} WHERE index_name = $1", index_name,
+            )
+            if idx_row is None:
+                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+
+            expected_dims = idx_row["dimensions"]
+            vec_table = self.schema.vec_table_name(space_id, index_name)
+
+            ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+            upserted = 0
+            errors = []
+
+            for entry in body.vectors:
+                if len(entry.embedding) != expected_dims:
+                    errors.append(
+                        f"{entry.subject_uri}: expected {expected_dims} dims, got {len(entry.embedding)}"
+                    )
+                    continue
+
+                subject_uuid = uuid.uuid5(ns, f"{entry.subject_uri}\x00U")
+                context_uuid = uuid.uuid5(ns, f"{entry.graph_uri}\x00U")
+                vec_str = "[" + ",".join(str(v) for v in entry.embedding) + "]"
+
+                try:
+                    await conn.execute(
+                        f"""INSERT INTO {vec_table}
+                            (subject_uuid, context_uuid, embedding, search_text, updated_time)
+                            VALUES ($1, $2, $3::vector, $4, CURRENT_TIMESTAMP)
+                            ON CONFLICT (subject_uuid, context_uuid)
+                            DO UPDATE SET embedding = EXCLUDED.embedding,
+                                          search_text = EXCLUDED.search_text,
+                                          updated_time = CURRENT_TIMESTAMP""",
+                        subject_uuid, context_uuid, vec_str, entry.search_text,
+                    )
+                    upserted += 1
+                except Exception as e:
+                    errors.append(f"{entry.subject_uri}: {e}")
+
+            return VectorUpsertResponse(
+                message=f"Upserted {upserted} vector(s)",
+                upserted=upserted,
+                errors=errors[:20],
+            )
+        finally:
+            await self._release(conn)
+
+    async def get_vectors(
+        self, space_id: str, index_name: str, subject_uri: Optional[str],
+        graph_uri: Optional[str], current_user: Dict,
+    ):
+        """Get stored vectors by subject URI and/or graph URI."""
+        require_space_read(current_user, space_id)
+        conn = await self._acquire()
+        try:
+            # Verify index exists
+            table = f"{space_id}_vector_index"
+            idx_row = await conn.fetchrow(
+                f"SELECT index_name FROM {table} WHERE index_name = $1", index_name,
+            )
+            if idx_row is None:
+                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+
+            vec_table = self.schema.vec_table_name(space_id, index_name)
+            term_table = f"{space_id}_term"
+            ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+
+            conditions = []
+            params = []
+            param_idx = 1
+
+            if subject_uri:
+                subject_uuid = uuid.uuid5(ns, f"{subject_uri}\x00U")
+                conditions.append(f"v.subject_uuid = ${param_idx}")
+                params.append(subject_uuid)
+                param_idx += 1
+
+            if graph_uri:
+                context_uuid = uuid.uuid5(ns, f"{graph_uri}\x00U")
+                conditions.append(f"v.context_uuid = ${param_idx}")
+                params.append(context_uuid)
+                param_idx += 1
+
+            if not conditions:
+                raise HTTPException(
+                    status_code=400,
+                    detail="At least one of subject_uri or graph_uri is required",
+                )
+
+            where = " AND ".join(conditions)
+            rows = await conn.fetch(
+                f"""SELECT v.subject_uuid, v.context_uuid,
+                          v.embedding::text AS embedding_text,
+                          v.search_text, v.updated_time,
+                          s.term_text AS subject_text,
+                          c.term_text AS context_text
+                   FROM {vec_table} v
+                   LEFT JOIN {term_table} s ON s.term_uuid = v.subject_uuid
+                   LEFT JOIN {term_table} c ON c.term_uuid = v.context_uuid
+                   WHERE {where}
+                   LIMIT 100""",
+                *params,
+            )
+
+            vectors = []
+            for row in rows:
+                emb_text = row["embedding_text"]
+                # Parse pgvector text format "[0.1,0.2,...]" → list of floats
+                emb_list = [float(x) for x in emb_text.strip("[]").split(",")] if emb_text else []
+                vectors.append(VectorGetOut(
+                    subject_uri=row["subject_text"] or str(row["subject_uuid"]),
+                    graph_uri=row["context_text"] or str(row["context_uuid"]),
+                    embedding=emb_list,
+                    search_text=row["search_text"],
+                    updated_time=str(row["updated_time"]) if row["updated_time"] else None,
+                ))
+
+            return VectorGetResponse(vectors=vectors, total_count=len(vectors))
+        finally:
+            await self._release(conn)
+
     async def reindex(
         self, space_id: str, index_name: str, body: ReindexRequest, current_user: Dict,
     ):
@@ -306,20 +441,24 @@ class VectorIndexesEndpoint:
         auth = self.auth_dependency
 
         @self.router.get(
-            "/spaces/{space_id}/vector-indexes",
+            "/vector-indexes",
             response_model=VectorIndexListResponse,
             tags=["Vector Indexes"],
-            summary="List Vector Indexes",
-            description="List all registered vector indexes for a space with embedding counts",
+            summary="List or Get Vector Indexes",
+            description="List all indexes for a space, or get a single index if index_name is provided",
         )
         async def list_route(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
+            index_name: Optional[str] = Query(None, description="Index name (returns single index if provided)"),
             current_user: Dict = Depends(auth),
         ):
+            if index_name:
+                idx = await self.get_index(space_id, index_name, current_user)
+                return VectorIndexListResponse(indexes=[idx], total_count=1)
             return await self.list_indexes(space_id, current_user)
 
         @self.router.post(
-            "/spaces/{space_id}/vector-indexes",
+            "/vector-indexes",
             response_model=VectorIndexOut,
             status_code=status.HTTP_201_CREATED,
             tags=["Vector Indexes"],
@@ -327,53 +466,70 @@ class VectorIndexesEndpoint:
             description="Register a new vector index and create its backing data table",
         )
         async def create_route(
-            space_id: str,
-            body: CreateVectorIndexRequest,
+            space_id: str = Query(..., description="Space ID"),
+            body: CreateVectorIndexRequest = None,
             current_user: Dict = Depends(auth),
         ):
             return await self.create_index(space_id, body, current_user)
 
-        @self.router.get(
-            "/spaces/{space_id}/vector-indexes/{index_name}",
-            response_model=VectorIndexOut,
-            tags=["Vector Indexes"],
-            summary="Get Vector Index",
-            description="Get details for a specific vector index including embedding count",
-        )
-        async def get_route(
-            space_id: str,
-            index_name: str,
-            current_user: Dict = Depends(auth),
-        ):
-            return await self.get_index(space_id, index_name, current_user)
-
         @self.router.delete(
-            "/spaces/{space_id}/vector-indexes/{index_name}",
+            "/vector-indexes",
             tags=["Vector Indexes"],
             summary="Delete Vector Index",
             description="Delete a vector index, its data table, and all dependent mappings",
         )
         async def delete_route(
-            space_id: str,
-            index_name: str,
+            space_id: str = Query(..., description="Space ID"),
+            index_name: str = Query(..., description="Index name to delete"),
             current_user: Dict = Depends(auth),
         ):
             return await self.delete_index(space_id, index_name, current_user)
 
         @self.router.post(
-            "/spaces/{space_id}/vector-indexes/{index_name}/reindex",
+            "/vector-indexes/reindex",
             response_model=ReindexResponse,
             tags=["Vector Indexes"],
             summary="Reindex Vector Index",
             description="Re-populate all embeddings for a vector index from a specific graph",
         )
         async def reindex_route(
-            space_id: str,
-            index_name: str,
             body: ReindexRequest,
+            space_id: str = Query(..., description="Space ID"),
+            index_name: str = Query(..., description="Index name to reindex"),
             current_user: Dict = Depends(auth),
         ):
             return await self.reindex(space_id, index_name, body, current_user)
+
+        @self.router.post(
+            "/vector-indexes/vectors",
+            response_model=VectorUpsertResponse,
+            tags=["Vector Indexes"],
+            summary="Upsert Vectors",
+            description="Insert or update pre-computed embedding vectors directly",
+        )
+        async def upsert_vectors_route(
+            body: VectorUpsertRequest,
+            space_id: str = Query(..., description="Space ID"),
+            index_name: str = Query(..., description="Target index name"),
+            current_user: Dict = Depends(auth),
+        ):
+            return await self.upsert_vectors(space_id, index_name, body, current_user)
+
+        @self.router.get(
+            "/vector-indexes/vectors",
+            response_model=VectorGetResponse,
+            tags=["Vector Indexes"],
+            summary="Get Vectors",
+            description="Retrieve stored vectors by subject URI and/or graph URI",
+        )
+        async def get_vectors_route(
+            space_id: str = Query(..., description="Space ID"),
+            index_name: str = Query(..., description="Index name"),
+            subject_uri: Optional[str] = Query(None, description="Subject URI to look up"),
+            graph_uri: Optional[str] = Query(None, description="Graph URI filter"),
+            current_user: Dict = Depends(auth),
+        ):
+            return await self.get_vectors(space_id, index_name, subject_uri, graph_uri, current_user)
 
 
 # ---------------------------------------------------------------------------

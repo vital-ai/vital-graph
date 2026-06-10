@@ -278,8 +278,73 @@ class SparqlSQLDbObjects:
         page_size: int,
         offset: int,
     ) -> Tuple[List[str], int]:
-        """Phase 1: find distinct subject URIs matching criteria."""
+        """Phase 1: find subject URIs for one page of objects.
 
+        Uses the vitaltype predicate as a natural 1-per-object index,
+        so no DISTINCT is needed.  Falls back to SPARQL when text
+        search or type filters are active.
+        """
+        has_filters = filters and (
+            filters.get('vitaltype_filter') or filters.get('search_text')
+        )
+        if has_filters:
+            return await self._find_subject_uris_sparql(
+                space_id, graph_id, filters, page_size, offset,
+            )
+
+        from .sparql_sql_schema import SparqlSQLSchema
+
+        t = SparqlSQLSchema.get_table_names(space_id)
+        rdf_quad = t['rdf_quad']
+        term = t['term']
+
+        async with self.space_impl._db._pool.acquire() as conn:
+            ctx_uuid = await conn.fetchval(
+                f"SELECT term_uuid FROM {term} "
+                f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                graph_id,
+            )
+            if ctx_uuid is None:
+                return [], 0
+
+            vt_uuid = await conn.fetchval(
+                f"SELECT term_uuid FROM {term} "
+                f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                _VITALTYPE,
+            )
+            if vt_uuid is None:
+                return [], 0
+
+            # Total count — one vitaltype row per object, so COUNT(*) is exact
+            total_count = await conn.fetchval(
+                f"SELECT COUNT(*) FROM {rdf_quad} "
+                f"WHERE context_uuid = $1 AND predicate_uuid = $2",
+                ctx_uuid, vt_uuid,
+            ) or 0
+
+            # Page of subject URIs
+            rows = await conn.fetch(
+                f"SELECT t.term_text AS uri "
+                f"FROM {rdf_quad} q "
+                f"JOIN {term} t ON q.subject_uuid = t.term_uuid "
+                f"WHERE q.context_uuid = $1 AND q.predicate_uuid = $2 "
+                f"ORDER BY q.subject_uuid "
+                f"LIMIT $3 OFFSET $4",
+                ctx_uuid, vt_uuid, page_size, offset,
+            )
+
+            uris = [r['uri'] for r in rows]
+            return uris, total_count
+
+    async def _find_subject_uris_sparql(
+        self,
+        space_id: str,
+        graph_id: str,
+        filters: Optional[Dict[str, Any]],
+        page_size: int,
+        offset: int,
+    ) -> Tuple[List[str], int]:
+        """Filtered fallback using SPARQL (search text, vitaltype filter)."""
         filter_clause = self._build_filter_clause(filters)
 
         query = f"""
@@ -296,7 +361,6 @@ class SparqlSQLDbObjects:
         bindings = self._extract_bindings(result)
         uris = [b['subject']['value'] for b in bindings if 'subject' in b]
 
-        # Approximate total count from returned page
         total_count = len(uris)
         return uris, total_count
 
@@ -307,79 +371,105 @@ class SparqlSQLDbObjects:
         subject_uris: List[str],
         batch_size: int = 100,
     ) -> List[Any]:
-        """Fetch SPARQL bindings and convert directly to GraphObjects.
+        """Fetch all quads for a list of subject URIs via direct SQL.
 
-        Bypasses rdflib entirely — goes straight from SPARQL JSON bindings
-        to GraphObject.from_property_maps for maximum throughput.
+        Bypasses the SPARQL sidecar entirely — resolves subject UUIDs
+        then fetches all (s, p, o) rows in one indexed query.  Converts
+        directly to GraphObjects via ``from_property_maps``.
         """
         from collections import defaultdict
         from vital_ai_vitalsigns.model.GraphObject import GraphObject
+        from .sparql_sql_schema import SparqlSQLSchema
+
+        t = SparqlSQLSchema.get_table_names(space_id)
+        rdf_quad = t['rdf_quad']
+        term = t['term']
 
         all_entries: List[Dict[str, Any]] = []
 
-        for i in range(0, len(subject_uris), batch_size):
-            batch = subject_uris[i : i + batch_size]
-            uri_values = " ".join(f"<{u}>" for u in batch)
-
-            query = f"""
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    VALUES ?s {{ {uri_values} }}
-                    ?s ?p ?o .
-                    {_materialized_filter()}
-                }}
-            }}
-            """
-
-            result = await self.space_impl.execute_sparql_query(space_id, query)
-            bindings = self._extract_bindings(result)
-
-            # Group by subject
-            subjects: Dict[str, Dict] = defaultdict(
-                lambda: {'type_uri': None, 'properties': {}}
+        async with self.space_impl._db._pool.acquire() as conn:
+            # Resolve graph context UUID
+            ctx_uuid = await conn.fetchval(
+                f"SELECT term_uuid FROM {term} "
+                f"WHERE term_text = $1 AND term_type = 'U' LIMIT 1",
+                graph_id,
             )
+            if ctx_uuid is None:
+                return []
 
-            for b in bindings:
-                s = b.get('s', {}).get('value')
-                p = b.get('p', {}).get('value')
-                o_data = b.get('o', {})
-                if not (s and p and o_data.get('value') is not None):
+            for i in range(0, len(subject_uris), batch_size):
+                batch = subject_uris[i : i + batch_size]
+
+                # Resolve subject URIs to UUIDs
+                subj_rows = await conn.fetch(
+                    f"SELECT term_uuid, term_text FROM {term} "
+                    f"WHERE term_text = ANY($1) AND term_type = 'U'",
+                    batch,
+                )
+                if not subj_rows:
                     continue
+                subj_uuids = [r['term_uuid'] for r in subj_rows]
 
-                o_val = o_data['value']
-                o_type = o_data.get('type', 'literal')
+                # Fetch all quads for these subjects in this graph
+                rows = await conn.fetch(f"""
+                    SELECT t_subj.term_text AS s,
+                           t_pred.term_text AS p,
+                           t_obj.term_text  AS o,
+                           t_obj.term_type  AS o_type
+                    FROM {rdf_quad} q
+                    JOIN {term} t_subj ON q.subject_uuid   = t_subj.term_uuid
+                    JOIN {term} t_pred ON q.predicate_uuid  = t_pred.term_uuid
+                    JOIN {term} t_obj  ON q.object_uuid     = t_obj.term_uuid
+                    WHERE q.context_uuid = $1
+                      AND q.subject_uuid = ANY($2)
+                """, ctx_uuid, subj_uuids)
 
-                # Extract type URI
-                if p == _RDF_TYPE or p == _VITALTYPE:
-                    subjects[s]['type_uri'] = o_val
-                    continue
-                if p == _URI_PROP:
-                    continue  # redundant with subject URI
+                # Group by subject
+                subjects: Dict[str, Dict] = defaultdict(
+                    lambda: {'type_uri': None, 'properties': {}}
+                )
 
-                # Convert value
-                if o_type == 'uri':
-                    value = o_val
-                else:
-                    value = _convert_literal(o_val, o_data.get('datatype'))
+                for r in rows:
+                    s = r['s']
+                    p = r['p']
+                    o_val = r['o']
+                    o_type = r['o_type']  # 'U' = uri, 'L'/'S' = literal
 
-                # Handle multi-value properties
-                props = subjects[s]['properties']
-                if p in props:
-                    existing = props[p]
-                    if isinstance(existing, list):
-                        existing.append(value)
+                    # Skip materialized predicates
+                    if p in _MATERIALIZED_PREDICATES:
+                        continue
+
+                    # Extract type URI
+                    if p == _RDF_TYPE or p == _VITALTYPE:
+                        subjects[s]['type_uri'] = o_val
+                        continue
+                    if p == _URI_PROP:
+                        continue
+
+                    # Convert value
+                    if o_type == 'U':
+                        value = o_val
                     else:
-                        props[p] = [existing, value]
-                else:
-                    props[p] = value
+                        value = _convert_literal(o_val, None)
 
-            for subject_uri, data in subjects.items():
-                if data['type_uri']:
-                    all_entries.append({
-                        'subject_uri': subject_uri,
-                        'type_uri': data['type_uri'],
-                        'properties': data['properties'],
-                    })
+                    # Handle multi-value properties
+                    props = subjects[s]['properties']
+                    if p in props:
+                        existing = props[p]
+                        if isinstance(existing, list):
+                            existing.append(value)
+                        else:
+                            props[p] = [existing, value]
+                    else:
+                        props[p] = value
+
+                for subject_uri, data in subjects.items():
+                    if data['type_uri']:
+                        all_entries.append({
+                            'subject_uri': subject_uri,
+                            'type_uri': data['type_uri'],
+                            'properties': data['properties'],
+                        })
 
         if not all_entries:
             return []

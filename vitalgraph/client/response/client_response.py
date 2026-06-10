@@ -589,3 +589,78 @@ class ObjectDeleteResponse(VitalGraphResponse):
     def is_success(self) -> bool:
         """Check if operation was successful."""
         return self.deleted and not self.error_code
+
+
+# ============================================================================
+# KGDocuments Response Classes
+# ============================================================================
+
+class KGDocumentResponse(VitalGraphResponse):
+    """Response for single KGDocument retrieval operations."""
+    document: Optional[Any] = Field(None, description="Retrieved KGDocument data")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.document is not None and not self.error_code
+
+
+class KGDocumentsListResponse(VitalGraphResponse):
+    """Response for KGDocument list operations."""
+    documents: List[Any] = Field(default_factory=list, description="List of KGDocuments")
+    count: int = Field(0, description="Total count of documents")
+    page_size: Optional[int] = Field(None, description="Page size for pagination")
+    offset: Optional[int] = Field(None, description="Offset for pagination")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return not self.error_code
+
+
+class KGDocumentCreateResponse(VitalGraphResponse):
+    """Response for KGDocument create operations."""
+    created: bool = Field(False, description="Whether documents were created")
+    created_count: int = Field(0, description="Number of documents created")
+    created_uris: List[str] = Field(default_factory=list, description="URIs of created documents")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.created and self.created_count > 0 and not self.error_code
+
+
+class KGDocumentUpdateResponse(VitalGraphResponse):
+    """Response for KGDocument update operations."""
+    updated: bool = Field(False, description="Whether documents were updated")
+    updated_count: int = Field(0, description="Number of documents updated")
+    updated_uris: List[str] = Field(default_factory=list, description="URIs of updated documents")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.updated and self.updated_count > 0 and not self.error_code
+
+
+class KGDocumentDeleteResponse(VitalGraphResponse):
+    """Response for KGDocument delete operations (with cascade)."""
+    deleted: bool = Field(False, description="Whether documents were deleted")
+    deleted_count: int = Field(0, description="Number of documents deleted")
+    deleted_uris: List[str] = Field(default_factory=list, description="URIs of deleted documents")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.deleted and not self.error_code
+
+
+class KGDocumentSegmentsResponse(VitalGraphResponse):
+    """Response for listing segments of a KGDocument."""
+    segments: List[Any] = Field(default_factory=list, description="List of segment GraphObjects")
+    count: int = Field(0, description="Total count of segments")
+    parent_uri: Optional[str] = Field(None, description="Parent document URI")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return not self.error_code

@@ -4,8 +4,8 @@ API endpoints for query metrics retrieval.
 All metrics are stored in PostgreSQL (query_metrics + slow_query_log tables).
 No Redis dependency.
 
-GET /api/spaces/{space_id}/metrics — time-series request metrics
-GET /api/spaces/{space_id}/metrics/slow — recent slow queries
+GET /api/metrics?space_id=... — time-series request metrics
+GET /api/metrics/slow?space_id=... — recent slow queries
 """
 
 import logging
@@ -30,16 +30,16 @@ class MetricsEndpoint:
         self._setup_routes()
 
     def _setup_routes(self):
-        @self.router.get("/spaces/{space_id}/metrics")
+        @self.router.get("/metrics")
         async def get_space_metrics(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             range: str = Query("realtime", description="Time range: realtime, 24h, 7d, 30d"),
         ):
             return await self.get_metrics(space_id, range)
 
-        @self.router.get("/spaces/{space_id}/metrics/slow")
+        @self.router.get("/metrics/slow")
         async def get_slow_queries(
-            space_id: str,
+            space_id: str = Query(..., description="Space ID"),
             limit: int = Query(50, ge=1, le=100),
         ):
             return await self.get_slow_log(space_id, limit)

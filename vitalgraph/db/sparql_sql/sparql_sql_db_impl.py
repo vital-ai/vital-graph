@@ -108,6 +108,18 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
         try:
             logger.debug("Connecting to PostgreSQL for sparql_sql backend...")
 
+            import json as _json
+
+            async def _init_conn(conn):
+                await conn.set_type_codec(
+                    'jsonb', encoder=_json.dumps, decoder=_json.loads,
+                    schema='pg_catalog',
+                )
+                await conn.set_type_codec(
+                    'json', encoder=_json.dumps, decoder=_json.loads,
+                    schema='pg_catalog',
+                )
+
             self.connection_pool = await asyncpg.create_pool(
                 host=self.config.get('host', 'localhost'),
                 port=self.config.get('port', 5432),
@@ -118,6 +130,7 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                 max_size=self.config.get('max_pool_size', 15),
                 max_inactive_connection_lifetime=120.0,
                 command_timeout=self.config.get('command_timeout', 60),
+                init=_init_conn,
             )
 
             # Track pool for service-level cleanup

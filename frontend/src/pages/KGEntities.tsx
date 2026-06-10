@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useOutletContext, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
-  Alert, Badge, Button, Pagination, Select, Spinner, TextInput
+  Alert, Badge, Button, Label, Pagination, Select, Spinner, TextInput
 } from 'flowbite-react';
+import { type SpaceInfo } from '../types/api';
+import { type GraphInfo } from '../types/graphs';
 import { HiPlus, HiEye, HiTrash } from 'react-icons/hi2';
-import { HiSearch, HiCube, HiSortAscending, HiSortDescending } from 'react-icons/hi';
+import { HiSearch, HiCube, HiCollection, HiSortAscending, HiSortDescending } from 'react-icons/hi';
 import CopyButton from '../components/CopyButton';
 import {
   parseEntitiesFromQuads,
@@ -29,16 +31,14 @@ interface KGEntity {
 
 const KGEntities: React.FC = () => {
   const navigate = useNavigate();
+  const { spaceId, graphId } = useParams<{ spaceId?: string; graphId?: string }>();
 
-  const context = useOutletContext<{
-    selectedSpace: string;
-    selectedGraph: string;
-    spacesLoading: boolean;
-    graphsLoading: boolean;
-    error: string | null;
-  }>();
-
-  const { selectedSpace = '', selectedGraph = '', spacesLoading = true } = context || {};
+  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
+  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [selectedSpace, setSelectedSpace] = useState(spaceId || '');
+  const [selectedGraph, setSelectedGraph] = useState(graphId ? decodeURIComponent(graphId) : '');
+  const [spacesLoading, setSpacesLoading] = useState(true);
+  const [graphsLoading, setGraphsLoading] = useState(false);
 
   const [entities, setEntities] = useState<KGEntity[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,6 +52,36 @@ const KGEntities: React.FC = () => {
   const [sortBy, setSortBy] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [entityTypeFilter, setEntityTypeFilter] = useState<string>('');
+
+  // Fetch spaces
+  const fetchSpaces = useCallback(async () => {
+    try {
+      setSpacesLoading(true);
+      setSpaces(await apiService.getSpaces());
+    } catch { /* ignore */ }
+    finally { setSpacesLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchSpaces(); }, [fetchSpaces]);
+
+  // Fetch graphs
+  const fetchGraphs = useCallback(async () => {
+    if (!selectedSpace) { setGraphs([]); return; }
+    try {
+      setGraphsLoading(true);
+      setGraphs(await apiService.getGraphs(selectedSpace));
+    } catch { setGraphs([]); }
+    finally { setGraphsLoading(false); }
+  }, [selectedSpace]);
+
+  useEffect(() => { fetchGraphs(); }, [fetchGraphs]);
+
+  // Navigate to hierarchical URL when selection changes
+  useEffect(() => {
+    if (selectedSpace && selectedGraph && !spaceId) {
+      navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/objects/kgentities`, { replace: true });
+    }
+  }, [selectedSpace, selectedGraph, navigate, spaceId]);
 
   // Debounce search
   useEffect(() => {
@@ -126,6 +156,46 @@ const KGEntities: React.FC = () => {
 
   return (
     <div className="space-y-5">
+      {/* Page Title */}
+      <div className="flex items-center gap-2 mb-2">
+        <HiCollection className="w-6 h-6 text-blue-600" />
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Entities</h1>
+      </div>
+
+      {/* Space / Graph selectors */}
+      <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex-1 max-w-xs">
+          <Label htmlFor="space-select" className="text-xs">Space</Label>
+          <Select
+            id="space-select"
+            value={selectedSpace}
+            onChange={(e) => { setSelectedSpace(e.target.value); setSelectedGraph(''); }}
+            disabled={spacesLoading}
+          >
+            <option value="">Choose a space...</option>
+            {spaces.map((s) => (
+              <option key={s.space} value={s.space}>{s.space_name || s.space}</option>
+            ))}
+          </Select>
+        </div>
+        <div className="flex-1 max-w-xs">
+          <Label htmlFor="graph-select" className="text-xs">Graph</Label>
+          <Select
+            id="graph-select"
+            value={selectedGraph}
+            onChange={(e) => setSelectedGraph(e.target.value)}
+            disabled={!selectedSpace || graphsLoading}
+          >
+            <option value="">Choose a graph...</option>
+            {graphs.map((g) => (
+              <option key={g.graph_uri} value={g.graph_uri}>
+                {g.graph_uri.split('/').pop() || g.graph_uri}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -179,7 +249,7 @@ const KGEntities: React.FC = () => {
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
 
       {/* Empty / prompt states */}
-      {!selectedSpace && !spacesLoading && (
+      {!selectedSpace && (
         <div className="text-center py-16 text-gray-500 dark:text-gray-400">
           <HiCube className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
           <p className="text-lg font-medium">Select a space</p>
