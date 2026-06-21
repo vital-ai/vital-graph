@@ -348,6 +348,13 @@ def _collect_referenced_vars(plan: PlanV2, refs: Set[str]) -> None:
     # need text resolution.  The UNION/MINUS nodes themselves don't add
     # any text requirements beyond what flows upward.
 
+    # VALUES (KIND_TABLE): variables bound by inline VALUES participate in
+    # JOIN conditions that compare text values.  Mark them as referenced so
+    # any BGP sibling that shares the variable resolves its text column
+    # (otherwise the text is NULL and the equality join always fails).
+    if kind == KIND_TABLE and plan.values_vars:
+        refs.update(plan.values_vars)
+
     # Recurse into children
     for child in (plan.children or []):
         _collect_referenced_vars(child, refs)

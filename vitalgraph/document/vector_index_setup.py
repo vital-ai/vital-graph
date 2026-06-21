@@ -91,7 +91,7 @@ async def ensure_document_segments_index(
                 context_uuid    UUID NOT NULL,
                 embedding       vector({dimensions}),
                 search_text     TEXT,
-                updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (subject_uuid, context_uuid)
             )
         """)
@@ -122,10 +122,10 @@ async def ensure_document_segments_mapping(
     type_uri: str = "urn:kgdoctype:document_segment",
 ) -> bool:
     """
-    Ensure a vector mapping exists for document segments.
+    Ensure a search mapping exists for document segments.
 
     This maps KGDocuments with kGDocumentType='urn:kgdoctype:document_segment'
-    to the document_segments vector index.
+    to the document_segments index (shared by vector and FTS).
 
     Args:
         conn: asyncpg connection.
@@ -135,8 +135,8 @@ async def ensure_document_segments_mapping(
     Returns:
         True if created/exists, False on error.
     """
-    mapping_table = f"{space_id}_vector_mapping"
-    property_table = f"{space_id}_vector_mapping_property"
+    mapping_table = f"{space_id}_search_mapping"
+    property_table = f"{space_id}_search_mapping_property"
 
     try:
         # Check if mapping already exists
@@ -157,8 +157,8 @@ async def ensure_document_segments_mapping(
             f"""
             INSERT INTO {mapping_table}
                 (mapping_type, type_uri, index_name, enabled, source_type,
-                 separator, include_pred_name, include_type_desc)
-            VALUES ($1, $2, $3, TRUE, $4, '. ', FALSE, FALSE)
+                 separator, include_pred_name)
+            VALUES ($1, $2, $3, TRUE, $4, '. ', FALSE)
             RETURNING mapping_id
             """,
             SEGMENTS_MAPPING_TYPE,

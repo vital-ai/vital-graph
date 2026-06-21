@@ -35,8 +35,7 @@ async def test_delete_single_frame(client: VitalGraphClient, space_id: str, grap
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[temp_frame],
-            entity_uri=entity_uri
+            objects=[temp_frame]
         )
         if not create_response.is_success:
             logger.error(f"❌ Failed to create temp frame for single delete test: {create_response.message}")
@@ -79,8 +78,7 @@ async def test_delete_multiple_frames(client: VitalGraphClient, space_id: str, g
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=temp_frames,
-            entity_uri=entity_uri
+            objects=temp_frames
         )
         if not create_response.is_success:
             logger.error(f"❌ Failed to create temp frames for multi-delete test: {create_response.message}")
@@ -120,9 +118,10 @@ async def test_delete_nonexistent_frame(client: VitalGraphClient, space_id: str,
             uri=nonexistent_uri
         )
         
-        # Should either succeed with 0 deletions or fail gracefully
-        if response.is_success or (response.message and "not found" in response.message.lower()):
-            logger.info(f"✅ Non-existent frame deletion handled gracefully")
+        # Server may return is_success=False with deleted_count=0 for non-existent frames,
+        # or is_success=True with 0 deletions. Both are graceful handling.
+        if response.is_success or response.deleted_count == 0:
+            logger.info(f"✅ Non-existent frame deletion handled gracefully (deleted_count={response.deleted_count})")
             return True
         else:
             logger.error(f"❌ Non-existent frame deletion failed unexpectedly: {response.message}")
@@ -134,15 +133,52 @@ async def test_delete_nonexistent_frame(client: VitalGraphClient, space_id: str,
 
 
 async def test_delete_frame_with_dependencies(client: VitalGraphClient, space_id: str, graph_id: str, parent_frame_uri: str, logger: logging.Logger) -> bool:
-    """Test deleting a frame that has dependencies (slots, child frames)."""
+    """Test deleting a frame that has dependencies (slots, child frames).
+    
+    Creates its own parent+child frames so it doesn't depend on shared test data.
+    """
     logger.info("🧪 Testing frame deletion with dependencies...")
     
     try:
-        # Test deletion of frame with dependencies
+        test_data_creator = ClientTestDataCreator()
+        
+        # Create a parent frame
+        parent = KGFrame()
+        parent.URI = str(test_data_creator.generate_test_uri("frame", "dep_delete_parent"))
+        parent.name = "Dep Delete Parent"
+        parent.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#DepDeleteParent"
+        
+        create_parent = await client.kgframes.create_kgframes(
+            space_id=space_id,
+            graph_id=graph_id,
+            objects=[parent]
+        )
+        if not create_parent.is_success:
+            logger.error(f"❌ Failed to create parent for dep delete test: {create_parent.message}")
+            return False
+        
+        # Create a child frame under the parent
+        child = KGFrame()
+        child.URI = str(test_data_creator.generate_test_uri("frame", "dep_delete_child"))
+        child.name = "Dep Delete Child"
+        child.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#DepDeleteChild"
+        
+        create_child = await client.kgframes.create_kgframes(
+            space_id=space_id,
+            graph_id=graph_id,
+            objects=[child],
+            parent_uri=str(parent.URI)
+        )
+        if not create_child.is_success:
+            logger.error(f"❌ Failed to create child for dep delete test: {create_child.message}")
+            return False
+        
+        # Delete the parent frame with recursive=True to cascade child frames
         response = await client.kgframes.delete_kgframe(
             space_id=space_id,
             graph_id=graph_id,
-            uri=parent_frame_uri
+            uri=str(parent.URI),
+            recursive=True
         )
         
         if response.is_success:

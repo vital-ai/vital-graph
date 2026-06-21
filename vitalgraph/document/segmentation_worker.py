@@ -83,9 +83,9 @@ class SegmentationWorker:
             self._wake_event.clear()
             try:
                 await asyncio.wait_for(self._wake_event.wait(), timeout=interval)
-                logger.debug("Worker woken by NOTIFY")
+                logger.info("Worker woken by NOTIFY")
             except asyncio.TimeoutError:
-                pass  # safety-net poll
+                logger.info("Worker safety-net poll (timeout=%.1fs)", interval)
 
         await self._teardown_listeners()
         logger.info("Segmentation worker stopped")
@@ -168,6 +168,10 @@ class SegmentationWorker:
             return False
 
         space_ids = self._get_active_space_ids()
+        if not space_ids:
+            return False
+
+        logger.info("Polling %d space(s) for segmentation jobs", len(space_ids))
         did_work = False
 
         for space_id in space_ids:
@@ -182,25 +186,27 @@ class SegmentationWorker:
 
     async def _poll_space(self, space_id: str) -> bool:
         """Try to claim and process one job for a space. Returns True if a job was processed."""
-        conn = await self._get_connection(space_id)
-        if not conn:
+        pool = await self._get_pool(space_id)
+        if not pool:
+            logger.warning("No pool for space %s, skipping", space_id)
             return False
 
-        try:
-            manager = SegmentationJobManager(conn, space_id)
-            await manager.ensure_table()
+        async with pool.acquire() as conn:
+            try:
+                manager = SegmentationJobManager(conn, space_id)
+                await manager.ensure_table()
 
-            job = await manager.claim_next()
-            if not job:
+                job = await manager.claim_next()
+                if not job:
+                    return False
+
+                # Process under semaphore to bound concurrency
+                async with self._semaphore:
+                    await self._process_job(space_id, job, manager)
+                return True
+            except Exception as e:
+                logger.error(f"Error in poll_space({space_id}): {e}", exc_info=True)
                 return False
-
-            # Process under semaphore to bound concurrency
-            async with self._semaphore:
-                await self._process_job(space_id, job, manager)
-            return True
-        except Exception as e:
-            logger.error(f"Error in poll_space({space_id}): {e}", exc_info=True)
-            return False
 
     async def _process_job(
         self,
@@ -327,8 +333,8 @@ class SegmentationWorker:
             logger.warning(f"Could not get active space IDs: {e}")
         return []
 
-    async def _get_connection(self, space_id: str):
-        """Get a DB connection for a space."""
+    async def _get_pool(self, space_id: str):
+        """Get the asyncpg pool for a space."""
         try:
             space_record = await self._space_manager.get_space_or_load(space_id)
             if not space_record:
@@ -337,43 +343,91 @@ class SegmentationWorker:
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
                 return None
-            if hasattr(backend_impl, "get_connection"):
-                return await backend_impl.get_connection()
-            if hasattr(backend_impl, "_pool"):
-                return await backend_impl._pool.acquire()
+            # Direct connection_pool on backend (SparqlSQLDbImpl)
+            if hasattr(backend_impl, 'connection_pool') and backend_impl.connection_pool:
+                return backend_impl.connection_pool
+            # SparqlSQLSpaceImpl has db_impl -> connection_pool
+            db_impl = getattr(backend_impl, 'db_impl', None)
+            if db_impl:
+                pool = getattr(db_impl, 'connection_pool', None)
+                if pool:
+                    return pool
+            # _pool property (may raise RuntimeError if not connected)
+            if hasattr(backend_impl, '_pool'):
+                try:
+                    return backend_impl._pool
+                except RuntimeError:
+                    pass
+            # _db._pool (SparqlSQLSpaceImpl._db._pool pattern)
+            _db = getattr(backend_impl, '_db', None)
+            if _db:
+                pool = getattr(_db, 'connection_pool', None) or getattr(_db, '_pool', None)
+                if pool:
+                    return pool
         except Exception as e:
-            logger.error(f"Error getting connection for space {space_id}: {e}")
+            logger.error(f"Error getting pool for space {space_id}: {e}")
+        return None
+
+    async def _get_connection(self, space_id: str):
+        """Get a DB connection for a space (caller must release)."""
+        pool = await self._get_pool(space_id)
+        if pool:
+            return await pool.acquire()
         return None
 
     async def _fetch_document_properties(
         self, backend_impl, space_id: str, graph_id: str, document_uri: str
     ) -> Optional[dict]:
-        """Fetch document properties from the backend."""
+        """Fetch document properties from the backend using SPARQL."""
         try:
-            from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
-            adapter = create_backend_adapter(backend_impl)
-            triples = await adapter.get_object_triples(space_id, graph_id, document_uri)
-            if not triples:
+            sparql = f"""
+                PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+                PREFIX vital: <http://vital.ai/ontology/vital-core#>
+
+                SELECT ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{
+                        <{document_uri}> ?p ?o .
+                    }}
+                }}
+            """
+            result = await backend_impl.execute_sparql_query(space_id, sparql)
+            bindings = result.get('results', {}).get('bindings', [])
+            if not bindings:
                 return None
 
-            from vital_ai_vitalsigns.model.GraphObject import GraphObject
-            objects = GraphObject.from_triples_list(triples)
-            if not objects:
-                return None
+            # Convert to property dict
+            props = {"URI": document_uri}
+            for row in bindings:
+                pred = row.get("p", {}).get("value", "")
+                obj_val = row.get("o", {}).get("value", "")
 
-            obj = objects[0]
-            props = {}
-            for prop_name in dir(obj):
-                if prop_name.startswith('_') or prop_name[0].isupper():
-                    continue
-                try:
-                    val = getattr(obj, prop_name)
-                    if val is not None and not callable(val):
-                        props[prop_name] = val
-                except Exception:
-                    pass
-            props["URI"] = str(getattr(obj, "URI", document_uri))
-            return props
+                if "hasKGDocumentContent" in pred:
+                    props["kGDocumentContent"] = str(obj_val)
+                elif "hasKGDocumentExtractedContent" in pred:
+                    props["kGDocumentExtractedContent"] = str(obj_val)
+                elif "hasKGDocumentHTMLContent" in pred:
+                    props["kGDocumentHTMLContent"] = str(obj_val)
+                elif "hasKGDocumentHeadline" in pred:
+                    props["kGDocumentHeadline"] = str(obj_val)
+                elif "hasKGDocumentSummary" in pred:
+                    props["kGDocumentSummary"] = str(obj_val)
+                elif "hasKGDocumentURL" in pred:
+                    props["kGDocumentURL"] = str(obj_val)
+                elif "hasKGDocumentType" in pred:
+                    props["kGDocumentType"] = str(obj_val)
+                elif "hasPrimaryLanguageType" in pred:
+                    props["primaryLanguageType"] = str(obj_val)
+                elif "hasKGGraphURI" in pred or "kGGraphURI" in pred:
+                    props["kGGraphURI"] = str(obj_val)
+                elif "hasName" in pred:
+                    props["name"] = str(obj_val)
+
+            if len(props) > 1:
+                content = props.get("kGDocumentContent", "")
+                logger.info("Fetched doc %s: %d props, content length=%d, first 100=%r",
+                            document_uri, len(props), len(content), content[:100])
+                return props
+            return None
         except Exception as e:
             logger.error(f"Error fetching properties for {document_uri}: {e}")
             return None
@@ -385,6 +439,7 @@ class SegmentationWorker:
         kwargs = {}
         if max_tokens:
             kwargs["max_segment_tokens"] = max_tokens
+        kwargs["min_segment_tokens"] = 20
 
         if method_uri == "urn:segmethod:plain_recursive_split":
             return PlainSplitConfig(**kwargs)
@@ -408,33 +463,67 @@ class SegmentationWorker:
         self, backend_impl, space_id: str, graph_id: str,
         original_uri: str, method_uri: str,
     ) -> None:
-        """Delete existing parent copy + segments for a method."""
-        from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
-        adapter = create_backend_adapter(backend_impl)
+        """Delete existing segmentation by traversing edges from the original document.
 
-        method_suffix = method_uri.split(":")[-1] if ":" in method_uri else "segmented"
-        parent_uri = f"{original_uri}_parent_{method_suffix}"
-
+        Finds parent copies and segments by following Edge_hasKGDocumentSegment
+        relationships, then deletes all discovered URIs (edges, parent, segments).
+        Never assumes URI structure — uses graph traversal only.
+        """
         try:
-            sparql = f"""
-                DELETE WHERE {{
+            # Step 1: Find edges FROM the original document to parent copies
+            # Filter by method_uri to only delete segmentation for this method
+            sparql_edges_from_original = f"""
+                SELECT ?edge ?parent WHERE {{
                     GRAPH <{graph_id}> {{
-                        ?s ?p ?o .
-                        FILTER(STRSTARTS(STR(?s), "{parent_uri}"))
+                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{original_uri}> .
+                        ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?parent .
+                        ?parent <http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentMethodURI> "{method_uri}" .
                     }}
                 }}
             """
-            await adapter.execute_sparql_query(space_id, sparql)
+            result = await backend_impl.execute_sparql_query(space_id, sparql_edges_from_original)
+            bindings = result.get('results', {}).get('bindings', [])
+            if not bindings:
+                return  # No existing segmentation to delete
 
-            edge_uri = f"{original_uri}_edge_to_{method_suffix}_parent"
-            sparql_edge = f"""
-                DELETE WHERE {{
-                    GRAPH <{graph_id}> {{
-                        <{edge_uri}> ?p ?o .
+            uris_to_delete = []
+            parent_uris = []
+
+            for row in bindings:
+                edge_uri = row.get("edge", {}).get("value", "")
+                parent_uri = row.get("parent", {}).get("value", "")
+                if edge_uri:
+                    uris_to_delete.append(edge_uri)
+                if parent_uri:
+                    uris_to_delete.append(parent_uri)
+                    parent_uris.append(parent_uri)
+
+            # Step 2: For each parent, find edges to segments and the segments themselves
+            for parent_uri in parent_uris:
+                sparql_segments = f"""
+                    SELECT ?edge ?seg WHERE {{
+                        GRAPH <{graph_id}> {{
+                            ?edge <http://vital.ai/ontology/vital-core#hasEdgeSource> <{parent_uri}> .
+                            ?edge <http://vital.ai/ontology/vital-core#hasEdgeDestination> ?seg .
+                        }}
                     }}
-                }}
-            """
-            await adapter.execute_sparql_query(space_id, sparql_edge)
+                """
+                seg_result = await backend_impl.execute_sparql_query(space_id, sparql_segments)
+                seg_bindings = seg_result.get('results', {}).get('bindings', [])
+                for row in seg_bindings:
+                    edge_uri = row.get("edge", {}).get("value", "")
+                    seg_uri = row.get("seg", {}).get("value", "")
+                    if edge_uri:
+                        uris_to_delete.append(edge_uri)
+                    if seg_uri:
+                        uris_to_delete.append(seg_uri)
+
+            if uris_to_delete:
+                await backend_impl.db_ops.remove_quads_by_subject_uris(
+                    space_id, uris_to_delete, graph_id=graph_id
+                )
+                logger.info("Deleted %d objects for existing segmentation of %s",
+                            len(uris_to_delete), original_uri)
         except Exception as e:
             logger.warning(f"Error deleting existing segmentation: {e}")
 
@@ -486,10 +575,8 @@ class SegmentationWorker:
             else:
                 triples = vs_objects[0].to_triples_list(vs_objects)
 
-            from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
-            adapter = create_backend_adapter(backend_impl)
             quads = [(s, p, o, graph_uri_ref) for s, p, o in triples]
-            await adapter.store_quads(space_id, quads)
+            await backend_impl.add_rdf_quads_batch_bulk(space_id, quads)
             logger.info(f"Stored {len(quads)} quads for segmentation output")
 
         except Exception as e:

@@ -26,7 +26,7 @@ from tabulate import tabulate
 
 from vitalgraph.config.config_loader import VitalGraphConfig
 from vitalgraph.impl.vitalgraph_impl import VitalGraphImpl
-from vitalgraph.vectorization.mapping_manager import MappingManager
+from vitalgraph.vectorization.search_mapping_manager import SearchMappingManager
 from vitalgraph.vectorization.vector_populator import populate_index, PopulationStats
 from vitalgraph.vectorization.geo_populator import populate_geo, GeoPopulationStats
 from vitalgraph.vectorization.geo_config_manager import GeoConfigManager
@@ -348,7 +348,7 @@ class VitalGraphSearchUtilREPL:
             return True
         index_name = _parse_flag(args, '--index')
         try:
-            mgr = MappingManager(self.conn, space)
+            mgr = SearchMappingManager(self.conn, space)
             mappings = self._run(mgr.list_mappings(index_name=index_name))
             data = [m.to_dict() for m in mappings]
             _print_table(data, ['mapping_id', 'index_name', 'mapping_type', 'source_type', 'enabled'])
@@ -372,7 +372,7 @@ class VitalGraphSearchUtilREPL:
             print("Usage: mapping create -s SPACE --index N --type T [--source-type S] [--type-uri U]")
             return True
         try:
-            mgr = MappingManager(self.conn, space)
+            mgr = SearchMappingManager(self.conn, space)
             mid = self._run(mgr.create_mapping(
                 index_name=index_name,
                 mapping_type=mapping_type,
@@ -397,7 +397,7 @@ class VitalGraphSearchUtilREPL:
             return True
         try:
             mid = int(mid_str)
-            mgr = MappingManager(self.conn, space)
+            mgr = SearchMappingManager(self.conn, space)
             deleted = self._run(mgr.delete_mapping(mid))
             if deleted:
                 print(f"✅ Deleted mapping {mid}")
@@ -412,7 +412,7 @@ class VitalGraphSearchUtilREPL:
     # ------------------------------------------------------------------
 
     def cmd_populate(self, args: List[str]) -> bool:
-        """Populate vector index: populate -s SPACE --index N [--graph-uri G] [--batch-size B]"""
+        """Populate vector index: populate -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]"""
         if not self._require_connected():
             return True
         space = _parse_flag(args, '-s') or _parse_flag(args, '--space') or self._require_space()
@@ -420,10 +420,11 @@ class VitalGraphSearchUtilREPL:
             return True
         index_name = _parse_flag(args, '--index')
         graph_uri = _parse_flag(args, '--graph-uri') or _parse_flag(args, '--graph')
+        mapping_type = _parse_flag(args, '--mapping-type') or 'kgentity'
         batch_str = _parse_flag(args, '--batch-size') or '100'
 
         if not index_name:
-            print("Usage: populate -s SPACE --index N [--graph-uri G] [--batch-size B]")
+            print("Usage: populate -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]")
             return True
         try:
             batch_size = int(batch_str)
@@ -432,29 +433,14 @@ class VitalGraphSearchUtilREPL:
             return True
 
         try:
-            # Resolve graph URI to context_uuid
-            context_uuid = None
-            if graph_uri:
-                context_uuid = self._run(self.conn.fetchval(
-                    f"SELECT term_uuid FROM {space}_term WHERE term_text = $1 AND term_type = 'U'",
-                    graph_uri,
-                ))
-                if not context_uuid:
-                    print(f"❌ Graph URI not found: {graph_uri}")
-                    return True
-            else:
-                # Use all contexts — get the first one as default
-                context_uuid = self._run(self.conn.fetchval(
-                    f"SELECT DISTINCT context_uuid FROM {space}_rdf_quad LIMIT 1"
-                ))
-                if not context_uuid:
-                    print("❌ No quad data found in space.")
-                    return True
+            context_uuid = self._resolve_context_uuid(space, graph_uri)
+            if context_uuid is None:
+                return True
 
-            print(f"Populating index '{index_name}' (batch_size={batch_size})...")
+            print(f"Populating index '{index_name}' (mapping_type={mapping_type}, batch_size={batch_size})...")
             stats: PopulationStats = self._run(populate_index(
                 self.conn, space, index_name, context_uuid,
-                mapping_type='kgentity',
+                mapping_type=mapping_type,
                 batch_size=batch_size,
             ))
             print(f"✅ Done in {stats.elapsed_seconds:.1f}s")
@@ -468,6 +454,69 @@ class VitalGraphSearchUtilREPL:
         except Exception as e:
             print(f"❌ Error: {e}")
         return True
+
+    def cmd_populate_fts(self, args: List[str]) -> bool:
+        """Populate FTS index: populate-fts -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]"""
+        if not self._require_connected():
+            return True
+        space = _parse_flag(args, '-s') or _parse_flag(args, '--space') or self._require_space()
+        if not space:
+            return True
+        index_name = _parse_flag(args, '--index')
+        graph_uri = _parse_flag(args, '--graph-uri') or _parse_flag(args, '--graph')
+        mapping_type = _parse_flag(args, '--mapping-type') or 'kgentity'
+        batch_str = _parse_flag(args, '--batch-size') or '100'
+
+        if not index_name:
+            print("Usage: populate-fts -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]")
+            return True
+        try:
+            batch_size = int(batch_str)
+        except ValueError:
+            print("❌ --batch-size must be an integer")
+            return True
+
+        try:
+            from vitalgraph.vectorization.fts_populator import populate_fts_index
+            context_uuid = self._resolve_context_uuid(space, graph_uri)
+            if context_uuid is None:
+                return True
+
+            print(f"Populating FTS index '{index_name}' (mapping_type={mapping_type}, batch_size={batch_size})...")
+            stats = self._run(populate_fts_index(
+                self.conn, space, index_name, context_uuid,
+                mapping_type=mapping_type,
+                batch_size=batch_size,
+            ))
+            print(f"✅ Done in {stats.elapsed_seconds:.1f}s")
+            print(f"   Rows stored: {stats.rows_stored}")
+            if stats.errors:
+                print(f"   Errors:      {len(stats.errors)}")
+                for err in stats.errors[:5]:
+                    print(f"     - {err}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
+        return True
+
+    def _resolve_context_uuid(self, space: str, graph_uri: Optional[str]):
+        """Resolve a graph URI to context_uuid, or pick the first context."""
+        if graph_uri:
+            context_uuid = self._run(self.conn.fetchval(
+                f"SELECT term_uuid FROM {space}_term WHERE term_text = $1 AND term_type = 'U'",
+                graph_uri,
+            ))
+            if not context_uuid:
+                print(f"❌ Graph URI not found: {graph_uri}")
+                return None
+            return context_uuid
+        else:
+            context_uuid = self._run(self.conn.fetchval(
+                f"SELECT DISTINCT context_uuid FROM {space}_rdf_quad LIMIT 1"
+            ))
+            if not context_uuid:
+                print("❌ No quad data found in space.")
+                return None
+            return context_uuid
 
     def cmd_populate_geo(self, args: List[str]) -> bool:
         """Populate geo: populate-geo -s SPACE [--graph-uri G]"""
@@ -898,6 +947,7 @@ class VitalGraphSearchUtilREPL:
             'mapping delete':   self.cmd_mapping_delete,
             # Population
             'populate':         self.cmd_populate,
+            'populate-fts':     self.cmd_populate_fts,
             'populate-geo':     self.cmd_populate_geo,
             'stats':            self.cmd_stats,
             # Search
@@ -945,7 +995,8 @@ Mapping Management:
   mapping delete -s SPACE --mapping-id M
 
 Population:
-  populate -s SPACE --index N [--graph-uri G] [--batch-size B]
+  populate -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]
+  populate-fts -s SPACE --index N [--graph-uri G] [--mapping-type M] [--batch-size B]
   populate-geo -s SPACE [--graph-uri G]
   stats -s SPACE
 
@@ -980,11 +1031,11 @@ Search:
             'index', 'mapping', 'search',
             'list', 'create', 'delete', 'info',
             'vector', 'text', 'fuzzy', 'geo', 'combined',
-            'populate', 'populate-geo', 'stats',
+            'populate', 'populate-fts', 'populate-geo', 'stats',
             'help', 'exit', 'quit',
             '-s', '--space', '--name', '--dims', '--provider', '--model',
             '--index', '--type', '--source-type', '--mapping-id',
-            '--graph-uri', '--graph', '--batch-size',
+            '--graph-uri', '--graph', '--batch-size', '--mapping-type',
             '--query', '-q', '--limit', '--threshold',
             '--lat', '--lon', '--radius-km', '--yes',
             '--type-uri', '--metric', '--description',

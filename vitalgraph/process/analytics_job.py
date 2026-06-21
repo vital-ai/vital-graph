@@ -94,8 +94,8 @@ class AnalyticsJob:
         start = time.monotonic()
 
         async with self._pool.acquire() as conn:
-            # Set statement timeout to prevent runaway queries on large spaces (60s)
-            await conn.execute("SET LOCAL statement_timeout = '60s'")
+            # Set statement timeout to prevent runaway queries on large spaces (120s)
+            await conn.execute("SET LOCAL statement_timeout = '120s'")
 
             # Verify space tables exist
             table_exists = await conn.fetchval(
@@ -369,15 +369,37 @@ class AnalyticsJob:
     # ------------------------------------------------------------------
 
     async def _compute_property_analytics(self, conn, space_id: str, graph_id: Optional[int] = None) -> Dict[str, Any]:
-        """Compute predicate usage and literal type distributions."""
+        """Compute predicate usage and literal type distributions.
+
+        For large spaces (>5M quads), skips the expensive GROUP BY queries
+        and returns only the distinct predicate count (which uses an index scan).
+        """
         t_quad = f"{space_id}_rdf_quad"
         t_term = f"{space_id}_term"
         gf = self._graph_filter(graph_id)
 
-        # Distinct predicate count
+        # Quick row estimate to decide whether full analytics is feasible
+        quad_estimate = await conn.fetchval(
+            f"SELECT reltuples::bigint FROM pg_class WHERE relname = $1",
+            t_quad,
+        ) or 0
+
+        # Distinct predicate count (fast — index-only scan on predicate_uuid)
         distinct_pred_count = await conn.fetchval(f"""
             SELECT COUNT(DISTINCT predicate_uuid) FROM {t_quad} q WHERE 1=1{gf}
         """) or 0
+
+        if quad_estimate > 5_000_000:
+            logger.info(
+                "AnalyticsJob: %s has ~%d quads — skipping expensive property analytics",
+                space_id, quad_estimate,
+            )
+            return {
+                "distinct_predicate_count": distinct_pred_count,
+                "top_predicates": [],
+                "literal_type_distribution": [],
+                "skipped_detail": f"space too large (~{quad_estimate} quads)",
+            }
 
         # Top 20 predicates by usage
         pred_rows = await conn.fetch(f"""

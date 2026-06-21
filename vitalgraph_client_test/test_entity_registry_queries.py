@@ -14,7 +14,7 @@ Covers:
   - Semantic (vector topic) search
   - Combined semantic + geo search
   - Location search with address BM25
-  - Phonetic / typo dedup (find_similar)
+  - Phonetic / typo fuzzy (find_similar)
   - Relationship traversal
   - Changelog
 
@@ -384,7 +384,7 @@ class QueryTestRunner:
             self._report("Search by type", False, str(ex))
 
     # ------------------------------------------------------------------
-    # Find Similar (phonetic / typo / dedup)
+    # Find Similar (phonetic / typo / fuzzy)
     # ------------------------------------------------------------------
 
     async def test_find_similar_exact(self):

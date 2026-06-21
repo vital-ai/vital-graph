@@ -50,6 +50,8 @@ export interface ObjectDetailConfig {
   paramName: string;
   uriFieldName: string;
   icon: React.ComponentType<Record<string, unknown>>;
+  graphIdRequired?: boolean; // default true; set false for endpoints that derive graph from space
+  spaceIdOverride?: string;  // hardcode spaceId instead of reading from URL params
 }
 
 // Custom hook for shared object detail functionality
@@ -62,7 +64,7 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   const [searchParams, setSearchParams] = useSearchParams();
   const params = useParams();
   
-  const spaceId = params.spaceId;
+  const spaceId = config.spaceIdOverride || params.spaceId;
   const graphId = params.graphId;
   const objectId = params[config.paramName];
   const mode = searchParams.get('mode') || 'view';
@@ -99,7 +101,8 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
       return;
     }
 
-    if (!spaceId || !graphId || !objectId) {
+    const needsGraphId = config.graphIdRequired !== false;
+    if (!spaceId || (needsGraphId && !graphId) || !objectId) {
       setError('Missing required parameters');
       setLoading(false);
       return;
@@ -110,7 +113,7 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
       
       const responseData = await config.crudOps.get(
         spaceId,
-        decodeURIComponent(graphId),
+        decodeURIComponent(graphId || ''),
         decodeURIComponent(objectId),
       ) as { results?: Quad[]; total_count?: number };
 
@@ -238,7 +241,12 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
       }
 
       if (isCreateMode) {
-        navigate(`/space/${spaceId}/graph/${graphId}${config.listRoute}`);
+        const listPath = config.spaceIdOverride
+          ? config.listRoute
+          : graphId
+            ? `/space/${spaceId}/graph/${graphId}${config.listRoute}`
+            : `/space/${spaceId}${config.listRoute}`;
+        navigate(listPath);
       } else {
         // Refresh the data and switch to view mode
         await fetchObject();
@@ -252,11 +260,12 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
   };
 
   const handleDelete = async () => {
-    if (!spaceId || !graphId || !objectId) return;
+    const needsGraphId = config.graphIdRequired !== false;
+    if (!spaceId || (needsGraphId && !graphId) || !objectId) return;
     try {
       await config.crudOps.delete(
         spaceId,
-        decodeURIComponent(graphId),
+        decodeURIComponent(graphId || ''),
         decodeURIComponent(objectId),
       );
       navigate(-1);

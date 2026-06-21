@@ -750,6 +750,9 @@ class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
             except Exception as ve:
                 logger.warning(f"document_segments vector bootstrap failed (non-critical): {ve}")
 
+            # NOTE: kgtype_default search infra is NOT bootstrapped per-space.
+            # KG Types live in the centralized sp_kg_types system space only.
+
             logger.debug(f"Primary data tables created for space: {space_id}")
             return True
             

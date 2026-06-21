@@ -96,9 +96,14 @@ class VectorIndexesClientEndpoint(BaseEndpoint):
         self._check_connection()
         validate_required_params(space_id=space_id, index_name=index_name)
         params = build_query_params(space_id=space_id, index_name=index_name)
-        return await self._make_typed_request(
-            "GET", self._base_url(), VectorIndexOut, params=params,
+        # Server wraps single-index response in VectorIndexListResponse
+        resp = await self._make_typed_request(
+            "GET", self._base_url(), VectorIndexListResponse, params=params,
         )
+        if not resp.indexes:
+            from ..utils.client_utils import VitalGraphClientError
+            raise VitalGraphClientError(f"Vector index '{index_name}' not found")
+        return resp.indexes[0]
 
     async def delete_index(self, space_id: str, index_name: str) -> Dict:
         """Delete a vector index, its data table, and dependent mappings.

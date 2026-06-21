@@ -7,11 +7,13 @@ builds a single ``search_text`` string suitable for:
   2. Full-text search (auto-generated tsvector column)
   3. Debugging / re-vectorization (stored as-is)
 
-The builder is driven by the normalized ``vector_mapping`` +
-``vector_mapping_property`` tables.  Three source modes:
+The builder is driven by the normalized ``search_mapping`` +
+``search_mapping_property`` tables.  Source modes:
 
-- **default**: Use ``hasKGraphDescription`` + optional type description.
+- **type_description**: Use ONLY the KGType description (cross-space lookup).
 - **properties**: Concatenate specific predicate values (listed in child table).
+- **properties_type**: Properties + type description appended.
+- **default**: Use ``hasKGraphDescription`` + optional type description.
 - **slots**: Concatenate slot type values (listed in child table).
 
 If no mapping exists, all literal-valued predicates are included (fallback).
@@ -32,13 +34,12 @@ HAS_KGRAPH_DESCRIPTION = "http://vital.ai/ontology/haley-ai-kg#hasKGraphDescript
 
 @dataclass
 class MappingRule:
-    """Resolved mapping rule from vector_mapping + vector_mapping_property tables."""
+    """Resolved mapping rule from search_mapping + search_mapping_property tables."""
     mapping_id: Optional[int] = None
     enabled: bool = True                    # on/off switch at class or type level
-    source_type: str = "default"            # 'default', 'properties', 'slots'
+    source_type: str = "default"            # 'type_description', 'properties', 'properties_type', 'default'
     separator: str = ". "
     include_pred_name: bool = False
-    include_type_desc: bool = True
     include_uris: List[str] = field(default_factory=list)   # ordered by ordinal
     exclude_uris: Set[str] = field(default_factory=set)
 
@@ -65,10 +66,19 @@ def build_search_text(
 
     separator = rule.separator or ". "
 
-    if rule.source_type == "default":
-        return _build_default(literal_properties, separator, type_description)
-    elif rule.source_type in ("properties", "slots"):
+    if rule.source_type == "type_description":
+        # Type description ONLY — no subject properties
+        if type_description and type_description.strip():
+            return type_description.strip()
+        return ""
+    elif rule.source_type == "properties_type":
+        # Properties + type description appended
         return _build_from_mapping(literal_properties, rule, separator, type_description)
+    elif rule.source_type == "default":
+        return _build_default(literal_properties, separator, type_description)
+    elif rule.source_type in ("properties", "slots", "concat_properties"):
+        # Properties only — no type description
+        return _build_from_mapping(literal_properties, rule, separator, None)
     else:
         # Unknown source type — fall back to all properties
         return _build_all_properties(literal_properties, separator, rule.include_pred_name)
@@ -136,7 +146,7 @@ def _build_from_mapping(
                 else:
                     parts.append(val)
 
-    if rule.include_type_desc and type_description and type_description.strip():
+    if type_description and type_description.strip():
         parts.append(type_description.strip())
 
     return separator.join(parts)
@@ -220,9 +230,9 @@ ORDER BY q.subject_uuid, t_pred.term_text
 # Mapping resolution from normalized tables
 # -----------------------------------------------------------------------
 
-RESOLVE_MAPPING_SQL = """
-SELECT m.mapping_id, m.enabled, m.source_type, m.separator, m.include_pred_name, m.include_type_desc
-FROM {vector_mapping} m
+RESOLVE_SEARCH_MAPPING_SQL = """
+SELECT m.mapping_id, m.enabled, m.source_type, m.separator, m.include_pred_name
+FROM {search_mapping} m
 WHERE m.index_name = $1
   AND (
     (m.mapping_type = $2 AND m.type_uri = $3)
@@ -232,30 +242,32 @@ ORDER BY m.type_uri IS NULL, m.mapping_id
 LIMIT 1
 """
 
-MAPPING_PROPERTIES_SQL = """
+SEARCH_MAPPING_PROPERTIES_SQL = """
 SELECT property_uri, property_role, ordinal
-FROM {vector_mapping_property}
+FROM {search_mapping_property}
 WHERE mapping_id = $1
 ORDER BY ordinal, property_id
 """
 
 
-async def resolve_mapping(
+async def resolve_search_mapping(
     conn,
     space_id: str,
     index_name: str,
     mapping_type: str,
     type_uri: Optional[str] = None,
 ) -> Optional[MappingRule]:
-    """Resolve the mapping rule for a given index + KG type.
+    """Resolve the mapping rule from the search_mapping tables.
+
+    Used by both FTS and vector populators.
 
     Precedence:
     1. Specific type_uri match
     2. Class-level match (type_uri IS NULL)
     3. None (caller should use default behavior)
     """
-    sql = RESOLVE_MAPPING_SQL.format(
-        vector_mapping=f"{space_id}_vector_mapping",
+    sql = RESOLVE_SEARCH_MAPPING_SQL.format(
+        search_mapping=f"{space_id}_search_mapping",
     )
     row = await conn.fetchrow(sql, index_name, mapping_type, type_uri)
     if row is None:
@@ -267,12 +279,11 @@ async def resolve_mapping(
         source_type=row["source_type"] or "default",
         separator=row["separator"] or ". ",
         include_pred_name=row["include_pred_name"] or False,
-        include_type_desc=row["include_type_desc"] if row["include_type_desc"] is not None else True,
     )
 
     # Fetch child property rows
-    prop_sql = MAPPING_PROPERTIES_SQL.format(
-        vector_mapping_property=f"{space_id}_vector_mapping_property",
+    prop_sql = SEARCH_MAPPING_PROPERTIES_SQL.format(
+        search_mapping_property=f"{space_id}_search_mapping_property",
     )
     prop_rows = await conn.fetch(prop_sql, row["mapping_id"])
     for pr in prop_rows:

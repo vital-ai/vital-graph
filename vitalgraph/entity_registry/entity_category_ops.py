@@ -21,7 +21,7 @@ class CategoryMixin:
 
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
 
-    async def _weaviate_upsert_entity(self, entity_id: str) -> None: ...
+    async def _pg_sync_entity(self, entity_id: str) -> None: ...
 
     async def list_categories(self) -> List[Dict[str, Any]]:
         """List all entity categories."""
@@ -79,8 +79,8 @@ class CategoryMixin:
                 result = dict(row)
                 result['category_key'] = category_key
 
-                # Sync to Weaviate (categories changed)
-                await self._weaviate_upsert_entity(entity_id)
+                # PG vector/FTS sync (categories changed)
+                await self._pg_sync_entity(entity_id)
 
                 return result
 
@@ -110,8 +110,8 @@ class CategoryMixin:
                     'category_key': category_key
                 }, changed_by=removed_by)
 
-                # Sync to Weaviate (categories changed)
-                await self._weaviate_upsert_entity(entity_id)
+                # PG vector/FTS sync (categories changed)
+                await self._pg_sync_entity(entity_id)
 
                 return True
 

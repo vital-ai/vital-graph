@@ -88,11 +88,19 @@ class VitalSignsProvider(VectorizationProvider):
         return list(result)  # type: ignore[arg-type]
 
     def _vectorize_batch_sync(self, texts: List[str]) -> List[List[float]]:
-        """Synchronous batch vectorization."""
+        """Synchronous batch vectorization.
+
+        NOTE: We vectorize one-at-a-time to preserve positional order.
+        The upstream EmbeddingModel.vectorize(list) has a cache-ordering bug
+        where cached results are placed before newly-computed ones, breaking
+        the correspondence between input texts and output embeddings.
+        """
         import numpy as np
-        results = self._embedder.vectorize(texts)  # type: ignore[arg-type]
-        # EmbeddingModel returns list of numpy arrays for batch
         out: List[List[float]] = []
-        for r in results:  # type: ignore[union-attr]
-            out.append(r.tolist() if isinstance(r, np.ndarray) else list(r))
+        for t in texts:
+            result = self._embedder.vectorize(t)  # single string → single array
+            if isinstance(result, np.ndarray):
+                out.append(result.tolist())
+            else:
+                out.append(list(result))  # type: ignore[arg-type]
         return out

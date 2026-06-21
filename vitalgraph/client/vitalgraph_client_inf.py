@@ -283,8 +283,9 @@ class VitalGraphClientInterface(ABC):
     # KGFrame CRUD Methods
     
     @abstractmethod
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
-        """List KGFrames with pagination and optional search."""
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                            search: Optional[str] = None, **kwargs) -> PaginatedGraphObjectResponse:
+        """List KGFrames with pagination, filtering, and sorting."""
         pass
     
     @abstractmethod

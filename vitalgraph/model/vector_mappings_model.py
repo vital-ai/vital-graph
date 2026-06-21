@@ -23,7 +23,6 @@ class MappingOut(BaseModel):
     source_type: str = "default"
     separator: str = ". "
     include_pred_name: bool = False
-    include_type_desc: bool = True
     created_time: Optional[str] = None
     properties: List[MappingPropertyOut] = []
 
@@ -38,10 +37,9 @@ class CreateMappingRequest(BaseModel):
     type_uri: Optional[str] = Field(None, description="Specific KG Type URI (NULL = class-level)")
     index_name: str = Field(..., description="Vector index name")
     enabled: bool = Field(True, description="Enable/disable vectorization")
-    source_type: str = Field("default", description="default | properties | slots")
+    source_type: str = Field("default", description="type_description | properties | properties_type | default")
     separator: str = Field(". ", description="Separator for concatenated text")
     include_pred_name: bool = Field(False, description="Include predicate local name in text")
-    include_type_desc: bool = Field(True, description="Include KG Type description in text")
 
 
 class UpdateMappingRequest(BaseModel):
@@ -49,7 +47,6 @@ class UpdateMappingRequest(BaseModel):
     source_type: Optional[str] = None
     separator: Optional[str] = None
     include_pred_name: Optional[bool] = None
-    include_type_desc: Optional[bool] = None
 
 
 class AddPropertyRequest(BaseModel):

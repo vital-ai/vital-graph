@@ -24,7 +24,7 @@ export class ObjectsEndpoint extends BaseEndpoint {
 
   async get(spaceId: string, graphId: string, uri: string): Promise<ObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
-    return this.request('GET', '/api/graphs/objects/object', {
+    return this.request('GET', '/api/graphs/objects', {
       params: { space_id: spaceId, graph_id: graphId, uri },
     });
   }

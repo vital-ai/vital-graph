@@ -257,7 +257,7 @@ class AutoSegmentationHook:
                 triples = vs_objects[0].to_triples_list(vs_objects)
 
             quads = [(s, p, o, graph_uri_ref) for s, p, o in triples]
-            await self._backend.store_quads(self._space_id, quads)
+            await self._backend.add_rdf_quads_batch_bulk(self._space_id, quads)
             logger.info(f"Stored {len(quads)} quads for auto-segmentation")
 
         except Exception as e:

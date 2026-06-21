@@ -93,12 +93,12 @@ def build_shingles(entity: Dict[str, Any], k: int = DEFAULT_SHINGLE_K) -> set:
     return shingles
 
 
-def compute_dedup_hash(entity: Dict[str, Any]) -> str:
-    """Compute a deterministic MD5 hash of the dedup-relevant fields.
+def compute_entity_hash(entity: Dict[str, Any]) -> str:
+    """Compute a deterministic MD5 hash of the fuzzy-relevant fields.
 
     Fields: type_key, primary_name, country, region, locality, sorted aliases.
     Returns a 32-char hex string.  Used to detect changes between PostgreSQL
-    and the MemoryDB dedup index without comparing full entity data.
+    and the MemoryDB fuzzy index without comparing full entity data.
     """
     parts = [
         (entity.get('type_key') or '').lower().strip(),
@@ -118,7 +118,7 @@ def compute_dedup_hash(entity: Dict[str, Any]) -> str:
     return hashlib.md5('|'.join(parts).encode('utf-8')).hexdigest()
 
 
-class EntityDedupIndex:
+class EntityFuzzyIndex:
     """Near-duplicate detection index for the Entity Registry.
 
     Two-layer approach:
@@ -187,7 +187,7 @@ class EntityDedupIndex:
         lsh = MinHashLSH(**kwargs)
         # Distribute bands across cluster slots with per-band hash tags
         if storage_config and storage_config.get('type') == 'redis_cluster':
-            prefix = storage_config.get('hash_tag_prefix', 'dedup')
+            prefix = storage_config.get('hash_tag_prefix', 'fuzzy')
             distribute_lsh_hash_tags(lsh, prefix)
         return lsh
 
@@ -196,7 +196,7 @@ class EntityDedupIndex:
         if not self.storage_config:
             return None
         config = dict(self.storage_config)
-        base = config.get('basename', b'dedup')
+        base = config.get('basename', b'fuzzy')
         if isinstance(base, str):
             base = base.encode()
         config['basename'] = base + b'_phonetic'
@@ -206,52 +206,52 @@ class EntityDedupIndex:
         return config
 
     @classmethod
-    def from_env(cls) -> 'EntityDedupIndex':
-        """Create an EntityDedupIndex from environment variables.
+    def from_env(cls) -> 'EntityFuzzyIndex':
+        """Create an EntityFuzzyIndex from environment variables.
 
         Uses ``get_scoped_env`` so that env vars are scoped by
-        ``VITALGRAPH_ENVIRONMENT`` (e.g. ``PROD_ENTITY_DEDUP_BACKEND``
+        ``VITALGRAPH_ENVIRONMENT`` (e.g. ``PROD_ENTITY_FUZZY_BACKEND``
         when ``VITALGRAPH_ENVIRONMENT=prod``), falling back to the
         unprefixed name.
 
         Reads:
-            ENTITY_DEDUP_BACKEND: 'memory' (default) or 'redis'
-            ENTITY_DEDUP_REDIS_HOST: Redis host (default 'localhost')
-            ENTITY_DEDUP_REDIS_PORT: Redis port (default 6379)
-            ENTITY_DEDUP_NUM_PERM: Number of permutations (default 128)
-            ENTITY_DEDUP_THRESHOLD: LSH threshold (default 0.3)
+            ENTITY_FUZZY_BACKEND: 'memory' (default) or 'redis'
+            ENTITY_FUZZY_REDIS_HOST: Redis host (default 'localhost')
+            ENTITY_FUZZY_REDIS_PORT: Redis port (default 6379)
+            ENTITY_FUZZY_NUM_PERM: Number of permutations (default 128)
+            ENTITY_FUZZY_THRESHOLD: LSH threshold (default 0.3)
             VITALGRAPH_ENVIRONMENT: Environment name used as Redis key prefix
                 (e.g. 'local', 'dev', 'prod').  Results in keys like
-                ``dev_dedup_bucket_...`` and ``dev_dedup_phonetic_bucket_...``
+                ``dev_fuzzy_bucket_...`` and ``dev_fuzzy_phonetic_bucket_...``
         """
         from vitalgraph.config.config_loader import get_scoped_env
 
-        backend = get_scoped_env('ENTITY_DEDUP_BACKEND', 'memory').lower()
-        num_perm = int(get_scoped_env('ENTITY_DEDUP_NUM_PERM', str(DEFAULT_NUM_PERM)))
-        threshold = float(get_scoped_env('ENTITY_DEDUP_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
+        backend = get_scoped_env('ENTITY_FUZZY_BACKEND', 'memory').lower()
+        num_perm = int(get_scoped_env('ENTITY_FUZZY_NUM_PERM', str(DEFAULT_NUM_PERM)))
+        threshold = float(get_scoped_env('ENTITY_FUZZY_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
 
         storage_config = None
         if backend == 'redis':
-            redis_host = get_scoped_env('ENTITY_DEDUP_REDIS_HOST', 'localhost')
-            redis_port = int(get_scoped_env('ENTITY_DEDUP_REDIS_PORT', '6379'))
+            redis_host = get_scoped_env('ENTITY_FUZZY_REDIS_HOST', 'localhost')
+            redis_port = int(get_scoped_env('ENTITY_FUZZY_REDIS_PORT', '6379'))
             redis_params = {'host': redis_host, 'port': redis_port}
 
             # Optional auth (MemoryDB ACL / ElastiCache AUTH)
-            redis_username = get_scoped_env('ENTITY_DEDUP_REDIS_USERNAME') or None
-            redis_password = get_scoped_env('ENTITY_DEDUP_REDIS_PASSWORD') or None
+            redis_username = get_scoped_env('ENTITY_FUZZY_REDIS_USERNAME') or None
+            redis_password = get_scoped_env('ENTITY_FUZZY_REDIS_PASSWORD') or None
             if redis_username:
                 redis_params['username'] = redis_username
             if redis_password:
                 redis_params['password'] = redis_password
 
             # TLS (required for MemoryDB)
-            use_ssl = get_scoped_env('ENTITY_DEDUP_REDIS_SSL', 'false').lower() in ('true', '1', 'yes')
+            use_ssl = get_scoped_env('ENTITY_FUZZY_REDIS_SSL', 'false').lower() in ('true', '1', 'yes')
             if use_ssl:
                 redis_params['ssl'] = True
                 redis_params['ssl_cert_reqs'] = None  # MemoryDB uses Amazon-managed certs
 
             # Redis Cluster mode (MemoryDB / ElastiCache cluster)
-            use_cluster = get_scoped_env('ENTITY_DEDUP_REDIS_CLUSTER', 'false').lower() in ('true', '1', 'yes')
+            use_cluster = get_scoped_env('ENTITY_FUZZY_REDIS_CLUSTER', 'false').lower() in ('true', '1', 'yes')
             if use_cluster:
                 register_cluster_storage()
                 storage_type = 'redis_cluster'
@@ -262,12 +262,12 @@ class EntityDedupIndex:
             # For cluster mode, per-band hash tags distribute bands across
             # shards (set via hash_tag_prefix, applied in _create_lsh).
             # For standalone Redis, use a simple hash-tagged basename.
-            # Production (and empty) use the bare 'dedup' prefix; other
+            # Production (and empty) use the bare 'fuzzy' prefix; other
             # environments (dev, staging, etc.) get a prefixed namespace.
             if env_name in ('', 'prod', 'production'):
-                tag_prefix = 'dedup'
+                tag_prefix = 'fuzzy'
             else:
-                tag_prefix = f"{env_name}_dedup"
+                tag_prefix = f"{env_name}_fuzzy"
             basename = f"{{{tag_prefix}}}"
 
             storage_config = {
@@ -277,11 +277,11 @@ class EntityDedupIndex:
             }
             if use_cluster:
                 storage_config['hash_tag_prefix'] = tag_prefix
-            logger.info(f"Entity dedup using Redis backend: {redis_host}:{redis_port} "
+            logger.info(f"Entity fuzzy using Redis backend: {redis_host}:{redis_port} "
                          f"(ssl={use_ssl}, cluster={use_cluster}, "
                          f"env='{env_name or '(none)'}')")
         else:
-            logger.info("Entity dedup using in-memory backend")
+            logger.info("Entity fuzzy using in-memory backend")
 
         return cls(num_perm=num_perm, threshold=threshold, storage_config=storage_config)
 
@@ -303,25 +303,25 @@ class EntityDedupIndex:
         redis_params.setdefault('decode_responses', False)
         try:
             self._redis_client = redis_lib.RedisCluster(**redis_params)
-            logger.debug("Dedup lock using RedisCluster client")
+            logger.debug("Fuzzy lock using RedisCluster client")
         except Exception:
             self._redis_client = redis_lib.Redis(**redis_params)
-            logger.debug("Dedup lock using standalone Redis client")
+            logger.debug("Fuzzy lock using standalone Redis client")
         return self._redis_client
 
     def _lock_key(self) -> bytes:
         """Redis key for the distributed init/rebuild lock."""
-        base = self.storage_config.get('basename', b'dedup') if self.storage_config else b'dedup'
+        base = self.storage_config.get('basename', b'fuzzy') if self.storage_config else b'fuzzy'
         if isinstance(base, str):
             base = base.encode()
         return base + LOCK_KEY_SUFFIX
 
-    def _dedup_hash_key(self) -> bytes:
-        """Redis HASH key that maps entity_id → dedup_hash for fast comparison."""
-        base = self.storage_config.get('basename', b'dedup') if self.storage_config else b'dedup'
+    def _fuzzy_hash_key(self) -> bytes:
+        """Redis HASH key that maps entity_id → fuzzy_hash for fast comparison."""
+        base = self.storage_config.get('basename', b'fuzzy') if self.storage_config else b'fuzzy'
         if isinstance(base, str):
             base = base.encode()
-        return base + b'_dedup_hashes'
+        return base + b'_fuzzy_hashes'
 
     def _try_acquire_lock(self, ttl: int = LOCK_TTL_SECONDS) -> bool:
         """Single non-blocking attempt to acquire the lock. Returns True if acquired."""
@@ -331,7 +331,7 @@ class EntityDedupIndex:
         self._lock_id = str(uuid.uuid4())
         acquired = client.set(self._lock_key(), self._lock_id.encode(), nx=True, ex=ttl)
         if acquired:
-            logger.info(f"Acquired dedup init lock (id={self._lock_id[:8]})")
+            logger.info(f"Acquired fuzzy init lock (id={self._lock_id[:8]})")
         return bool(acquired)
 
     def _release_lock(self):
@@ -341,9 +341,9 @@ class EntityDedupIndex:
             return
         try:
             client.eval(_LUA_RELEASE, 1, self._lock_key(), self._lock_id.encode())
-            logger.info(f"Released dedup init lock (id={self._lock_id[:8]})")
+            logger.info(f"Released fuzzy init lock (id={self._lock_id[:8]})")
         except Exception as e:
-            logger.warning(f"Error releasing dedup lock: {e}")
+            logger.warning(f"Error releasing fuzzy lock: {e}")
         finally:
             self._lock_id = None
 
@@ -354,9 +354,9 @@ class EntityDedupIndex:
         while _time_mod.time() < deadline:
             if self._try_acquire_lock(ttl):
                 return True
-            logger.info("Dedup init lock held by another process, waiting...")
+            logger.info("Fuzzy init lock held by another process, waiting...")
             _time_mod.sleep(LOCK_RETRY_INTERVAL)
-        logger.warning(f"Could not acquire dedup init lock after {max_wait}s")
+        logger.warning(f"Could not acquire fuzzy init lock after {max_wait}s")
         return False
 
     async def _acquire_lock_async(self, ttl: int = LOCK_TTL_SECONDS,
@@ -366,9 +366,9 @@ class EntityDedupIndex:
         while _time_mod.time() < deadline:
             if self._try_acquire_lock(ttl):
                 return True
-            logger.info("Dedup init lock held by another process, waiting...")
+            logger.info("Fuzzy init lock held by another process, waiting...")
             await asyncio.sleep(LOCK_RETRY_INTERVAL)
-        logger.warning(f"Could not acquire dedup init lock after {max_wait}s")
+        logger.warning(f"Could not acquire fuzzy init lock after {max_wait}s")
         return False
 
     # ------------------------------------------------------------------
@@ -389,7 +389,7 @@ class EntityDedupIndex:
 
         # Collect all patterns to scan — legacy basename + per-band tags
         patterns = []
-        basename = self.storage_config.get('basename', b'dedup')
+        basename = self.storage_config.get('basename', b'fuzzy')
         if isinstance(basename, str):
             basename = basename.encode()
         patterns.append(basename + b'*')
@@ -436,23 +436,23 @@ class EntityDedupIndex:
         clear/initialize races across processes.
         """
         if not self._acquire_lock_sync():
-            raise RuntimeError("Could not acquire dedup init lock for clear_index")
+            raise RuntimeError("Could not acquire fuzzy init lock for clear_index")
         try:
             self._delete_redis_keys()
-            # Delete the dedup hash comparison key
+            # Delete the fuzzy hash comparison key
             client = self._get_redis_client()
             if client:
                 try:
-                    client.delete(self._dedup_hash_key())
+                    client.delete(self._fuzzy_hash_key())
                 except Exception as e:
-                    logger.warning(f"Error deleting dedup hash key: {e}")
+                    logger.warning(f"Error deleting fuzzy hash key: {e}")
             self.lsh = self._create_lsh(self.threshold, self.storage_config)
             self.phonetic_lsh = self._create_lsh(
                 self.phonetic_threshold, self._phonetic_storage_config(),
             )
             self._entity_cache.clear()
             self._initialized = False
-            logger.info("Dedup index cleared")
+            logger.info("Fuzzy index cleared")
         finally:
             self._release_lock()
 
@@ -499,7 +499,7 @@ class EntityDedupIndex:
                                              num_workers=num_workers)
 
         if not await self._acquire_lock_async():
-            raise RuntimeError("Could not acquire dedup init lock for initialize")
+            raise RuntimeError("Could not acquire fuzzy init lock for initialize")
 
         try:
             return await self._do_initialize(pool, since=since,
@@ -675,11 +675,11 @@ class EntityDedupIndex:
             for stale_id in stale_ids:
                 self.remove_entity(stale_id)
             if stale_ids:
-                logger.info(f"Removed {len(stale_ids)} stale entities from dedup index")
+                logger.info(f"Removed {len(stale_ids)} stale entities from fuzzy index")
 
         self._initialized = True
         duration = _time_mod.time() - start
-        logger.info(f"Entity dedup index: {count:,} entities indexed in {duration:.1f}s"
+        logger.info(f"Entity fuzzy index: {count:,} entities indexed in {duration:.1f}s"
                      f" ({num_workers} workers)"
                      f"{' (incremental)' if since else ' (full)'}")
         return count
@@ -760,19 +760,19 @@ class EntityDedupIndex:
             for raw_key, mh in phonetic_entries:
                 self.phonetic_lsh.insert(raw_key, mh)
 
-        # Phase 3: Batch-store dedup hashes in Redis HASH
+        # Phase 3: Batch-store fuzzy hashes in Redis HASH
         client = self._get_redis_client()
         if client and batch:
             try:
-                hash_key = self._dedup_hash_key()
+                hash_key = self._fuzzy_hash_key()
                 pipe = client.pipeline()
                 for entity_id, entity in batch:
                     if entity_id in self._entity_cache:  # only if actually indexed
-                        h = compute_dedup_hash(entity)
+                        h = compute_entity_hash(entity)
                         pipe.hset(hash_key, entity_id, h)  # type: ignore[arg-type]
                 pipe.execute()
             except Exception as e:
-                logger.warning(f"Error storing batch dedup hashes: {e}")
+                logger.warning(f"Error storing batch fuzzy hashes: {e}")
 
     def _bulk_write_lsh(self, lsh: MinHashLSH, entries: List[tuple]):
         """Write pre-computed (key, minhash) pairs to an LSH's Redis storage
@@ -921,14 +921,14 @@ class EntityDedupIndex:
             '_variant_count': len(all_names),
         }
 
-        # Store dedup hash in Redis for PG ↔ MemoryDB comparison
+        # Store fuzzy hash in Redis for PG ↔ MemoryDB comparison
         client = self._get_redis_client()
         if client:
             try:
-                h = compute_dedup_hash(entity)
-                client.hset(self._dedup_hash_key(), entity_id, h)  # type: ignore[arg-type]
+                h = compute_entity_hash(entity)
+                client.hset(self._fuzzy_hash_key(), entity_id, h)  # type: ignore[arg-type]
             except Exception as e:
-                logger.warning(f"Error storing dedup hash for {entity_id}: {e}")
+                logger.warning(f"Error storing fuzzy hash for {entity_id}: {e}")
 
         # Insert into phonetic LSH (one entry per name variant, phonetic codes as shingles)
         for idx_p, name in enumerate(all_names):
@@ -951,11 +951,11 @@ class EntityDedupIndex:
                 self._remove_from_phonetic_lsh(entity_id, len(all_names))
             self._remove_from_lsh(entity_id)
             self._entity_cache.pop(entity_id, None)
-            # Remove dedup hash from Redis
+            # Remove fuzzy hash from Redis
             client = self._get_redis_client()
             if client:
                 try:
-                    client.hdel(self._dedup_hash_key(), entity_id)  # type: ignore[arg-type]
+                    client.hdel(self._fuzzy_hash_key(), entity_id)  # type: ignore[arg-type]
                 except Exception:
                     pass
 

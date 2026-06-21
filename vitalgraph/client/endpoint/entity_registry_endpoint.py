@@ -527,7 +527,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
 
     # ------------------------------------------------------------------
-    # Similar / Dedup
+    # Similar / Fuzzy
     # ------------------------------------------------------------------
 
     async def find_similar(
@@ -683,3 +683,15 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
             "GET", self._url("/search/location"), LocationSearchResponse,
             params=params,
         )
+
+    # ------------------------------------------------------------------
+    # Admin: Populate vectors/FTS/geo
+    # ------------------------------------------------------------------
+
+    async def populate_vectors(self) -> Dict[str, Any]:
+        """Trigger a full rebuild of entity registry vector/FTS/geo tables."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "POST", self._url("/admin/populate-vectors"),
+        )
+        return response.json()

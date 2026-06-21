@@ -12,8 +12,7 @@ This class composes domain-specific mixins:
   - LocationMixin:     location types, location CRUD, location categories
   - RelationshipMixin: relationship types, relationship CRUD
   - SameAsMixin:       same-as mappings + entity resolution
-  - DedupMixin:        near-duplicate detection + cross-worker sync
-  - WeaviateMixin:     Weaviate upsert/delete helpers
+  - FuzzyMixin:        near-duplicate detection + cross-worker sync
 """
 
 import json
@@ -28,17 +27,16 @@ from vitalgraph.utils.db_retry import with_db_retry
 from .entity_alias_ops import AliasMixin
 from .entity_category_ops import CategoryMixin
 from .entity_changelog_ops import ChangeLogMixin
-from .entity_dedup import EntityDedupIndex, compute_dedup_hash
-from .entity_dedup_pg import EntityDedupIndexPG
-from .entity_dedup_ops import DedupMixin
+from .entity_fuzzy import EntityFuzzyIndex, compute_entity_hash
+from .entity_fuzzy_pg import EntityFuzzyIndexPG
+from .entity_fuzzy_ops import FuzzyMixin
 from .entity_identifier_ops import IdentifierMixin
 from .entity_location_ops import LocationMixin
 from .entity_registry_id import generate_entity_id, entity_id_to_uri, uri_to_entity_id
 from .entity_registry_schema import EntityRegistrySchema
 from .entity_relationship_ops import RelationshipMixin
 from .entity_same_as_ops import SameAsMixin
-from .entity_weaviate import EntityWeaviateIndex
-from .entity_weaviate_ops import WeaviateMixin
+from .entity_registry_vector_populator import EntityRegistryVectorPopulator
 
 
 logger = logging.getLogger(__name__)
@@ -52,8 +50,7 @@ class EntityRegistryImpl(
     LocationMixin,
     RelationshipMixin,
     SameAsMixin,
-    DedupMixin,
-    WeaviateMixin,
+    FuzzyMixin,
 ):
     """
     Core entity registry operations.
@@ -63,23 +60,26 @@ class EntityRegistryImpl(
     """
 
     def __init__(self, connection_pool: asyncpg.Pool,
-                 dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]] = None,
-                 signal_manager=None, weaviate_index: Optional[EntityWeaviateIndex] = None):
+                 fuzzy_index: Optional[Union[EntityFuzzyIndex, EntityFuzzyIndexPG]] = None,
+                 signal_manager=None, weaviate_index=None):
         """
         Initialize with an asyncpg connection pool.
 
         Args:
             connection_pool: Shared asyncpg pool from FusekiPostgreSQLDbImpl.
-            dedup_index: Optional dedup index (EntityDedupIndex for Redis/memory,
-                         EntityDedupIndexPG for PostgreSQL backend).
-            signal_manager: Optional SignalManager for cross-worker dedup sync.
-            weaviate_index: Optional EntityWeaviateIndex for vector search.
+            fuzzy_index: Optional fuzzy index (EntityFuzzyIndex for Redis/memory,
+                         EntityFuzzyIndexPG for PostgreSQL backend).
+            signal_manager: Optional SignalManager for cross-worker fuzzy sync.
+            weaviate_index: Deprecated, ignored. Kept for backward compat.
         """
         self.pool = connection_pool
         self.schema = EntityRegistrySchema()
-        self.dedup_index = dedup_index
+        self.fuzzy_index = fuzzy_index
         self.signal_manager = signal_manager
-        self.weaviate_index = weaviate_index
+        # PG-native vector/FTS/geo populator — lazy-initialised so it
+        # tolerates missing vector tables gracefully.
+        self._vector_populator: Optional[EntityRegistryVectorPopulator] = None
+        self._vector_populator_checked = False
 
     # ------------------------------------------------------------------
     # Schema initialization
@@ -104,38 +104,31 @@ class EntityRegistryImpl(
                     )
             logger.info("Entity registry tables verified")
 
-            # Initialize dedup index if configured
-            if self.dedup_index:
-                if isinstance(self.dedup_index, EntityDedupIndexPG):
+            # Initialize fuzzy index if configured
+            if self.fuzzy_index:
+                if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
                     # PostgreSQL backend: band tables persist, only need to
                     # rebuild the in-memory scoring cache on startup
                     try:
-                        count = await self.dedup_index.initialize(self.pool)
-                        logger.info(f"Entity dedup index (PG) loaded {count} entities")
+                        count = await self.fuzzy_index.initialize(self.pool)
+                        logger.info(f"Entity fuzzy index (PG) loaded {count} entities")
                     except Exception as e:
-                        logger.error(f"Failed to initialize entity dedup index (PG): {e}")
-                elif self.dedup_index.storage_config:
+                        logger.error(f"Failed to initialize entity fuzzy index (PG): {e}")
+                elif self.fuzzy_index.storage_config:
                     # Persistent backend (Redis/MemoryDB): skip bulk init at
                     # startup — the index is populated by the standalone
-                    # sync_dedup_index.py script. Just mark as initialized
+                    # sync_fuzzy_index.py script. Just mark as initialized
                     # so incremental updates via add_entity/remove_entity work.
-                    self.dedup_index._initialized = True
-                    logger.info("Entity dedup index: using existing MemoryDB data "
-                                "(run sync_dedup_index.py for full sync)")
+                    self.fuzzy_index._initialized = True
+                    logger.info("Entity fuzzy index: using existing MemoryDB data "
+                                "(run sync_fuzzy_index.py for full sync)")
                 else:
                     # In-memory backend: must load from DB on every startup
                     try:
-                        count = await self.dedup_index.initialize(self.pool)
-                        logger.info(f"Entity dedup index loaded {count} entities")
+                        count = await self.fuzzy_index.initialize(self.pool)
+                        logger.info(f"Entity fuzzy index loaded {count} entities")
                     except Exception as e:
-                        logger.error(f"Failed to initialize entity dedup index: {e}")
-
-            # Ensure Weaviate collection if configured
-            if self.weaviate_index:
-                try:
-                    await self.weaviate_index.ensure_collection()
-                except Exception as e:
-                    logger.error(f"Failed to ensure Weaviate collection: {e}")
+                        logger.error(f"Failed to initialize entity fuzzy index: {e}")
 
             return True
         except Exception as e:
@@ -233,11 +226,11 @@ class EntityRegistryImpl(
                 if entity_id is None:
                     raise RuntimeError("Failed to generate unique entity ID after 5 attempts")
 
-                # Compute dedup hash from the fields that will be indexed
+                # Compute fuzzy hash from the fields that will be indexed
                 alias_list = [
                     {'alias_name': a.get('alias_name', a.get('name', ''))} for a in (aliases or [])
                 ]
-                dedup_hash = compute_dedup_hash({
+                fuzzy_hash = compute_entity_hash({
                     'type_key': type_key, 'primary_name': primary_name,
                     'country': country, 'region': region, 'locality': locality,
                     'aliases': alias_list,
@@ -246,12 +239,12 @@ class EntityRegistryImpl(
                 row = await conn.fetchrow(
                     "INSERT INTO entity (entity_id, entity_type_id, primary_name, description, "
                     "country, region, locality, website, latitude, longitude, "
-                    "metadata, created_by, notes, dedup_hash) "
+                    "metadata, created_by, notes, fuzzy_hash) "
                     "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14) "
                     "RETURNING *",
                     entity_id, type_id, primary_name, description,
                     country, region, locality, website, latitude, longitude,
-                    metadata_json, created_by, notes, dedup_hash
+                    metadata_json, created_by, notes, fuzzy_hash
                 )
                 entity = dict(row)
                 entity['entity_uri'] = entity_id_to_uri(entity_id)
@@ -280,19 +273,19 @@ class EntityRegistryImpl(
                                 created_by=created_by, **loc_data,
                             )
 
-                # Update dedup index and notify other workers
-                if self.dedup_index:
+                # Update fuzzy index and notify other workers
+                if self.fuzzy_index:
                     entity_for_index = dict(entity)
                     entity_for_index['type_key'] = type_key
                     entity_for_index['aliases'] = alias_list
-                    if isinstance(self.dedup_index, EntityDedupIndexPG):
-                        await self.dedup_index.add_entity(entity_id, entity_for_index)
+                    if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                        await self.fuzzy_index.add_entity(entity_id, entity_for_index)
                     else:
-                        await self.dedup_index.async_add_entity(entity_id, entity_for_index)
-                    await self._notify_dedup_change('add', entity_id)
+                        await self.fuzzy_index.async_add_entity(entity_id, entity_for_index)
+                    await self._notify_fuzzy_change('add', entity_id)
 
-                # Sync to Weaviate
-                await self._weaviate_upsert_entity(entity_id)
+                # Sync to PG vector/FTS/geo tables
+                await self._pg_sync_entity(entity_id)
 
                 return entity
 
@@ -473,24 +466,24 @@ class EntityRegistryImpl(
 
         updated = await self.get_entity(entity_id)
 
-        # Refresh dedup index and hash if name or location fields changed
-        dedup_fields = {'primary_name', 'country', 'region', 'locality'}
-        if updated and dedup_fields & set(fields.keys()):
-            new_hash = compute_dedup_hash(updated)
+        # Refresh fuzzy index and hash if name or location fields changed
+        fuzzy_fields = {'primary_name', 'country', 'region', 'locality'}
+        if updated and fuzzy_fields & set(fields.keys()):
+            new_hash = compute_entity_hash(updated)
             async with self.pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                    "UPDATE entity SET fuzzy_hash = $1 WHERE entity_id = $2",
                     new_hash, entity_id
                 )
-            if self.dedup_index:
-                if isinstance(self.dedup_index, EntityDedupIndexPG):
-                    await self.dedup_index.add_entity(entity_id, updated)
+            if self.fuzzy_index:
+                if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                    await self.fuzzy_index.add_entity(entity_id, updated)
                 else:
-                    await self.dedup_index.async_add_entity(entity_id, updated)
-                await self._notify_dedup_change('add', entity_id)
+                    await self.fuzzy_index.async_add_entity(entity_id, updated)
+                await self._notify_fuzzy_change('add', entity_id)
 
-        # Sync to Weaviate
-        await self._weaviate_upsert_entity(entity_id)
+        # Sync to PG vector/FTS/geo tables
+        await self._pg_sync_entity(entity_id)
 
         return updated
 
@@ -515,18 +508,76 @@ class EntityRegistryImpl(
                 await self._log_change(conn, entity_id, 'entity_deleted', None,
                                        changed_by=deleted_by, comment=comment)
 
-                # Remove from dedup index and notify other workers
-                if self.dedup_index:
-                    if isinstance(self.dedup_index, EntityDedupIndexPG):
-                        await self.dedup_index.remove_entity(entity_id)
+                # Remove from fuzzy index and notify other workers
+                if self.fuzzy_index:
+                    if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                        await self.fuzzy_index.remove_entity(entity_id)
                     else:
-                        await self.dedup_index.async_remove_entity(entity_id)
-                    await self._notify_dedup_change('remove', entity_id)
+                        await self.fuzzy_index.async_remove_entity(entity_id)
+                    await self._notify_fuzzy_change('remove', entity_id)
 
-                # Remove from Weaviate
-                await self._weaviate_delete_entity(entity_id)
+                # Remove from PG vector/FTS/geo tables
+                await self._pg_delete_entity(entity_id)
 
                 return True
+
+    # ------------------------------------------------------------------
+    # PG vector/FTS/geo auto-sync helpers
+    # ------------------------------------------------------------------
+
+    def _get_vector_populator(self) -> Optional[EntityRegistryVectorPopulator]:
+        """Lazily create the vector populator, tolerating missing tables."""
+        if self._vector_populator is not None:
+            return self._vector_populator
+        if self._vector_populator_checked:
+            return None
+        self._vector_populator_checked = True
+        try:
+            self._vector_populator = EntityRegistryVectorPopulator(self.pool)
+            logger.info("Entity registry vector populator initialised")
+        except Exception as e:
+            logger.debug("Vector populator not available (tables may not exist): %s", e)
+        return self._vector_populator
+
+    async def _pg_sync_entity(self, entity_id: str) -> None:
+        """Sync a single entity to PG vector/FTS/geo tables (non-blocking)."""
+        pop = self._get_vector_populator()
+        if pop is None:
+            return
+        try:
+            await pop.sync_entity(entity_id)
+        except Exception as e:
+            logger.warning("_pg_sync_entity(%s) failed: %s", entity_id, e)
+
+    async def _pg_delete_entity(self, entity_id: str) -> None:
+        """Remove an entity from PG vector/FTS/geo tables (non-blocking)."""
+        pop = self._get_vector_populator()
+        if pop is None:
+            return
+        try:
+            await pop.delete_entity_all(entity_id)
+        except Exception as e:
+            logger.warning("_pg_delete_entity(%s) failed: %s", entity_id, e)
+
+    async def _pg_sync_location(self, location_id: int) -> None:
+        """Sync a single location to PG vector/FTS/geo tables (non-blocking)."""
+        pop = self._get_vector_populator()
+        if pop is None:
+            return
+        try:
+            await pop.sync_location(location_id)
+        except Exception as e:
+            logger.warning("_pg_sync_location(%d) failed: %s", location_id, e)
+
+    async def _pg_delete_location(self, location_id: int) -> None:
+        """Remove a location from PG vector/FTS/geo tables (non-blocking)."""
+        pop = self._get_vector_populator()
+        if pop is None:
+            return
+        try:
+            await pop.delete_location(location_id)
+        except Exception as e:
+            logger.warning("_pg_delete_location(%d) failed: %s", location_id, e)
 
     # ------------------------------------------------------------------
     # Search

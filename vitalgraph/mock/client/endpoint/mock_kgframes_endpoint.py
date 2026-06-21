@@ -46,9 +46,19 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
         self.frame_validator = FrameGraphValidator()
         self.haley_prefix = "http://vital.ai/ontology/haley-ai-kg#"
     
-    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> QuadResponse:
+    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                      search: Optional[str] = None,
+                      sort_by: Optional[str] = None, sort_order: str = "asc",
+                      form_type: Optional[str] = None,
+                      frame_type_uri: Optional[str] = None,
+                      status: Optional[str] = None,
+                      exclude_status: Optional[str] = None,
+                      created_after: Optional[str] = None,
+                      created_before: Optional[str] = None,
+                      modified_after: Optional[str] = None,
+                      modified_before: Optional[str] = None) -> QuadResponse:
         """
-        List KGFrames with pagination and optional search using pyoxigraph SPARQL queries.
+        List KGFrames with pagination, filtering, and sorting using pyoxigraph SPARQL queries.
         
         Args:
             space_id: Space identifier
@@ -56,6 +66,16 @@ class MockKGFramesEndpoint(MockBaseEndpoint):
             page_size: Number of frames per page
             offset: Offset for pagination
             search: Optional search term
+            sort_by: Property URI to sort by
+            sort_order: 'asc' or 'desc'
+            form_type: Filter by hasKGFormType (resolved URI)
+            frame_type_uri: Filter by hasKGFrameTypeURI
+            status: Filter by status URI
+            exclude_status: Exclude by status URI
+            created_after: ISO 8601 datetime lower bound
+            created_before: ISO 8601 datetime upper bound
+            modified_after: ISO 8601 datetime lower bound
+            modified_before: ISO 8601 datetime upper bound
             
         Returns:
             QuadResponse with VitalSigns native objects

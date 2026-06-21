@@ -170,11 +170,21 @@ export class ApiService {
   async getFrames(spaceId: string, graphId: string, options: {
     page_size?: number; offset?: number; search?: string;
     sort_by?: string; sort_order?: 'asc' | 'desc';
+    form_type?: string;
+    frame_type_uri?: string;
+    status?: string;
+    exclude_status?: string;
+    created_after?: string;
+    created_before?: string;
+    modified_after?: string;
+    modified_before?: string;
   } = {}): Promise<QuadResponse> {
+    const { page_size, offset, search } = options;
+    // Note: filter opts (sort, frame_type, status, etc.) not yet supported by TS client
     return vgClient.kgframes.list(
       spaceId, graphId,
-      options.page_size ?? 10, options.offset ?? 0,
-      options.search,
+      page_size ?? 10, offset ?? 0,
+      search,
     ) as any;
   }
 
@@ -204,27 +214,62 @@ export class ApiService {
   }
 
   // ─── KG Types ─────────────────────────────────────────────────────
+  // NOTE: vgClient.kgtypes is cast to `any` because the locally installed
+  // @vital-ai/vitalgraph-client may be stale. The TS client source has all
+  // methods; Docker rebuild updates node_modules.
+  private get _kgtypes(): any { return vgClient.kgtypes; }
 
-  async getKGTypes(spaceId: string, graphId: string, options: {
-    page_size?: number; offset?: number; search?: string;
+  async getKGTypes(spaceId: string, options: {
+    page_size?: number; offset?: number; search?: string; type_uri?: string;
   } = {}): Promise<any> {
-    return vgClient.kgtypes.list(
-      spaceId, graphId,
+    return this._kgtypes.list(
+      spaceId,
       options.page_size ?? 10, options.offset ?? 0,
       options.search,
+      options.type_uri,
     );
   }
 
-  async getKGType(spaceId: string, graphId: string, typeUri: string): Promise<any> {
-    return vgClient.kgtypes.get(spaceId, graphId, typeUri);
+  async getKGType(spaceId: string, typeUri: string): Promise<any> {
+    return this._kgtypes.get(spaceId, typeUri);
   }
 
-  async saveKGType(spaceId: string, graphId: string, typeData: any): Promise<any> {
-    return vgClient.kgtypes.create(spaceId, graphId, typeData);
+  async getKGTypeRelationships(spaceId: string, typeUri: string): Promise<any> {
+    return this._kgtypes.getRelationships(spaceId, typeUri);
   }
 
-  async deleteKGType(spaceId: string, graphId: string, typeUri: string): Promise<any> {
-    return vgClient.kgtypes.delete(spaceId, graphId, typeUri);
+  async saveKGType(spaceId: string, typeData: any): Promise<any> {
+    return this._kgtypes.create(spaceId, typeData);
+  }
+
+  async deleteKGType(spaceId: string, typeUri: string): Promise<any> {
+    return this._kgtypes.delete(spaceId, typeUri);
+  }
+
+  async createKGTypeRelationship(spaceId: string, typeUri: string, edgeType: string, targetUri: string): Promise<any> {
+    return this._kgtypes.createRelationship(spaceId, typeUri, edgeType, targetUri);
+  }
+
+  async deleteKGTypeRelationship(spaceId: string, typeUri: string, edgeUri: string): Promise<any> {
+    return this._kgtypes.deleteRelationship(spaceId, typeUri, edgeUri);
+  }
+
+  async getKGTypeDocumentation(spaceId: string, typeUri: string): Promise<any> {
+    return this._kgtypes.getDocumentation(spaceId, typeUri);
+  }
+
+  async updateKGTypeDocumentation(spaceId: string, typeUri: string, content: string): Promise<any> {
+    return this._kgtypes.updateDocumentation(spaceId, typeUri, content);
+  }
+
+  async deleteKGTypeDocumentation(spaceId: string, typeUri: string): Promise<any> {
+    return this._kgtypes.deleteDocumentation(spaceId, typeUri);
+  }
+
+  async searchKGTypes(spaceId: string, query: string, options?: {
+    type?: string; search_mode?: 'keyword' | 'fts' | 'vector' | 'hybrid'; alpha?: number;
+  }): Promise<any> {
+    return this._kgtypes.search(spaceId, query, options);
   }
 
   // ─── Files ────────────────────────────────────────────────────────
@@ -403,6 +448,26 @@ export class ApiService {
     return vgClient.entityRegistry.listLocations(entityId);
   }
 
+  async findSimilarEntities(options: { name: string; type_key?: string; limit?: number; min_score?: number }): Promise<any> {
+    return vgClient.entityRegistry.findSimilar({
+      name: options.name,
+      typeKey: options.type_key,
+      limit: options.limit,
+      minScore: options.min_score,
+    });
+  }
+
+  async searchRegistryEntity(options: { q?: string; latitude?: number; longitude?: number; radius_km?: number; limit?: number; min_certainty?: number }): Promise<any> {
+    return vgClient.entityRegistry.searchEntity({
+      q: options.q,
+      latitude: options.latitude,
+      longitude: options.longitude,
+      radiusKm: options.radius_km,
+      limit: options.limit,
+      minCertainty: options.min_certainty,
+    });
+  }
+
   // ─── Agent Registry ────────────────────────────────────────────────
 
   async listAgentTypes(): Promise<any[]> {
@@ -468,6 +533,19 @@ export class ApiService {
       segment_method_uri: segmentMethodUri,
       max_segment_tokens: maxSegmentTokens,
     });
+  }
+  // ─── Ontology ──────────────────────────────────────────────────────
+  // NOTE: vgClient.ontology may not be typed until client package is rebuilt.
+  private get _ontology(): any { return (vgClient as any).ontology; }
+
+  async getOntologyProperties(classUri: string): Promise<{ uri: string; local_name?: string; short_name?: string; property_class?: string }[]> {
+    const resp = await this._ontology.getProperties(classUri);
+    return resp.properties || [];
+  }
+
+  async getOntologyClasses(): Promise<string[]> {
+    const resp = await this._ontology.getClasses();
+    return resp.classes || [];
   }
 }
 

@@ -145,8 +145,12 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
             color="gray"
             size="sm"
             onClick={() => {
-              const encodedGraphId = encodeURIComponent(graphId || '');
-              navigate(`/space/${spaceId}/graph/${encodedGraphId}${config.listRoute}`);
+              if (config.spaceIdOverride) {
+                navigate(config.listRoute);
+              } else {
+                const encodedGraphId = encodeURIComponent(graphId || '');
+                navigate(`/space/${spaceId}/graph/${encodedGraphId}${config.listRoute}`);
+              }
             }}
           >
             ← Back to {config.objectTypeName}s
@@ -175,7 +179,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
             <>
               <Button
                 color="gray"
-                onClick={() => isCreateMode ? navigate(`/space/${spaceId}/graph/${encodeURIComponent(graphId || '')}${config.listRoute}`) : setSearchParams({ mode: 'view' })}
+                onClick={() => isCreateMode ? navigate(config.spaceIdOverride ? config.listRoute : `/space/${spaceId}/graph/${encodeURIComponent(graphId || '')}${config.listRoute}`) : setSearchParams({ mode: 'view' })}
               >
                 <HiX className="w-4 h-4 mr-2" />
                 Cancel

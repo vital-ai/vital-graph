@@ -82,3 +82,94 @@ class KGTypeDeleteResponse(KGTypeResponse):
     deleted_count: Optional[int] = Field(None, description="Number of KGTypes deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of deleted KGTypes")
 
+
+class KGTypeRelationshipEdge(BaseModel):
+    """A single type-level edge in a relationship response."""
+    uri: str = Field(..., description="Edge object URI")
+    edgeType: str = Field(..., description="Edge vitaltype URI (e.g. Edge_hasSubKGFrameType)")
+    sourceURI: str = Field(..., description="Source type URI")
+    destinationURI: str = Field(..., description="Destination type URI")
+    direction: str = Field(..., description="'outgoing' or 'incoming' relative to the queried type")
+
+
+class KGTypeRelationshipType(BaseModel):
+    """Summary of a connected type in a relationship response."""
+    uri: str = Field(..., description="Type URI")
+    name: str = Field(..., description="Type name (hasName)")
+    vitaltype: str = Field(..., description="vitaltype URI of the connected type")
+
+
+class KGTypeRelationshipsResponse(BaseModel):
+    """Response model for GET /api/graphs/kgtypes/relationships."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    source_type: KGTypeRelationshipType = Field(..., description="The queried type")
+    edges: List[KGTypeRelationshipEdge] = Field(default_factory=list, description="Type-level edges")
+    connected_types: List[KGTypeRelationshipType] = Field(default_factory=list, description="Connected types")
+
+
+class KGTypeRelationshipCreateRequest(BaseModel):
+    """Request body for POST /api/graphs/kgtypes/relationships."""
+    edge_type: str = Field(..., description="Edge vitaltype URI (e.g. Edge_hasSubKGFrameType)")
+    target_uri: str = Field(..., description="URI of the target type to link to")
+
+
+class KGTypeRelationshipCreateResponse(BaseModel):
+    """Response model for POST /api/graphs/kgtypes/relationships."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    edge_uri: str = Field("", description="URI of the created edge")
+    edge_type: str = Field("", description="Edge vitaltype URI")
+    source_uri: str = Field("", description="Source type URI")
+    destination_uri: str = Field("", description="Destination type URI")
+
+
+class KGTypeRelationshipDeleteResponse(BaseModel):
+    """Response model for DELETE /api/graphs/kgtypes/relationships."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    deleted: bool = Field(False, description="Whether the edge was deleted")
+    edge_uri: str = Field("", description="URI of the deleted edge")
+
+
+class KGTypeDocumentationRequest(BaseModel):
+    """Request body for PUT /api/graphs/kgtypes/documentation."""
+    content: str = Field(..., description="Markdown documentation content")
+
+
+class KGTypeDocumentationResponse(BaseModel):
+    """Response model for GET /api/graphs/kgtypes/documentation."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    type_uri: str = Field("", description="Type URI")
+    content: Optional[str] = Field(None, description="Markdown documentation content")
+    document_uri: Optional[str] = Field(None, description="KGDocument URI")
+    has_documentation: bool = Field(False, description="Whether documentation exists")
+
+
+class KGTypeDocumentationUpdateResponse(BaseModel):
+    """Response model for PUT /api/graphs/kgtypes/documentation."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    type_uri: str = Field("", description="Type URI")
+    document_uri: str = Field("", description="KGDocument URI")
+    created: bool = Field(False, description="Whether a new document was created (vs updated)")
+
+
+class KGTypeDocumentationDeleteResponse(BaseModel):
+    """Response model for DELETE /api/graphs/kgtypes/documentation."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    type_uri: str = Field("", description="Type URI")
+    deleted: bool = Field(False, description="Whether the documentation was deleted")
+
+
+class KGTypeSearchResponse(BaseModel):
+    """Response model for GET /api/graphs/kgtypes/search."""
+    success: bool = Field(True, description="Operation success status")
+    message: str = Field("", description="Human-readable status message")
+    types: List[Dict[str, Any]] = Field(default_factory=list, description="Matching types")
+    count: int = Field(0, description="Number of results")
+    search_mode: str = Field("keyword", description="Search mode used (keyword or vector)")
+    query: str = Field("", description="Original search query")
+

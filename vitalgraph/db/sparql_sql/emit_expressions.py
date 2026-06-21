@@ -25,11 +25,16 @@ from .collect import _esc
 from .vg_functions import (
     VG_ALL_FUNCTIONS as _VG_ALL_FUNCTIONS,
     VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
+    VG_TEXT_SEARCH, VG_HYBRID_SEARCH,
     VG_MULTI_VECTOR_SIMILARITY, VG_MULTI_VECTOR_NEARBY,
     VG_MULTI_VECTOR_FUNCTIONS,
-    VG_GEO_DISTANCE, VG_WITHIN_RADIUS,
+    VG_GEO_DISTANCE, VG_WITHIN_RADIUS, VG_WITHIN_BOUNDS, VG_WITHIN_POLYGON,
+    VG_FUZZY_MATCH, VG_TRIGRAM_SIMILARITY,
     vector_similarity_sql, geo_distance_sql, within_radius_sql,
+    within_bounds_sql, within_polygon_sql,
     multi_vector_similarity_sql,
+    text_search_sql, hybrid_search_sql, fuzzy_match_sql,
+    trigram_similarity_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,9 +159,11 @@ def _is_numeric_expr(expr, ctx: EmitContext) -> bool:
             sql_type = _XSD_CAST_MAP[expr.function_iri]
             if sql_type not in ("TEXT", "BOOLEAN"):
                 return True
-        # vg: vector/geo functions that return numeric values
+        # vg: vector/geo/text/fuzzy functions that return numeric values
         if expr.function_iri and expr.function_iri in (
             VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY, VG_GEO_DISTANCE,
+            VG_TEXT_SEARCH, VG_HYBRID_SEARCH, VG_FUZZY_MATCH,
+            VG_TRIGRAM_SIMILARITY,
         ):
             return True
         # Recurse: COALESCE/IF is numeric if any argument is numeric
@@ -1072,11 +1079,35 @@ def _vg_function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
             ctx.add_vector_request(vr)
         return sql
 
+    if iri == VG_TEXT_SEARCH:
+        return text_search_sql(expr, ctx)
+
+    if iri == VG_HYBRID_SEARCH:
+        sql, vec_request = hybrid_search_sql(expr, ctx)
+        if vec_request is not None:
+            ctx.add_vector_request(vec_request)
+        return sql
+
     if iri == VG_GEO_DISTANCE:
         return geo_distance_sql(expr, ctx)
 
     if iri == VG_WITHIN_RADIUS:
         return within_radius_sql(expr, ctx)
+
+    if iri == VG_WITHIN_BOUNDS:
+        return within_bounds_sql(expr, ctx)
+
+    if iri == VG_WITHIN_POLYGON:
+        return within_polygon_sql(expr, ctx)
+
+    if iri == VG_FUZZY_MATCH:
+        sql, fuzzy_request = fuzzy_match_sql(expr, ctx)
+        if fuzzy_request is not None:
+            ctx.add_fuzzy_request(fuzzy_request)
+        return sql
+
+    if iri == VG_TRIGRAM_SIMILARITY:
+        return trigram_similarity_sql(expr, ctx)
 
     logger.warning("Unhandled vg: function IRI: %s", iri)
     return None

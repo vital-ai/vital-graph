@@ -78,8 +78,7 @@ async def test_slot_update_with_entity_uri(client: VitalGraphClient, space_id: s
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            objects=[slot],
-            entity_uri=entity_uri
+            objects=[slot]
         )
         
         if response.is_success:

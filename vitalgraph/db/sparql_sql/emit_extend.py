@@ -127,9 +127,19 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
     if not isinstance(expr, ExprFunction) or not is_vg_vector_function(expr):
         return None
 
+    # Resolve the entity variable's UUID column from the child context
+    from .vg_functions import extract_vector_args, _resolve_uuid_col
+    vargs = extract_vector_args(expr)
+    if vargs is None:
+        return None
+    child_uuid_col = _resolve_uuid_col(vargs.entity_var, ctx)
+    if child_uuid_col is None:
+        return None
+
     threshold = plan.hints.get('vg_threshold')
     driving = vector_top_k_driving_sql(
         expr, ctx, limit=top_k['limit'], threshold=threshold,
+        child_sql=child_sql, child_uuid_col=child_uuid_col,
     )
     if driving is None:
         return None

@@ -1,8 +1,9 @@
 import React from 'react';
 import { Badge } from 'flowbite-react';
-import { HiCheck, HiX, HiExternalLink } from 'react-icons/hi';
+import { HiCheck, HiX, HiExternalLink, HiArrowRight } from 'react-icons/hi';
+import { useNavigate } from 'react-router-dom';
 import type { SlotEntry } from '../../lib/entityGraphBuilder';
-import { getSlotLabel, getShortClassName } from '../../lib/entityGraphBuilder';
+import { getSlotLabel, getShortClassName, humanizeUrn } from '../../lib/entityGraphBuilder';
 import ExpandableText from '../ExpandableText';
 import CopyButton from '../CopyButton';
 
@@ -37,8 +38,23 @@ const SlotFieldRow: React.FC<SlotFieldRowProps> = ({ entry }) => {
   );
 };
 
+/** Check if a URI is an internal reference (entity, frame, or document) */
+function isInternalUri(uri: string): boolean {
+  return uri.startsWith('urn:') || uri.includes('vital.ai/');
+}
+
+/** Get the short display label for a URI */
+function getUriDisplayLabel(uri: string): string {
+  if (uri.startsWith('urn:')) {
+    return humanizeUrn(uri);
+  }
+  return uri.split(/[/#]/).pop() || uri;
+}
+
 /** Render the slot value based on its data type */
 const SlotValue: React.FC<{ value: unknown; dataType: string }> = ({ value, dataType }) => {
+  const navigate = useNavigate();
+
   if (value === undefined || value === null || value === '') {
     return <span className="text-xs text-gray-400 dark:text-gray-500 italic">empty</span>;
   }
@@ -80,22 +96,39 @@ const SlotValue: React.FC<{ value: unknown; dataType: string }> = ({ value, data
         </span>
       );
 
-    case 'uri':
+    case 'uri': {
+      const uriStr = String(value);
+      if (isInternalUri(uriStr)) {
+        return (
+          <div className="flex items-center gap-1 min-w-0">
+            <button
+              onClick={() => navigate(`/object/${encodeURIComponent(uriStr)}`)}
+              className="text-sm text-blue-600 dark:text-blue-400 hover:underline truncate text-left"
+              title={`Navigate to ${uriStr}`}
+            >
+              {getUriDisplayLabel(uriStr)}
+            </button>
+            <HiArrowRight className="w-3 h-3 flex-shrink-0 text-blue-400" />
+            <CopyButton text={uriStr} size="sm" />
+          </div>
+        );
+      }
       return (
         <div className="flex items-center gap-1 min-w-0">
           <a
-            href={String(value)}
+            href={uriStr}
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-blue-600 dark:text-blue-400 hover:underline truncate"
-            title={String(value)}
+            title={uriStr}
           >
-            {String(value)}
+            {uriStr}
           </a>
           <HiExternalLink className="w-3 h-3 flex-shrink-0 text-gray-400" />
-          <CopyButton text={String(value)} size="sm" />
+          <CopyButton text={uriStr} size="sm" />
         </div>
       );
+    }
 
     case 'choice':
       return <Badge color="info" size="xs">{String(value)}</Badge>;

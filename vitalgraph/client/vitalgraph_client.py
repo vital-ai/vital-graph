@@ -34,7 +34,10 @@ from .endpoint.process_endpoint import ProcessClientEndpoint
 from .endpoint.admin_endpoint import AdminClientEndpoint
 from .endpoint.api_keys_endpoint import ApiKeysClientEndpoint
 from .endpoint.vector_mappings_endpoint import VectorMappingsClientEndpoint
+from .endpoint.fuzzy_mappings_endpoint import FuzzyMappingsClientEndpoint
 from .endpoint.vector_indexes_endpoint import VectorIndexesClientEndpoint
+from .endpoint.search_mappings_endpoint import SearchMappingsClientEndpoint
+from .endpoint.fts_indexes_endpoint import FtsIndexesClientEndpoint
 from .endpoint.geo_config_endpoint import GeoConfigClientEndpoint
 from .endpoint.geo_points_endpoint import GeoPointsClientEndpoint
 from .endpoint.kgdocuments_endpoint import KGDocumentsEndpoint as KGDocumentsClientEndpoint
@@ -168,7 +171,10 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.admin = AdminClientEndpoint(self)
         self.api_keys = ApiKeysClientEndpoint(self)
         self.vector_mappings = VectorMappingsClientEndpoint(self)
+        self.fuzzy_mappings = FuzzyMappingsClientEndpoint(self)
         self.vector_indexes = VectorIndexesClientEndpoint(self)
+        self.search_mappings = SearchMappingsClientEndpoint(self)
+        self.fts_indexes = FtsIndexesClientEndpoint(self)
         self.kgdocuments = KGDocumentsClientEndpoint(self)
         self.geo_config = GeoConfigClientEndpoint(self)
         self.geo_points = GeoPointsClientEndpoint(self)
@@ -1046,9 +1052,10 @@ class VitalGraphClient(VitalGraphClientInterface):
 
     # KGFrame CRUD Methods - Delegated to KGFramesEndpoint
     
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                            search: Optional[str] = None, **kwargs) -> PaginatedGraphObjectResponse:
         """
-        List KGFrames with pagination and optional search.
+        List KGFrames with pagination, filtering, and sorting.
         
         Args:
             space_id: Space identifier
@@ -1056,11 +1063,12 @@ class VitalGraphClient(VitalGraphClientInterface):
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
+            **kwargs: Additional filter params (sort_by, sort_order, form_type, etc.)
             
         Returns:
-            FramesResponse containing KGFrames data and pagination info
+            PaginatedGraphObjectResponse containing KGFrame GraphObjects
         """
-        return await self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search)
+        return await self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search=search, **kwargs)
     
     async def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> FrameGraphResponse:
         """

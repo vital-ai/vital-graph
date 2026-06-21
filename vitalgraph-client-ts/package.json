@@ -1,6 +1,6 @@
 {
   "name": "@vital-ai/vitalgraph-client",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "TypeScript client for connecting to VitalGraph REST API servers",
   "type": "module",
   "main": "./dist/index.cjs",

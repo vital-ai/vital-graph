@@ -150,7 +150,6 @@ class CreateRelationsTester:
             product.URI = f"http://vital.ai/test/kgentity/product/{product_name_normalized}"
             product.kGEntityType = product_entity_type_uri
             product.name = product_data['name']
-            product.kGGraphURI = product.URI
             
             # Create slots for product properties
             objects = [product]

@@ -42,8 +42,7 @@ async def test_frame_creation_basic(client: VitalGraphClient, space_id: str, gra
         response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=frames,
-            entity_uri=entity_uri
+            objects=frames
         )
         
         if response.is_success and response.created_count > 0:
@@ -77,8 +76,7 @@ async def test_frame_creation_with_entity_uri(client: VitalGraphClient, space_id
         response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame],
-            entity_uri=entity_uri
+            objects=[frame]
         )
         
         if response.is_success and response.created_count > 0:
@@ -147,7 +145,6 @@ async def test_frame_creation_with_operation_modes(client: VitalGraphClient, spa
             space_id=space_id,
             graph_id=graph_id,
             objects=[frame],
-            entity_uri=entity_uri,
             operation_mode="create"
         )
         
@@ -160,8 +157,7 @@ async def test_frame_creation_with_operation_modes(client: VitalGraphClient, spa
         update_response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame],
-            entity_uri=entity_uri
+            objects=[frame]
         )
         
         if not update_response.is_success:
@@ -174,7 +170,6 @@ async def test_frame_creation_with_operation_modes(client: VitalGraphClient, spa
             space_id=space_id,
             graph_id=graph_id,
             objects=[frame],
-            entity_uri=entity_uri,
             operation_mode="upsert"
         )
         

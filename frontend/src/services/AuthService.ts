@@ -223,7 +223,7 @@ export class AuthService {
       const refreshTime = this.tokenExpiry.getTime() - Date.now() - (5 * 60 * 1000);
       
       if (refreshTime > 0) {
-        this.refreshTimer = setTimeout(() => {
+        this.refreshTimer = window.setTimeout(() => {
           console.log('⏰ Automatic token refresh triggered');
           this.refreshAccessToken();
         }, refreshTime);

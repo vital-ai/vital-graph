@@ -327,10 +327,10 @@ const Home: React.FC = () => {
                 description="Download graph data"
               />
               <NavItem
-                to="/vector-indexes"
+                to="/semantic-search"
                 icon={<HiCube className="w-5 h-5" />}
-                label="Vector Search"
-                description="Indexes, mappings, search"
+                label="Semantic Indexes"
+                description="Search, mappings, indexes"
               />
               <NavItem
                 to="/files"

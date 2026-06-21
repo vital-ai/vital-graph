@@ -38,6 +38,10 @@ from vitalgraph_client_test.kgentities.case_kgentity_frame_delete import KGEntit
 from vitalgraph_client_test.kgentities.case_kgentity_frame_get import KGEntityFrameGetTester
 from vitalgraph_client_test.kgentities.case_kgentity_frame_update import KGEntityFrameUpdateTester
 from vitalgraph_client_test.kgentities.case_kgentity_frame_hierarchical import KGEntityHierarchicalFrameTester
+from vitalgraph_client_test.kgentities.case_kgentity_child_frame_update import KGEntityChildFrameUpdateTester
+from vitalgraph_client_test.kgentities.case_kgentity_entity_only_update import KGEntityOnlyUpdateTester
+from vitalgraph_client_test.entity_graph_lead.case_entity_server_properties import EntityServerPropertiesTester
+from vitalgraph_client_test.kgframes.case_kgframe_hierarchy import KGFrameHierarchyTester
 
 
 # Setup logging
@@ -242,25 +246,96 @@ async def test_kgentities_endpoint(delete_space_at_end: bool = False) -> bool:
         print("13. Running KGEntity Frame Hierarchical Tests...")
         frame_hierarchical_tester = KGEntityHierarchicalFrameTester(client, test_data_creator)
         
-        frame_hierarchical_success = await frame_hierarchical_tester.test_basic_hierarchical_frame_creation(test_space_id, test_graph_id)
-        frame_hierarchical_error_success = await frame_hierarchical_tester.test_multi_level_hierarchical_frames(test_space_id, test_graph_id)
+        hier_create = await frame_hierarchical_tester.test_create_child_frame(test_space_id, test_graph_id)
+        hier_delete = await frame_hierarchical_tester.test_delete_child_frame_with_parent(test_space_id, test_graph_id)
+        hier_reject = await frame_hierarchical_tester.test_delete_non_child_rejected(test_space_id, test_graph_id)
+        hier_multi = await frame_hierarchical_tester.test_multi_level_hierarchy(test_space_id, test_graph_id)
+        hier_block = await frame_hierarchical_tester.test_delete_fails_if_children(test_space_id, test_graph_id)
+        hier_recursive = await frame_hierarchical_tester.test_recursive_delete(test_space_id, test_graph_id)
+        hier_grouping = await frame_hierarchical_tester.test_frame_grouping_uri_assignment(test_space_id, test_graph_id)
         
         frame_hierarchical_cleanup_success = await frame_hierarchical_tester.cleanup_created_resources(test_space_id, test_graph_id)
         
-        frame_hierarchical_tests_passed = sum([frame_hierarchical_success, frame_hierarchical_error_success])
-        total_frame_hierarchical_tests = 2
+        frame_hierarchical_tests_passed = sum([hier_create, hier_delete, hier_reject, hier_multi, hier_block, hier_recursive, hier_grouping])
+        total_frame_hierarchical_tests = 7
+        
+        # 13b. Child Frame Update Regression Tests (duplication bug fix)
+        print("13b. Running Child Frame Update Regression Tests...")
+        child_frame_tester = KGEntityChildFrameUpdateTester(client, test_data_creator)
+        child_frame_results = await child_frame_tester.run_all_tests(test_space_id, test_graph_id)
+        await child_frame_tester.cleanup_created_resources(test_space_id, test_graph_id)
+        
+        child_frame_tests_passed = sum(1 for v in child_frame_results.values() if v)
+        total_child_frame_tests = len(child_frame_results)
         
         frame_results = {
             "test_name": "Frame Operations",
-            "tests_run": total_frame_create_tests + total_frame_delete_tests + total_frame_get_tests + total_frame_update_tests + total_frame_hierarchical_tests,
-            "tests_passed": frame_create_tests_passed + frame_delete_tests_passed + frame_get_tests_passed + frame_update_tests_passed + frame_hierarchical_tests_passed,
-            "tests_failed": (total_frame_create_tests - frame_create_tests_passed) + (total_frame_delete_tests - frame_delete_tests_passed) + (total_frame_get_tests - frame_get_tests_passed) + (total_frame_update_tests - frame_update_tests_passed) + (total_frame_hierarchical_tests - frame_hierarchical_tests_passed),
-            "success": (frame_create_tests_passed == total_frame_create_tests) and (frame_delete_tests_passed == total_frame_delete_tests) and (frame_get_tests_passed == total_frame_get_tests) and (frame_update_tests_passed == total_frame_update_tests) and (frame_hierarchical_tests_passed == total_frame_hierarchical_tests)
+            "tests_run": total_frame_create_tests + total_frame_delete_tests + total_frame_get_tests + total_frame_update_tests + total_frame_hierarchical_tests + total_child_frame_tests,
+            "tests_passed": frame_create_tests_passed + frame_delete_tests_passed + frame_get_tests_passed + frame_update_tests_passed + frame_hierarchical_tests_passed + child_frame_tests_passed,
+            "tests_failed": (total_frame_create_tests - frame_create_tests_passed) + (total_frame_delete_tests - frame_delete_tests_passed) + (total_frame_get_tests - frame_get_tests_passed) + (total_frame_update_tests - frame_update_tests_passed) + (total_frame_hierarchical_tests - frame_hierarchical_tests_passed) + (total_child_frame_tests - child_frame_tests_passed),
+            "success": (frame_create_tests_passed == total_frame_create_tests) and (frame_delete_tests_passed == total_frame_delete_tests) and (frame_get_tests_passed == total_frame_get_tests) and (frame_update_tests_passed == total_frame_update_tests) and (frame_hierarchical_tests_passed == total_frame_hierarchical_tests) and (child_frame_tests_passed == total_child_frame_tests)
         }
         all_results.append(frame_results)
         total_tests += frame_results["tests_run"]
         total_passed += frame_results["tests_passed"]
         total_failed += frame_results["tests_failed"]
+        
+        # 13c. Entity-Only Update Tests
+        print("13c. Running Entity-Only Update Tests...")
+        entity_only_tester = KGEntityOnlyUpdateTester(client, test_data_creator)
+        entity_only_results = await entity_only_tester.run_all_tests(test_space_id, test_graph_id)
+        await entity_only_tester.cleanup_created_resources(test_space_id, test_graph_id)
+        
+        entity_only_passed = sum(1 for v in entity_only_results.values() if v)
+        total_entity_only = len(entity_only_results)
+        entity_only_result = {
+            "test_name": "Entity-Only Update",
+            "tests_run": total_entity_only,
+            "tests_passed": entity_only_passed,
+            "tests_failed": total_entity_only - entity_only_passed,
+            "success": entity_only_passed == total_entity_only
+        }
+        all_results.append(entity_only_result)
+        total_tests += entity_only_result["tests_run"]
+        total_passed += entity_only_result["tests_passed"]
+        total_failed += entity_only_result["tests_failed"]
+        
+        # 14. Entity Server Properties Tests (timestamps, status, entity type)
+        print("14. Running Entity Server Properties Tests...")
+        server_props_tester = EntityServerPropertiesTester(client)
+        server_props_results = await server_props_tester.run_tests(test_space_id, test_graph_id)
+        all_results.append(server_props_results)
+        total_tests += server_props_results["tests_run"]
+        total_passed += server_props_results["tests_passed"]
+        total_failed += server_props_results["tests_failed"]
+        
+        # 15. Standalone KGFrames Hierarchy Tests (top-level /kgframes endpoint)
+        print("15. Running Standalone KGFrames Hierarchy Tests...")
+        kgframe_hier_tester = KGFrameHierarchyTester(client, test_data_creator)
+        
+        kfh_delete_block = await kgframe_hier_tester.test_delete_fails_if_children(test_space_id, test_graph_id)
+        kfh_recursive = await kgframe_hier_tester.test_recursive_delete(test_space_id, test_graph_id)
+        kfh_parent_val = await kgframe_hier_tester.test_update_validates_parent(test_space_id, test_graph_id)
+        kfh_preserve = await kgframe_hier_tester.test_update_preserves_children(test_space_id, test_graph_id)
+        kfh_replace = await kgframe_hier_tester.test_replace_mode(test_space_id, test_graph_id)
+        kfh_replace_hier = await kgframe_hier_tester.test_replace_with_hierarchy(test_space_id, test_graph_id)
+        kfh_grouping = await kgframe_hier_tester.test_frame_grouping_uri_assignment(test_space_id, test_graph_id)
+        
+        await kgframe_hier_tester.cleanup_created_resources(test_space_id, test_graph_id)
+        
+        kfh_passed = sum([kfh_delete_block, kfh_recursive, kfh_parent_val, kfh_preserve, kfh_replace, kfh_replace_hier, kfh_grouping])
+        kfh_total = 7
+        kgframe_hier_results = {
+            "test_name": "Standalone KGFrames Hierarchy",
+            "tests_run": kfh_total,
+            "tests_passed": kfh_passed,
+            "tests_failed": kfh_total - kfh_passed,
+            "success": kfh_passed == kfh_total
+        }
+        all_results.append(kgframe_hier_results)
+        total_tests += kgframe_hier_results["tests_run"]
+        total_passed += kgframe_hier_results["tests_passed"]
+        total_failed += kgframe_hier_results["tests_failed"]
         
         # Cleanup remaining test entities
         print(f"\n10. Cleaning up remaining test entities...")

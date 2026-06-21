@@ -3,7 +3,8 @@
 The ``geo_config`` table stores a single row per space controlling:
 - **enabled**: whether geo population is active
 - **auto_sync**: whether entity create/update triggers geo update
-- **lat_predicates / lon_predicates**: configurable predicate URI sets
+- **geo_datatype_uris**: recognized geo datatype URIs for datatype-driven detection
+- **lat_predicates / lon_predicates**: (legacy) configurable predicate URI sets
 
 Usage:
     mgr = GeoConfigManager(conn, space_id)
@@ -21,18 +22,20 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Default predicate sets (match geo_populator.py originals)
+# Default geo datatype URIs (datatype-driven detection)
 # ---------------------------------------------------------------------------
 
+DEFAULT_GEO_DATATYPE_URIS = [
+    "http://www.opengis.net/ont/geosparql#wktLiteral",
+    "http://vital.ai/ontology/vital-core#geoLocation",
+]
+
+# Legacy predicate sets (kept for backward compat with existing config rows)
 DEFAULT_LAT_PREDICATES = [
-    "http://www.w3.org/2003/01/geo/wgs84_pos#lat",
-    "http://vital.ai/ontology/haley-ai-kg#hasLatitude",
     "http://vital.ai/ontology/vital-aimp#hasLatitude",
 ]
 
 DEFAULT_LON_PREDICATES = [
-    "http://www.w3.org/2003/01/geo/wgs84_pos#long",
-    "http://vital.ai/ontology/haley-ai-kg#hasLongitude",
     "http://vital.ai/ontology/vital-aimp#hasLongitude",
 ]
 
@@ -46,6 +49,7 @@ class GeoConfigDTO:
     config_id: int
     enabled: bool = False
     auto_sync: bool = False
+    geo_datatype_uris: List[str] = field(default_factory=lambda: list(DEFAULT_GEO_DATATYPE_URIS))
     lat_predicates: List[str] = field(default_factory=lambda: list(DEFAULT_LAT_PREDICATES))
     lon_predicates: List[str] = field(default_factory=lambda: list(DEFAULT_LON_PREDICATES))
     updated_time: Optional[str] = None
@@ -95,9 +99,9 @@ class GeoConfigManager:
     async def update_config(self, **fields) -> Optional[GeoConfigDTO]:
         """Update mutable columns.
 
-        Accepted kwargs: enabled, auto_sync, lat_predicates, lon_predicates.
+        Accepted kwargs: enabled, auto_sync, geo_datatype_uris, lat_predicates, lon_predicates.
         """
-        allowed = {"enabled", "auto_sync", "lat_predicates", "lon_predicates"}
+        allowed = {"enabled", "auto_sync", "geo_datatype_uris", "lat_predicates", "lon_predicates"}
         to_set = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not to_set:
             return await self.get_config()
@@ -131,11 +135,15 @@ class GeoConfigManager:
 
     @staticmethod
     def _row_to_dto(row) -> GeoConfigDTO:
+        geo_dt = None
+        if "geo_datatype_uris" in row.keys():
+            geo_dt = list(row["geo_datatype_uris"]) if row["geo_datatype_uris"] else None
         return GeoConfigDTO(
             config_id=row["config_id"],
             enabled=row["enabled"],
             auto_sync=row["auto_sync"],
-            lat_predicates=list(row["lat_predicates"]) if row["lat_predicates"] else list(DEFAULT_LAT_PREDICATES),
-            lon_predicates=list(row["lon_predicates"]) if row["lon_predicates"] else list(DEFAULT_LON_PREDICATES),
+            geo_datatype_uris=geo_dt if geo_dt else list(DEFAULT_GEO_DATATYPE_URIS),
+            lat_predicates=list(row["lat_predicates"]) if row.get("lat_predicates") else list(DEFAULT_LAT_PREDICATES),
+            lon_predicates=list(row["lon_predicates"]) if row.get("lon_predicates") else list(DEFAULT_LON_PREDICATES),
             updated_time=str(row["updated_time"]) if row["updated_time"] else None,
         )

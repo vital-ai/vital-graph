@@ -28,7 +28,14 @@ from ..response.client_response import (
     KGTypesListResponse,
     KGTypeCreateResponse,
     KGTypeUpdateResponse,
-    KGTypeDeleteResponse
+    KGTypeDeleteResponse,
+    KGTypeRelationshipsResponse,
+    KGTypeRelationshipCreateResponse,
+    KGTypeRelationshipDeleteResponse,
+    KGTypeDocumentationResponse,
+    KGTypeDocumentationUpdateResponse,
+    KGTypeDocumentationDeleteResponse,
+    KGTypeSearchResponse,
 )
 from ..response.response_builder import build_success_response, build_error_response
 
@@ -38,16 +45,16 @@ logger = logging.getLogger(__name__)
 class KGTypesEndpoint(BaseEndpoint):
     """Client endpoint for KGTypes operations."""
     
-    async def list_kgtypes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> KGTypesListResponse:
+    async def list_kgtypes(self, space_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None, type_uri: Optional[str] = None) -> KGTypesListResponse:
         """
         List KGTypes with pagination and optional search.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             page_size: Number of items per page
             offset: Offset for pagination
             search: Optional search term
+            type_uri: Optional type URI to filter by subclass
             
         Returns:
             KGTypesListResponse with .is_success property
@@ -56,16 +63,16 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id)
+        validate_required_params(space_id=space_id)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             params = build_query_params(
                 space_id=space_id,
-                graph_id=graph_id,
                 page_size=page_size,
                 offset=offset,
-                search=search
+                search=search,
+                type_uri=type_uri
             )
             
             response = await self._make_authenticated_request('GET', url, params=params)
@@ -98,13 +105,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def get_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeResponse:
+    async def get_kgtype(self, space_id: str, uri: str) -> KGTypeResponse:
         """
         Get a specific KGType by URI.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             uri: KGType URI
             
         Returns:
@@ -114,13 +120,12 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, uri=uri)
+        validate_required_params(space_id=space_id, uri=uri)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             params = build_query_params(
                 space_id=space_id,
-                graph_id=graph_id,
                 uri=uri
             )
             
@@ -158,13 +163,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def get_kgtypes_by_uris(self, space_id: str, graph_id: str, uri_list: str) -> KGTypesListResponse:
+    async def get_kgtypes_by_uris(self, space_id: str, uri_list: str) -> KGTypesListResponse:
         """
         Get multiple KGTypes by URI list.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             uri_list: Comma-separated list of KGType URIs
             
         Returns:
@@ -174,13 +178,12 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list)
+        validate_required_params(space_id=space_id, uri_list=uri_list)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             params = build_query_params(
                 space_id=space_id,
-                graph_id=graph_id,
                 uri_list=uri_list
             )
             
@@ -211,13 +214,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def create_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
+    async def create_kgtypes(self, space_id: str, objects: List[GraphObject]) -> KGTypeCreateResponse:
         """
         Create KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             objects: List of KGType GraphObject instances to create
             
         Returns:
@@ -227,13 +229,13 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
+        validate_required_params(space_id=space_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            params = build_query_params(space_id=space_id)
             response = await self._make_authenticated_request('POST', url, params=params, json=body, headers={'Content-Type': content_type})
             server_response = ServerKGTypeCreateResponse.model_validate(response.json())
             
@@ -272,13 +274,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def update_kgtypes(self, space_id: str, graph_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
+    async def update_kgtypes(self, space_id: str, objects: List[GraphObject]) -> KGTypeUpdateResponse:
         """
         Update KGTypes from GraphObjects.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             objects: List of KGType GraphObject instances to update
             
         Returns:
@@ -288,13 +289,13 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, objects=objects)
+        validate_required_params(space_id=space_id, objects=objects)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             
             body, content_type = serialize_graphobjects_for_request(objects, self.wire_format)
-            params = build_query_params(space_id=space_id, graph_id=graph_id)
+            params = build_query_params(space_id=space_id)
             response = await self._make_authenticated_request('PUT', url, params=params, json=body, headers={'Content-Type': content_type})
             server_response = ServerKGTypeUpdateResponse.model_validate(response.json())
             
@@ -332,13 +333,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def delete_kgtype(self, space_id: str, graph_id: str, uri: str) -> KGTypeDeleteResponse:
+    async def delete_kgtype(self, space_id: str, uri: str) -> KGTypeDeleteResponse:
         """
         Delete a KGType by URI.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             uri: KGType URI to delete
             
         Returns:
@@ -348,13 +348,12 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, uri=uri)
+        validate_required_params(space_id=space_id, uri=uri)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             params = build_query_params(
                 space_id=space_id,
-                graph_id=graph_id,
                 uri=uri
             )
             
@@ -363,7 +362,7 @@ class KGTypesEndpoint(BaseEndpoint):
             # Extract deletion info from server response
             deleted = True
             deleted_count = 1
-            deleted_uris = [uri]
+            deleted_uris = [str(uri)]
             
             return build_success_response(
                 KGTypeDeleteResponse,
@@ -390,13 +389,12 @@ class KGTypesEndpoint(BaseEndpoint):
                 status_code=500
             )
     
-    async def delete_kgtypes_batch(self, space_id: str, graph_id: str, uri_list: str) -> KGTypeDeleteResponse:
+    async def delete_kgtypes_batch(self, space_id: str, uri_list: str) -> KGTypeDeleteResponse:
         """
         Delete multiple KGTypes by URI list.
         
         Args:
             space_id: Space identifier
-            graph_id: Graph identifier
             uri_list: Comma-separated list of KGType URIs
             
         Returns:
@@ -406,13 +404,12 @@ class KGTypesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
-        validate_required_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list)
+        validate_required_params(space_id=space_id, uri_list=uri_list)
         
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes"
             params = build_query_params(
                 space_id=space_id,
-                graph_id=graph_id,
                 uri_list=uri_list
             )
             
@@ -446,3 +443,249 @@ class KGTypesEndpoint(BaseEndpoint):
                 error_message=str(e),
                 status_code=500
             )
+
+    # ── Relationships ──────────────────────────────────────────────
+
+    async def get_type_relationships(self, space_id: str, type_uri: str) -> KGTypeRelationshipsResponse:
+        """
+        Get all type-level relationships for a given type URI.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Type URI to query relationships for
+
+        Returns:
+            KGTypeRelationshipsResponse with source_type, edges, connected_types
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/relationships"
+            params = build_query_params(space_id=space_id, id=type_uri)
+            response = await self._make_authenticated_request('GET', url, params=params)
+            data = response.json()
+            return build_success_response(
+                KGTypeRelationshipsResponse,
+                status_code=200,
+                message=data.get('message', 'OK'),
+                source_type=data.get('source_type', {}),
+                edges=data.get('edges', []),
+                connected_types=data.get('connected_types', []),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeRelationshipsResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error getting type relationships: {e}")
+            return build_error_response(KGTypeRelationshipsResponse, error_code=500, error_message=str(e), status_code=500)
+
+    async def create_type_relationship(self, space_id: str, type_uri: str, edge_type: str, target_uri: str) -> KGTypeRelationshipCreateResponse:
+        """
+        Create a type-level relationship edge.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Source type URI
+            edge_type: Edge vitaltype URI
+            target_uri: Destination type URI
+
+        Returns:
+            KGTypeRelationshipCreateResponse with edge_uri, edge_type, source_uri, destination_uri
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/relationships"
+            params = build_query_params(space_id=space_id, id=type_uri)
+            body = {"edge_type": edge_type, "target_uri": target_uri}
+            response = await self._make_authenticated_request('POST', url, params=params, json=body)
+            data = response.json()
+            return build_success_response(
+                KGTypeRelationshipCreateResponse,
+                status_code=200,
+                message=data.get('message', 'Created'),
+                edge_uri=data.get('edge_uri', ''),
+                edge_type=data.get('edge_type', ''),
+                source_uri=data.get('source_uri', ''),
+                destination_uri=data.get('destination_uri', ''),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeRelationshipCreateResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error creating type relationship: {e}")
+            return build_error_response(KGTypeRelationshipCreateResponse, error_code=500, error_message=str(e), status_code=500)
+
+    async def delete_type_relationship(self, space_id: str, type_uri: str, edge_uri: str) -> KGTypeRelationshipDeleteResponse:
+        """
+        Delete a type-level relationship edge.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Type URI the edge is associated with
+            edge_uri: Edge URI to delete
+
+        Returns:
+            KGTypeRelationshipDeleteResponse with deleted, edge_uri
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri, edge_uri=edge_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/relationships"
+            params = build_query_params(space_id=space_id, id=type_uri, edge_uri=edge_uri)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
+            data = response.json()
+            return build_success_response(
+                KGTypeRelationshipDeleteResponse,
+                status_code=200,
+                message=data.get('message', 'Deleted'),
+                deleted=data.get('deleted', True),
+                edge_uri=data.get('edge_uri', edge_uri),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeRelationshipDeleteResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error deleting type relationship: {e}")
+            return build_error_response(KGTypeRelationshipDeleteResponse, error_code=500, error_message=str(e), status_code=500)
+
+    # ── Documentation ──────────────────────────────────────────────
+
+    async def get_type_documentation(self, space_id: str, type_uri: str) -> KGTypeDocumentationResponse:
+        """
+        Get the documentation for a type.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Type URI
+
+        Returns:
+            KGTypeDocumentationResponse with content, document_uri, has_documentation
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/documentation"
+            params = build_query_params(space_id=space_id, id=type_uri)
+            response = await self._make_authenticated_request('GET', url, params=params)
+            data = response.json()
+            return build_success_response(
+                KGTypeDocumentationResponse,
+                status_code=200,
+                message=data.get('message', 'OK'),
+                type_uri=data.get('type_uri', type_uri),
+                content=data.get('content'),
+                document_uri=data.get('document_uri'),
+                has_documentation=data.get('has_documentation', False),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeDocumentationResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error getting type documentation: {e}")
+            return build_error_response(KGTypeDocumentationResponse, error_code=500, error_message=str(e), status_code=500)
+
+    async def update_type_documentation(self, space_id: str, type_uri: str, content: str) -> KGTypeDocumentationUpdateResponse:
+        """
+        Create or update documentation for a type.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Type URI
+            content: Markdown documentation content
+
+        Returns:
+            KGTypeDocumentationUpdateResponse with document_uri, created
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/documentation"
+            params = build_query_params(space_id=space_id, id=type_uri)
+            body = {"content": content}
+            response = await self._make_authenticated_request('PUT', url, params=params, json=body)
+            data = response.json()
+            return build_success_response(
+                KGTypeDocumentationUpdateResponse,
+                status_code=200,
+                message=data.get('message', 'Updated'),
+                type_uri=data.get('type_uri', type_uri),
+                document_uri=data.get('document_uri', ''),
+                created=data.get('created', False),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeDocumentationUpdateResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error updating type documentation: {e}")
+            return build_error_response(KGTypeDocumentationUpdateResponse, error_code=500, error_message=str(e), status_code=500)
+
+    async def delete_type_documentation(self, space_id: str, type_uri: str) -> KGTypeDocumentationDeleteResponse:
+        """
+        Delete the documentation for a type.
+
+        Args:
+            space_id: Space identifier
+            type_uri: Type URI
+
+        Returns:
+            KGTypeDocumentationDeleteResponse with deleted
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, id=type_uri)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/documentation"
+            params = build_query_params(space_id=space_id, id=type_uri)
+            response = await self._make_authenticated_request('DELETE', url, params=params)
+            data = response.json()
+            return build_success_response(
+                KGTypeDocumentationDeleteResponse,
+                status_code=200,
+                message=data.get('message', 'Deleted'),
+                type_uri=data.get('type_uri', type_uri),
+                deleted=data.get('deleted', False),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeDocumentationDeleteResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error deleting type documentation: {e}")
+            return build_error_response(KGTypeDocumentationDeleteResponse, error_code=500, error_message=str(e), status_code=500)
+
+    # ── Search ─────────────────────────────────────────────────────
+
+    async def search_types(self, space_id: str, query: str, type: Optional[str] = None, search_mode: Optional[str] = None) -> KGTypeSearchResponse:
+        """
+        Search KG types by keyword or vector similarity.
+
+        Args:
+            space_id: Space identifier
+            query: Search query string
+            type: Optional type filter (e.g. 'frame', 'entity', or full URI)
+            search_mode: 'keyword' (default) or 'vector'
+
+        Returns:
+            KGTypeSearchResponse with types, count, search_mode, query
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, q=query)
+
+        try:
+            url = f"{self._get_server_url()}/api/graphs/kgtypes/search"
+            params = build_query_params(space_id=space_id, q=query, type=type, search_mode=search_mode)
+            response = await self._make_authenticated_request('GET', url, params=params)
+            data = response.json()
+            return build_success_response(
+                KGTypeSearchResponse,
+                status_code=200,
+                message=data.get('message', 'OK'),
+                types=data.get('types', []),
+                count=data.get('count', 0),
+                search_mode=data.get('search_mode', 'keyword'),
+                query=data.get('query', query),
+            )
+        except VitalGraphClientError as e:
+            return build_error_response(KGTypeSearchResponse, error_code=e.status_code or 500, error_message=str(e), status_code=e.status_code or 500)
+        except Exception as e:
+            logger.error(f"Error searching types: {e}")
+            return build_error_response(KGTypeSearchResponse, error_code=500, error_message=str(e), status_code=500)

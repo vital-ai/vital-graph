@@ -1,8 +1,8 @@
 """
-Auto-sync hooks for vector and geo data.
+Auto-sync hooks for vector, geo, fuzzy, and FTS data.
 
 Provides fire-and-forget post-CRUD sync that re-vectorizes and/or
-re-populates geo data for changed subjects.  The caller is not blocked;
+re-populates geo and fuzzy data for changed subjects.  The caller is not blocked;
 sync runs as a background asyncio task.
 
 Usage from an endpoint::
@@ -105,7 +105,7 @@ async def _sync_geo_for_subjects(
     if not geo_config.enabled or not geo_config.auto_sync:
         return
 
-    # Path 1: Direct lat/lon predicate geo (existing logic)
+    # Path 1: Datatype-driven geo (detects geo-typed literals on subject)
     for subj_uuid in subject_uuids:
         try:
             if operation == "delete":
@@ -130,6 +130,85 @@ async def _sync_geo_for_subjects(
         logger.warning("auto_sync geo_slot %s failed: %s", space_id, e)
 
 
+async def _sync_fuzzy_for_subjects(
+    conn,
+    space_id: str,
+    subject_uuids: List[uuid.UUID],
+    context_uuid: uuid.UUID,
+    operation: str,
+) -> None:
+    """Re-index or delete fuzzy bands for a list of subject UUIDs."""
+    from vitalgraph.vectorization.fuzzy_populator import (
+        update_subject_fuzzy,
+        remove_subject_fuzzy,
+    )
+
+    # Quick check: does this space have any fuzzy mappings?
+    try:
+        count = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {space_id}_fuzzy_mapping WHERE enabled = TRUE"
+        )
+    except Exception:
+        # Table may not exist
+        return
+
+    if not count:
+        return
+
+    for subj_uuid in subject_uuids:
+        try:
+            if operation == "delete":
+                await remove_subject_fuzzy(conn, space_id, subj_uuid)
+            else:
+                await update_subject_fuzzy(conn, space_id, subj_uuid, context_uuid)
+        except Exception as e:
+            logger.warning(
+                "auto_sync fuzzy %s/%s failed: %s",
+                space_id, subj_uuid, e,
+            )
+
+
+async def _sync_fts_for_subjects(
+    conn,
+    space_id: str,
+    subject_uuids: List[uuid.UUID],
+    context_uuid: uuid.UUID,
+    operation: str,
+) -> None:
+    """Re-index or delete FTS data for a list of subject UUIDs."""
+    from vitalgraph.vectorization.fts_populator import (
+        update_subject_fts,
+        delete_subject_fts,
+    )
+
+    # Quick check: does this space have any FTS indexes?
+    try:
+        rows = await conn.fetch(
+            f"SELECT index_name FROM {space_id}_fts_index"
+        )
+    except Exception:
+        # Table may not exist
+        return
+
+    if not rows:
+        return
+
+    index_names = [r["index_name"] for r in rows]
+
+    for subj_uuid in subject_uuids:
+        for idx_name in index_names:
+            try:
+                if operation == "delete":
+                    await delete_subject_fts(conn, space_id, idx_name, subj_uuid, context_uuid)
+                else:
+                    await update_subject_fts(conn, space_id, idx_name, subj_uuid, context_uuid)
+            except Exception as e:
+                logger.warning(
+                    "auto_sync fts %s/%s/%s failed: %s",
+                    space_id, idx_name, subj_uuid, e,
+                )
+
+
 async def _run_sync(
     db_impl,
     space_id: str,
@@ -137,7 +216,7 @@ async def _run_sync(
     graph_uri: str,
     operation: str,
 ) -> None:
-    """Core sync coroutine: acquire connection and sync both vector + geo."""
+    """Core sync coroutine: acquire connection and sync vector + geo + fuzzy."""
     if not subject_uris:
         return
 
@@ -157,6 +236,14 @@ async def _run_sync(
             )
             # Geo sync
             await _sync_geo_for_subjects(
+                conn, space_id, subject_uuids, context_uuid, operation,
+            )
+            # Fuzzy sync
+            await _sync_fuzzy_for_subjects(
+                conn, space_id, subject_uuids, context_uuid, operation,
+            )
+            # FTS sync
+            await _sync_fts_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
             )
     except Exception as e:

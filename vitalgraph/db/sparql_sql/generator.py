@@ -47,6 +47,9 @@ class GenerateResult:
     # The orchestrator must vectorize each request's search_text and replace
     # the placeholder token in the SQL with the actual embedding.
     vector_requests: List[Any] = field(default_factory=list)
+    # FuzzyRequests that need MinHash LSH + RapidFuzz resolution before execution.
+    # Non-empty when the query uses vg:fuzzyMatch with a text argument.
+    fuzzy_requests: List[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -432,8 +435,9 @@ async def generate_sql(
         from .vg_optimize import vg_optimize
         plan = vg_optimize(plan)
 
-        # Stage 2e: Pre-load vector index metadata (for mixed-model auto-detect)
+        # Stage 2e: Pre-load vector + FTS index metadata
         vector_index_meta: Dict[str, Dict[str, Any]] = {}
+        fts_index_meta: Dict[str, Dict[str, Any]] = {}
         if conn is not None:
             try:
                 vi_table = f"{space_id}_vector_index"
@@ -449,6 +453,37 @@ async def generate_sql(
                 }
             except Exception:
                 pass  # table may not exist for non-vector spaces
+            try:
+                fi_table = f"{space_id}_fts_index"
+                rows = await conn.fetch(
+                    f"SELECT index_name, languages FROM {fi_table}")
+                fts_index_meta = {
+                    r['index_name']: {
+                        'languages': list(r['languages']),
+                    }
+                    for r in rows
+                }
+            except Exception:
+                pass  # table may not exist for non-FTS spaces
+
+        # Pre-load search mapping → index resolution
+        search_mapping_meta: Dict[str, Dict[str, str]] = {}
+        if conn is not None:
+            try:
+                sm_table = f"{space_id}_search_mapping"
+                smi_table = f"{space_id}_search_mapping_index"
+                rows = await conn.fetch(
+                    f"SELECT sm.index_name AS mapping_name, smi.index_type, smi.index_name "
+                    f"FROM {sm_table} sm "
+                    f"JOIN {smi_table} smi ON sm.mapping_id = smi.mapping_id"
+                )
+                for r in rows:
+                    mapping_name = r['mapping_name']
+                    if mapping_name not in search_mapping_meta:
+                        search_mapping_meta[mapping_name] = {}
+                    search_mapping_meta[mapping_name][r['index_type']] = r['index_name']
+            except Exception:
+                pass  # tables may not exist
 
         # Stage 3: Emit → SQL (pure, no I/O)
         from .emit_context import ProcessingTrace
@@ -462,6 +497,8 @@ async def generate_sql(
         if multi_vector_config:
             ctx.multi_vector_config = multi_vector_config
         ctx.vector_index_meta = vector_index_meta
+        ctx.fts_index_meta = fts_index_meta
+        ctx.search_mapping_meta = search_mapping_meta
         sql_str = emit(plan, ctx)
 
         # Stage 4: Substitute constants
@@ -499,6 +536,7 @@ async def generate_sql(
             sparql_vars=sparql_vars,
             trace_json=ctx.trace.to_json(),
             vector_requests=ctx.vector_requests,
+            fuzzy_requests=ctx.fuzzy_requests,
         )
 
     except Exception as e:

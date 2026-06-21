@@ -13,7 +13,7 @@ Usage::
 
     storage_config = {
         'type': 'redis_cluster',
-        'basename': b'{prod_dedup}',
+        'basename': b'{prod_fuzzy}',
         'redis': {'host': '...', 'port': 6379, 'ssl': True, ...},
     }
     lsh = MinHashLSH(threshold=0.3, num_perm=128, storage_config=storage_config)

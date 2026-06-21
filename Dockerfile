@@ -1,8 +1,10 @@
 # ---- Stage 1: Build frontend ----
 FROM node:20-slim AS frontend-build
 WORKDIR /frontend
+COPY vitalgraph-client-ts/ /vitalgraph-client-ts/
+RUN cd /vitalgraph-client-ts && npm ci && npm run build
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci && npm install --no-save /vitalgraph-client-ts
 COPY frontend/ ./
 RUN npm run build:only
 

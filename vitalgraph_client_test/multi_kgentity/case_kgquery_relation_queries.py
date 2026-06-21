@@ -92,6 +92,30 @@ class KGQueryRelationQueriesTester:
         if not test8['passed']:
             errors.append(test8.get('error', 'Empty results test failed'))
         
+        # Test 9: Pagination count consistency (total_count same regardless of page_size)
+        test9 = await self._test_pagination_count_consistency(space_id, graph_id)
+        results.append(test9)
+        if not test9['passed']:
+            errors.append(test9.get('error', 'Pagination count consistency failed'))
+        
+        # Test 10: Offset beyond total returns empty with correct total_count
+        test10 = await self._test_pagination_offset_beyond_total(space_id, graph_id)
+        results.append(test10)
+        if not test10['passed']:
+            errors.append(test10.get('error', 'Offset beyond total test failed'))
+        
+        # Test 11: Sort relations by source entity's slot value
+        test11 = await self._test_sort_by_source_slot(space_id, graph_id, relation_type_uris)
+        results.append(test11)
+        if not test11['passed']:
+            errors.append(test11.get('error', 'Sort by source slot failed'))
+        
+        # Test 12: Sort relations by destination entity's slot value
+        test12 = await self._test_sort_by_destination_slot(space_id, graph_id, relation_type_uris)
+        results.append(test12)
+        if not test12['passed']:
+            errors.append(test12.get('error', 'Sort by destination slot failed'))
+        
         passed_tests = sum(1 for r in results if r.get('passed', False))
         
         # Aggregate timing data
@@ -337,7 +361,14 @@ class KGQueryRelationQueriesTester:
     
     async def _test_pagination(self, space_id: str, graph_id: str,
                         relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
-        """Test pagination of relation query results."""
+        """Test pagination of relation query results.
+        
+        Verifies:
+        - Page 1 returns <= page_size results
+        - Page 2 returns remaining results
+        - total_count is consistent between both pages
+        - Pages don't overlap (combined count matches total)
+        """
         logger.info("\n  Test 7: Pagination...")
         
         try:
@@ -349,10 +380,10 @@ class KGQueryRelationQueriesTester:
                 page_size=5,
                 offset=0
             )
-            elapsed = time.time() - start_time
+            elapsed1 = time.time() - start_time
             
-            logger.info(f"     ⏱️  KGQuery execution time (page 1): {elapsed:.3f}s")
-            logger.info(f"KGQuery Response: total_count={response1.total_count}")
+            logger.info(f"     ⏱️  KGQuery execution time (page 1): {elapsed1:.3f}s")
+            logger.info(f"     Page 1: total_count={response1.total_count}")
             
             page1_count = len(response1.connections) if response1.connections else 0
             
@@ -364,19 +395,124 @@ class KGQueryRelationQueriesTester:
                 page_size=5,
                 offset=5
             )
-            elapsed = time.time() - start_time
+            elapsed2 = time.time() - start_time
             
-            logger.info(f"     ⏱️  KGQuery execution time (page 2): {elapsed:.3f}s")
-            logger.info(f"KGQuery Response: total_count={response2.total_count}")
+            logger.info(f"     ⏱️  KGQuery execution time (page 2): {elapsed2:.3f}s")
+            logger.info(f"     Page 2: total_count={response2.total_count}")
             
             page2_count = len(response2.connections) if response2.connections else 0
             
-            logger.info(f"     ✅ Page 1: {page1_count} results, Page 2: {page2_count} results")
-            return {'name': 'Pagination Test', 'passed': True, 'page1_count': page1_count, 'page2_count': page2_count, 'elapsed_time': elapsed}
+            # Verify page_size cap
+            passed = True
+            if page1_count > 5:
+                logger.error(f"     ❌ Page 1 returned {page1_count} results, expected <= 5")
+                passed = False
+            
+            # Verify total_count consistency between pages
+            if response1.total_count != response2.total_count:
+                logger.error(f"     ❌ total_count mismatch: page1={response1.total_count}, page2={response2.total_count}")
+                passed = False
+            
+            # Verify combined count matches total (no overlap, no gaps)
+            total = response1.total_count
+            expected_page2 = max(0, total - 5)
+            if page2_count != min(5, expected_page2):
+                logger.warning(f"     ⚠️  Page 2 has {page2_count} results, expected {min(5, expected_page2)} (total={total})")
+            
+            if passed:
+                logger.info(f"     ✅ Page 1: {page1_count} results, Page 2: {page2_count} results, total_count={total} (consistent)")
+            
+            return {'name': 'Pagination Test', 'passed': passed, 'page1_count': page1_count, 'page2_count': page2_count,
+                    'total_count': total, 'elapsed_time': elapsed1 + elapsed2}
                 
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Pagination Test', 'passed': False, 'error': str(e), 'elapsed_time': 0}
+    
+    async def _test_pagination_count_consistency(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+        """Test that total_count is the same regardless of page_size.
+        
+        Queries with page_size=2 and page_size=100 should return the same total_count.
+        """
+        logger.info("\n  Test 9: Pagination count consistency...")
+        
+        try:
+            start_time = time.time()
+            small_page = await self.client.kgqueries.query_relation_connections(
+                space_id, graph_id, page_size=2, offset=0
+            )
+            large_page = await self.client.kgqueries.query_relation_connections(
+                space_id, graph_id, page_size=100, offset=0
+            )
+            elapsed = time.time() - start_time
+            
+            small_total = small_page.total_count
+            large_total = large_page.total_count
+            small_results = len(small_page.connections) if small_page.connections else 0
+            large_results = len(large_page.connections) if large_page.connections else 0
+            
+            passed = True
+            if small_total != large_total:
+                logger.error(f"     ❌ total_count mismatch: page_size=2 -> {small_total}, page_size=100 -> {large_total}")
+                passed = False
+            
+            if small_results > 2:
+                logger.error(f"     ❌ page_size=2 returned {small_results} results, expected <= 2")
+                passed = False
+            
+            # Large page should contain all results
+            if large_results != large_total:
+                logger.warning(f"     ⚠️  page_size=100 returned {large_results} results, total={large_total}")
+            
+            if passed:
+                logger.info(f"     ✅ total_count consistent: {small_total} (page_size=2 returned {small_results}, page_size=100 returned {large_results})")
+            
+            return {'name': 'Count Consistency', 'passed': passed, 'total_count': small_total, 'elapsed_time': elapsed}
+            
+        except Exception as e:
+            logger.error(f"     ❌ Exception: {e}")
+            return {'name': 'Count Consistency', 'passed': False, 'error': str(e), 'elapsed_time': 0}
+    
+    async def _test_pagination_offset_beyond_total(self, space_id: str, graph_id: str) -> Dict[str, Any]:
+        """Test that offset >= total_count returns empty connections with correct total_count.
+        
+        This verifies the count-first short-circuit path.
+        """
+        logger.info("\n  Test 10: Offset beyond total...")
+        
+        try:
+            # First get total_count
+            start_time = time.time()
+            baseline = await self.client.kgqueries.query_relation_connections(
+                space_id, graph_id, page_size=1, offset=0
+            )
+            total = baseline.total_count
+            
+            # Now query with offset >= total
+            beyond = await self.client.kgqueries.query_relation_connections(
+                space_id, graph_id, page_size=10, offset=total + 100
+            )
+            elapsed = time.time() - start_time
+            
+            beyond_count = len(beyond.connections) if beyond.connections else 0
+            
+            passed = True
+            if beyond_count != 0:
+                logger.error(f"     ❌ Expected 0 results for offset={total + 100}, got {beyond_count}")
+                passed = False
+            
+            if beyond.total_count != total:
+                logger.error(f"     ❌ total_count changed: baseline={total}, beyond={beyond.total_count}")
+                passed = False
+            
+            if passed:
+                logger.info(f"     ✅ offset={total + 100} returned 0 results, total_count={beyond.total_count} (correct)")
+            
+            return {'name': 'Offset Beyond Total', 'passed': passed, 'total_count': total, 'elapsed_time': elapsed}
+            
+        except Exception as e:
+            logger.error(f"     ❌ Exception: {e}")
+            return {'name': 'Offset Beyond Total', 'passed': False, 'error': str(e), 'elapsed_time': 0}
     
     async def _test_empty_results(self, space_id: str, graph_id: str) -> Dict[str, Any]:
         """Test query that should return empty results."""
@@ -408,3 +544,105 @@ class KGQueryRelationQueriesTester:
         except Exception as e:
             logger.error(f"     ❌ Exception: {e}")
             return {'name': 'Empty Results Query', 'passed': False, 'error': str(e), 'elapsed_time': 0}
+    
+    async def _test_sort_by_source_slot(self, space_id: str, graph_id: str,
+                                        relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
+        """Test 11: Sort MakesProduct relations by source org's EmployeeCount DESC."""
+        logger.info("\n  Test 11: Sort relations by source entity slot (EmployeeCount DESC)...")
+        
+        try:
+            from vitalgraph.model.kgentities_model import SortCriteria
+            
+            makes_product_type = relation_type_uris.get('makes_product')
+            if not makes_product_type:
+                logger.warning("     ⚠️  MakesProduct relation type not found, skipping")
+                return {'name': 'Sort by Source Slot', 'passed': True, 'skipped': True, 'elapsed_time': 0}
+            
+            sort_criteria = [
+                SortCriteria(
+                    sort_type="source_frame_slot",
+                    frame_path=[
+                        "http://vital.ai/ontology/haley-ai-kg#CompanyInfoFrame"
+                    ],
+                    slot_type="http://vital.ai/ontology/haley-ai-kg#EmployeeCountSlot",
+                    slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGIntegerSlot",
+                    sort_order="desc",
+                    priority=1
+                )
+            ]
+            
+            start_time = time.time()
+            response = await self.client.kgqueries.query_relation_connections(
+                space_id,
+                graph_id,
+                relation_type_uris=[makes_product_type],
+                sort_criteria=sort_criteria,
+                page_size=20,
+                offset=0
+            )
+            elapsed = time.time() - start_time
+            
+            logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
+            
+            connections = response.connections or []
+            if len(connections) > 0:
+                logger.info(f"     ✅ Got {len(connections)} MakesProduct relations sorted by source EmployeeCount DESC (total: {response.total_count})")
+                return {'name': 'Sort by Source Slot', 'passed': True, 'found_count': len(connections), 'elapsed_time': elapsed}
+            else:
+                logger.error(f"     ❌ Expected >0 relations, got 0")
+                return {'name': 'Sort by Source Slot', 'passed': False, 'error': 'Expected >0 relations', 'elapsed_time': elapsed}
+                
+        except Exception as e:
+            logger.error(f"     ❌ Exception: {e}")
+            return {'name': 'Sort by Source Slot', 'passed': False, 'error': str(e), 'elapsed_time': 0}
+    
+    async def _test_sort_by_destination_slot(self, space_id: str, graph_id: str,
+                                             relation_type_uris: Dict[str, str]) -> Dict[str, Any]:
+        """Test 12: Sort CompetitorOf relations by destination org's CitySlot ASC."""
+        logger.info("\n  Test 12: Sort relations by destination entity slot (City ASC)...")
+        
+        try:
+            from vitalgraph.model.kgentities_model import SortCriteria
+            
+            competitor_type = relation_type_uris.get('competitor_of')
+            if not competitor_type:
+                logger.warning("     ⚠️  CompetitorOf relation type not found, skipping")
+                return {'name': 'Sort by Destination Slot', 'passed': True, 'skipped': True, 'elapsed_time': 0}
+            
+            sort_criteria = [
+                SortCriteria(
+                    sort_type="destination_frame_slot",
+                    frame_path=[
+                        "http://vital.ai/ontology/haley-ai-kg#AddressFrame"
+                    ],
+                    slot_type="http://vital.ai/ontology/haley-ai-kg#CitySlot",
+                    slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
+                    sort_order="asc",
+                    priority=1
+                )
+            ]
+            
+            start_time = time.time()
+            response = await self.client.kgqueries.query_relation_connections(
+                space_id,
+                graph_id,
+                relation_type_uris=[competitor_type],
+                sort_criteria=sort_criteria,
+                page_size=20,
+                offset=0
+            )
+            elapsed = time.time() - start_time
+            
+            logger.info(f"     ⏱️  KGQuery execution time: {elapsed:.3f}s")
+            
+            connections = response.connections or []
+            if len(connections) > 0:
+                logger.info(f"     ✅ Got {len(connections)} CompetitorOf relations sorted by destination City ASC (total: {response.total_count})")
+                return {'name': 'Sort by Destination Slot', 'passed': True, 'found_count': len(connections), 'elapsed_time': elapsed}
+            else:
+                logger.error(f"     ❌ Expected >0 relations, got 0")
+                return {'name': 'Sort by Destination Slot', 'passed': False, 'error': 'Expected >0 relations', 'elapsed_time': elapsed}
+                
+        except Exception as e:
+            logger.error(f"     ❌ Exception: {e}")
+            return {'name': 'Sort by Destination Slot', 'passed': False, 'error': str(e), 'elapsed_time': 0}

@@ -223,7 +223,7 @@ const Layout: React.FC = () => {
                 </SidebarItem>
               </Link>
               <Link to="/kg-types" style={{display: 'block'}}>
-                <SidebarItem icon={KGTypesIcon} active={location.pathname === '/kg-types'} as="div">
+                <SidebarItem icon={KGTypesIcon} active={location.pathname.includes('/kg-types')} as="div">
                   KG Types
                 </SidebarItem>
               </Link>
@@ -284,25 +284,25 @@ const Layout: React.FC = () => {
 
             {/* Vector & Geo */}
             <SidebarItemGroup>
-              <SidebarCollapse icon={HiCube} label="Vector & Geo" open={location.pathname.includes('/vector') || location.pathname.includes('/geo')}>
-                <Link to="/vector-indexes" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/vector-indexes'} as="div">
+              <SidebarCollapse icon={HiCube} label="Semantic Indexes" open={location.pathname.includes('/semantic-search') || location.pathname.includes('/vector') || location.pathname.includes('/geo') || location.pathname.includes('/fuzzy') || location.pathname.includes('/search-mappings') || location.pathname.includes('/fts-indexes') || location.pathname.includes('/indexes')}>
+                <Link to="/semantic-search" style={{display: 'block'}}>
+                  <SidebarItem active={location.pathname === '/semantic-search'} as="div">
+                    Semantic Search
+                  </SidebarItem>
+                </Link>
+                <Link to="/index-mappings" style={{display: 'block'}}>
+                  <SidebarItem active={location.pathname === '/index-mappings' || location.pathname.includes('/index-mappings/')} as="div">
+                    Index Mappings
+                  </SidebarItem>
+                </Link>
+                <Link to="/indexes" style={{display: 'block'}}>
+                  <SidebarItem active={location.pathname === '/indexes' || location.pathname.includes('/indexes/')} as="div">
                     Indexes
                   </SidebarItem>
                 </Link>
-                <Link to="/vector-mappings" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/vector-mappings'} as="div">
-                    Mappings
-                  </SidebarItem>
-                </Link>
-                <Link to="/vector-search" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/vector-search'} as="div">
-                    Search
-                  </SidebarItem>
-                </Link>
-                <Link to="/geo-points" style={{display: 'block'}}>
-                  <SidebarItem active={location.pathname === '/geo-points'} as="div">
-                    Geo Points
+                <Link to="/geo-shapes" style={{display: 'block'}}>
+                  <SidebarItem active={location.pathname === '/geo-shapes'} as="div">
+                    Geo Shapes
                   </SidebarItem>
                 </Link>
               </SidebarCollapse>

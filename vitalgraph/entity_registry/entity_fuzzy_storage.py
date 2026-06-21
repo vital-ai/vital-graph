@@ -1,9 +1,9 @@
 """
-PostgreSQL storage backend for the Entity Dedup MinHash LSH index.
+PostgreSQL storage backend for the Entity Fuzzy MinHash LSH index.
 
 Replaces datasketch's Redis/MemoryDB storage with direct asyncpg SQL,
 eliminating the Redis dependency entirely. Band hashes are stored in
-PostgreSQL tables (entity_dedup_band, entity_dedup_phonetic_band) with
+PostgreSQL tables (entity_fuzzy_band, entity_fuzzy_phonetic_band) with
 B-tree indexes for fast band lookups.
 
 All operations are natively async — no thread offloading needed.
@@ -18,9 +18,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Table names
-TABLE_PRIMARY = 'entity_dedup_band'
-TABLE_PHONETIC = 'entity_dedup_phonetic_band'
-TABLE_HASH = 'entity_dedup_hash'
+TABLE_PRIMARY = 'entity_fuzzy_band'
+TABLE_PHONETIC = 'entity_fuzzy_phonetic_band'
+TABLE_HASH = 'entity_fuzzy_hash'
 
 
 def compute_band_ranges(num_perm: int, threshold: float) -> List[Tuple[int, int]]:
@@ -56,7 +56,7 @@ def compute_band_hash(hashvalues: np.ndarray, start: int, end: int) -> bytes:
     return hashlib.sha1(hashvalues[start:end].tobytes()).digest()
 
 
-class PostgreSQLDedupStorage:
+class PostgreSQLFuzzyStorage:
     """PostgreSQL-backed storage for MinHash LSH band data.
 
     Replaces datasketch's Redis/MemoryDB storage with direct SQL,
@@ -276,11 +276,11 @@ class PostgreSQLDedupStorage:
             await conn.execute(f"TRUNCATE {table}")
 
     # ------------------------------------------------------------------
-    # Dedup hash operations
+    # Fuzzy hash operations
     # ------------------------------------------------------------------
 
-    async def get_dedup_hash(self, entity_id: str) -> Optional[str]:
-        """Get the stored dedup hash for an entity.
+    async def get_fuzzy_hash(self, entity_id: str) -> Optional[str]:
+        """Get the stored fuzzy hash for an entity.
 
         Args:
             entity_id: The entity ID.
@@ -290,12 +290,12 @@ class PostgreSQLDedupStorage:
         """
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                f"SELECT dedup_hash FROM {TABLE_HASH} WHERE entity_id = $1",
+                f"SELECT fuzzy_hash FROM {TABLE_HASH} WHERE entity_id = $1",
                 entity_id,
             )
 
-    async def set_dedup_hash(self, entity_id: str, hash_val: str):
-        """Set the dedup hash for an entity (upsert).
+    async def set_fuzzy_hash(self, entity_id: str, hash_val: str):
+        """Set the fuzzy hash for an entity (upsert).
 
         Args:
             entity_id: The entity ID.
@@ -303,14 +303,14 @@ class PostgreSQLDedupStorage:
         """
         async with self.pool.acquire() as conn:
             await conn.execute(
-                f"INSERT INTO {TABLE_HASH} (entity_id, dedup_hash) "
+                f"INSERT INTO {TABLE_HASH} (entity_id, fuzzy_hash) "
                 f"VALUES ($1, $2) "
-                f"ON CONFLICT (entity_id) DO UPDATE SET dedup_hash = EXCLUDED.dedup_hash",
+                f"ON CONFLICT (entity_id) DO UPDATE SET fuzzy_hash = EXCLUDED.fuzzy_hash",
                 entity_id, hash_val,
             )
 
-    async def set_dedup_hashes_batch(self, hashes: Dict[str, str]):
-        """Batch upsert dedup hashes.
+    async def set_fuzzy_hashes_batch(self, hashes: Dict[str, str]):
+        """Batch upsert fuzzy hashes.
 
         Args:
             hashes: Mapping of entity_id → hash_val.
@@ -320,14 +320,14 @@ class PostgreSQLDedupStorage:
         records = [(eid, h) for eid, h in hashes.items()]
         async with self.pool.acquire() as conn:
             await conn.executemany(
-                f"INSERT INTO {TABLE_HASH} (entity_id, dedup_hash) "
+                f"INSERT INTO {TABLE_HASH} (entity_id, fuzzy_hash) "
                 f"VALUES ($1, $2) "
-                f"ON CONFLICT (entity_id) DO UPDATE SET dedup_hash = EXCLUDED.dedup_hash",
+                f"ON CONFLICT (entity_id) DO UPDATE SET fuzzy_hash = EXCLUDED.fuzzy_hash",
                 records,
             )
 
-    async def delete_dedup_hash(self, entity_id: str):
-        """Delete the dedup hash for an entity.
+    async def delete_fuzzy_hash(self, entity_id: str):
+        """Delete the fuzzy hash for an entity.
 
         Args:
             entity_id: The entity ID.
@@ -338,8 +338,8 @@ class PostgreSQLDedupStorage:
                 entity_id,
             )
 
-    async def delete_dedup_hashes_batch(self, entity_ids: List[str]):
-        """Batch delete dedup hashes.
+    async def delete_fuzzy_hashes_batch(self, entity_ids: List[str]):
+        """Batch delete fuzzy hashes.
 
         Args:
             entity_ids: List of entity IDs to delete.
@@ -357,7 +357,7 @@ class PostgreSQLDedupStorage:
     # ------------------------------------------------------------------
 
     async def truncate_all(self):
-        """Truncate all dedup tables (for full rebuild)."""
+        """Truncate all fuzzy tables (for full rebuild)."""
         async with self.pool.acquire() as conn:
             await conn.execute(f"TRUNCATE {TABLE_PRIMARY}")
             await conn.execute(f"TRUNCATE {TABLE_PHONETIC}")
@@ -376,10 +376,10 @@ class PostgreSQLDedupStorage:
             return await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
 
     async def get_entity_count(self) -> int:
-        """Get number of distinct entities in the dedup hash table.
+        """Get number of distinct entities in the fuzzy hash table.
 
         Returns:
-            Number of entities with stored dedup hashes.
+            Number of entities with stored fuzzy hashes.
         """
         async with self.pool.acquire() as conn:
             return await conn.fetchval(f"SELECT COUNT(*) FROM {TABLE_HASH}")
@@ -389,22 +389,22 @@ class PostgreSQLDedupStorage:
     # ------------------------------------------------------------------
 
     async def try_advisory_lock(self) -> bool:
-        """Try to acquire a PostgreSQL advisory lock for dedup operations.
+        """Try to acquire a PostgreSQL advisory lock for fuzzy operations.
 
         Uses pg_try_advisory_lock with a fixed lock ID derived from
-        'entity_dedup_init'. Returns immediately (non-blocking).
+        'entity_fuzzy_init'. Returns immediately (non-blocking).
 
         Returns:
             True if lock acquired, False if held by another session.
         """
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                "SELECT pg_try_advisory_lock(hashtext('entity_dedup_init'))"
+                "SELECT pg_try_advisory_lock(hashtext('entity_fuzzy_init'))"
             )
 
     async def release_advisory_lock(self):
-        """Release the PostgreSQL advisory lock for dedup operations."""
+        """Release the PostgreSQL advisory lock for fuzzy operations."""
         async with self.pool.acquire() as conn:
             await conn.execute(
-                "SELECT pg_advisory_unlock(hashtext('entity_dedup_init'))"
+                "SELECT pg_advisory_unlock(hashtext('entity_fuzzy_init'))"
             )

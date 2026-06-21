@@ -86,9 +86,19 @@ class KGFramesEndpoint(BaseEndpoint):
         except httpx.HTTPError as e:
             raise VitalGraphClientError(f"Request failed: {str(e)}")
     
-    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, parent_uri: Optional[str] = None, search: Optional[str] = None) -> PaginatedGraphObjectResponse:
+    async def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                            parent_uri: Optional[str] = None, search: Optional[str] = None,
+                            sort_by: Optional[str] = None, sort_order: str = "asc",
+                            form_type: Optional[str] = None,
+                            frame_type_uri: Optional[str] = None,
+                            status: Optional[str] = None,
+                            exclude_status: Optional[str] = None,
+                            created_after: Optional[str] = None,
+                            created_before: Optional[str] = None,
+                            modified_after: Optional[str] = None,
+                            modified_before: Optional[str] = None) -> PaginatedGraphObjectResponse:
         """
-        List KGFrames with pagination and optional search.
+        List KGFrames with pagination, filtering, and sorting.
         
         Args:
             space_id: Space identifier
@@ -97,6 +107,16 @@ class KGFramesEndpoint(BaseEndpoint):
             offset: Offset for pagination
             parent_uri: Optional parent URI for filtering frames
             search: Optional search term
+            sort_by: Property URI to sort by
+            sort_order: 'asc' or 'desc'
+            form_type: Filter by form type ('Assertion', 'Aspect', or full URI)
+            frame_type_uri: Filter by frame type URI
+            status: Filter by status URI
+            exclude_status: Exclude by status URI
+            created_after: ISO 8601 lower bound for creation time
+            created_before: ISO 8601 upper bound for creation time
+            modified_after: ISO 8601 lower bound for modification time
+            modified_before: ISO 8601 upper bound for modification time
             
         Returns:
             PaginatedGraphObjectResponse containing KGFrame GraphObjects
@@ -115,7 +135,17 @@ class KGFramesEndpoint(BaseEndpoint):
                 page_size=page_size,
                 offset=offset,
                 parent_uri=parent_uri,
-                search=search
+                search=search,
+                sort_by=sort_by,
+                sort_order=sort_order if sort_by else None,
+                form_type=form_type,
+                frame_type_uri=frame_type_uri,
+                status=status,
+                exclude_status=exclude_status,
+                created_after=created_after,
+                created_before=created_before,
+                modified_after=modified_after,
+                modified_before=modified_before,
             )
             
             response = await self._make_request('GET', url, params=params)

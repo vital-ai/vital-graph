@@ -22,27 +22,27 @@ import {
   TextInput,
   ToggleSwitch,
 } from 'flowbite-react';
-import { HiPlus, HiTrash, HiEye, HiExclamation, HiHome } from 'react-icons/hi';
-import { vectorGeoService } from '../services/VectorGeoService';
+import { HiPlus, HiTrash, HiExclamation, HiHome, HiEye } from 'react-icons/hi';
+import { searchFtsService } from '../services/SearchFtsService';
 import { apiService } from '../services/ApiService';
-import type { VectorMapping, VectorIndex, MappingType, SourceType } from '../types/vectorGeo';
+import type { SearchMapping, SearchMappingType, SearchSourceType, FtsIndex } from '../types/searchFts';
 import { type SpaceInfo } from '../types/api';
 
-const MAPPING_TYPE_COLORS: Record<MappingType, string> = {
+const MAPPING_TYPE_COLORS: Record<SearchMappingType, string> = {
   kgentity: 'info',
   kgdocument: 'purple',
   kgframe: 'success',
   kgslot: 'warning',
 };
 
-const VectorMappings: React.FC = () => {
+const SearchMappings: React.FC = () => {
   const { spaceId } = useParams<{ spaceId?: string }>();
   const navigate = useNavigate();
 
   const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
-  const [mappings, setMappings] = useState<VectorMapping[]>([]);
-  const [indexes, setIndexes] = useState<VectorIndex[]>([]);
+  const [mappings, setMappings] = useState<SearchMapping[]>([]);
+  const [ftsIndexes, setFtsIndexes] = useState<FtsIndex[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [spacesLoading, setSpacesLoading] = useState(true);
@@ -54,19 +54,18 @@ const VectorMappings: React.FC = () => {
   // Create modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState({
-    mapping_type: 'kgentity' as MappingType,
+    mapping_type: 'kgentity' as SearchMappingType,
     type_uri: '',
     index_name: '',
     enabled: true,
-    source_type: 'default' as SourceType,
-    separator: ' ',
+    source_type: 'default' as SearchSourceType,
+    separator: '. ',
     include_pred_name: false,
-    include_type_desc: false,
   });
   const [creating, setCreating] = useState(false);
 
   // Delete modal state
-  const [deleteTarget, setDeleteTarget] = useState<VectorMapping | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SearchMapping | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // Load spaces
@@ -87,21 +86,21 @@ const VectorMappings: React.FC = () => {
     loadSpaces();
   }, []);
 
-  // Load mappings and indexes when space changes
+  // Load mappings and FTS indexes when space changes
   const loadData = useCallback(async () => {
     if (!selectedSpace) return;
     setLoading(true);
     setError(null);
     try {
       const [mappingsData, indexesData] = await Promise.all([
-        vectorGeoService.getVectorMappings(selectedSpace, {
+        searchFtsService.getSearchMappings(selectedSpace, {
           index_name: filterIndex || undefined,
           mapping_type: filterType || undefined,
         }),
-        vectorGeoService.getVectorIndexes(selectedSpace),
+        searchFtsService.getFtsIndexes(selectedSpace),
       ]);
       setMappings(mappingsData);
-      setIndexes(indexesData);
+      setFtsIndexes(indexesData);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
       setMappings([]);
@@ -119,13 +118,12 @@ const VectorMappings: React.FC = () => {
     setSelectedSpace(e.target.value);
   };
 
-  const handleToggleEnabled = async (mapping: VectorMapping) => {
+  const handleToggleEnabled = async (mapping: SearchMapping) => {
     if (!selectedSpace) return;
     try {
-      await vectorGeoService.updateVectorMapping(selectedSpace, mapping.mapping_id, {
+      await searchFtsService.updateSearchMapping(selectedSpace, mapping.mapping_id, {
         enabled: !mapping.enabled,
       });
-      // Optimistic update
       setMappings((prev) =>
         prev.map((m) =>
           m.mapping_id === mapping.mapping_id ? { ...m, enabled: !m.enabled } : m
@@ -133,7 +131,7 @@ const VectorMappings: React.FC = () => {
       );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to toggle mapping');
-      loadData(); // Revert on failure
+      loadData();
     }
   };
 
@@ -141,7 +139,7 @@ const VectorMappings: React.FC = () => {
     if (!selectedSpace || !createForm.index_name) return;
     setCreating(true);
     try {
-      await vectorGeoService.createVectorMapping(selectedSpace, {
+      await searchFtsService.createSearchMapping(selectedSpace, {
         mapping_type: createForm.mapping_type,
         type_uri: createForm.type_uri || undefined,
         index_name: createForm.index_name,
@@ -149,7 +147,6 @@ const VectorMappings: React.FC = () => {
         source_type: createForm.source_type,
         separator: createForm.separator,
         include_pred_name: createForm.include_pred_name,
-        include_type_desc: createForm.include_type_desc,
       });
       setShowCreateModal(false);
       setCreateForm({
@@ -158,9 +155,8 @@ const VectorMappings: React.FC = () => {
         index_name: '',
         enabled: true,
         source_type: 'default',
-        separator: ' ',
+        separator: '. ',
         include_pred_name: false,
-        include_type_desc: false,
       });
       loadData();
     } catch (err: unknown) {
@@ -174,7 +170,7 @@ const VectorMappings: React.FC = () => {
     if (!selectedSpace || !deleteTarget) return;
     setDeleting(true);
     try {
-      await vectorGeoService.deleteVectorMapping(selectedSpace, deleteTarget.mapping_id);
+      await searchFtsService.deleteSearchMapping(selectedSpace, deleteTarget.mapping_id);
       setDeleteTarget(null);
       loadData();
     } catch (err: unknown) {
@@ -188,12 +184,12 @@ const VectorMappings: React.FC = () => {
     <div>
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
-        <BreadcrumbItem>Vector Mappings</BreadcrumbItem>
+        <BreadcrumbItem>Search Mappings</BreadcrumbItem>
       </Breadcrumb>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Vector Mappings</h1>
-        <Button size="sm" onClick={() => setShowCreateModal(true)} disabled={!selectedSpace || indexes.length === 0}>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Search Mappings</h1>
+        <Button size="sm" onClick={() => setShowCreateModal(true)} disabled={!selectedSpace || ftsIndexes.length === 0}>
           <HiPlus className="mr-2 h-4 w-4" />
           Create Mapping
         </Button>
@@ -222,7 +218,7 @@ const VectorMappings: React.FC = () => {
           <Label htmlFor="filter-index">Index</Label>
           <Select id="filter-index" value={filterIndex} onChange={(e) => setFilterIndex(e.target.value)}>
             <option value="">All indexes</option>
-            {indexes.map((idx) => (
+            {ftsIndexes.map((idx) => (
               <option key={idx.index_name} value={idx.index_name}>
                 {idx.index_name}
               </option>
@@ -254,26 +250,28 @@ const VectorMappings: React.FC = () => {
         </div>
       ) : mappings.length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          <p className="text-lg mb-2">No vector mappings found</p>
+          <p className="text-lg mb-2">No search mappings found</p>
           <p className="text-sm">
             {selectedSpace
-              ? indexes.length === 0
-                ? 'Create a vector index first, then add mappings.'
-                : 'Create a mapping to configure how entities are vectorized.'
-              : 'Select a space to view vector mappings.'}
+              ? ftsIndexes.length === 0
+                ? 'Create an FTS index first, then add mappings.'
+                : 'Create a mapping to configure which entity properties feed into FTS.'
+              : 'Select a space to view search mappings.'}
           </p>
         </div>
       ) : (
         <div className="overflow-x-auto">
           <Table hoverable>
             <TableHead>
-              <TableHeadCell>Type</TableHeadCell>
-              <TableHeadCell>Type URI</TableHeadCell>
-              <TableHeadCell>Index</TableHeadCell>
-              <TableHeadCell>Source</TableHeadCell>
-              <TableHeadCell>Enabled</TableHeadCell>
-              <TableHeadCell>Properties</TableHeadCell>
-              <TableHeadCell>Actions</TableHeadCell>
+              <TableRow>
+                <TableHeadCell>Type</TableHeadCell>
+                <TableHeadCell>Type URI</TableHeadCell>
+                <TableHeadCell>Index</TableHeadCell>
+                <TableHeadCell>Source</TableHeadCell>
+                <TableHeadCell>Enabled</TableHeadCell>
+                <TableHeadCell>Properties</TableHeadCell>
+                <TableHeadCell>Actions</TableHeadCell>
+              </TableRow>
             </TableHead>
             <TableBody className="divide-y">
               {mappings.map((mapping) => (
@@ -301,7 +299,11 @@ const VectorMappings: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
-                      <Button size="xs" color="light" onClick={() => navigate(`/space/${selectedSpace}/vector-mappings/${mapping.mapping_id}`)}>
+                      <Button
+                        size="xs"
+                        color="light"
+                        onClick={() => navigate(`/space/${selectedSpace}/search-mappings/${mapping.mapping_id}`)}
+                      >
                         <HiEye className="h-4 w-4" />
                       </Button>
                       <Button size="xs" color="failure" onClick={() => setDeleteTarget(mapping)}>
@@ -318,7 +320,7 @@ const VectorMappings: React.FC = () => {
 
       {/* Create Modal */}
       <Modal show={showCreateModal} onClose={() => setShowCreateModal(false)}>
-        <ModalHeader>Create Vector Mapping</ModalHeader>
+        <ModalHeader>Create Search Mapping</ModalHeader>
         <ModalBody>
           <div className="space-y-4">
             <div>
@@ -326,7 +328,7 @@ const VectorMappings: React.FC = () => {
               <Select
                 id="map-type"
                 value={createForm.mapping_type}
-                onChange={(e) => setCreateForm({ ...createForm, mapping_type: e.target.value as MappingType })}
+                onChange={(e) => setCreateForm({ ...createForm, mapping_type: e.target.value as SearchMappingType })}
               >
                 <option value="kgentity">KG Entity</option>
                 <option value="kgdocument">KG Document</option>
@@ -344,16 +346,16 @@ const VectorMappings: React.FC = () => {
               />
             </div>
             <div>
-              <Label htmlFor="map-index">Target Index</Label>
+              <Label htmlFor="map-index">Target FTS Index</Label>
               <Select
                 id="map-index"
                 value={createForm.index_name}
                 onChange={(e) => setCreateForm({ ...createForm, index_name: e.target.value })}
               >
                 <option value="">Select an index...</option>
-                {indexes.map((idx) => (
+                {ftsIndexes.map((idx) => (
                   <option key={idx.index_name} value={idx.index_name}>
-                    {idx.index_name} ({idx.dimensions}d, {idx.provider})
+                    {idx.index_name} ({idx.languages.join(', ')})
                   </option>
                 ))}
               </Select>
@@ -363,12 +365,22 @@ const VectorMappings: React.FC = () => {
               <Select
                 id="map-source"
                 value={createForm.source_type}
-                onChange={(e) => setCreateForm({ ...createForm, source_type: e.target.value as SourceType })}
+                onChange={(e) => setCreateForm({ ...createForm, source_type: e.target.value as SearchSourceType })}
               >
-                <option value="default">Default (all string properties)</option>
-                <option value="properties">Properties (specific URIs)</option>
+                <option value="type_description">Type Description only (from KG Types)</option>
+                <option value="properties">Properties only (specific URIs)</option>
+                <option value="properties_type">Properties + Type Description</option>
+                <option value="default">Default (hasKGraphDescription + type desc)</option>
                 <option value="slots">Slots (slot content)</option>
               </Select>
+            </div>
+            <div>
+              <Label htmlFor="map-sep">Separator</Label>
+              <TextInput
+                id="map-sep"
+                value={createForm.separator}
+                onChange={(e) => setCreateForm({ ...createForm, separator: e.target.value })}
+              />
             </div>
             <div className="flex items-center gap-4">
               <ToggleSwitch
@@ -382,13 +394,6 @@ const VectorMappings: React.FC = () => {
                 checked={createForm.include_pred_name}
                 onChange={(val) => setCreateForm({ ...createForm, include_pred_name: val })}
                 label="Include predicate names"
-              />
-            </div>
-            <div className="flex items-center gap-4">
-              <ToggleSwitch
-                checked={createForm.include_type_desc}
-                onChange={(val) => setCreateForm({ ...createForm, include_type_desc: val })}
-                label="Include type description"
               />
             </div>
           </div>
@@ -406,13 +411,13 @@ const VectorMappings: React.FC = () => {
 
       {/* Delete Confirmation Modal */}
       <Modal show={!!deleteTarget} onClose={() => setDeleteTarget(null)} size="md">
-        <ModalHeader>Delete Vector Mapping</ModalHeader>
+        <ModalHeader>Delete Search Mapping</ModalHeader>
         <ModalBody>
           <div className="flex items-center gap-3">
             <HiExclamation className="h-8 w-8 text-red-500 flex-shrink-0" />
             <div>
               <p className="text-gray-700 dark:text-gray-300">
-                Are you sure you want to delete this mapping?
+                Are you sure you want to delete this search mapping?
               </p>
               <p className="text-sm text-gray-500 mt-1">
                 {deleteTarget?.mapping_type} → {deleteTarget?.index_name}
@@ -434,9 +439,8 @@ const VectorMappings: React.FC = () => {
           </Button>
         </ModalFooter>
       </Modal>
-
     </div>
   );
 };
 
-export default VectorMappings;
+export default SearchMappings;

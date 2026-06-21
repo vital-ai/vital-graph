@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
-import { Spinner, TextInput } from 'flowbite-react';
+import { Button, Spinner, TextInput } from 'flowbite-react';
 import {
   HiSearch,
   HiViewBoards,
   HiChevronRight,
-  HiDatabase
+  HiDatabase,
+  HiPlus
 } from 'react-icons/hi';
 import GraphIcon from '../components/icons/GraphIcon';
 import { SkeletonCardList } from '../components/Skeleton';
@@ -25,6 +26,7 @@ interface SpaceWithStats {
 
 const Spaces: React.FC = () => {
   usePageTitle('Spaces');
+  const navigate = useNavigate();
   const [spaces, setSpaces] = useState<SpaceWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const { error, handleError, clearError } = useApiError();
@@ -109,13 +111,19 @@ const Spaces: React.FC = () => {
             {spaces.length} space{spaces.length !== 1 ? 's' : ''}
           </p>
         </div>
-        <div className="w-full sm:w-72">
-          <TextInput
-            icon={HiSearch}
-            placeholder="Search spaces..."
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
-          />
+        <div className="flex items-center gap-3">
+          <div className="w-full sm:w-72">
+            <TextInput
+              icon={HiSearch}
+              placeholder="Search spaces..."
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+          </div>
+          <Button color="blue" onClick={() => navigate('/space/new')}>
+            <HiPlus className="w-4 h-4 mr-1" />
+            Create Space
+          </Button>
         </div>
       </div>
 

@@ -118,9 +118,9 @@ class LocationMixin:
                 )
                 result = await self._get_location_response(conn, location['location_id'])
 
-        # Weaviate sync (outside transaction)
+        # PG vector/FTS/geo sync (outside transaction)
         if result:
-            await self._weaviate_upsert_location(result)
+            await self._pg_sync_location(result['location_id'])
         return result
 
     async def get_location(self, location_id: int) -> Optional[Dict[str, Any]]:
@@ -208,9 +208,9 @@ class LocationMixin:
 
                 result = await self._get_location_response(conn, location_id)
 
-        # Weaviate sync (outside transaction)
+        # PG vector/FTS/geo sync (outside transaction)
         if result:
-            await self._weaviate_upsert_location(result)
+            await self._pg_sync_location(location_id)
         return result
 
     async def remove_location(self, location_id: int,
@@ -232,8 +232,8 @@ class LocationMixin:
                     'location_name': row['location_name'],
                 }, changed_by=removed_by)
 
-        # Weaviate sync (outside transaction)
-        await self._weaviate_delete_location(location_id, row['entity_id'])
+        # PG vector/FTS/geo sync (outside transaction)
+        await self._pg_delete_location(location_id)
         return True
 
     async def list_locations(self, entity_id: str,

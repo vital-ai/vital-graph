@@ -46,9 +46,17 @@ def get_provider(
     Raises:
         ValueError: If provider_name is not registered.
     """
-    # Check cache first
+    # Check cache first — validate provider_name matches to handle index swaps
     if cache_key and cache_key in _provider_cache:
-        return _provider_cache[cache_key]
+        cached = _provider_cache[cache_key]
+        if cached.provider_name == provider_name:
+            return cached
+        # Stale cache entry (provider was swapped) — evict and recreate
+        logger.info(
+            "Provider cache stale for '%s': cached=%s, requested=%s — evicting",
+            cache_key, cached.provider_name, provider_name,
+        )
+        del _provider_cache[cache_key]
 
     cls = PROVIDER_REGISTRY.get(provider_name)
     if cls is None:

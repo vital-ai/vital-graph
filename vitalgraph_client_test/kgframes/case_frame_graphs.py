@@ -116,8 +116,7 @@ async def test_delete_frame_graph(client: VitalGraphClient, space_id: str, graph
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[temp_frame],
-            entity_uri=entity_uri
+            objects=[temp_frame]
         )
         if not create_response.is_success:
             logger.error(f"❌ Failed to create temp frame for delete test: {create_response.message}")
@@ -161,8 +160,7 @@ async def test_delete_multiple_frame_graphs(client: VitalGraphClient, space_id: 
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=temp_frames,
-            entity_uri=entity_uri
+            objects=temp_frames
         )
         if not create_response.is_success:
             logger.error(f"❌ Failed to create temp frames for multi-delete test: {create_response.message}")

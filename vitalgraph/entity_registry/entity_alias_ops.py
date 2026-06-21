@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from .entity_dedup import compute_dedup_hash, EntityDedupIndex
-from .entity_dedup_pg import EntityDedupIndexPG
+from .entity_fuzzy import compute_entity_hash, EntityFuzzyIndex
+from .entity_fuzzy_pg import EntityFuzzyIndexPG
 
 if TYPE_CHECKING:
     from typing import Union
@@ -18,7 +18,7 @@ class AliasMixin:
     """Alias CRUD methods."""
 
     pool: asyncpg.Pool
-    dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]]
+    fuzzy_index: Optional[Union[EntityFuzzyIndex, EntityFuzzyIndexPG]]
 
     async def _log_change(self, conn: asyncpg.Connection, entity_id: str,
                           change_type: str, details: Dict[str, Any],
@@ -26,9 +26,9 @@ class AliasMixin:
 
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
 
-    async def _notify_dedup_change(self, action: str, entity_id: str) -> None: ...
+    async def _notify_fuzzy_change(self, action: str, entity_id: str) -> None: ...
 
-    async def _weaviate_upsert_entity(self, entity_id: str) -> None: ...
+    async def _pg_sync_entity(self, entity_id: str) -> None: ...
 
     async def _insert_alias(
         self, conn, entity_id: str,
@@ -67,23 +67,23 @@ class AliasMixin:
                     is_primary, created_by, notes
                 )
 
-                # Recompute dedup hash (aliases changed) and refresh index
+                # Recompute fuzzy hash (aliases changed) and refresh index
                 entity = await self.get_entity(entity_id)
                 if entity:
-                    new_hash = compute_dedup_hash(entity)
+                    new_hash = compute_entity_hash(entity)
                     await conn.execute(
-                        "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                        "UPDATE entity SET fuzzy_hash = $1 WHERE entity_id = $2",
                         new_hash, entity_id
                     )
-                    if self.dedup_index:
-                        if isinstance(self.dedup_index, EntityDedupIndexPG):
-                            await self.dedup_index.add_entity(entity_id, entity)
+                    if self.fuzzy_index:
+                        if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                            await self.fuzzy_index.add_entity(entity_id, entity)
                         else:
-                            await self.dedup_index.async_add_entity(entity_id, entity)
-                        await self._notify_dedup_change('add', entity_id)
+                            await self.fuzzy_index.async_add_entity(entity_id, entity)
+                        await self._notify_fuzzy_change('add', entity_id)
 
-                # Sync to Weaviate (aliases changed)
-                await self._weaviate_upsert_entity(entity_id)
+                # PG vector/FTS/geo sync (aliases changed)
+                await self._pg_sync_entity(entity_id)
 
                 return alias
 
@@ -104,23 +104,23 @@ class AliasMixin:
                     'alias_id': alias_id, 'alias_name': row['alias_name']
                 }, changed_by=retracted_by)
 
-                # Recompute dedup hash (alias retracted) and refresh index
+                # Recompute fuzzy hash (alias retracted) and refresh index
                 entity = await self.get_entity(row['entity_id'])
                 if entity:
-                    new_hash = compute_dedup_hash(entity)
+                    new_hash = compute_entity_hash(entity)
                     await conn.execute(
-                        "UPDATE entity SET dedup_hash = $1 WHERE entity_id = $2",
+                        "UPDATE entity SET fuzzy_hash = $1 WHERE entity_id = $2",
                         new_hash, row['entity_id']
                     )
-                    if self.dedup_index:
-                        if isinstance(self.dedup_index, EntityDedupIndexPG):
-                            await self.dedup_index.add_entity(row['entity_id'], entity)
+                    if self.fuzzy_index:
+                        if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                            await self.fuzzy_index.add_entity(row['entity_id'], entity)
                         else:
-                            await self.dedup_index.async_add_entity(row['entity_id'], entity)
-                        await self._notify_dedup_change('add', row['entity_id'])
+                            await self.fuzzy_index.async_add_entity(row['entity_id'], entity)
+                        await self._notify_fuzzy_change('add', row['entity_id'])
 
-                # Sync to Weaviate (aliases changed)
-                await self._weaviate_upsert_entity(row['entity_id'])
+                # PG vector/FTS/geo sync (aliases changed)
+                await self._pg_sync_entity(row['entity_id'])
 
                 return True
 

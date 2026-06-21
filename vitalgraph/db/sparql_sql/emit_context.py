@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .vg_functions import VectorRequest
+    from .vg_functions import FuzzyRequest, VectorRequest
 
 from .ir import AliasGenerator
 from .sql_type_generation import TypeRegistry
@@ -247,6 +247,9 @@ class EmitContext:
         # vectorization before SQL execution.  Shared across the entire
         # pipeline (child contexts reference the same list).
         self._vector_requests: List['VectorRequest'] = []
+        # FuzzyRequests: vg:fuzzyMatch calls that need MinHash LSH + RapidFuzz
+        # resolution before SQL execution.
+        self._fuzzy_requests: List['FuzzyRequest'] = []
         # vg: optimizer hints — temporarily set by emit_extend when emitting
         # a BIND with vg_top_k or vg_threshold hints from vg_optimize pass.
         self.vg_hints: Dict[str, Any] = {}
@@ -257,6 +260,14 @@ class EmitContext:
         # Maps index_name → {'model_name': str, 'dimensions': int}.
         # Used by multi_vector_similarity_sql to auto-detect mixed models.
         self.vector_index_meta: Dict[str, Dict[str, Any]] = {}
+        # FTS index metadata — pre-loaded from {space}_fts_index table.
+        # Maps index_name → {'languages': ['english', ...]}.
+        # Used by text_search_sql / hybrid_search_sql for multi-language tsquery.
+        self.fts_index_meta: Dict[str, Dict[str, Any]] = {}
+        # Search mapping metadata — pre-loaded from search_mapping + junction table.
+        # Maps mapping_name → {'vector': index_name, 'fts': index_name}.
+        # Used by hybrid_search_sql to resolve mapping name to actual indexes.
+        self.search_mapping_meta: Dict[str, Dict[str, str]] = {}
 
     @property
     def depth(self) -> int:
@@ -340,6 +351,19 @@ class EmitContext:
         """Pending vectorization requests for this query."""
         return self._vector_requests
 
+    def add_fuzzy_request(self, request: 'FuzzyRequest') -> None:
+        """Record that this query needs fuzzy search resolution.
+
+        Called by the vg:fuzzyMatch handler in emit_expressions.
+        The orchestrator inspects fuzzy_requests after SQL generation.
+        """
+        self._fuzzy_requests.append(request)
+
+    @property
+    def fuzzy_requests(self) -> List['FuzzyRequest']:
+        """Pending fuzzy search requests for this query."""
+        return self._fuzzy_requests
+
     def child(self, types: Optional[TypeRegistry] = None) -> EmitContext:
         """Create a child context for nested emission.
 
@@ -359,9 +383,12 @@ class EmitContext:
         ctx._depth = self._depth + 1
         # Share vector requests list across parent/child contexts
         ctx._vector_requests = self._vector_requests
-        # Share multi-vector config and vector index metadata
+        # Share fuzzy requests list across parent/child contexts
+        ctx._fuzzy_requests = self._fuzzy_requests
+        # Share multi-vector config and index metadata
         ctx.multi_vector_config = self.multi_vector_config
         ctx.vector_index_meta = self.vector_index_meta
+        ctx.fts_index_meta = self.fts_index_meta
         return ctx
 
     def log(self, plan_kind: str, message: str, **kwargs) -> Optional[TraceStep]:

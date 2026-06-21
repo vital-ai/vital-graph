@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -16,12 +16,11 @@ import {
   TableHead,
   TableHeadCell,
   TableRow,
-  TextInput,
   Breadcrumb,
   BreadcrumbItem,
   Label,
 } from 'flowbite-react';
-import { HiPlus, HiTrash, HiRefresh, HiExclamation, HiHome } from 'react-icons/hi';
+import { HiTrash, HiRefresh, HiExclamation, HiHome, HiEye } from 'react-icons/hi';
 import { vectorGeoService } from '../services/VectorGeoService';
 import { apiService } from '../services/ApiService';
 import type { VectorIndex } from '../types/vectorGeo';
@@ -30,6 +29,7 @@ import { formatDateShort } from '../utils/formatUtils';
 
 const VectorIndexes: React.FC = () => {
   const { spaceId } = useParams<{ spaceId?: string }>();
+  const navigate = useNavigate();
 
   const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
   const [selectedSpace, setSelectedSpace] = useState<string>(spaceId || '');
@@ -38,17 +38,6 @@ const VectorIndexes: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [spacesLoading, setSpacesLoading] = useState(true);
 
-  // Create modal state
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [createForm, setCreateForm] = useState({
-    index_name: '',
-    provider: 'vitalsigns',
-    dimensions: 384,
-    model_name: '',
-    distance_metric: 'cosine',
-    description: '',
-  });
-  const [creating, setCreating] = useState(false);
 
   // Delete modal state
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
@@ -101,34 +90,6 @@ const VectorIndexes: React.FC = () => {
     setSelectedSpace(e.target.value);
   };
 
-  const handleCreate = async () => {
-    if (!selectedSpace || !createForm.index_name.trim()) return;
-    setCreating(true);
-    try {
-      await vectorGeoService.createVectorIndex(selectedSpace, {
-        index_name: createForm.index_name.trim(),
-        provider: createForm.provider,
-        dimensions: createForm.dimensions,
-        model_name: createForm.model_name || undefined,
-        distance_metric: createForm.distance_metric,
-        description: createForm.description || undefined,
-      });
-      setShowCreateModal(false);
-      setCreateForm({
-        index_name: '',
-        provider: 'vitalsigns',
-        dimensions: 384,
-        model_name: '',
-        distance_metric: 'cosine',
-        description: '',
-      });
-      loadIndexes();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to create index');
-    } finally {
-      setCreating(false);
-    }
-  };
 
   const handleDelete = async () => {
     if (!selectedSpace || !deleteTarget) return;
@@ -150,10 +111,7 @@ const VectorIndexes: React.FC = () => {
     setReindexResult(null);
     try {
       const result = await vectorGeoService.reindex(selectedSpace, indexName);
-      setReindexResult(
-        `Re-indexed ${indexName}: ${result.subjects_processed} subjects, ` +
-        `${result.embeddings_stored} embeddings in ${result.elapsed_seconds.toFixed(1)}s`
-      );
+      setReindexResult(result.message || `Reindex started for "${indexName}"`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to trigger reindex');
     } finally {
@@ -172,10 +130,6 @@ const VectorIndexes: React.FC = () => {
 
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Vector Indexes</h1>
-        <Button size="sm" onClick={() => setShowCreateModal(true)} disabled={!selectedSpace}>
-          <HiPlus className="mr-2 h-4 w-4" />
-          Create Index
-        </Button>
       </div>
 
       {/* Space selector */}
@@ -227,13 +181,15 @@ const VectorIndexes: React.FC = () => {
         <div className="overflow-x-auto">
           <Table hoverable>
             <TableHead>
-              <TableHeadCell>Index Name</TableHeadCell>
-              <TableHeadCell>Provider</TableHeadCell>
-              <TableHeadCell>Dimensions</TableHeadCell>
-              <TableHeadCell>Model</TableHeadCell>
-              <TableHeadCell>Metric</TableHeadCell>
-              <TableHeadCell>Created</TableHeadCell>
-              <TableHeadCell>Actions</TableHeadCell>
+              <TableRow>
+                <TableHeadCell>Index Name</TableHeadCell>
+                <TableHeadCell>Provider</TableHeadCell>
+                <TableHeadCell>Dimensions</TableHeadCell>
+                <TableHeadCell>Model</TableHeadCell>
+                <TableHeadCell>Metric</TableHeadCell>
+                <TableHeadCell>Created</TableHeadCell>
+                <TableHeadCell>Actions</TableHeadCell>
+              </TableRow>
             </TableHead>
             <TableBody className="divide-y">
               {indexes.map((idx) => (
@@ -256,6 +212,14 @@ const VectorIndexes: React.FC = () => {
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
+                      <Button
+                        size="xs"
+                        color="light"
+                        onClick={() => navigate(`/space/${selectedSpace}/vector-indexes/${idx.index_name}`)}
+                        title="View"
+                      >
+                        <HiEye className="h-4 w-4" />
+                      </Button>
                       <Button
                         size="xs"
                         color="light"
@@ -284,83 +248,6 @@ const VectorIndexes: React.FC = () => {
         </div>
       )}
 
-      {/* Create Modal */}
-      <Modal show={showCreateModal} onClose={() => setShowCreateModal(false)}>
-        <ModalHeader>Create Vector Index</ModalHeader>
-        <ModalBody>
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="idx-name">Index Name</Label>
-              <TextInput
-                id="idx-name"
-                placeholder="e.g. entity_default"
-                value={createForm.index_name}
-                onChange={(e) => setCreateForm({ ...createForm, index_name: e.target.value })}
-                required
-              />
-            </div>
-            <div>
-              <Label htmlFor="idx-provider">Provider</Label>
-              <Select
-                id="idx-provider"
-                value={createForm.provider}
-                onChange={(e) => setCreateForm({ ...createForm, provider: e.target.value })}
-              >
-                <option value="vitalsigns">VitalSigns (local)</option>
-                <option value="openai">OpenAI</option>
-                <option value="cohere">Cohere</option>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="idx-dims">Dimensions</Label>
-              <TextInput
-                id="idx-dims"
-                type="number"
-                value={createForm.dimensions}
-                onChange={(e) => setCreateForm({ ...createForm, dimensions: parseInt(e.target.value) || 384 })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="idx-model">Model Name (optional)</Label>
-              <TextInput
-                id="idx-model"
-                placeholder="e.g. paraphrase-multilingual-MiniLM-L12-v2"
-                value={createForm.model_name}
-                onChange={(e) => setCreateForm({ ...createForm, model_name: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="idx-metric">Distance Metric</Label>
-              <Select
-                id="idx-metric"
-                value={createForm.distance_metric}
-                onChange={(e) => setCreateForm({ ...createForm, distance_metric: e.target.value })}
-              >
-                <option value="cosine">Cosine</option>
-                <option value="l2">L2 (Euclidean)</option>
-                <option value="inner_product">Inner Product</option>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="idx-desc">Description (optional)</Label>
-              <TextInput
-                id="idx-desc"
-                value={createForm.description}
-                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-              />
-            </div>
-          </div>
-        </ModalBody>
-        <ModalFooter>
-          <Button onClick={handleCreate} disabled={creating || !createForm.index_name.trim()}>
-            {creating ? <Spinner size="sm" className="mr-2" /> : null}
-            Create
-          </Button>
-          <Button color="gray" onClick={() => setShowCreateModal(false)}>
-            Cancel
-          </Button>
-        </ModalFooter>
-      </Modal>
 
       {/* Delete Confirmation Modal */}
       <Modal show={!!deleteTarget} onClose={() => setDeleteTarget(null)} size="md">

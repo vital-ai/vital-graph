@@ -15,7 +15,7 @@ CHANNEL_GRAPHS = "vitalgraph_graphs"
 CHANNEL_USER = "vitalgraph_user"
 CHANNEL_SPACE = "vitalgraph_space" 
 CHANNEL_GRAPH = "vitalgraph_graph"
-CHANNEL_ENTITY_DEDUP = "vitalgraph_entity_dedup"
+CHANNEL_ENTITY_FUZZY = "vitalgraph_entity_fuzzy"
 CHANNEL_PROCESS = "vitalgraph_process"
 CHANNEL_CACHE_INVALIDATE = "vitalgraph_cache_invalidate"
 CHANNEL_ENTITY_GRAPH = "vitalgraph_entity_graph"
@@ -58,7 +58,7 @@ class SignalManager:
             CHANNEL_USER: [],
             CHANNEL_SPACE: [],
             CHANNEL_GRAPH: [],
-            CHANNEL_ENTITY_DEDUP: [],
+            CHANNEL_ENTITY_FUZZY: [],
             CHANNEL_PROCESS: [],
             CHANNEL_CACHE_INVALIDATE: [],
             CHANNEL_ENTITY_GRAPH: [],

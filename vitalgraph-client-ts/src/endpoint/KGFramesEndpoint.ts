@@ -16,10 +16,22 @@ export class KGFramesEndpoint extends BaseEndpoint {
     pageSize = 10,
     offset = 0,
     search?: string,
+    options?: {
+      sort_by?: string;
+      sort_order?: 'asc' | 'desc';
+      form_type?: string;
+      frame_type_uri?: string;
+      status?: string;
+      exclude_status?: string;
+      created_after?: string;
+      created_before?: string;
+      modified_after?: string;
+      modified_before?: string;
+    },
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('GET', '/api/graphs/kgframes', {
-      params: { space_id: spaceId, graph_id: graphId, page_size: pageSize, offset, search },
+      params: { space_id: spaceId, graph_id: graphId, page_size: pageSize, offset, search, ...options },
     });
   }
 

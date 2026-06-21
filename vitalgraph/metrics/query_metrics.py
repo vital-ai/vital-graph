@@ -274,8 +274,8 @@ class QueryMetricsCollector:
 
         Env vars (scoped by VITALGRAPH_ENVIRONMENT):
             QUERY_METRICS_ENABLED: 'true' (default) or 'false'
-            QUERY_METRICS_REDIS_HOST: defaults to ENTITY_DEDUP_REDIS_HOST or 'localhost'
-            QUERY_METRICS_REDIS_PORT: defaults to ENTITY_DEDUP_REDIS_PORT or 6379
+            QUERY_METRICS_REDIS_HOST: defaults to ENTITY_FUZZY_REDIS_HOST or 'localhost'
+            QUERY_METRICS_REDIS_PORT: defaults to ENTITY_FUZZY_REDIS_PORT or 6379
             QUERY_METRICS_REDIS_USERNAME: optional auth
             QUERY_METRICS_REDIS_PASSWORD: optional auth
             QUERY_METRICS_REDIS_SSL: 'false' (default)
@@ -289,19 +289,19 @@ class QueryMetricsCollector:
             logger.info("Query metrics disabled")
             return None
 
-        # Allow sharing config with entity dedup Redis
+        # Allow sharing config with entity fuzzy Redis
         redis_host = (get_scoped_env('QUERY_METRICS_REDIS_HOST') or
-                      get_scoped_env('ENTITY_DEDUP_REDIS_HOST', 'localhost'))
+                      get_scoped_env('ENTITY_FUZZY_REDIS_HOST', 'localhost'))
         redis_port = int(get_scoped_env('QUERY_METRICS_REDIS_PORT') or
-                         get_scoped_env('ENTITY_DEDUP_REDIS_PORT', '6379'))
+                         get_scoped_env('ENTITY_FUZZY_REDIS_PORT', '6379'))
 
         redis_params: Dict[str, Any] = {'host': redis_host, 'port': redis_port}
 
         # Auth
         redis_username = (get_scoped_env('QUERY_METRICS_REDIS_USERNAME') or
-                          get_scoped_env('ENTITY_DEDUP_REDIS_USERNAME') or None)
+                          get_scoped_env('ENTITY_FUZZY_REDIS_USERNAME') or None)
         redis_password = (get_scoped_env('QUERY_METRICS_REDIS_PASSWORD') or
-                          get_scoped_env('ENTITY_DEDUP_REDIS_PASSWORD') or None)
+                          get_scoped_env('ENTITY_FUZZY_REDIS_PASSWORD') or None)
         if redis_username:
             redis_params['username'] = redis_username
         if redis_password:
@@ -309,14 +309,14 @@ class QueryMetricsCollector:
 
         # TLS
         use_ssl = (get_scoped_env('QUERY_METRICS_REDIS_SSL') or
-                   get_scoped_env('ENTITY_DEDUP_REDIS_SSL', 'false')).lower() in ('true', '1', 'yes')
+                   get_scoped_env('ENTITY_FUZZY_REDIS_SSL', 'false')).lower() in ('true', '1', 'yes')
         if use_ssl:
             redis_params['ssl'] = True
             redis_params['ssl_cert_reqs'] = None
 
         # Cluster mode
         use_cluster = (get_scoped_env('QUERY_METRICS_REDIS_CLUSTER') or
-                       get_scoped_env('ENTITY_DEDUP_REDIS_CLUSTER', 'false')).lower() in ('true', '1', 'yes')
+                       get_scoped_env('ENTITY_FUZZY_REDIS_CLUSTER', 'false')).lower() in ('true', '1', 'yes')
 
         # Environment-scoped prefix
         env_name = os.environ.get('VITALGRAPH_ENVIRONMENT', '').strip().lower()

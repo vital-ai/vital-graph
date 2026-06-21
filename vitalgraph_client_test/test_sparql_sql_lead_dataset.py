@@ -46,6 +46,7 @@ from vitalgraph_client_test.entity_graph_lead_dataset.case_bulk_load_dataset imp
 from vitalgraph_client_test.entity_graph_lead_dataset.case_list_and_query_entities import ListAndQueryEntitiesTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_retrieve_entity_graphs import RetrieveEntityGraphsTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_kgquery_lead_queries import KGQueryLeadQueriesTester
+from vitalgraph_client_test.entity_graph_lead_dataset.case_list_entities_sort import ListEntitiesSortTester
 
 # ===========================================================================
 # Configuration
@@ -181,6 +182,13 @@ async def main():
         kgquery_tester = KGQueryLeadQueriesTester(client, query_mode="edge")
         kgquery_results = await kgquery_tester.run_tests(TEST_SPACE_ID, TEST_GRAPH_ID, entity_count)
         all_results.append(kgquery_results)
+
+        # ==================================================================
+        # Step 5: List Entities Sorting
+        # ==================================================================
+        list_sort_tester = ListEntitiesSortTester(client)
+        list_sort_results = await list_sort_tester.run_tests(TEST_SPACE_ID, TEST_GRAPH_ID)
+        all_results.append(list_sort_results)
 
         # ==================================================================
         # Summary

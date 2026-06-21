@@ -4,7 +4,7 @@ Implements REST API endpoints for space management operations.
 """
 
 from typing import Dict, List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 import logging
 
@@ -239,6 +239,12 @@ class SpacesEndpoint:
     
     async def delete_space(self, space_id: str, current_user: Dict):
         """Delete a space."""
+        from vitalgraph.constants import PROTECTED_SPACES
+        if space_id in PROTECTED_SPACES:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot delete system space '{space_id}'",
+            )
         result = await self.api.delete_space(space_id, current_user)
         return SpaceDeleteResponse(
             message="Space deleted successfully",

@@ -102,6 +102,32 @@ def require_space_read(current_user: Dict, space_id: str) -> None:
         )
 
 
+def require_system_space_write(current_user: Dict, space_id: str) -> None:
+    """Raise 403 if a non-admin user tries to write to a system space.
+
+    System spaces (e.g. sp_kg_types) are admin-only for writes.
+    Must be called **before** require_space_write for system spaces.
+
+    Args:
+        current_user: Authenticated user dict.
+        space_id: Target space identifier.
+
+    Raises:
+        HTTPException 403 if user is not admin.
+    """
+    from vitalgraph.constants import PROTECTED_SPACES
+    if space_id in PROTECTED_SPACES and current_user.get('role') != 'admin':
+        emit_audit_event("auth.access.denied",
+                         current_user.get("username", "unknown"),
+                         level="WARN",
+                         reason="system_space_admin_only",
+                         space_id=space_id)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Write access to system space '{space_id}' requires admin role"
+        )
+
+
 def require_space_write(current_user: Dict, space_id: str) -> None:
     """Raise 403 if user does not have write access to the space.
 

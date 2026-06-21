@@ -27,6 +27,7 @@ coverage.xml
 # Node.js (frontend development files)
 frontend/node_modules
 frontend/.vscode
+vitalgraph-client-ts/node_modules
 
 # Development files
 .vscode

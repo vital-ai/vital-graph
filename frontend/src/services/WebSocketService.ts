@@ -98,7 +98,7 @@ export class WebSocketServiceImpl implements IWebSocketService {
     
     console.log(`🕒 Starting periodic reconnect timer: ${this.reconnectIntervalMs / 60000} minutes`);
     
-    this.periodicReconnectTimer = setTimeout(async () => {
+    this.periodicReconnectTimer = window.setTimeout(async () => {
       if (this.isConnected) {
         console.log('🔄 Performing periodic WebSocket reconnect...');
         
@@ -539,7 +539,7 @@ export class WebSocketServiceImpl implements IWebSocketService {
 
     console.log(`⏰ Scheduling reconnection attempt ${this.reconnectAttempts} in ${Math.round(finalDelay)}ms`);
 
-    this.reconnectTimer = setTimeout(async () => {
+    this.reconnectTimer = window.setTimeout(async () => {
       if (this.shouldReconnect && this.token && !this._manualReconnectInProgress) {
         console.log(`🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
         const success = await this.connect(this.token);

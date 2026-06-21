@@ -65,8 +65,7 @@ async def test_get_frames_with_slots_filtered(client: VitalGraphClient, space_id
             graph_id=graph_id,
             frame_uri=test_frame_uri,
             page_size=10,
-            offset=0,
-            entity_uri=entity_uri
+            offset=0
         )
         
         if response.is_success:
@@ -113,8 +112,7 @@ async def test_create_frames_with_slots(client: VitalGraphClient, space_id: str,
         response = await client.kgframes.create_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame, slot1, slot2],
-            entity_uri=entity_uri
+            objects=[frame, slot1, slot2]
         )
         
         if response.is_success and response.created_count > 0:
@@ -171,8 +169,7 @@ async def test_update_frames_with_slots(client: VitalGraphClient, space_id: str,
         response = await client.kgframes.update_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame, slot1, slot2, edge1, edge2],
-            entity_uri=entity_uri
+            objects=[frame, slot1, slot2, edge1, edge2]
         )
         
         if response.is_success:
@@ -207,8 +204,7 @@ async def test_delete_frames_with_slots(client: VitalGraphClient, space_id: str,
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=temp_frames,
-            entity_uri=entity_uri
+            objects=temp_frames
         )
         
         if not create_response.is_success:

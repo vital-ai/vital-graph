@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Read-only client test for the find_similar (dedup) endpoint.
+Read-only client test for the find_similar (fuzzy) endpoint.
 
 Connects via VitalGraphClient to a running server, discovers real entities
 via search_entities, then exercises find_similar. Does NOT create, update,
 or delete any data.
 
-Requires a running VitalGraph server with the entity registry + dedup index.
+Requires a running VitalGraph server with the entity registry + fuzzy index.
 
 Usage:
     VITALGRAPH_CLIENT_ENVIRONMENT=local \

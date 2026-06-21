@@ -38,9 +38,21 @@ export { MetricsEndpoint } from './endpoint/MetricsEndpoint.js';
 export { AdminEndpoint } from './endpoint/AdminEndpoint.js';
 export { ProcessEndpoint } from './endpoint/ProcessEndpoint.js';
 export { VectorMappingsEndpoint } from './endpoint/VectorMappingsEndpoint.js';
+export { FuzzyMappingsEndpoint } from './endpoint/FuzzyMappingsEndpoint.js';
+export type { FuzzyMapping, FuzzyMappingProperty, FuzzyMappingResponse, FuzzyMappingsListResponse } from './endpoint/FuzzyMappingsEndpoint.js';
 export { VectorIndexesEndpoint } from './endpoint/VectorIndexesEndpoint.js';
+export { SearchMappingsEndpoint } from './endpoint/SearchMappingsEndpoint.js';
+export type {
+  SearchMapping, SearchMappingProperty,
+  SearchMappingResponse, SearchMappingsListResponse,
+} from './endpoint/SearchMappingsEndpoint.js';
+export { FtsIndexesEndpoint } from './endpoint/FtsIndexesEndpoint.js';
+export type {
+  FtsIndex, FtsIndexResponse, FtsIndexesListResponse,
+  FtsIndexStatsResponse, PopulateFtsResponse,
+} from './endpoint/FtsIndexesEndpoint.js';
 export { GeoConfigEndpoint } from './endpoint/GeoConfigEndpoint.js';
-export { GeoPointsEndpoint } from './endpoint/GeoPointsEndpoint.js';
+export { GeoPointsEndpoint, type SearchNearbyOptions } from './endpoint/GeoPointsEndpoint.js';
 export { AgentRegistryEndpoint, type SearchAgentsOptions } from './endpoint/AgentRegistryEndpoint.js';
 export {
   EntityRegistryEndpoint,
@@ -49,3 +61,4 @@ export {
   type SearchLocationOptions,
   type FindSimilarOptions,
 } from './endpoint/EntityRegistryEndpoint.js';
+export { OntologyEndpoint, type OntologyProperty, type OntologyPropertiesResponse, type OntologyClassesResponse } from './endpoint/OntologyEndpoint.js';

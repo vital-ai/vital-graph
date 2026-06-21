@@ -249,6 +249,9 @@ class KGFrameCreateProcessor:
         for obj in objects:
             if isinstance(obj, KGFrame):
                 obj.frameGraphURI = str(obj.URI)
+                # Standalone frames are Assertions (top-level independent facts)
+                if not getattr(obj, 'kGFormType', None):
+                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Assertion"
             elif isinstance(obj, KGSlot):
                 owning_frame = slot_to_frame.get(str(obj.URI), fallback_frame_uri)
                 if owning_frame:

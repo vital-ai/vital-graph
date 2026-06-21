@@ -40,68 +40,8 @@ export interface ReindexRequest {
 }
 
 export interface ReindexResponse {
-  subjects_processed: number;
-  embeddings_stored: number;
-  elapsed_seconds: number;
-}
-
-// ---------------------------------------------------------------------------
-// Vector Mappings
-// ---------------------------------------------------------------------------
-
-export type MappingType = 'kgentity' | 'kgdocument' | 'kgframe' | 'kgslot';
-export type SourceType = 'default' | 'properties' | 'slots';
-export type PropertyRole = 'include' | 'exclude';
-
-export interface MappingProperty {
-  property_id: number;
-  mapping_id: number;
-  property_uri: string;
-  property_role: PropertyRole;
-  ordinal: number;
-}
-
-export interface VectorMapping {
-  mapping_id: number;
-  mapping_type: MappingType;
-  type_uri: string | null;
+  message: string;
   index_name: string;
-  enabled: boolean;
-  source_type: SourceType;
-  separator: string;
-  include_pred_name: boolean;
-  include_type_desc: boolean;
-  created_time: string;
-  properties: MappingProperty[];
-}
-
-export interface MappingListResponse {
-  mappings: VectorMapping[];
-  count: number;
-}
-
-export interface CreateVectorMappingRequest {
-  mapping_type: MappingType;
-  type_uri?: string;
-  index_name: string;
-  enabled?: boolean;
-  source_type?: SourceType;
-  separator?: string;
-  include_pred_name?: boolean;
-  include_type_desc?: boolean;
-  properties?: Array<{
-    property_uri: string;
-    property_role: PropertyRole;
-    ordinal?: number;
-  }>;
-}
-
-export interface UpdateVectorMappingRequest {
-  enabled?: boolean;
-  source_type?: SourceType;
-  separator?: string;
-  include_pred_name?: boolean;
-  include_type_desc?: boolean;
 }
 
 // ---------------------------------------------------------------------------

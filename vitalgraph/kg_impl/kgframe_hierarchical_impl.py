@@ -225,6 +225,9 @@ class KGFrameHierarchicalProcessor:
         for obj in objects:
             if isinstance(obj, KGFrame):
                 obj.frameGraphURI = str(obj.URI)
+                # Child frames are always Aspects
+                if not getattr(obj, 'kGFormType', None):
+                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
                 self.logger.debug(f"Frame {obj.URI}: frameGraphURI={obj.URI}")
             else:
                 # Slots and edges belong to a frame

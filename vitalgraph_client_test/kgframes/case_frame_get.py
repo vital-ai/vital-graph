@@ -110,8 +110,7 @@ async def test_list_frames_with_entity_filter(client: VitalGraphClient, space_id
             space_id=space_id,
             graph_id=graph_id,
             page_size=10,
-            offset=0,
-            entity_uri=entity_uri
+            offset=0
         )
         
         if response.is_success:

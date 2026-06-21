@@ -275,35 +275,35 @@ class VitalGraphAppImpl:
                         pool = getattr(self.db_impl, 'connection_pool', None)
                         if pool:
                             from vitalgraph.entity_registry.entity_registry_impl import EntityRegistryImpl
-                            from vitalgraph.entity_registry.entity_dedup import EntityDedupIndex
-                            from vitalgraph.entity_registry.entity_dedup_pg import EntityDedupIndexPG
+                            from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex
+                            from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
                             from vitalgraph.entity_registry.entity_weaviate import EntityWeaviateIndex
                             from vitalgraph.config.config_loader import get_scoped_env
 
-                            dedup_backend = get_scoped_env('ENTITY_DEDUP_BACKEND', 'memory').lower()
-                            if dedup_backend == 'postgresql':
-                                dedup_index = EntityDedupIndexPG.from_env(pool)
+                            fuzzy_backend = get_scoped_env('ENTITY_FUZZY_BACKEND', 'memory').lower()
+                            if fuzzy_backend == 'postgresql':
+                                fuzzy_index = EntityFuzzyIndexPG.from_env(pool)
                             else:
-                                dedup_index = EntityDedupIndex.from_env()
+                                fuzzy_index = EntityFuzzyIndex.from_env()
                             self.logger.info("Initializing Weaviate index (profile=%s)...",
                                              os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper())
                             weaviate_index = await EntityWeaviateIndex.from_env()
                             signal_mgr = self.vital_graph_impl.signal_manager if self.vital_graph_impl else None
                             self.entity_registry = EntityRegistryImpl(
-                                pool, dedup_index=dedup_index, signal_manager=signal_mgr,
+                                pool, fuzzy_index=fuzzy_index, signal_manager=signal_mgr,
                                 weaviate_index=weaviate_index,
                             )
                             await self.entity_registry.ensure_tables()
                             self.logger.info("✅ Entity Registry tables ensured")
 
-                            # Register callback for cross-worker dedup sync
-                            if signal_mgr and dedup_index:
-                                from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_DEDUP
+                            # Register callback for cross-worker fuzzy sync
+                            if signal_mgr and fuzzy_index:
+                                from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_FUZZY
                                 signal_mgr.register_callback(
-                                    CHANNEL_ENTITY_DEDUP,
-                                    self.entity_registry._handle_dedup_notification,
+                                    CHANNEL_ENTITY_FUZZY,
+                                    self.entity_registry._handle_fuzzy_notification,
                                 )
-                                self.logger.info("✅ Entity dedup cross-worker sync registered")
+                                self.logger.info("✅ Entity fuzzy cross-worker sync registered")
                         else:
                             self.logger.warning("Entity Registry skipped - no connection pool available")
                             self.entity_registry = None
@@ -777,12 +777,20 @@ class VitalGraphAppImpl:
         self._init_admin_routes()
         self.logger.info("Initializing vector mapping routes...")
         self._init_vector_mapping_routes()
+        self.logger.info("Initializing fuzzy mapping routes...")
+        self._init_fuzzy_mapping_routes()
         self.logger.info("Initializing vector index routes...")
         self._init_vector_index_routes()
+        self.logger.info("Initializing search mapping routes...")
+        self._init_search_mapping_routes()
+        self.logger.info("Initializing FTS index routes...")
+        self._init_fts_index_routes()
         self.logger.info("Initializing geo config routes...")
         self._init_geo_config_routes()
         self.logger.info("Initializing geo points routes...")
         self._init_geo_points_routes()
+        self.logger.info("Initializing ontology routes...")
+        self._init_ontology_routes()
         self.logger.info("Initializing metrics routes...")
         self._init_metrics_routes()
         self.logger.info("Initializing frontend routes...")
@@ -983,6 +991,13 @@ class VitalGraphAppImpl:
         agent_registry_router = create_agent_registry_router(self, self.get_current_user)
         self.app.include_router(agent_registry_router, prefix="/api/agents")
     
+    def _init_ontology_routes(self):
+        """Initialize Ontology introspection endpoint routes."""
+        from vitalgraph.endpoint.ontology_endpoint import create_ontology_router
+
+        ontology_router = create_ontology_router(self.get_current_user)
+        self.app.include_router(ontology_router, prefix="/api", tags=["Ontology"])
+
     def _init_process_routes(self):
         """Initialize Process tracking endpoint routes."""
         from vitalgraph.endpoint.process_endpoint import create_process_router
@@ -1004,6 +1019,13 @@ class VitalGraphAppImpl:
         vector_mappings_router = create_vector_mappings_router(self, self.get_current_user)
         self.app.include_router(vector_mappings_router, prefix="/api", tags=["Vector Mappings"])
     
+    def _init_fuzzy_mapping_routes(self):
+        """Initialize fuzzy mapping CRUD endpoint routes."""
+        from vitalgraph.endpoint.fuzzy_mappings_endpoint import create_fuzzy_mappings_router
+        
+        fuzzy_mappings_router = create_fuzzy_mappings_router(self, self.get_current_user)
+        self.app.include_router(fuzzy_mappings_router, prefix="/api", tags=["Fuzzy Mappings"])
+
     def _init_vector_index_routes(self):
         """Initialize vector index CRUD endpoint routes."""
         from vitalgraph.endpoint.vector_indexes_endpoint import create_vector_indexes_router
@@ -1011,6 +1033,20 @@ class VitalGraphAppImpl:
         vector_indexes_router = create_vector_indexes_router(self, self.get_current_user)
         self.app.include_router(vector_indexes_router, prefix="/api", tags=["Vector Indexes"])
     
+    def _init_search_mapping_routes(self):
+        """Initialize search mapping CRUD endpoint routes."""
+        from vitalgraph.endpoint.search_mappings_endpoint import create_search_mappings_router
+        
+        search_mappings_router = create_search_mappings_router(self, self.get_current_user)
+        self.app.include_router(search_mappings_router, prefix="/api", tags=["Search Mappings"])
+
+    def _init_fts_index_routes(self):
+        """Initialize FTS index CRUD endpoint routes."""
+        from vitalgraph.endpoint.fts_indexes_endpoint import create_fts_indexes_router
+        
+        fts_indexes_router = create_fts_indexes_router(self, self.get_current_user)
+        self.app.include_router(fts_indexes_router, prefix="/api", tags=["FTS Indexes"])
+
     def _init_geo_config_routes(self):
         """Initialize geo config CRUD endpoint routes."""
         from vitalgraph.endpoint.geo_config_endpoint import create_geo_config_router

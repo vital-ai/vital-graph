@@ -460,7 +460,7 @@ def get_scoped_env(key: str, default: str = '') -> str:
         2. ``{key}``                (unprefixed fallback)
         3. *default*
 
-    This allows subsystems (Entity Dedup, Weaviate, etc.) to share the same
+    This allows subsystems (Entity Fuzzy, Weaviate, etc.) to share the same
     environment-scoping convention used by the database / Fuseki config.
     """
     env = os.getenv('VITALGRAPH_ENVIRONMENT', 'local').upper()

@@ -1,5 +1,5 @@
 """
-Pre-emit optimization pass for vector and geo functions.
+Pre-emit optimization pass for vector, text, and geo functions.
 
 Walks the PlanV2 tree top-down and annotates nodes with hints that the
 emit phase uses to generate more efficient SQL.  Runs between collect
@@ -7,10 +7,10 @@ and emit in the generator pipeline.
 
 Detected patterns and their hints:
 
-1. **Vector top-K** (SLICE → ORDER → … → EXTEND with vg:vectorSimilarity)
+1. **Vector/Text/Hybrid top-K** (SLICE → ORDER → … → EXTEND with vg:*)
    Hint on EXTEND: ``hints['vg_top_k'] = {'limit': N, 'direction': 'DESC'}``
-   → emit uses a CTE driving query from the vector table instead of
-     a correlated subquery per row.
+   → emit uses index-driving subqueries (HNSW for vector, GIN for text)
+     instead of a correlated subquery per row.
 
 2. **Filter threshold pushdown** (FILTER(?score > T) after BIND vg:…)
    Hint on EXTEND: ``hints['vg_threshold'] = 0.7``
@@ -31,7 +31,8 @@ from .ir import (
 )
 from .vg_functions import (
     VG_VECTOR_SIMILARITY, VG_VECTOR_NEARBY,
-    is_vg_function, is_vg_vector_function,
+    is_vg_function, is_vg_vector_function, is_vg_text_function,
+    is_vg_trigram_function,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,20 +54,20 @@ def vg_optimize(plan: PlanV2) -> PlanV2:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 1: Vector top-K
+# Pattern 1: Vector/Text/Hybrid top-K
 #
 # Detects:
 #   SLICE(limit=N)
 #     ORDER(DESC ?score)          -- or nested through PROJECT/DISTINCT
 #       (PROJECT)?
-#         EXTEND(?score = vg:vectorSimilarity/vectorNearby)
+#         EXTEND(?score = vg:vectorSimilarity/vectorNearby/textSearch/hybridSearch)
 #
 # Annotates the EXTEND node with:
 #   hints['vg_top_k'] = {'limit': N, 'direction': 'DESC'}
 # ---------------------------------------------------------------------------
 
 def _annotate_vector_top_k(plan: PlanV2) -> None:
-    """Detect SLICE→ORDER→…→EXTEND(vg:vector*) and annotate."""
+    """Detect SLICE→ORDER→…→EXTEND(vg:vector*/text*/hybrid*) and annotate."""
     if plan.kind != KIND_SLICE or plan.limit <= 0:
         return
 
@@ -80,10 +81,12 @@ def _annotate_vector_top_k(plan: PlanV2) -> None:
     if extend_node is None:
         return
 
-    # Verify the extend expression is a vg: vector function
+    # Verify the extend expression is a vg: vector or text/hybrid function
     if not isinstance(extend_node.extend_expr, ExprFunction):
         return
-    if not is_vg_vector_function(extend_node.extend_expr):
+    if not (is_vg_vector_function(extend_node.extend_expr)
+            or is_vg_text_function(extend_node.extend_expr)
+            or is_vg_trigram_function(extend_node.extend_expr)):
         return
 
     # Annotate the EXTEND node
@@ -92,7 +95,7 @@ def _annotate_vector_top_k(plan: PlanV2) -> None:
         'direction': direction,
     }
     logger.info(
-        "vg_optimize: vector top-K detected: ?%s ORDER BY %s LIMIT %d",
+        "vg_optimize: top-K detected: ?%s ORDER BY %s LIMIT %d",
         score_var, direction, plan.limit,
     )
 
@@ -193,11 +196,15 @@ def _check_filter_extend_threshold(filter_node: PlanV2) -> None:
 def _find_vg_extend(
     node: Optional[PlanV2], depth: int = 0,
 ) -> Optional[PlanV2]:
-    """Find an EXTEND node with a vg: vector function expression."""
+    """Find an EXTEND node with a vg: vector or text/hybrid function expression."""
     if node is None or depth > 3:
         return None
     if node.kind == KIND_EXTEND:
-        if isinstance(node.extend_expr, ExprFunction) and is_vg_vector_function(node.extend_expr):
+        if isinstance(node.extend_expr, ExprFunction) and (
+            is_vg_vector_function(node.extend_expr)
+            or is_vg_text_function(node.extend_expr)
+            or is_vg_trigram_function(node.extend_expr)
+        ):
             return node
     if node.children:
         return _find_vg_extend(node.children[0], depth + 1)

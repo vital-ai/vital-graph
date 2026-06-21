@@ -131,18 +131,33 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
                     config_id       SERIAL PRIMARY KEY,
                     enabled         BOOLEAN NOT NULL DEFAULT FALSE,
                     auto_sync       BOOLEAN NOT NULL DEFAULT FALSE,
+                    geo_datatype_uris TEXT[] NOT NULL DEFAULT ARRAY[
+                        'http://www.opengis.net/ont/geosparql#wktLiteral',
+                        'http://vital.ai/ontology/vital-core#geoLocation'
+                    ],
                     lat_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                        'http://www.w3.org/2003/01/geo/wgs84_pos#lat',
-                        'http://vital.ai/ontology/haley-ai-kg#hasLatitude'
+                        'http://vital.ai/ontology/vital-aimp#hasLatitude'
                     ],
                     lon_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                        'http://www.w3.org/2003/01/geo/wgs84_pos#long',
-                        'http://vital.ai/ontology/haley-ai-kg#hasLongitude'
+                        'http://vital.ai/ontology/vital-aimp#hasLongitude'
                     ],
                     updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             created.append(tbl)
+    else:
+        # Add geo_datatype_uris column to existing tables
+        if not dry_run:
+            try:
+                await conn.execute(f'''
+                    ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS
+                    geo_datatype_uris TEXT[] NOT NULL DEFAULT ARRAY[
+                        'http://www.opengis.net/ont/geosparql#wktLiteral',
+                        'http://vital.ai/ontology/vital-core#geoLocation'
+                    ]
+                ''')
+            except Exception:
+                pass  # Column may already exist
 
     # --- 5. Geo side-table ---
     tbl = f"{space_id}_geo"
@@ -173,16 +188,122 @@ async def _migrate_space(conn: asyncpg.Connection, space_id: str, dry_run: bool 
             )
             created.append(tbl)
 
+    # --- 6. Seed geo datatypes into the datatype table ---
+    dt_tbl = f"{space_id}_datatype"
+    if await _table_exists(conn, dt_tbl) and not dry_run:
+        geo_datatypes = [
+            ('http://www.opengis.net/ont/geosparql#wktLiteral', 'wktLiteral'),
+            ('http://vital.ai/ontology/vital-core#geoLocation', 'geoLocation'),
+        ]
+        await conn.executemany(
+            f"INSERT INTO {dt_tbl} (datatype_uri, datatype_name) "
+            f"VALUES ($1, $2) ON CONFLICT (datatype_uri) DO NOTHING",
+            geo_datatypes,
+        )
+
+    # --- 7. Shared search mapping ---
+    tbl = f"{space_id}_search_mapping"
+    if not await _table_exists(conn, tbl):
+        missing.append(tbl)
+        if not dry_run:
+            await conn.execute(f'''
+                CREATE TABLE {tbl} (
+                    mapping_id          SERIAL PRIMARY KEY,
+                    mapping_type        VARCHAR(50) NOT NULL,
+                    type_uri            VARCHAR(500),
+                    index_name          VARCHAR(255) NOT NULL,
+                    enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+                    source_type         VARCHAR(20) NOT NULL DEFAULT 'default',
+                    separator           VARCHAR(20) DEFAULT '. ',
+                    include_pred_name   BOOLEAN DEFAULT FALSE,
+                    include_type_desc   BOOLEAN DEFAULT TRUE,
+                    created_time        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            created.append(tbl)
+
+    # --- 8. Shared search mapping property ---
+    tbl = f"{space_id}_search_mapping_property"
+    if not await _table_exists(conn, tbl):
+        missing.append(tbl)
+        if not dry_run:
+            await conn.execute(f'''
+                CREATE TABLE {tbl} (
+                    property_id     SERIAL PRIMARY KEY,
+                    mapping_id      INTEGER NOT NULL,
+                    property_uri    VARCHAR(500) NOT NULL,
+                    property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
+                    ordinal         INTEGER DEFAULT 0,
+                    UNIQUE (mapping_id, property_uri),
+                    FOREIGN KEY (mapping_id) REFERENCES {space_id}_search_mapping(mapping_id) ON DELETE CASCADE
+                )
+            ''')
+            created.append(tbl)
+
+    # --- 9. FTS index registry ---
+    tbl = f"{space_id}_fts_index"
+    if not await _table_exists(conn, tbl):
+        missing.append(tbl)
+        if not dry_run:
+            await conn.execute(f'''
+                CREATE TABLE {tbl} (
+                    index_id        SERIAL PRIMARY KEY,
+                    index_name      VARCHAR(255) NOT NULL UNIQUE,
+                    languages       VARCHAR(64)[] NOT NULL DEFAULT '{{english}}',
+                    created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            created.append(tbl)
+
+    # --- 10. Fuzzy mapping ---
+    tbl = f"{space_id}_fuzzy_mapping"
+    if not await _table_exists(conn, tbl):
+        missing.append(tbl)
+        if not dry_run:
+            await conn.execute(f'''
+                CREATE TABLE {tbl} (
+                    mapping_id      SERIAL PRIMARY KEY,
+                    mapping_type    VARCHAR(50) NOT NULL,
+                    type_uri        VARCHAR(500),
+                    index_name      VARCHAR(255) NOT NULL,
+                    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+                    shingle_k       INTEGER NOT NULL DEFAULT 3,
+                    num_perm        INTEGER NOT NULL DEFAULT 64,
+                    lsh_threshold   FLOAT NOT NULL DEFAULT 0.3,
+                    phonetic_bonus  FLOAT NOT NULL DEFAULT 10.0,
+                    created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            created.append(tbl)
+
+    # --- 11. Fuzzy mapping property ---
+    tbl = f"{space_id}_fuzzy_mapping_property"
+    if not await _table_exists(conn, tbl):
+        missing.append(tbl)
+        if not dry_run:
+            await conn.execute(f'''
+                CREATE TABLE {tbl} (
+                    property_id     SERIAL PRIMARY KEY,
+                    mapping_id      INTEGER NOT NULL,
+                    property_uri    VARCHAR(500) NOT NULL,
+                    property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
+                    ordinal         INTEGER DEFAULT 0,
+                    UNIQUE (mapping_id, property_uri),
+                    FOREIGN KEY (mapping_id) REFERENCES {space_id}_fuzzy_mapping(mapping_id) ON DELETE CASCADE
+                )
+            ''')
+            created.append(tbl)
+
     if dry_run:
         if missing:
             logger.info(f"    Would create: {', '.join(missing)}")
         else:
-            logger.info(f"    All vector/geo tables already exist")
+            logger.info(f"    All tables already exist")
     else:
         if created:
             logger.info(f"    Created: {', '.join(created)}")
         else:
-            logger.info(f"    All vector/geo tables already exist")
+            logger.info(f"    All tables already exist")
 
 
 async def migrate_vector_geo_schema(conn: asyncpg.Connection, dry_run: bool = False) -> None:

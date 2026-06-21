@@ -212,9 +212,10 @@ class MockVitalGraphClient(VitalGraphClientInterface):
     
     # KGFrame CRUD Methods - Delegate to MockKGFramesEndpoint
     
-    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0, search: Optional[str] = None) -> 'QuadResponse':
-        """List KGFrames with pagination and optional search."""
-        return self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search)
+    def list_kgframes(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
+                      search: Optional[str] = None, **kwargs) -> 'QuadResponse':
+        """List KGFrames with pagination, filtering, and sorting."""
+        return self.kgframes.list_kgframes(space_id, graph_id, page_size, offset, search, **kwargs)
     
     def get_kgframe(self, space_id: str, graph_id: str, uri: str) -> 'QuadResultsResponse':
         """Get a specific KGFrame by URI."""

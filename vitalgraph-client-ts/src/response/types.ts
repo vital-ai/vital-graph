@@ -224,6 +224,63 @@ export interface KGTypeDeleteResponse extends VitalGraphResponse {
   deleted_uris: string[];
 }
 
+export interface KGTypeRelationshipEdge {
+  uri: string;
+  edgeType: string;
+  sourceURI: string;
+  destinationURI: string;
+  direction: 'outgoing' | 'incoming';
+}
+
+export interface KGTypeRelationshipType {
+  uri: string;
+  name: string;
+  vitaltype: string;
+}
+
+export interface KGTypeRelationshipsResponse extends VitalGraphResponse {
+  source_type: KGTypeRelationshipType;
+  edges: KGTypeRelationshipEdge[];
+  connected_types: KGTypeRelationshipType[];
+}
+
+export interface KGTypeRelationshipCreateResponse extends VitalGraphResponse {
+  edge_uri: string;
+  edge_type: string;
+  source_uri: string;
+  destination_uri: string;
+}
+
+export interface KGTypeRelationshipDeleteResponse extends VitalGraphResponse {
+  deleted: boolean;
+  edge_uri: string;
+}
+
+export interface KGTypeDocumentationResponse extends VitalGraphResponse {
+  type_uri: string;
+  content?: string;
+  document_uri?: string;
+  has_documentation: boolean;
+}
+
+export interface KGTypeDocumentationUpdateResponse extends VitalGraphResponse {
+  type_uri: string;
+  document_uri: string;
+  created: boolean;
+}
+
+export interface KGTypeDocumentationDeleteResponse extends VitalGraphResponse {
+  type_uri: string;
+  deleted: boolean;
+}
+
+export interface KGTypeSearchResponse extends VitalGraphResponse {
+  types: Record<string, unknown>[];
+  count: number;
+  search_mode: 'keyword' | 'vector';
+  query: string;
+}
+
 // ============================================================================
 // Objects Responses
 // ============================================================================

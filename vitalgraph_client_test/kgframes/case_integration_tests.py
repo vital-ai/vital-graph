@@ -46,8 +46,7 @@ async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: s
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame],
-            entity_uri=entity_uri
+            objects=[frame]
         )
         
         if not create_response.is_success:
@@ -86,8 +85,7 @@ async def test_frame_lifecycle_integration(client: VitalGraphClient, space_id: s
         update_response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[updated_frame],
-            entity_uri=entity_uri
+            objects=[updated_frame]
         )
         
         if not update_response.is_success:
@@ -150,8 +148,7 @@ async def test_frame_slot_integration_workflow(client: VitalGraphClient, space_i
         create_response = await client.kgframes.create_kgframes_with_slots(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame, slot1, slot2],
-            entity_uri=entity_uri
+            objects=[frame, slot1, slot2]
         )
         
         if not create_response.is_success:
@@ -173,8 +170,7 @@ async def test_frame_slot_integration_workflow(client: VitalGraphClient, space_i
             space_id=space_id,
             graph_id=graph_id,
             frame_uri=frame_uri,
-            objects=[additional_slot],
-            entity_uri=entity_uri
+            objects=[additional_slot]
         )
         
         if not slot_response.is_success:
@@ -238,8 +234,7 @@ async def test_batch_operations_integration(client: VitalGraphClient, space_id: 
         create_response = await client.kgframes.create_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=frames,
-            entity_uri=entity_uri
+            objects=frames
         )
         
         if not create_response.is_success or create_response.created_count < 3:

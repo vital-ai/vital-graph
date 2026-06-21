@@ -18,6 +18,7 @@ import {
 
 const HAS_EDGE_SOURCE = 'http://vital.ai/ontology/vital-core#hasEdgeSource';
 const HAS_EDGE_DESTINATION = 'http://vital.ai/ontology/vital-core#hasEdgeDestination';
+const HAS_NAME = 'http://vital.ai/ontology/vital-core#hasName';
 
 interface KGRelation {
   uri: string;
@@ -48,6 +49,7 @@ const KGRelations: React.FC = () => {
   const [sourceFilter, setSourceFilter] = useState('');
   const [destFilter, setDestFilter] = useState('');
   const [deletingRelation, setDeletingRelation] = useState<KGRelation | null>(null);
+  const [entityNames, setEntityNames] = useState<Map<string, string>>(new Map());
 
   const hasSelection = !!(selectedSpace && selectedGraph);
 
@@ -114,6 +116,45 @@ const KGRelations: React.FC = () => {
   }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, sourceFilter, destFilter]);
 
   useEffect(() => { fetchRelations(); }, [fetchRelations]);
+
+  // Resolve entity names for source/destination URIs
+  useEffect(() => {
+    if (!selectedSpace || !selectedGraph || relations.length === 0) return;
+    const uris = new Set<string>();
+    for (const rel of relations) {
+      if (rel.source_uri) uris.add(rel.source_uri);
+      if (rel.destination_uri) uris.add(rel.destination_uri);
+    }
+    // Only resolve URIs we don't already have
+    const toResolve = [...uris].filter(u => !entityNames.has(u));
+    if (toResolve.length === 0) return;
+
+    const resolveNames = async () => {
+      const resolved = new Map(entityNames);
+      // Batch fetch via individual GETs (limited concurrency)
+      const batchSize = 10;
+      for (let i = 0; i < toResolve.length; i += batchSize) {
+        const batch = toResolve.slice(i, i + batchSize);
+        const results = await Promise.allSettled(
+          batch.map(uri => apiService.getEntity(selectedSpace, selectedGraph, uri))
+        );
+        results.forEach((result, idx) => {
+          const uri = batch[idx];
+          if (result.status === 'fulfilled' && result.value?.results) {
+            const quads = result.value.results as Quad[];
+            const nameQuad = quads.find((q: Quad) => q.p === HAS_NAME);
+            if (nameQuad) {
+              const name = nameQuad.o?.replace(/^"(.*)".*$/, '$1') || '';
+              if (name) resolved.set(uri, name);
+            }
+          }
+        });
+      }
+      setEntityNames(resolved);
+    };
+    resolveNames();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relations, selectedSpace, selectedGraph]);
 
   const handleDelete = async (rel: KGRelation) => {
     try {
@@ -268,12 +309,12 @@ const KGRelations: React.FC = () => {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5 text-xs">
-                      <span className="bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded truncate max-w-[180px]" title={rel.source_uri}>
-                        {shortenUri(rel.source_uri) || '—'}
+                      <span className="bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded truncate max-w-[200px]" title={rel.source_uri}>
+                        {entityNames.get(rel.source_uri) || shortenUri(rel.source_uri) || '—'}
                       </span>
                       <HiArrowRight className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
-                      <span className="bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-2 py-0.5 rounded truncate max-w-[180px]" title={rel.destination_uri}>
-                        {shortenUri(rel.destination_uri) || '—'}
+                      <span className="bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-2 py-0.5 rounded truncate max-w-[200px]" title={rel.destination_uri}>
+                        {entityNames.get(rel.destination_uri) || shortenUri(rel.destination_uri) || '—'}
                       </span>
                     </div>
                   </td>

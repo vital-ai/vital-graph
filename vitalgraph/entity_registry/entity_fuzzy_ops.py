@@ -1,7 +1,7 @@
 """
-Dedup operations mixin for the Entity Registry.
+Fuzzy search operations mixin for the Entity Registry.
 
-Near-duplicate detection and cross-worker dedup sync via PostgreSQL NOTIFY.
+Near-duplicate detection and cross-worker fuzzy sync via PostgreSQL NOTIFY.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
-from .entity_dedup import EntityDedupIndex
-from .entity_dedup_pg import EntityDedupIndexPG
+from .entity_fuzzy import EntityFuzzyIndex
+from .entity_fuzzy_pg import EntityFuzzyIndexPG
 
 if TYPE_CHECKING:
     import asyncpg
@@ -21,11 +21,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class DedupMixin:
-    """Near-duplicate detection and cross-worker dedup sync methods."""
+class FuzzyMixin:
+    """Near-duplicate detection and cross-worker fuzzy sync methods."""
 
     pool: asyncpg.Pool
-    dedup_index: Optional[Union[EntityDedupIndex, EntityDedupIndexPG]]
+    fuzzy_index: Optional[Union[EntityFuzzyIndex, EntityFuzzyIndexPG]]
     signal_manager: Optional[SignalManager]
 
     async def get_entity(self, entity_id: str) -> Optional[Dict[str, Any]]: ...
@@ -47,9 +47,9 @@ class DedupMixin:
         from PostgreSQL on demand rather than caching the entire database.
 
         Returns:
-            List of scored candidate dicts, or empty list if dedup is not enabled.
+            List of scored candidate dicts, or empty list if fuzzy search is not enabled.
         """
-        if not self.dedup_index:
+        if not self.fuzzy_index:
             return []
 
         entity = {
@@ -60,10 +60,10 @@ class DedupMixin:
         }
 
         # Phase 1: Get candidate IDs from LSH
-        if isinstance(self.dedup_index, EntityDedupIndexPG):
-            candidate_ids = await self.dedup_index.get_candidate_ids(entity)
+        if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+            candidate_ids = await self.fuzzy_index.get_candidate_ids(entity)
         else:
-            candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
+            candidate_ids = await self.fuzzy_index.async_get_candidate_ids(entity)
         if not candidate_ids:
             logger.info("find_similar(%s): 0 LSH candidates", name)
             return []
@@ -74,7 +74,7 @@ class DedupMixin:
                     name, len(candidate_ids), len(candidate_data))
 
         # Phase 2: Score with RapidFuzz
-        results = self.dedup_index.score_candidates(
+        results = self.fuzzy_index.score_candidates(
             entity, candidate_data,
             limit=limit, min_score=min_score, type_key=type_key,
         )
@@ -132,30 +132,30 @@ class DedupMixin:
         Returns:
             Scored candidates excluding the entity itself.
         """
-        if not self.dedup_index:
+        if not self.fuzzy_index:
             return []
 
         exclude_ids = {entity.get('entity_id')}
-        if isinstance(self.dedup_index, EntityDedupIndexPG):
-            candidate_ids = await self.dedup_index.get_candidate_ids(entity)
+        if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+            candidate_ids = await self.fuzzy_index.get_candidate_ids(entity)
         else:
-            candidate_ids = await self.dedup_index.async_get_candidate_ids(entity)
+            candidate_ids = await self.fuzzy_index.async_get_candidate_ids(entity)
         if not candidate_ids:
             return []
 
         candidate_data = await self._fetch_entities_for_scoring(list(candidate_ids))
 
-        return self.dedup_index.score_candidates(
+        return self.fuzzy_index.score_candidates(
             entity, candidate_data,
             limit=limit, min_score=min_score, exclude_ids=exclude_ids,
         )
 
     # ------------------------------------------------------------------
-    # Cross-worker dedup sync via PostgreSQL NOTIFY
+    # Cross-worker fuzzy sync via PostgreSQL NOTIFY
     # ------------------------------------------------------------------
 
-    async def _notify_dedup_change(self, action: str, entity_id: str):
-        """Send a pg NOTIFY so other workers update their local dedup index.
+    async def _notify_fuzzy_change(self, action: str, entity_id: str):
+        """Send a pg NOTIFY so other workers update their local fuzzy index.
 
         Args:
             action: 'add' or 'remove'
@@ -164,42 +164,42 @@ class DedupMixin:
         if not self.signal_manager:
             return
         try:
-            from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_DEDUP
+            from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_FUZZY
             payload = json.dumps({'action': action, 'entity_id': entity_id})
-            await self.signal_manager._send_notification(CHANNEL_ENTITY_DEDUP, payload)
+            await self.signal_manager._send_notification(CHANNEL_ENTITY_FUZZY, payload)
         except Exception as e:
-            logger.debug(f"Dedup notify failed (non-critical): {e}")
+            logger.debug(f"Fuzzy notify failed (non-critical): {e}")
 
-    async def _notify_dedup_reload(self):
-        """Send a pg NOTIFY telling all workers to do a full dedup index rebuild."""
+    async def _notify_fuzzy_reload(self):
+        """Send a pg NOTIFY telling all workers to do a full fuzzy index rebuild."""
         if not self.signal_manager:
             return
         try:
-            from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_DEDUP
+            from vitalgraph.signal.signal_manager import CHANNEL_ENTITY_FUZZY
             payload = json.dumps({'action': 'reload_full'})
-            await self.signal_manager._send_notification(CHANNEL_ENTITY_DEDUP, payload)
+            await self.signal_manager._send_notification(CHANNEL_ENTITY_FUZZY, payload)
             logger.info("Sent reload_full notification to all workers")
         except Exception as e:
-            logger.warning(f"Dedup reload notify failed: {e}")
+            logger.warning(f"Fuzzy reload notify failed: {e}")
 
-    async def _handle_dedup_notification(self, data: dict):
-        """Callback for incoming dedup notifications from other workers.
+    async def _handle_fuzzy_notification(self, data: dict):
+        """Callback for incoming fuzzy notifications from other workers.
 
         Re-fetches the entity from PostgreSQL and updates the local
-        in-memory dedup index. Safe to call even if this instance
+        in-memory fuzzy index. Safe to call even if this instance
         already applied the change (add_entity is idempotent,
         remove_entity is a no-op for missing IDs).
 
         Supports actions: 'add', 'remove', 'reload_full'.
         """
-        if not self.dedup_index:
+        if not self.fuzzy_index:
             return
         action = data.get('action')
 
         try:
             if action == 'reload_full':
-                count = await self.dedup_index.initialize(self.pool)
-                logger.info(f"Dedup sync: full reload complete — {count} entities indexed")
+                count = await self.fuzzy_index.initialize(self.pool)
+                logger.info(f"Fuzzy sync: full reload complete — {count} entities indexed")
                 return
 
             entity_id = data.get('entity_id')
@@ -207,24 +207,24 @@ class DedupMixin:
                 return
 
             if action == 'remove':
-                if isinstance(self.dedup_index, EntityDedupIndexPG):
-                    await self.dedup_index.remove_entity(entity_id)
+                if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                    await self.fuzzy_index.remove_entity(entity_id)
                 else:
-                    await self.dedup_index.async_remove_entity(entity_id)
-                logger.debug(f"Dedup sync: removed {entity_id}")
+                    await self.fuzzy_index.async_remove_entity(entity_id)
+                logger.debug(f"Fuzzy sync: removed {entity_id}")
             elif action == 'add':
                 entity = await self.get_entity(entity_id)
                 if entity:
-                    if isinstance(self.dedup_index, EntityDedupIndexPG):
-                        await self.dedup_index.add_entity(entity_id, entity)
+                    if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                        await self.fuzzy_index.add_entity(entity_id, entity)
                     else:
-                        await self.dedup_index.async_add_entity(entity_id, entity)
-                    logger.debug(f"Dedup sync: added/updated {entity_id}")
+                        await self.fuzzy_index.async_add_entity(entity_id, entity)
+                    logger.debug(f"Fuzzy sync: added/updated {entity_id}")
                 else:
                     # Entity may have been deleted between notify and handler
-                    if isinstance(self.dedup_index, EntityDedupIndexPG):
-                        await self.dedup_index.remove_entity(entity_id)
+                    if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
+                        await self.fuzzy_index.remove_entity(entity_id)
                     else:
-                        await self.dedup_index.async_remove_entity(entity_id)
+                        await self.fuzzy_index.async_remove_entity(entity_id)
         except Exception as e:
-            logger.warning(f"Dedup sync error for {data}: {e}")
+            logger.warning(f"Fuzzy sync error for {data}: {e}")

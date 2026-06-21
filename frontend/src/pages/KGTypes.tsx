@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
-  Alert, Badge, Button, Label, Pagination, Select, Spinner, TextInput
+  Alert, Badge, Button, Pagination, Select, Spinner, TextInput
 } from 'flowbite-react';
 import { HiPlus, HiTrash, HiSearch, HiEye } from 'react-icons/hi';
-import { type SpaceInfo } from '../types/api';
-import { type GraphInfo } from '../types/graphs';
 import KGTypesIcon from '../components/icons/KGTypesIcon';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
-import { shortenUri, extractGraphName } from '../utils/QuadUtils';
+import {
+  shortenUri, parseEntitiesFromQuads, getFirstValue,
+  type Quad, type GroupedEntity,
+} from '../utils/QuadUtils';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface KGType {
@@ -20,97 +21,133 @@ interface KGType {
   [key: string]: unknown;
 }
 
+type TabKey = 'all' | 'frame' | 'entity' | 'slot' | 'relation' | 'role';
+
+interface TabDef {
+  key: TabKey;
+  label: string;
+  type_uri?: string;
+}
+
+const TABS: TabDef[] = [
+  { key: 'all', label: 'All Types' },
+  { key: 'frame', label: 'Frame Types', type_uri: 'http://vital.ai/ontology/haley-ai-kg#KGFrameType' },
+  { key: 'entity', label: 'Entity Types', type_uri: 'http://vital.ai/ontology/haley-ai-kg#KGEntityType' },
+  { key: 'slot', label: 'Slot Types', type_uri: 'http://vital.ai/ontology/haley-ai-kg#KGSlotType' },
+  { key: 'relation', label: 'Relation Types', type_uri: 'http://vital.ai/ontology/haley-ai-kg#KGRelationType' },
+  { key: 'role', label: 'Role Types', type_uri: 'http://vital.ai/ontology/haley-ai-kg#KGSlotRoleType' },
+];
+
+const SP_KG_TYPES = 'sp_kg_types';
+
 const KGTypes: React.FC = () => {
   const navigate = useNavigate();
-  const { spaceId, graphId } = useParams<{ spaceId?: string; graphId?: string }>();
 
-  const [spaces, setSpaces] = useState<SpaceInfo[]>([]);
-  const [selectedSpace, setSelectedSpace] = useState(spaceId || '');
-  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
-  const [selectedGraph, setSelectedGraph] = useState(graphId ? decodeURIComponent(graphId) : '');
-  const [spacesLoading, setSpacesLoading] = useState(true);
-  const [graphsLoading, setGraphsLoading] = useState(false);
+  // Always use the centralized KG Types system space
+  const selectedSpace = SP_KG_TYPES;
 
+  const [activeTab, setActiveTab] = useState<TabKey>('all');
   const [kgTypes, setKGTypes] = useState<KGType[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchMode, setSearchMode] = useState<'client' | 'keyword' | 'fts' | 'vector' | 'hybrid'>('client');
+  const [searchResults, setSearchResults] = useState<KGType[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [totalCount, setTotalCount] = useState(0);
   const [deletingType, setDeletingType] = useState<KGType | null>(null);
 
-  // Navigate to hierarchical URL
-  useEffect(() => {
-    if (selectedSpace && selectedGraph && !spaceId && !graphId) {
-      navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/kg-types`);
-    }
-  }, [selectedSpace, selectedGraph, navigate, spaceId, graphId]);
 
-  // Fetch spaces
-  const fetchSpaces = useCallback(async () => {
-    try {
-      setSpacesLoading(true);
-      setSpaces(await apiService.getSpaces());
-    } catch { setError('Failed to load spaces.'); }
-    finally { setSpacesLoading(false); }
-  }, []);
-  useEffect(() => { fetchSpaces(); }, [fetchSpaces]);
+  // Resolve type_uri for the active tab
+  const activeTabDef = TABS.find(t => t.key === activeTab)!;
 
-  // Fetch graphs
-  const fetchGraphs = useCallback(async () => {
-    if (!selectedSpace) { setGraphs([]); return; }
-    try {
-      setGraphsLoading(true);
-      setGraphs(await apiService.getGraphs(selectedSpace));
-    } catch { setError('Failed to load graphs.'); setGraphs([]); }
-    finally { setGraphsLoading(false); }
-  }, [selectedSpace]);
-
-  useEffect(() => {
-    fetchGraphs();
-    if (!graphId) setSelectedGraph('');
-  }, [fetchGraphs, graphId]);
-
-  // Fetch KG types
+  // Fetch KG types — re-fetches when tab, space, page, or search changes
   const fetchKGTypes = useCallback(async () => {
-    if (!selectedSpace || !selectedGraph) { setKGTypes([]); return; }
+    if (!selectedSpace) { setKGTypes([]); setTotalCount(0); return; }
     try {
       setLoading(true);
       setError(null);
-      const responseData = await apiService.getKGTypes(selectedSpace, selectedGraph, {
-        page_size: 100, offset: 0
+      const responseData = await apiService.getKGTypes(selectedSpace, {
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        type_uri: activeTabDef.type_uri,
       });
 
-      // Extract types array from response
-      let data: KGType[] = [];
-      if (Array.isArray(responseData)) {
-        data = responseData;
-      } else if (responseData.kgtypes) {
-        data = responseData.kgtypes;
-      } else if (responseData.data) {
-        data = Array.isArray(responseData.data) ? responseData.data : [];
+      // Parse quads into grouped entities, then map to KGType
+      const VITALTYPE = 'http://vital.ai/ontology/vital-core#vitaltype';
+      const HAS_DESCRIPTION = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription';
+
+      let normalized: KGType[] = [];
+      if (responseData.results && Array.isArray(responseData.results)) {
+        const quads: Quad[] = responseData.results;
+        const entities: GroupedEntity[] = parseEntitiesFromQuads(quads);
+        normalized = entities.map((e: GroupedEntity) => ({
+          uri: e.uri,
+          type_name: e.name || shortenUri(e.uri),
+          type_uri: getFirstValue(e.properties, VITALTYPE) || e.rdf_type || '',
+          description: getFirstValue(e.properties, HAS_DESCRIPTION),
+        }));
+      } else if (Array.isArray(responseData)) {
+        normalized = responseData.map((t: KGType) => ({
+          uri: t.uri || '',
+          type_name: t.type_name || shortenUri(t.uri || ''),
+          type_uri: t.type_uri || '',
+          description: t.description || '',
+        }));
       }
 
-      // Normalize: ensure uri/type_name/type_uri/description fields exist
-      const normalized = data.map((t: KGType) => ({
-        ...t,
-        uri: t.uri || '',
-        type_name: t.type_name || shortenUri(t.uri || ''),
-        type_uri: t.type_uri || '',
-        description: t.description || '',
-      }));
-
       setKGTypes(normalized);
+      setTotalCount(responseData.total_count ?? normalized.length);
     } catch {
       setError('Failed to load KG types.');
       setKGTypes([]);
+      setTotalCount(0);
     } finally { setLoading(false); }
-  }, [selectedSpace, selectedGraph]);
+  }, [selectedSpace, activeTabDef.type_uri, currentPage, itemsPerPage]);
 
   useEffect(() => { fetchKGTypes(); }, [fetchKGTypes]);
 
-  // Client-side filter
-  const filtered = kgTypes.filter(t => {
+  // Server-side search
+  const executeSearch = useCallback(async () => {
+    if (!selectedSpace || !searchTerm.trim() || searchMode === 'client') {
+      setSearchResults(null);
+      return;
+    }
+    try {
+      setSearching(true);
+      const resp = await apiService.searchKGTypes(selectedSpace, searchTerm, {
+        search_mode: searchMode,
+        type: activeTab !== 'all' ? activeTab : undefined,
+      });
+      const results = (resp.results || []).map((r: Record<string, unknown>) => ({
+        uri: String(r.uri || ''),
+        type_name: String(r.name || '') || shortenUri(String(r.uri || '')),
+        type_uri: String(r.vitaltype || r.type_uri || ''),
+        description: String(r.description || ''),
+        score: r.score as number | undefined,
+      }));
+      setSearchResults(results);
+    } catch {
+      setError('Search failed.');
+      setSearchResults(null);
+    } finally { setSearching(false); }
+  }, [selectedSpace, searchTerm, searchMode, activeTab]);
+
+  // Trigger server search on Enter key or mode change
+  useEffect(() => {
+    if (searchMode !== 'client' && searchTerm.trim()) {
+      const timer = setTimeout(executeSearch, 400);
+      return () => clearTimeout(timer);
+    } else {
+      setSearchResults(null);
+    }
+  }, [searchTerm, searchMode, executeSearch]);
+
+  // Client-side search filter (on top of server-side type_uri filter)
+  const clientFiltered = kgTypes.filter(t => {
+    if (!searchTerm || searchMode !== 'client') return true;
     const q = searchTerm.toLowerCase();
     return t.type_name.toLowerCase().includes(q) ||
            t.uri.toLowerCase().includes(q) ||
@@ -118,15 +155,21 @@ const KGTypes: React.FC = () => {
            t.description.toLowerCase().includes(q);
   });
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
-  const paginated = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-  const hasSelection = selectedSpace && selectedGraph;
+  const filtered = searchResults ?? clientFiltered;
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  const hasSelection = true;
+
+  const handleTabChange = (tab: TabKey) => {
+    setActiveTab(tab);
+    setCurrentPage(1);
+    setSearchTerm('');
+    setSearchResults(null);
+  };
 
   const handleDelete = async (t: KGType) => {
     try {
-      await apiService.deleteTriples(selectedSpace, selectedGraph, {
-        quads: [{ s: `<${t.uri}>`, p: '*', o: '*', g: `<${selectedGraph}>` }]
-      });
+      await apiService.deleteKGType(selectedSpace, t.uri);
       setDeletingType(null);
       await fetchKGTypes();
     } catch {
@@ -137,7 +180,7 @@ const KGTypes: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <NavigationBreadcrumb spaceId={spaceId} graphId={graphId} currentPageName="KG Types" currentPageIcon={KGTypesIcon} />
+      <NavigationBreadcrumb spaceId={SP_KG_TYPES} currentPageName="KG Types" currentPageIcon={KGTypesIcon} />
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -147,48 +190,59 @@ const KGTypes: React.FC = () => {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Types</h1>
           </div>
           {hasSelection && !loading && (
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{filtered.length} type{filtered.length !== 1 ? 's' : ''}</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{totalCount} type{totalCount !== 1 ? 's' : ''}</p>
           )}
         </div>
         {hasSelection && (
-          <Button size="sm" color="blue" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/kg-types/new?mode=create`)}>
+          <Button size="sm" color="blue" onClick={() => navigate(`/kg-types/new?mode=create`)}>
             <HiPlus className="mr-1.5 h-4 w-4" />Add Type
           </Button>
         )}
       </div>
 
-      {/* Space / Graph selectors */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="flex-1 max-w-xs">
-          <Label htmlFor="space-select" className="text-xs">Space</Label>
-          <Select id="space-select" value={selectedSpace}
-            onChange={(e) => { setSelectedSpace(e.target.value); setSelectedGraph(''); }}
-            disabled={spacesLoading}>
-            <option value="">Choose a space...</option>
-            {spaces.map((s: SpaceInfo) => (
-              <option key={s.space} value={s.space}>{s.space_name}</option>
-            ))}
-          </Select>
-        </div>
-        <div className="flex-1 max-w-xs">
-          <Label htmlFor="graph-select" className="text-xs">Graph</Label>
-          <Select id="graph-select" value={selectedGraph}
-            onChange={(e) => setSelectedGraph(e.target.value)}
-            disabled={!selectedSpace || graphsLoading}>
-            <option value="">Choose a graph...</option>
-            {graphs.map((g: GraphInfo) => (
-              <option key={g.graph_uri} value={g.graph_uri}>{extractGraphName(g.graph_uri)}</option>
-            ))}
-          </Select>
-        </div>
+      {/* System space indicator */}
+      <div className="text-xs text-gray-500 dark:text-gray-400">
+        Centralized type definitions stored in <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">sp_kg_types</code>
       </div>
 
-      {/* Search + page size */}
+      {/* Tabs */}
+      {hasSelection && (
+        <div className="border-b border-gray-200 dark:border-gray-700">
+          <nav className="-mb-px flex space-x-6 overflow-x-auto" aria-label="Type tabs">
+            {TABS.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => handleTabChange(tab.key)}
+                className={`whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === tab.key
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-500'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      )}
+
+      {/* Search + mode + page size */}
       {hasSelection && (
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
-            <TextInput icon={HiSearch} placeholder="Search types..." value={searchTerm}
+            <TextInput icon={HiSearch}
+              placeholder={searchMode === 'client' ? 'Filter types...' : `Search types (${searchMode})...`}
+              value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
+          </div>
+          <div className="w-36 flex-shrink-0">
+            <Select value={searchMode} onChange={(e) => { setSearchMode(e.target.value as typeof searchMode); setCurrentPage(1); }}>
+              <option value="client">Client filter</option>
+              <option value="keyword">Keyword</option>
+              <option value="fts">Full-text</option>
+              <option value="vector">Vector</option>
+              <option value="hybrid">Hybrid</option>
+            </Select>
           </div>
           <div className="w-32 flex-shrink-0">
             <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
@@ -201,23 +255,23 @@ const KGTypes: React.FC = () => {
         </div>
       )}
 
+      {/* Search loading indicator */}
+      {searching && (
+        <div className="flex items-center gap-2 text-sm text-gray-500">
+          <Spinner size="sm" />
+          <span>Searching...</span>
+        </div>
+      )}
+
+      {/* Search result count */}
+      {searchResults && !searching && (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &quot;{searchTerm}&quot; ({searchMode})
+        </p>
+      )}
+
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
 
-      {/* Prompt states */}
-      {!selectedSpace && !spacesLoading && (
-        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
-          <KGTypesIcon className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          <p className="text-lg font-medium">Select a space</p>
-          <p className="text-sm mt-1">Choose a space from the dropdown above</p>
-        </div>
-      )}
-      {selectedSpace && !selectedGraph && !graphsLoading && (
-        <div className="text-center py-16 text-gray-500 dark:text-gray-400">
-          <KGTypesIcon className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          <p className="text-lg font-medium">Select a graph</p>
-          <p className="text-sm mt-1">Choose a graph to browse its KG types</p>
-        </div>
-      )}
 
       {hasSelection && loading && (
         <div className="flex justify-center py-12"><Spinner size="xl" /></div>
@@ -233,7 +287,7 @@ const KGTypes: React.FC = () => {
             </>
           ) : (
             <>
-              <p className="text-lg font-medium">No KG types yet</p>
+              <p className="text-lg font-medium">No {activeTabDef.label.toLowerCase()} yet</p>
               <p className="text-sm mt-1">Add your first KG type to get started</p>
             </>
           )}
@@ -241,20 +295,20 @@ const KGTypes: React.FC = () => {
       )}
 
       {/* Types table */}
-      {hasSelection && !loading && paginated.length > 0 && (
+      {hasSelection && !loading && filtered.length > 0 && (
         <>
           <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">RDF Type</th>
+                  {activeTab === 'all' && <th className="px-4 py-3">RDF Type</th>}
                   <th className="px-4 py-3 hidden md:table-cell">Description</th>
                   <th className="px-4 py-3 w-24"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {paginated.map((t, i) => (
+                {filtered.map((t, i) => (
                   <tr key={t.uri || i} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                     <td className="px-4 py-2.5">
                       <div className="max-w-xs">
@@ -262,16 +316,18 @@ const KGTypes: React.FC = () => {
                         <p className="text-xs font-mono text-gray-400 truncate" title={t.uri}>{t.uri}</p>
                       </div>
                     </td>
-                    <td className="px-4 py-2.5">
-                      <Badge color="indigo" size="xs">{shortenUri(t.type_uri) || 'Unknown'}</Badge>
-                    </td>
+                    {activeTab === 'all' && (
+                      <td className="px-4 py-2.5">
+                        <Badge color="indigo" size="xs">{shortenUri(t.type_uri) || 'Unknown'}</Badge>
+                      </td>
+                    )}
                     <td className="px-4 py-2.5 hidden md:table-cell text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate">
                       {t.description || '-'}
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex gap-1">
                         <button
-                          onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/kg-types/${encodeURIComponent(t.uri)}?mode=view`)}
+                          onClick={() => navigate(`/kg-types/${encodeURIComponent(t.uri)}?mode=view`)}
                           className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-500 transition-colors" title="View"
                         >
                           <HiEye className="h-4 w-4" />

@@ -9,7 +9,11 @@ Test Flow:
   1. Spaces  — list, create, get, get_info, update, verify
   2. Graphs  — list, create, get_info, clear, drop, verify
   3. Triples — add, list, filter, delete, verify deletion
-  4. Cleanup — delete test space (unless DELETE_SPACE_AT_END is False)
+  4. Objects — create, get, update, delete
+  5. KGTypes — create, list, get, update, delete
+  6. Files   — upload, download, delete
+  7. KGEntities — create, list, get, update, delete
+  8. Cleanup — delete test space (unless DELETE_SPACE_AT_END is False)
 """
 
 import asyncio

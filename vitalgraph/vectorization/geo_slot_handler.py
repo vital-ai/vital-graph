@@ -113,27 +113,36 @@ LIMIT 1
 # Parsing
 # ---------------------------------------------------------------------------
 
-def parse_geo_slot_value(value_text: str) -> Optional[Tuple[float, float]]:
-    """Parse a geo slot value string into (latitude, longitude).
+def parse_geo_slot_value(value_text: str) -> Optional[Tuple[float, float, str]]:
+    """Parse a geo slot value string into (latitude, longitude, wkt).
 
-    Supported formats:
-    - "lat,lon" (comma-separated)
-    - "lat lon" (space-separated)
+    Delegates to geo_populator.parse_geo_wkt which handles:
+    - WKT POINT format: "POINT(lon lat)"
+    - Legacy "lat,lon" (comma-separated)
+    - Legacy "lat lon" (space-separated)
+
+    Also handles JSON format as an additional legacy fallback:
     - JSON: {"lat": ..., "lon": ...}
     - JSON: {"latitude": ..., "longitude": ...}
 
     Returns:
-        (latitude, longitude) tuple or None if parsing fails.
+        (latitude, longitude, wkt_string) tuple or None if parsing fails.
     """
+    from vitalgraph.vectorization.geo_populator import parse_geo_wkt
+
     if not value_text:
         return None
 
+    # Try the standard WKT / legacy lat,lon parser first
+    result = parse_geo_wkt(value_text)
+    if result is not None:
+        return result
+
+    # Additional fallback: JSON format
     text = value_text.strip()
-    # Strip XSD typed literal suffix
     if "^^" in text:
         text = text.split("^^")[0].strip('"').strip("'")
 
-    # Try JSON
     if text.startswith("{"):
         try:
             obj = json.loads(text)
@@ -142,30 +151,8 @@ def parse_geo_slot_value(value_text: str) -> Optional[Tuple[float, float]]:
             if lat is not None and lon is not None:
                 lat_f, lon_f = float(lat), float(lon)
                 if -90 <= lat_f <= 90 and -180 <= lon_f <= 180:
-                    return (lat_f, lon_f)
+                    return (lat_f, lon_f, f"POINT({lon_f} {lat_f})")
         except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-        return None
-
-    # Try comma-separated
-    if "," in text:
-        parts = text.split(",", 1)
-        try:
-            lat_f, lon_f = float(parts[0].strip()), float(parts[1].strip())
-            if -90 <= lat_f <= 90 and -180 <= lon_f <= 180:
-                return (lat_f, lon_f)
-        except (ValueError, IndexError):
-            pass
-        return None
-
-    # Try space-separated
-    parts = text.split()
-    if len(parts) == 2:
-        try:
-            lat_f, lon_f = float(parts[0]), float(parts[1])
-            if -90 <= lat_f <= 90 and -180 <= lon_f <= 180:
-                return (lat_f, lon_f)
-        except ValueError:
             pass
 
     return None
@@ -277,16 +264,16 @@ async def process_geo_slot(
             pass
         return True
 
-    # Parse lat/lon
-    coords = parse_geo_slot_value(row["value_text"])
-    if coords is None:
+    # Parse geo value → (lat, lon, wkt)
+    parsed = parse_geo_slot_value(row["value_text"])
+    if parsed is None:
         logger.warning(
             "process_geo_slot: unparseable geo value for slot %s: %s",
             slot_uuid, row["value_text"],
         )
         return False
 
-    lat, lon = coords
+    lat, lon, wkt = parsed
 
     # Upsert into geo table (keyed on entity_uuid + context_uuid)
     try:
@@ -294,6 +281,7 @@ async def process_geo_slot(
             GEO_UPSERT_SQL.format(geo_table=geo_table),
             entity_uuid,
             None,  # predicate_uuid (not applicable for slot-based geo)
+            wkt,
             lat,
             lon,
             context_uuid,

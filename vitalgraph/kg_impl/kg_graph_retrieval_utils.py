@@ -722,7 +722,19 @@ class GraphObjectRetriever:
         property_filter_clauses = []
         if property_filters:
             for prop_uri, value_uri in property_filters.items():
-                property_filter_clauses.append(f"?s <{prop_uri}> <{value_uri}> .")
+                if prop_uri == "_exclude_segment_types":
+                    # Exclude managed segment objects via FILTER NOT EXISTS
+                    from vitalgraph.kg_impl.kgdocuments_read_impl import _MANAGED_SEGMENT_TYPES, _HAS_SEGMENT_TYPE_URI
+                    seg_values = ", ".join(f'<{v}>' for v in _MANAGED_SEGMENT_TYPES)
+                    property_filter_clauses.append(
+                        f"FILTER NOT EXISTS {{ ?s <{_HAS_SEGMENT_TYPE_URI}> ?_segType . FILTER(?_segType IN ({seg_values})) }}"
+                    )
+                elif prop_uri == "document_type_uri":
+                    property_filter_clauses.append(
+                        f'?s <http://vital.ai/ontology/haley-ai-kg#hasKGDocumentType> <{value_uri}> .'
+                    )
+                else:
+                    property_filter_clauses.append(f"?s <{prop_uri}> <{value_uri}> .")
         
         # Build search filter if provided
         search_filter_clauses = []

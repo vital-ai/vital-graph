@@ -163,13 +163,15 @@ class KGTypesCreateProcessor:
             graph_id: Graph identifier (complete URI)
             
         Returns:
-            List[tuple]: List of (subject, predicate, object, graph) tuads
+            List[tuple]: List of (subject, predicate, object, graph) quads
+                         with rdflib types preserved (URIRef/Literal/BNode)
         """
+        from rdflib import URIRef, Literal, BNode
+        import json
         try:
             # Use VitalSigns native to_triples() method
             triples = kgtype_object.to_triples()
             
-            # Log the actual URI value to debug the format issue
             actual_uri = str(kgtype_object.URI)
             self.logger.debug(f"🔍 KGType URI value: '{actual_uri}' (type: {type(kgtype_object.URI)})")
             self.logger.debug(f"🔍 VitalSigns to_triples() generated {len(triples)} triples for KGType: {actual_uri}")
@@ -179,49 +181,31 @@ class KGTypesCreateProcessor:
                 self.logger.debug(f"  Triple {i+1}: {triple}")
             if len(triples) > 5:
                 self.logger.debug(f"  ... and {len(triples) - 5} more triples")
-            
-            # Convert triples to quads by adding graph_id
-            # Extract proper URI from VitalSigns CombinedProperty objects
-            proper_uri = str(kgtype_object.URI)
-            if proper_uri.startswith("[{'@id': '") and proper_uri.endswith("'}]"):
-                # Extract the actual URI from the JSON-like format
-                import json
-                try:
-                    parsed = json.loads(proper_uri)
-                    if isinstance(parsed, list) and len(parsed) > 0 and '@id' in parsed[0]:
-                        proper_uri = parsed[0]['@id']
-                except:
-                    pass  # Keep original if parsing fails
-            
+
+            def _fix_uri(term):
+                """Fix malformed VitalSigns CombinedProperty URIs and ensure rdflib type."""
+                s = str(term)
+                if s.startswith("[{'@id': '") and s.endswith("'}]"):
+                    try:
+                        parsed = json.loads(s)
+                        if isinstance(parsed, list) and len(parsed) > 0 and '@id' in parsed[0]:
+                            s = parsed[0]['@id']
+                    except Exception:
+                        pass
+                return URIRef(s) if not isinstance(term, (Literal, BNode)) else term
+
+            graph_ref = URIRef(graph_id)
             quads = []
             for i, triple in enumerate(triples):
                 if len(triple) == 3:  # (subject, predicate, object)
                     subject, predicate, obj = triple
-                    
-                    # Fix subject URI if it's malformed
-                    subject_str = str(subject)
-                    if subject_str.startswith("[{'@id': '") and subject_str.endswith("'}]"):
-                        try:
-                            parsed = json.loads(subject_str)
-                            if isinstance(parsed, list) and len(parsed) > 0 and '@id' in parsed[0]:
-                                subject_str = parsed[0]['@id']
-                        except:
-                            pass
-                    
-                    # Fix object URI if it's malformed
-                    obj_str = str(obj)
-                    if obj_str.startswith("[{'@id': '") and obj_str.endswith("'}]"):
-                        try:
-                            parsed = json.loads(obj_str)
-                            if isinstance(parsed, list) and len(parsed) > 0 and '@id' in parsed[0]:
-                                obj_str = parsed[0]['@id']
-                        except:
-                            pass
-                    
-                    quad = (subject_str, str(predicate), obj_str, graph_id)
+                    # Preserve Literal/BNode objects; fix URIs
+                    subject = _fix_uri(subject)
+                    predicate = _fix_uri(predicate)
+                    obj = obj if isinstance(obj, (Literal, BNode)) else _fix_uri(obj)
+                    quad = (subject, predicate, obj, graph_ref)
                     quads.append(quad)
                     
-                    # Log first few quads for debugging
                     if i < 5:
                         self.logger.debug(f"  Quad {i+1}: {quad}")
                 else:

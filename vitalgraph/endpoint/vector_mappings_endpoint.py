@@ -1,6 +1,7 @@
 """Vector Mappings REST Endpoint
 
-REST API for managing vector_mapping + vector_mapping_property rows per space.
+REST API for managing search_mapping + search_mapping_property rows per space.
+(Legacy /api/vector-mappings routes — delegates to shared search_mapping tables.)
 
 Routes (all under /api/vector-mappings):
     GET    /             — list mappings (filterable), or get single if mapping_id provided
@@ -16,10 +17,9 @@ import logging
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_write, require_space_read
-from ..vectorization.mapping_manager import MappingManager
+from ..vectorization.search_mapping_manager import SearchMappingManager
 from ..model.vector_mappings_model import (
     MappingPropertyOut, MappingOut, MappingListResponse,
     CreateMappingRequest, UpdateMappingRequest, AddPropertyRequest,
@@ -46,7 +46,7 @@ class VectorMappingsEndpoint:
     # ------------------------------------------------------------------
 
     async def _get_manager(self, space_id: str) -> tuple:
-        """Acquire a connection and return a (MappingManager, conn) tuple."""
+        """Acquire a connection and return a (SearchMappingManager, conn) tuple."""
         db_impl = self.app_impl.db_impl
         if db_impl is None or not getattr(db_impl, "connection_pool", None):
             raise HTTPException(
@@ -54,7 +54,7 @@ class VectorMappingsEndpoint:
                 detail="Database not available",
             )
         conn = await db_impl.connection_pool.acquire()
-        return MappingManager(conn, space_id), conn
+        return SearchMappingManager(conn, space_id), conn
 
     async def _release(self, conn):
         """Release the connection back to the pool."""
@@ -64,6 +64,35 @@ class VectorMappingsEndpoint:
                 await db_impl.connection_pool.release(conn)
         except Exception:
             logger.exception("Error releasing connection")
+
+    # ------------------------------------------------------------------
+    # DTO conversion
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dto_to_out(dto) -> MappingOut:
+        """Convert SearchMappingDTO to the vector MappingOut model."""
+        return MappingOut(
+            mapping_id=dto.mapping_id,
+            mapping_type=dto.mapping_type,
+            type_uri=dto.type_uri,
+            index_name=dto.index_name,
+            enabled=dto.enabled,
+            source_type=dto.source_type,
+            separator=dto.separator,
+            include_pred_name=dto.include_pred_name,
+            created_time=dto.created_time,
+            properties=[
+                MappingPropertyOut(
+                    property_id=p.property_id,
+                    mapping_id=p.mapping_id,
+                    property_uri=p.property_uri,
+                    property_role=p.property_role,
+                    ordinal=p.ordinal,
+                )
+                for p in dto.properties
+            ],
+        )
 
     # ------------------------------------------------------------------
     # Route handlers
@@ -85,7 +114,7 @@ class VectorMappingsEndpoint:
                 mapping_type=mapping_type,
                 enabled=enabled,
             )
-            mappings = [MappingOut(**d.to_dict()) for d in dtos]
+            mappings = [self._dto_to_out(d) for d in dtos]
             return MappingListResponse(mappings=mappings, total_count=len(mappings))
         finally:
             await self._release(conn)
@@ -102,10 +131,9 @@ class VectorMappingsEndpoint:
                 source_type=body.source_type,
                 separator=body.separator,
                 include_pred_name=body.include_pred_name,
-                include_type_desc=body.include_type_desc,
             )
             dto = await manager.get_mapping(mapping_id)
-            return MappingOut(**dto.to_dict())
+            return self._dto_to_out(dto)
         finally:
             await self._release(conn)
 
@@ -116,7 +144,7 @@ class VectorMappingsEndpoint:
             dto = await manager.get_mapping(mapping_id)
             if dto is None:
                 raise HTTPException(status_code=404, detail="Mapping not found")
-            return MappingOut(**dto.to_dict())
+            return self._dto_to_out(dto)
         finally:
             await self._release(conn)
 
@@ -126,10 +154,10 @@ class VectorMappingsEndpoint:
         require_space_write(current_user, space_id)
         manager, conn = await self._get_manager(space_id)
         try:
-            dto = await manager.update_mapping(mapping_id, **body.dict(exclude_none=True))
+            dto = await manager.update_mapping(mapping_id, **body.model_dump(exclude_none=True))
             if dto is None:
                 raise HTTPException(status_code=404, detail="Mapping not found")
-            return MappingOut(**dto.to_dict())
+            return self._dto_to_out(dto)
         finally:
             await self._release(conn)
 

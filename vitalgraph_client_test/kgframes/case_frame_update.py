@@ -72,8 +72,7 @@ async def test_frame_update_with_entity_uri(client: VitalGraphClient, space_id: 
         response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame],
-            entity_uri=entity_uri
+            objects=[frame]
         )
         
         if response.is_success:
@@ -89,24 +88,45 @@ async def test_frame_update_with_entity_uri(client: VitalGraphClient, space_id: 
 
 
 async def test_frame_update_with_parent_uri(client: VitalGraphClient, space_id: str, graph_id: str, frame_uri: str, parent_uri: str, logger: logging.Logger) -> bool:
-    """Test frame update with parent URI parameter."""
+    """Test frame update with parent URI parameter.
+    
+    Creates a child frame under parent_uri first, then updates it
+    using the server-assigned URI from the create response.
+    """
     logger.info("🧪 Testing frame update with parent URI...")
     
     try:
-        # Create test data using VitalSigns objects - CORRECT APPROACH
         test_data_creator = ClientTestDataCreator()
         
-        # Create updated KGFrame using VitalSigns
-        frame = KGFrame()
-        frame.URI = frame_uri
-        frame.name = "Updated Child Frame"
-        frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ChildUpdatedFrame"
+        # Step 1: Create a child frame under the parent
+        child_frame = KGFrame()
+        child_frame.URI = str(test_data_creator.generate_test_uri("frame", "update_parent_child_001"))
+        child_frame.name = "Child Frame for Parent Update Test"
+        child_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ChildFrame"
         
-        # Test frame update with parent URI - pass GraphObject directly
+        create_response = await client.kgframes.create_kgframes(
+            space_id=space_id,
+            graph_id=graph_id,
+            objects=[child_frame],
+            parent_uri=parent_uri
+        )
+        
+        if not create_response.is_success:
+            logger.error(f"❌ Failed to create child frame for parent update test: {create_response.message}")
+            return False
+        
+        child_uri = str(child_frame.URI)
+        
+        # Step 2: Update the child frame
+        updated_frame = KGFrame()
+        updated_frame.URI = child_uri
+        updated_frame.name = "Updated Child Frame"
+        updated_frame.kGFrameType = "http://vital.ai/ontology/haley-ai-kg#ChildUpdatedFrame"
+        
         response = await client.kgframes.update_kgframes(
             space_id=space_id,
             graph_id=graph_id,
-            objects=[frame],
+            objects=[updated_frame],
             parent_uri=parent_uri
         )
         

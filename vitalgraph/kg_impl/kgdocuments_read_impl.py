@@ -170,16 +170,30 @@ class KGDocumentsReadProcessor:
             self.logger.debug(f"Listing segments for parent: {parent_uri}")
             self._ensure_retriever(backend)
 
-            # Use SPARQL to find segments linked to this parent
+            # Use SPARQL edge traversal to find segments.
+            # Handles two cases via UNION:
+            #   1. parent_uri is the ORIGINAL doc → two-hop: original → parent_copy → segments
+            #   2. parent_uri is already a PARENT COPY → one-hop: parent_copy → segments
             sparql = f"""
                 PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
                 PREFIX vital: <http://vital.ai/ontology/vital-core#>
 
-                SELECT ?seg WHERE {{
+                SELECT DISTINCT ?seg WHERE {{
                     GRAPH <{graph_id}> {{
-                        ?seg haley:hasKGDocumentSegmentTypeURI ?segType .
-                        FILTER(?segType != "urn:segtype:segmentation_parent")
-                        FILTER(STRSTARTS(STR(?seg), "{parent_uri}"))
+                        {{
+                            ?e1 vital:hasEdgeSource <{parent_uri}> .
+                            ?e1 vital:hasEdgeDestination ?parent_copy .
+                            ?parent_copy haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+                            ?e2 vital:hasEdgeSource ?parent_copy .
+                            ?e2 vital:hasEdgeDestination ?seg .
+                            ?seg haley:hasKGDocumentSegmentTypeURI ?segType .
+                            FILTER(?segType != <urn:segtype:segmentation_parent>)
+                        }} UNION {{
+                            ?e3 vital:hasEdgeSource <{parent_uri}> .
+                            ?e3 vital:hasEdgeDestination ?seg .
+                            ?seg haley:hasKGDocumentSegmentTypeURI ?segType .
+                            FILTER(?segType != <urn:segtype:segmentation_parent>)
+                        }}
                     }}
                 }}
                 ORDER BY ?seg

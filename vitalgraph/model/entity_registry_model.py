@@ -433,7 +433,7 @@ class ChangeLogResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
-# Similar Entity / Dedup Models
+# Similar Entity / Fuzzy Models
 # ------------------------------------------------------------------
 
 class SimilarEntityResult(BaseModel):

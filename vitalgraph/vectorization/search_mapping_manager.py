@@ -1,7 +1,11 @@
-"""Programmatic API for managing vector_mapping + vector_mapping_property rows.
+"""Programmatic API for managing shared search_mapping + search_mapping_property rows.
+
+These mappings are shared by both FTS and vector indexes.  A given mapping
+defines which entity types and predicates feed into a named search index.
+FTS and vector index tables reference these mappings by ``index_name``.
 
 Usage:
-    manager = MappingManager(conn, space_id)
+    manager = SearchMappingManager(conn, space_id)
     mid = await manager.create_mapping(index_name="entity_default",
                                         mapping_type="kgentity",
                                         source_type="default", enabled=True)
@@ -23,16 +27,43 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MappingPropertyDTO:
+class SearchMappingPropertyDTO:
     property_id: int
     mapping_id: int
     property_uri: str
     property_role: str = "include"
     ordinal: int = 0
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'property_id': self.property_id,
+            'mapping_id': self.mapping_id,
+            'property_uri': self.property_uri,
+            'property_role': self.property_role,
+            'ordinal': self.ordinal,
+        }
+
 
 @dataclass
-class MappingDTO:
+class SearchMappingIndexDTO:
+    id: int
+    mapping_id: int
+    index_type: str  # 'vector' or 'fts'
+    index_name: str
+    created_time: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'mapping_id': self.mapping_id,
+            'index_type': self.index_type,
+            'index_name': self.index_name,
+            'created_time': str(self.created_time) if self.created_time else None,
+        }
+
+
+@dataclass
+class SearchMappingDTO:
     mapping_id: int
     mapping_type: str
     type_uri: Optional[str]
@@ -41,9 +72,9 @@ class MappingDTO:
     source_type: str
     separator: str
     include_pred_name: bool
-    include_type_desc: bool
     created_time: Optional[str] = None
-    properties: List[MappingPropertyDTO] = field(default_factory=list)
+    properties: List[SearchMappingPropertyDTO] = field(default_factory=list)
+    indexes: List[SearchMappingIndexDTO] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -56,18 +87,19 @@ class MappingDTO:
 # Manager
 # ---------------------------------------------------------------------------
 
-class MappingManager:
-    """CRUD operations on the normalized vector_mapping tables.
+class SearchMappingManager:
+    """CRUD operations on the shared search_mapping tables.
 
-    ``conn`` must be an asyncpg Connection (or pool-acquired connection).
-    All public methods are async.
+    These mappings are consumed by both FTS and vector indexes.
+    ``conn`` must be an asyncpg Connection.  All public methods are async.
     """
 
     def __init__(self, conn, space_id: str):
         self.conn = conn
         self.space_id = space_id
-        self._mapping_table = f"{space_id}_vector_mapping"
-        self._property_table = f"{space_id}_vector_mapping_property"
+        self._mapping_table = f"{space_id}_search_mapping"
+        self._index_table = f"{space_id}_search_mapping_index"
+        self._property_table = f"{space_id}_search_mapping_property"
 
     # ------------------------------------------------------------------
     # Mapping CRUD
@@ -83,26 +115,25 @@ class MappingManager:
         source_type: str = "default",
         separator: str = ". ",
         include_pred_name: bool = False,
-        include_type_desc: bool = True,
     ) -> int:
-        """Insert a vector_mapping row and return its mapping_id."""
+        """Insert a search_mapping row and return its mapping_id."""
         sql = f"""
             INSERT INTO {self._mapping_table}
                 (mapping_type, type_uri, index_name, enabled,
-                 source_type, separator, include_pred_name, include_type_desc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 source_type, separator, include_pred_name)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING mapping_id
         """
         mapping_id = await self.conn.fetchval(
             sql,
             mapping_type, type_uri, index_name, enabled,
-            source_type, separator, include_pred_name, include_type_desc,
+            source_type, separator, include_pred_name,
         )
-        logger.info("Created mapping %s for %s/%s (space=%s)",
+        logger.info("Created search mapping %s for %s/%s (space=%s)",
                      mapping_id, mapping_type, type_uri, self.space_id)
         return mapping_id
 
-    async def get_mapping(self, mapping_id: int) -> Optional[MappingDTO]:
+    async def get_mapping(self, mapping_id: int) -> Optional[SearchMappingDTO]:
         """Get a single mapping with its child properties."""
         row = await self.conn.fetchrow(
             f"SELECT * FROM {self._mapping_table} WHERE mapping_id = $1",
@@ -118,7 +149,7 @@ class MappingManager:
         index_name: Optional[str] = None,
         mapping_type: Optional[str] = None,
         enabled: Optional[bool] = None,
-    ) -> List[MappingDTO]:
+    ) -> List[SearchMappingDTO]:
         """List mappings with optional filters.  Always includes child properties."""
         clauses: List[str] = []
         params: List[Any] = []
@@ -146,14 +177,14 @@ class MappingManager:
         self,
         mapping_id: int,
         **fields,
-    ) -> Optional[MappingDTO]:
+    ) -> Optional[SearchMappingDTO]:
         """Update mutable columns on a mapping row.
 
         Accepted keyword args: enabled, source_type, separator,
-        include_pred_name, include_type_desc.
+        include_pred_name.
         """
         allowed = {"enabled", "source_type", "separator",
-                    "include_pred_name", "include_type_desc"}
+                    "include_pred_name"}
         to_set = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not to_set:
             return await self.get_mapping(mapping_id)
@@ -182,7 +213,7 @@ class MappingManager:
         )
         deleted = result == "DELETE 1"
         if deleted:
-            logger.info("Deleted mapping %s (space=%s)", mapping_id, self.space_id)
+            logger.info("Deleted search mapping %s (space=%s)", mapping_id, self.space_id)
         return deleted
 
     # ------------------------------------------------------------------
@@ -197,14 +228,30 @@ class MappingManager:
         property_role: str = "include",
         ordinal: int = 0,
     ) -> int:
-        """Add a child property row.  Returns the property_id."""
+        """Add a child property row.  Returns the property_id.
+
+        Side-effect: if this is an 'include' property and the mapping's
+        source_type is still 'default', automatically upgrades it to
+        'properties' so the populator uses the explicit property list.
+        """
         sql = f"""
             INSERT INTO {self._property_table}
                 (mapping_id, property_uri, property_role, ordinal)
             VALUES ($1, $2, $3, $4)
             RETURNING property_id
         """
-        return await self.conn.fetchval(sql, mapping_id, property_uri, property_role, ordinal)
+        pid = await self.conn.fetchval(sql, mapping_id, property_uri, property_role, ordinal)
+
+        # Auto-upgrade source_type when include properties are added
+        if property_role == "include":
+            await self.conn.execute(
+                f"UPDATE {self._mapping_table} "
+                f"SET source_type = 'properties' "
+                f"WHERE mapping_id = $1 AND source_type = 'default'",
+                mapping_id,
+            )
+
+        return pid
 
     async def remove_property(self, property_id: int) -> bool:
         """Remove a child property row by its property_id."""
@@ -214,14 +261,14 @@ class MappingManager:
         )
         return result == "DELETE 1"
 
-    async def list_properties(self, mapping_id: int) -> List[MappingPropertyDTO]:
+    async def list_properties(self, mapping_id: int) -> List[SearchMappingPropertyDTO]:
         """List child properties for a mapping (ordered by ordinal)."""
         rows = await self.conn.fetch(
             f"SELECT * FROM {self._property_table} "
             f"WHERE mapping_id = $1 ORDER BY ordinal, property_id",
             mapping_id,
         )
-        return [MappingPropertyDTO(
+        return [SearchMappingPropertyDTO(
             property_id=r["property_id"],
             mapping_id=r["mapping_id"],
             property_uri=r["property_uri"],
@@ -230,11 +277,64 @@ class MappingManager:
         ) for r in rows]
 
     # ------------------------------------------------------------------
+    # Index association CRUD
+    # ------------------------------------------------------------------
+
+    async def add_index(
+        self,
+        mapping_id: int,
+        index_type: str,
+        index_name: str,
+    ) -> int:
+        """Associate an index with a mapping.  Returns the junction row id."""
+        sql = f"""
+            INSERT INTO {self._index_table}
+                (mapping_id, index_type, index_name)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (mapping_id, index_type, index_name) DO NOTHING
+            RETURNING id
+        """
+        row_id = await self.conn.fetchval(sql, mapping_id, index_type, index_name)
+        if row_id is None:
+            # Already exists — fetch it
+            row_id = await self.conn.fetchval(
+                f"SELECT id FROM {self._index_table} "
+                f"WHERE mapping_id = $1 AND index_type = $2 AND index_name = $3",
+                mapping_id, index_type, index_name,
+            )
+        logger.info("Associated index %s/%s with mapping %s (space=%s)",
+                    index_type, index_name, mapping_id, self.space_id)
+        return row_id
+
+    async def remove_index(self, junction_id: int) -> bool:
+        """Remove an index association by junction row id."""
+        result = await self.conn.execute(
+            f"DELETE FROM {self._index_table} WHERE id = $1",
+            junction_id,
+        )
+        return result == "DELETE 1"
+
+    async def list_indexes(self, mapping_id: int) -> List[SearchMappingIndexDTO]:
+        """List index associations for a mapping."""
+        rows = await self.conn.fetch(
+            f"SELECT * FROM {self._index_table} "
+            f"WHERE mapping_id = $1 ORDER BY index_type, index_name",
+            mapping_id,
+        )
+        return [SearchMappingIndexDTO(
+            id=r["id"],
+            mapping_id=r["mapping_id"],
+            index_type=r["index_type"],
+            index_name=r["index_name"],
+            created_time=str(r["created_time"]) if r["created_time"] else None,
+        ) for r in rows]
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _row_to_dto(self, row, *, include_properties: bool = False) -> MappingDTO:
-        dto = MappingDTO(
+    async def _row_to_dto(self, row, *, include_properties: bool = False) -> SearchMappingDTO:
+        dto = SearchMappingDTO(
             mapping_id=row["mapping_id"],
             mapping_type=row["mapping_type"],
             type_uri=row["type_uri"],
@@ -243,9 +343,9 @@ class MappingManager:
             source_type=row["source_type"],
             separator=row["separator"],
             include_pred_name=row["include_pred_name"],
-            include_type_desc=row["include_type_desc"],
             created_time=str(row["created_time"]) if row["created_time"] else None,
         )
         if include_properties:
             dto.properties = await self.list_properties(row["mapping_id"])
+            dto.indexes = await self.list_indexes(row["mapping_id"])
         return dto

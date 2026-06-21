@@ -39,7 +39,7 @@ class EntityRegistrySchema:
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 status VARCHAR(20) NOT NULL DEFAULT 'active',
-                dedup_hash VARCHAR(32),
+                fuzzy_hash VARCHAR(32),
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 created_by VARCHAR(255),
@@ -215,8 +215,8 @@ class EntityRegistrySchema:
             )
         ''',
 
-        'entity_dedup_band': '''
-            CREATE TABLE IF NOT EXISTS entity_dedup_band (
+        'entity_fuzzy_band': '''
+            CREATE TABLE IF NOT EXISTS entity_fuzzy_band (
                 band_id SMALLINT NOT NULL,
                 band_hash BYTEA NOT NULL,
                 entity_key TEXT NOT NULL,
@@ -224,8 +224,8 @@ class EntityRegistrySchema:
             )
         ''',
 
-        'entity_dedup_phonetic_band': '''
-            CREATE TABLE IF NOT EXISTS entity_dedup_phonetic_band (
+        'entity_fuzzy_phonetic_band': '''
+            CREATE TABLE IF NOT EXISTS entity_fuzzy_phonetic_band (
                 band_id SMALLINT NOT NULL,
                 band_hash BYTEA NOT NULL,
                 entity_key TEXT NOT NULL,
@@ -233,10 +233,10 @@ class EntityRegistrySchema:
             )
         ''',
 
-        'entity_dedup_hash': '''
-            CREATE TABLE IF NOT EXISTS entity_dedup_hash (
+        'entity_fuzzy_hash': '''
+            CREATE TABLE IF NOT EXISTS entity_fuzzy_hash (
                 entity_id VARCHAR(50) PRIMARY KEY,
-                dedup_hash CHAR(32) NOT NULL
+                fuzzy_hash CHAR(32) NOT NULL
             )
         ''',
     }
@@ -299,9 +299,9 @@ class EntityRegistrySchema:
         'CREATE INDEX IF NOT EXISTS idx_rel_status ON entity_relationship(status)',
         'CREATE INDEX IF NOT EXISTS idx_rel_dates ON entity_relationship(start_datetime, end_datetime)',
 
-        # Dedup band indexes (covering index for fast band lookups)
-        'CREATE INDEX IF NOT EXISTS idx_dedup_band_lookup ON entity_dedup_band (band_id, band_hash) INCLUDE (entity_key)',
-        'CREATE INDEX IF NOT EXISTS idx_dedup_phonetic_lookup ON entity_dedup_phonetic_band (band_id, band_hash) INCLUDE (entity_key)',
+        # Fuzzy band indexes (covering index for fast band lookups)
+        'CREATE INDEX IF NOT EXISTS idx_fuzzy_band_lookup ON entity_fuzzy_band (band_id, band_hash) INCLUDE (entity_key)',
+        'CREATE INDEX IF NOT EXISTS idx_fuzzy_phonetic_lookup ON entity_fuzzy_phonetic_band (band_id, band_hash) INCLUDE (entity_key)',
     ]
 
     SEED_ENTITY_TYPES = [
@@ -369,8 +369,8 @@ class EntityRegistrySchema:
         "THEN EXECUTE 'ALTER INDEX idx_category_key RENAME TO idx_category_key_old'; END IF; END $$",
         # Add external_location_id for business-assigned location references
         "ALTER TABLE entity_location ADD COLUMN IF NOT EXISTS external_location_id VARCHAR(50)",
-        # Dedup hash: MD5 of dedup-relevant fields for fast PG ↔ MemoryDB comparison
-        "ALTER TABLE entity ADD COLUMN IF NOT EXISTS dedup_hash VARCHAR(32)",
+        # Fuzzy hash: MD5 of fuzzy-relevant fields for fast PG ↔ MemoryDB comparison
+        "ALTER TABLE entity ADD COLUMN IF NOT EXISTS fuzzy_hash VARCHAR(32)",
     ]
 
     VIEWS = [

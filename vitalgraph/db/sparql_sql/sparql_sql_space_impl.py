@@ -221,6 +221,20 @@ class _SparqlSQLDbOpsAdapter:
             return 0
         return await self._impl.remove_rdf_quads_batch(space_id, quads)
 
+    async def add_rdf_quads_batch_bulk(self, space_id: str, quads: list,
+                                      connection=None) -> int:
+        if not quads:
+            return 0
+        return await self._impl.add_rdf_quads_batch_bulk(
+            space_id, quads, connection=connection)
+
+    async def remove_rdf_quads_batch_bulk(self, space_id: str, quads: list,
+                                          connection=None) -> int:
+        if not quads:
+            return 0
+        return await self._impl.remove_rdf_quads_batch_bulk(
+            space_id, quads, connection=connection)
+
     async def remove_quads_by_subject_uris(self, space_id: str,
                                            subject_uris: list,
                                            graph_id: Optional[str] = None,
@@ -1295,6 +1309,12 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     from .vg_resolve import resolve_vector_requests
                     sql = await resolve_vector_requests(
                         sql, gen.vector_requests, space_id, conn)
+
+                # Resolve fuzzy placeholders (vg:fuzzyMatch)
+                if gen.fuzzy_requests:
+                    from .vg_resolve import resolve_fuzzy_requests
+                    sql = await resolve_fuzzy_requests(
+                        sql, gen.fuzzy_requests, space_id, conn)
 
                 if 'ORDER BY' in query.upper() and 'MIN' in query.upper():
                     logger.info("DEBUG multi-value sort SQL:\n%s", sql)

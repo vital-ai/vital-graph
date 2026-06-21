@@ -63,7 +63,6 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         source_type: str = "default",
         separator: str = ". ",
         include_pred_name: bool = False,
-        include_type_desc: bool = True,
     ) -> MappingOut:
         """Create a new vector mapping.
 
@@ -73,10 +72,9 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
             mapping_type: kgentity | kgdocument | kgframe | kgslot
             type_uri: Specific KG Type URI (None = class-level)
             enabled: Enable vectorization
-            source_type: default | properties | slots
+            source_type: type_description | properties | properties_type | default
             separator: Separator for concatenated text
             include_pred_name: Include predicate local name in text
-            include_type_desc: Include KG Type description in text
 
         Returns:
             MappingOut with created mapping details
@@ -86,7 +84,7 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         request = CreateMappingRequest(
             mapping_type=mapping_type, type_uri=type_uri, index_name=index_name,
             enabled=enabled, source_type=source_type, separator=separator,
-            include_pred_name=include_pred_name, include_type_desc=include_type_desc,
+            include_pred_name=include_pred_name,
         )
         params = build_query_params(space_id=space_id)
         return await self._make_typed_request(
@@ -119,7 +117,6 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         source_type: Optional[str] = None,
         separator: Optional[str] = None,
         include_pred_name: Optional[bool] = None,
-        include_type_desc: Optional[bool] = None,
     ) -> MappingOut:
         """Update a vector mapping.
 
@@ -127,10 +124,9 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
             space_id: Space ID
             mapping_id: Mapping ID
             enabled: Enable/disable vectorization
-            source_type: default | properties | slots
+            source_type: type_description | properties | properties_type | default
             separator: Separator for concatenated text
             include_pred_name: Include predicate local name
-            include_type_desc: Include KG Type description
 
         Returns:
             MappingOut with updated mapping details
@@ -139,7 +135,7 @@ class VectorMappingsClientEndpoint(BaseEndpoint):
         validate_required_params(space_id=space_id, mapping_id=mapping_id)
         request = UpdateMappingRequest(
             enabled=enabled, source_type=source_type, separator=separator,
-            include_pred_name=include_pred_name, include_type_desc=include_type_desc,
+            include_pred_name=include_pred_name,
         )
         params = build_query_params(space_id=space_id, mapping_id=mapping_id)
         return await self._make_typed_request(

@@ -11,11 +11,12 @@ Routes (all under /api/vector-indexes):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
@@ -101,7 +102,7 @@ class VectorIndexesEndpoint:
                     distance_metric=row["distance_metric"],
                     provider=row["provider"],
                     model_name=row.get("model_name"),
-                    provider_config=dict(row["provider_config"]) if row.get("provider_config") else None,
+                    provider_config=_parse_provider_config(row.get("provider_config")),
                     description=row.get("description"),
                     created_time=str(row["created_time"]) if row.get("created_time") else None,
                     embedding_count=count,
@@ -153,6 +154,13 @@ class VectorIndexesEndpoint:
                 body.description,
             )
 
+            # Drop any stale data table (e.g. from a previous partially-failed delete)
+            # before creating the new one — prevents IF NOT EXISTS from keeping
+            # an old table with the wrong vector dimensions.
+            drop_stmts = self.schema.drop_vector_data_table_sql(space_id, body.index_name)
+            for stmt in drop_stmts:
+                await conn.execute(stmt)
+
             # Create the backing data table + indexes
             stmts = self.schema.create_vector_data_table_sql(
                 space_id, body.index_name, body.dimensions, body.distance_metric,
@@ -173,7 +181,7 @@ class VectorIndexesEndpoint:
                 distance_metric=row["distance_metric"],
                 provider=row["provider"],
                 model_name=row.get("model_name"),
-                provider_config=dict(row["provider_config"]) if row.get("provider_config") else None,
+                provider_config=_parse_provider_config(row.get("provider_config")),
                 description=row.get("description"),
                 created_time=str(row["created_time"]) if row.get("created_time") else None,
                 embedding_count=0,
@@ -207,7 +215,7 @@ class VectorIndexesEndpoint:
                 distance_metric=row["distance_metric"],
                 provider=row["provider"],
                 model_name=row.get("model_name"),
-                provider_config=dict(row["provider_config"]) if row.get("provider_config") else None,
+                provider_config=_parse_provider_config(row.get("provider_config")),
                 description=row.get("description"),
                 created_time=str(row["created_time"]) if row.get("created_time") else None,
                 embedding_count=count,
@@ -234,18 +242,34 @@ class VectorIndexesEndpoint:
             for stmt in drop_stmts:
                 await conn.execute(stmt)
 
-            # Delete dependent mappings (CASCADE would handle mapping_property)
-            mapping_table = f"{space_id}_vector_mapping"
-            await conn.execute(
-                f"DELETE FROM {mapping_table} WHERE index_name = $1",
-                index_name,
-            )
+            # Delete dependent search mappings
+            search_mapping_table = f"{space_id}_search_mapping"
+            search_mapping_prop_table = f"{space_id}_search_mapping_property"
+            try:
+                # Delete mapping properties first, then mappings
+                await conn.execute(
+                    f"DELETE FROM {search_mapping_prop_table} WHERE mapping_id IN "
+                    f"(SELECT mapping_id FROM {search_mapping_table} WHERE index_name = $1)",
+                    index_name,
+                )
+                await conn.execute(
+                    f"DELETE FROM {search_mapping_table} WHERE index_name = $1",
+                    index_name,
+                )
+            except Exception as e:
+                logger.warning("Could not clean search mappings for '%s': %s", index_name, e)
 
             # Delete registry row
             await conn.execute(
                 f"DELETE FROM {table} WHERE index_name = $1",
                 index_name,
             )
+
+            # Evict cached provider instance so a re-created index with a
+            # different provider doesn't reuse the old embedder.
+            from ..vectorization.registry import _provider_cache
+            cache_key = f"{space_id}:{index_name}"
+            _provider_cache.pop(cache_key, None)
 
             logger.info("Deleted vector index '%s' for space '%s'", index_name, space_id)
 
@@ -293,13 +317,12 @@ class VectorIndexesEndpoint:
                 try:
                     await conn.execute(
                         f"""INSERT INTO {vec_table}
-                            (subject_uuid, context_uuid, embedding, search_text, updated_time)
-                            VALUES ($1, $2, $3::vector, $4, CURRENT_TIMESTAMP)
+                            (subject_uuid, context_uuid, embedding, updated_time)
+                            VALUES ($1, $2, $3::vector, CURRENT_TIMESTAMP)
                             ON CONFLICT (subject_uuid, context_uuid)
                             DO UPDATE SET embedding = EXCLUDED.embedding,
-                                          search_text = EXCLUDED.search_text,
                                           updated_time = CURRENT_TIMESTAMP""",
-                        subject_uuid, context_uuid, vec_str, entry.search_text,
+                        subject_uuid, context_uuid, vec_str,
                     )
                     upserted += 1
                 except Exception as e:
@@ -359,7 +382,7 @@ class VectorIndexesEndpoint:
             rows = await conn.fetch(
                 f"""SELECT v.subject_uuid, v.context_uuid,
                           v.embedding::text AS embedding_text,
-                          v.search_text, v.updated_time,
+                          v.updated_time,
                           s.term_text AS subject_text,
                           c.term_text AS context_text
                    FROM {vec_table} v
@@ -379,7 +402,6 @@ class VectorIndexesEndpoint:
                     subject_uri=row["subject_text"] or str(row["subject_uuid"]),
                     graph_uri=row["context_text"] or str(row["context_uuid"]),
                     embedding=emb_list,
-                    search_text=row["search_text"],
                     updated_time=str(row["updated_time"]) if row["updated_time"] else None,
                 ))
 
@@ -390,10 +412,11 @@ class VectorIndexesEndpoint:
     async def reindex(
         self, space_id: str, index_name: str, body: ReindexRequest, current_user: Dict,
     ):
+        """Start a reindex as a background task and return immediately."""
         require_space_write(current_user, space_id)
         conn = await self._acquire()
         try:
-            # Verify index exists and fetch provider info
+            # Verify index exists (fail fast before spawning background work)
             table = f"{space_id}_vector_index"
             idx_row = await conn.fetchrow(
                 f"SELECT * FROM {table} WHERE index_name = $1",
@@ -402,11 +425,33 @@ class VectorIndexesEndpoint:
             if idx_row is None:
                 raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
 
-            # Build context UUID from graph URI
-            ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-            context_uuid = uuid.uuid5(ns, body.graph_uri)
+            provider_name = idx_row["provider"]
+            provider_config = _parse_provider_config(idx_row.get("provider_config"))
+        finally:
+            await self._release(conn)
 
-            # Import here to avoid circular imports
+        # Build context UUID from graph URI
+        ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        context_uuid = uuid.uuid5(ns, f"{body.graph_uri}\x00U")
+
+        # Spawn background task
+        asyncio.ensure_future(self._run_reindex(
+            space_id, index_name, context_uuid, body,
+            provider_name, provider_config,
+        ))
+
+        return ReindexResponse(
+            message="Reindex started",
+            index_name=index_name,
+        )
+
+    async def _run_reindex(
+        self, space_id: str, index_name: str, context_uuid,
+        body: ReindexRequest, provider_name: str, provider_config: Optional[Dict],
+    ):
+        """Background worker: populate the vector index."""
+        conn = await self._acquire()
+        try:
             from ..vectorization.vector_populator import populate_index
 
             stats = await populate_index(
@@ -416,20 +461,18 @@ class VectorIndexesEndpoint:
                 context_uuid=context_uuid,
                 type_uri=body.type_uri,
                 mapping_type=body.mapping_type,
-                provider_name=idx_row["provider"],
-                provider_config=dict(idx_row["provider_config"]) if idx_row.get("provider_config") else None,
+                provider_name=provider_name,
+                provider_config=provider_config,
                 batch_size=body.batch_size,
             )
-
-            return ReindexResponse(
-                message="Reindex complete",
-                index_name=index_name,
-                subjects_processed=stats.subjects_processed,
-                embeddings_stored=stats.embeddings_stored,
-                subjects_skipped=stats.subjects_skipped,
-                elapsed_seconds=round(stats.elapsed_seconds, 2),
-                errors=stats.errors[:20],
+            logger.info(
+                "Reindex complete: %s/%s — %d processed, %d stored (%.1fs)",
+                space_id, index_name,
+                stats.subjects_processed, stats.embeddings_stored,
+                stats.elapsed_seconds,
             )
+        except Exception:
+            logger.exception("Reindex failed: %s/%s", space_id, index_name)
         finally:
             await self._release(conn)
 
@@ -542,6 +585,18 @@ def _jsonb(val: Optional[Dict]) -> Optional[str]:
         return None
     import json
     return json.dumps(val)
+
+
+def _parse_provider_config(val) -> Optional[Dict]:
+    """Safely parse a provider_config value from asyncpg (may be dict, str, or None)."""
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        import json
+        return json.loads(val)
+    return dict(val)
 
 
 # ---------------------------------------------------------------------------

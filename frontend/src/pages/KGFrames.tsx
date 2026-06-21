@@ -17,10 +17,15 @@ import {
 import ConfirmDialog from '../components/ConfirmDialog';
 
 const FRAME_SORT_OPTIONS: { label: string; value: string }[] = [
-  { label: 'Name', value: 'name' },
-  { label: 'URI', value: 'uri' },
-  { label: 'Created', value: 'created_date' },
-  { label: 'Type', value: 'frame_type' },
+  { label: 'Name', value: 'http://vital.ai/ontology/vital-core#hasName' },
+  { label: 'Created', value: 'http://vital.ai/ontology/vital-aimp#hasObjectCreationTime' },
+  { label: 'Modified', value: 'http://vital.ai/ontology/vital#hasObjectModificationDateTime' },
+];
+
+const FORM_TYPE_OPTIONS: { label: string; value: string }[] = [
+  { label: 'All', value: '' },
+  { label: 'Assertions', value: 'Assertion' },
+  { label: 'Aspects', value: 'Aspect' },
 ];
 
 interface KGFrame {
@@ -52,6 +57,7 @@ const KGFrames: React.FC = () => {
   const [deletingFrame, setDeletingFrame] = useState<KGFrame | null>(null);
   const [sortBy, setSortBy] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [formType, setFormType] = useState<string>('');
 
   // Fetch spaces
   const fetchSpaces = useCallback(async () => {
@@ -100,6 +106,7 @@ const KGFrames: React.FC = () => {
         search: debouncedSearch || undefined,
         sort_by: sortBy || undefined,
         sort_order: sortBy ? sortOrder : undefined,
+        form_type: formType || undefined,
       });
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
@@ -118,7 +125,7 @@ const KGFrames: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, sortBy, sortOrder]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, sortBy, sortOrder, formType]);
 
   useEffect(() => { fetchFrames(); }, [fetchFrames]);
 
@@ -209,6 +216,25 @@ const KGFrames: React.FC = () => {
         )}
       </div>
 
+      {/* Form type tabs */}
+      {hasSelection && (
+        <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700">
+          {FORM_TYPE_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => { setFormType(opt.value); setCurrentPage(1); }}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                formType === opt.value
+                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Search + filters */}
       {hasSelection && (
         <div className="flex flex-col sm:flex-row gap-3">
@@ -279,8 +305,8 @@ const KGFrames: React.FC = () => {
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">
-                    <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
-                      Frame <SortIcon field="name" />
+                    <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                      Frame <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
                     </button>
                   </th>
                   <th className="px-4 py-3">Type</th>

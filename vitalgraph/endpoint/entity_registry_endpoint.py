@@ -53,6 +53,7 @@ from ..model.entity_registry_model import (
     LocationSearchResult,
 )
 from ..entity_registry.entity_registry_id import entity_id_to_uri
+from ..entity_registry.entity_registry_search import EntityRegistrySearch
 
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,17 @@ class EntityRegistryEndpoint:
                 detail="Entity Registry not initialized"
             )
         return reg
+
+    @property
+    def search(self) -> EntityRegistrySearch:
+        """Get the EntityRegistrySearch instance (lazy, cached)."""
+        cached = getattr(self, '_search_instance', None)
+        if cached is not None:
+            return cached
+        pool = self.registry.pool
+        instance = EntityRegistrySearch(pool)
+        self._search_instance = instance
+        return instance
 
     # ------------------------------------------------------------------
     # Route setup
@@ -713,36 +725,36 @@ class EntityRegistryEndpoint:
 
         @self.router.post("/admin/rebuild", tags=["Entity Registry Admin"])
         async def admin_rebuild_route(
-            rebuild_dedup: bool = Query(True, description="Rebuild the in-memory dedup index"),
+            rebuild_fuzzy: bool = Query(True, description="Rebuild the in-memory fuzzy index"),
             rebuild_weaviate: bool = Query(False, description="Full Weaviate entity + location sync"),
             notify_workers: bool = Query(True, description="Send pg NOTIFY so other workers also rebuild"),
             current_user: Dict = Depends(auth),
         ):
-            """Rebuild secondary indexes (dedup, Weaviate) and notify all workers.
+            """Rebuild secondary indexes (fuzzy, Weaviate) and notify all workers.
 
             Intended for use after bulk data loads or manual data corrections.
-            The dedup rebuild reloads the entire MinHash LSH index from PostgreSQL.
+            The fuzzy rebuild reloads the entire MinHash LSH index from PostgreSQL.
             The Weaviate rebuild does a full entity + location sync (upsert, not drop/recreate).
             """
             import time as _time
             reg = self.registry
             results = {}
 
-            if rebuild_dedup and reg.dedup_index:
+            if rebuild_fuzzy and reg.fuzzy_index:
                 start = _time.time()
-                count = await reg.dedup_index.initialize(reg.pool)
+                count = await reg.fuzzy_index.initialize(reg.pool)
                 duration = _time.time() - start
-                results['dedup'] = {
+                results['fuzzy'] = {
                     'entities_indexed': count,
                     'duration_seconds': round(duration, 1),
                 }
-                logger.info(f"Admin rebuild: dedup index rebuilt — {count} entities in {duration:.1f}s")
+                logger.info(f"Admin rebuild: fuzzy index rebuilt — {count} entities in {duration:.1f}s")
 
                 if notify_workers:
-                    await reg._notify_dedup_reload()
-                    results['dedup']['workers_notified'] = True
-            elif rebuild_dedup:
-                results['dedup'] = {'status': 'not_enabled'}
+                    await reg._notify_fuzzy_reload()
+                    results['fuzzy']['workers_notified'] = True
+            elif rebuild_fuzzy:
+                results['fuzzy'] = {'status': 'not_enabled'}
 
             if rebuild_weaviate:
                 weaviate_index = getattr(reg, 'weaviate_index', None)
@@ -770,7 +782,7 @@ class EntityRegistryEndpoint:
 
             return {'success': True, 'rebuild': results}
 
-        # -- Similar / Dedup --
+        # -- Similar / Fuzzy --
 
         @self.router.get("/search/similar", response_model=SimilarEntityResponse, tags=["Entity Registry"])
         async def find_similar_route(
@@ -811,12 +823,7 @@ class EntityRegistryEndpoint:
             min_certainty: float = Query(0.7, ge=0, le=1),
             current_user: Dict = Depends(auth),
         ):
-            weaviate_index = getattr(self.registry, 'weaviate_index', None)
-            if not weaviate_index:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Weaviate entity indexing is not enabled",
-                )
+            search = self.search
 
             has_geo = latitude is not None and longitude is not None and radius_km is not None
             has_query = q is not None and q.strip()
@@ -847,14 +854,13 @@ class EntityRegistryEndpoint:
                 if identifier_namespace:
                     filters["identifier"]["namespace"] = identifier_namespace
 
-            # All search modes go through Weaviate — identifier filtering is native
             id_kw = {}
             if has_identifier:
                 id_kw = {"identifier_value": identifier_value, "identifier_namespace": identifier_namespace}
 
             if has_query and has_geo:
-                # Combined: semantic + LocationIndex geo via cross-reference
-                raw = await weaviate_index.search_topic_near(
+                # Combined: semantic + geo radius
+                raw = await search.search_topic_near(
                     query=q, latitude=latitude, longitude=longitude, radius_km=radius_km,
                     type_key=type_key, category_key=category_key,
                     limit=limit, min_certainty=min_certainty, **id_kw,
@@ -865,15 +871,15 @@ class EntityRegistryEndpoint:
                 ) for r in raw]
             elif has_query:
                 # Semantic only
-                raw = await weaviate_index.search_topic(
+                raw = await search.search_topic(
                     query=q, type_key=type_key, category_key=category_key,
                     country=country, region=region, locality=locality,
                     limit=limit, min_certainty=min_certainty, **id_kw,
                 )
                 results = [EntitySearchResult(**r) for r in raw]
             elif has_geo:
-                # Geo only via LocationIndex cross-reference
-                raw = await weaviate_index.search_entities_near(
+                # Geo only — entities with a location within radius
+                raw = await search.search_entities_near(
                     latitude=latitude, longitude=longitude, radius_km=radius_km,
                     type_key=type_key, limit=limit, **id_kw,
                 )
@@ -882,8 +888,8 @@ class EntityRegistryEndpoint:
                     locations=[EntitySearchLocationResult(**loc) for loc in r.get('locations', [])],
                 ) for r in raw]
             else:
-                # Identifier-only: Weaviate filter search (exact match, no vector)
-                raw = await weaviate_index.search_by_identifier(
+                # Identifier-only: exact match, no vector
+                raw = await search.search_by_identifier(
                     identifier_value=identifier_value,
                     identifier_namespace=identifier_namespace,
                     type_key=type_key, category_key=category_key,
@@ -947,14 +953,8 @@ class EntityRegistryEndpoint:
                     results=[LocationSearchResult(**r) for r in rows],
                 )
 
-            # Weaviate path: geo, semantic, address, or combinations
-            weaviate_index = getattr(self.registry, 'weaviate_index', None)
-            if not weaviate_index:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Weaviate entity indexing is not enabled",
-                )
-            results = await weaviate_index.search_locations_near(
+            # PostgreSQL path: geo, semantic, address, or combinations
+            raw = await self.search.search_locations_near(
                 latitude=latitude, longitude=longitude, radius_km=radius_km,
                 q=q, address=address,
                 location_type_key=location_type_key,
@@ -968,8 +968,31 @@ class EntityRegistryEndpoint:
             )
             return LocationSearchResponse(
                 success=True,
-                results=[LocationSearchResult(**r) for r in results],
+                results=[LocationSearchResult(**r) for r in raw],
             )
+
+
+        # -- Admin: Populate vectors/FTS/geo --
+
+        @self.router.post(
+            "/admin/populate-vectors",
+            tags=["Entity Registry"],
+            summary="Rebuild all vector/FTS/geo data for entity registry",
+        )
+        async def populate_vectors_route(current_user: Dict = Depends(auth)):
+            from ..entity_registry.entity_registry_vector_populator import (
+                EntityRegistryVectorPopulator,
+            )
+            pool = self.registry.pool
+            populator = EntityRegistryVectorPopulator(pool)
+            stats = await populator.full_rebuild()
+            return {
+                "success": True,
+                "entities_vectorized": stats.entities_vectorized,
+                "locations_vectorized": stats.locations_vectorized,
+                "geo_rows_inserted": stats.geo_rows_inserted,
+                "errors": stats.errors,
+            }
 
 
 def create_entity_registry_router(app_impl, auth_dependency) -> APIRouter:

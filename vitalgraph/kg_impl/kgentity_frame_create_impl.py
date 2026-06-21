@@ -343,6 +343,9 @@ class KGEntityFrameCreateProcessor:
                 pass
             elif isinstance(obj, KGFrame):
                 obj.frameGraphURI = str(obj.URI)
+                # Entity-enclosed frames are Aspects
+                if not getattr(obj, 'kGFormType', None):
+                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
             elif isinstance(obj, KGSlot):
                 owning_frame = slot_to_frame.get(str(obj.URI), fallback_frame_uri)
                 if owning_frame:

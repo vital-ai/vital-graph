@@ -79,6 +79,7 @@ from vitalgraph_client_test.multi_kgentity.case_create_relations import create_a
 from vitalgraph_client_test.multi_kgentity.case_upload_files import UploadFilesTester
 from vitalgraph_client_test.multi_kgentity.case_download_files import DownloadFilesTester
 from vitalgraph_client_test.multi_kgentity.case_delete_files import DeleteFilesTester
+from vitalgraph_client_test.multi_kgentity.case_count_cache_invalidation import CountCacheInvalidationTester
 
 
 def print_section(title: str):
@@ -343,7 +344,7 @@ async def main():
         # STEP 11: KGQuery Entity Frame Queries
         # ====================================================================
         # Run frame-based entity queries (single and multi-frame)
-        kgquery_tester = KGQueryFrameQueriesTester(client, query_mode="direct")
+        kgquery_tester = KGQueryFrameQueriesTester(client, query_mode="edge")
         kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, 
                                                     created_entity_uris, created_event_uris, 
                                                     file_uris=file_uris)
@@ -361,6 +362,14 @@ async def main():
             all_results.append(kgquery_relation_results)
         else:
             logger.info("\n⚠️  Skipping KGQuery Relation-Based Queries (no relation data)")
+        
+        # ====================================================================
+        # STEP 12.5: Count Cache Invalidation Tests
+        # ====================================================================
+        cache_tester = CountCacheInvalidationTester(client)
+        cache_results = await cache_tester.run_tests(space_id, graph_id,
+                                                     relation_type_uris=relation_type_uris)
+        all_results.append(cache_results)
         
         # ====================================================================
         # STEP 13: Entity Graph Operations

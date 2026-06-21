@@ -4,11 +4,73 @@ Pydantic models for KG frame management operations.
 """
 
 from typing import List, Optional, Any, Dict, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse, BaseOperationResponse
 from .kgentities_model import SlotCriteria, SortCriteria
+
+
+# ---------------------------------------------------------------------------
+# Frame property registry (mirrors entity pattern in kgentities_model.py)
+# ---------------------------------------------------------------------------
+
+# Property registry: maps property URI → datatype for filtering and sorting.
+_FILTERABLE_FRAME_PROPERTIES = {
+    "http://vital.ai/ontology/vital-core#hasName":                        "string",
+    "http://vital.ai/ontology/vital#hasObjectModificationDateTime":       "dateTime",
+    "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime":          "dateTime",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGFormType":                 "uri",
+    "http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeURI":             "uri",
+    "http://vital.ai/ontology/vital-aimp#hasObjectStatusType":            "uri",
+}
+
+# Allowed property URIs for frame sort (derived from registry)
+_FRAME_SORT_PROPERTIES = set(_FILTERABLE_FRAME_PROPERTIES.keys())
+
+# Valid operators per datatype (shared with entities)
+_FRAME_OPERATORS_BY_DATATYPE = {
+    "string":   {"eq", "ne", "contains"},
+    "dateTime": {"eq", "ne", "gt", "lt", "gte", "lte"},
+    "uri":      {"eq", "ne", "in", "not_in"},
+}
+
+# Form type short-label → full URI resolution
+_FORM_TYPE_LABELS = {
+    "Assertion": "http://vital.ai/ontology/haley-ai-kg#KGFormType_Assertion",
+    "Aspect":    "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect",
+}
+
+
+def resolve_form_type(value: str) -> str:
+    """Resolve a form_type short label or full URI to the canonical full URI."""
+    return _FORM_TYPE_LABELS.get(value, value)
+
+
+class FramePropertyFilter(BaseModel):
+    """Filter on a direct property of the frame node."""
+    property_uri: str = Field(..., description="Full property URI")
+    operator: str = Field(..., description="Filter operator: eq, ne, gt, lt, gte, lte, contains, in, not_in")
+    value: Optional[Union[str, List[str]]] = Field(
+        None,
+        description="Single value for eq/ne/gt/lt/gte/lte/contains, list for in/not_in"
+    )
+
+    @model_validator(mode='after')
+    def validate_frame_property_filter(self) -> 'FramePropertyFilter':
+        if self.property_uri not in _FILTERABLE_FRAME_PROPERTIES:
+            raise ValueError(
+                f"property_uri '{self.property_uri}' is not a filterable property. "
+                f"Allowed: {', '.join(sorted(_FILTERABLE_FRAME_PROPERTIES.keys()))}"
+            )
+        datatype = _FILTERABLE_FRAME_PROPERTIES[self.property_uri]
+        valid_ops = _FRAME_OPERATORS_BY_DATATYPE[datatype]
+        if self.operator not in valid_ops:
+            raise ValueError(
+                f"operator '{self.operator}' is not valid for datatype '{datatype}'. "
+                f"Valid: {', '.join(sorted(valid_ops))}"
+            )
+        return self
 
 
 class FrameCreateResponse(BaseCreateResponse):

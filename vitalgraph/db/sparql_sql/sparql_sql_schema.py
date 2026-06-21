@@ -64,6 +64,9 @@ STANDARD_DATATYPES: List[Tuple[str, str]] = [
     ('http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral', 'XMLLiteral'),
     ('http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML', 'HTML'),
     ('http://www.w3.org/1999/02/22-rdf-syntax-ns#langString', 'langString'),
+    # Geo datatypes (OGC GeoSPARQL + VitalSigns)
+    ('http://www.opengis.net/ont/geosparql#wktLiteral', 'wktLiteral'),
+    ('http://vital.ai/ontology/vital-core#geoLocation', 'geoLocation'),
 ]
 
 
@@ -378,10 +381,16 @@ class SparqlSQLSchema:
             'edge': f'{space_id}_edge',
             'frame_entity': f'{space_id}_frame_entity',
             'vector_index': f'{space_id}_vector_index',
-            'vector_mapping': f'{space_id}_vector_mapping',
-            'vector_mapping_property': f'{space_id}_vector_mapping_property',
             'geo': f'{space_id}_geo',
             'geo_config': f'{space_id}_geo_config',
+            'fuzzy_mapping': f'{space_id}_fuzzy_mapping',
+            'fuzzy_mapping_property': f'{space_id}_fuzzy_mapping_property',
+            'fuzzy_band': f'{space_id}_fuzzy_band',
+            'fuzzy_phonetic_band': f'{space_id}_fuzzy_phonetic_band',
+            'search_mapping': f'{space_id}_search_mapping',
+            'search_mapping_index': f'{space_id}_search_mapping_index',
+            'search_mapping_property': f'{space_id}_search_mapping_property',
+            'fts_index': f'{space_id}_fts_index',
         }
 
     # ------------------------------------------------------------------
@@ -484,35 +493,6 @@ class SparqlSQLSchema:
             )
         ''')
 
-        # 9. Vector mapping (KG concept → vector index association)
-        stmts.append(f'''
-            CREATE TABLE IF NOT EXISTS {t['vector_mapping']} (
-                mapping_id          SERIAL PRIMARY KEY,
-                mapping_type        VARCHAR(50) NOT NULL,
-                type_uri            VARCHAR(500),
-                index_name          VARCHAR(255) NOT NULL,
-                enabled             BOOLEAN NOT NULL DEFAULT TRUE,
-                source_type         VARCHAR(20) NOT NULL DEFAULT 'default',
-                separator           VARCHAR(20) DEFAULT '. ',
-                include_pred_name   BOOLEAN DEFAULT FALSE,
-                include_type_desc   BOOLEAN DEFAULT TRUE,
-                created_time        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (index_name) REFERENCES {t['vector_index']}(index_name)
-            )
-        ''')
-
-        # 9b. Vector mapping properties (child: predicates/slot URIs per mapping)
-        stmts.append(f'''
-            CREATE TABLE IF NOT EXISTS {t['vector_mapping_property']} (
-                property_id     SERIAL PRIMARY KEY,
-                mapping_id      INTEGER NOT NULL,
-                property_uri    VARCHAR(500) NOT NULL,
-                property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
-                ordinal         INTEGER DEFAULT 0,
-                UNIQUE (mapping_id, property_uri),
-                FOREIGN KEY (mapping_id) REFERENCES {t['vector_mapping']}(mapping_id) ON DELETE CASCADE
-            )
-        ''')
 
         # 10. Geo config (lightweight per-space config for geo population)
         stmts.append(f'''
@@ -520,13 +500,15 @@ class SparqlSQLSchema:
                 config_id       SERIAL PRIMARY KEY,
                 enabled         BOOLEAN NOT NULL DEFAULT FALSE,
                 auto_sync       BOOLEAN NOT NULL DEFAULT FALSE,
+                geo_datatype_uris TEXT[] NOT NULL DEFAULT ARRAY[
+                    'http://www.opengis.net/ont/geosparql#wktLiteral',
+                    'http://vital.ai/ontology/vital-core#geoLocation'
+                ],
                 lat_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                    'http://www.w3.org/2003/01/geo/wgs84_pos#lat',
-                    'http://vital.ai/ontology/haley-ai-kg#hasLatitude'
+                    'http://vital.ai/ontology/vital-aimp#hasLatitude'
                 ],
                 lon_predicates  TEXT[] NOT NULL DEFAULT ARRAY[
-                    'http://www.w3.org/2003/01/geo/wgs84_pos#long',
-                    'http://vital.ai/ontology/haley-ai-kg#hasLongitude'
+                    'http://vital.ai/ontology/vital-aimp#hasLongitude'
                 ],
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -543,6 +525,104 @@ class SparqlSQLSchema:
                 context_uuid    UUID NOT NULL,
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (subject_uuid, context_uuid)
+            )
+        ''')
+
+        # 12. Fuzzy mapping (KG concept → fuzzy index association)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['fuzzy_mapping']} (
+                mapping_id      SERIAL PRIMARY KEY,
+                mapping_type    VARCHAR(50) NOT NULL,
+                type_uri        VARCHAR(500),
+                index_name      VARCHAR(255) NOT NULL,
+                enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+                shingle_k       INTEGER NOT NULL DEFAULT 3,
+                num_perm        INTEGER NOT NULL DEFAULT 64,
+                lsh_threshold   FLOAT NOT NULL DEFAULT 0.3,
+                phonetic_bonus  FLOAT NOT NULL DEFAULT 10.0,
+                created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 12b. Fuzzy mapping properties (child: predicate URIs per mapping)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['fuzzy_mapping_property']} (
+                property_id     SERIAL PRIMARY KEY,
+                mapping_id      INTEGER NOT NULL,
+                property_uri    VARCHAR(500) NOT NULL,
+                property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
+                ordinal         INTEGER DEFAULT 0,
+                UNIQUE (mapping_id, property_uri),
+                FOREIGN KEY (mapping_id) REFERENCES {t['fuzzy_mapping']}(mapping_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # 13. Shared search mapping (used by both FTS and vector indexes)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['search_mapping']} (
+                mapping_id          SERIAL PRIMARY KEY,
+                mapping_type        VARCHAR(50) NOT NULL,
+                type_uri            VARCHAR(500),
+                index_name          VARCHAR(255) NOT NULL,
+                enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+                source_type         VARCHAR(20) NOT NULL DEFAULT 'default',
+                separator           VARCHAR(20) DEFAULT '. ',
+                include_pred_name   BOOLEAN DEFAULT FALSE,
+                created_time        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 13b. Shared search mapping properties (child predicates)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['search_mapping_property']} (
+                property_id     SERIAL PRIMARY KEY,
+                mapping_id      INTEGER NOT NULL,
+                property_uri    VARCHAR(500) NOT NULL,
+                property_role   VARCHAR(20) NOT NULL DEFAULT 'include',
+                ordinal         INTEGER DEFAULT 0,
+                UNIQUE (mapping_id, property_uri),
+                FOREIGN KEY (mapping_id) REFERENCES {t['search_mapping']}(mapping_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # 13c. Search mapping index junction table (links mappings to concrete indexes)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['search_mapping_index']} (
+                id              SERIAL PRIMARY KEY,
+                mapping_id      INTEGER NOT NULL,
+                index_type      VARCHAR(10) NOT NULL CHECK (index_type IN ('vector', 'fts')),
+                index_name      VARCHAR(255) NOT NULL,
+                created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (mapping_id, index_type, index_name),
+                FOREIGN KEY (mapping_id) REFERENCES {t['search_mapping']}(mapping_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # 14. FTS index registry (per-space catalog of named FTS indexes)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['fts_index']} (
+                index_id        SERIAL PRIMARY KEY,
+                index_name      VARCHAR(255) NOT NULL UNIQUE,
+                languages       VARCHAR(64)[] NOT NULL DEFAULT '{{english}}',
+                created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # 15. Fuzzy band table (MinHash LSH primary bands)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['fuzzy_band']} (
+                band_id     INTEGER NOT NULL,
+                band_hash   BYTEA NOT NULL,
+                entity_key  VARCHAR(500) NOT NULL
+            )
+        ''')
+
+        # 16. Fuzzy phonetic band table (MinHash LSH phonetic bands)
+        stmts.append(f'''
+            CREATE TABLE IF NOT EXISTS {t['fuzzy_phonetic_band']} (
+                band_id     INTEGER NOT NULL,
+                band_hash   BYTEA NOT NULL,
+                entity_key  VARCHAR(500) NOT NULL
             )
         ''')
 
@@ -590,6 +670,12 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_subj ON {t['geo']} (subject_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_ctx ON {t['geo']} (context_uuid)",
+
+            # Fuzzy band table indexes
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_band_lookup ON {t['fuzzy_band']} (band_id, band_hash)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_band_entity ON {t['fuzzy_band']} (entity_key)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_lookup ON {t['fuzzy_phonetic_band']} (band_id, band_hash)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_fuzzy_pband_entity ON {t['fuzzy_phonetic_band']} (entity_key)",
         ]
 
     def drop_space_tables_sql(self, space_id: str) -> List[str]:
@@ -605,9 +691,14 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['datatype']} CASCADE",
             f"DROP TABLE IF EXISTS {t['geo']} CASCADE",
             f"DROP TABLE IF EXISTS {t['geo_config']} CASCADE",
-            f"DROP TABLE IF EXISTS {t['vector_mapping_property']} CASCADE",
-            f"DROP TABLE IF EXISTS {t['vector_mapping']} CASCADE",
             f"DROP TABLE IF EXISTS {t['vector_index']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['fuzzy_phonetic_band']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['fuzzy_band']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['fuzzy_mapping_property']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['fuzzy_mapping']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['fts_index']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['search_mapping_property']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
         ]
 
     def drop_space_indexes_sql(self, space_id: str) -> List[str]:
@@ -625,6 +716,10 @@ class SparqlSQLSchema:
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_ps",
             f"DROP INDEX IF EXISTS idx_{space_id}_quad_sp",
             f"DROP INDEX IF EXISTS idx_{space_id}_datatype_uri",
+            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_band_lookup",
+            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_band_entity",
+            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_pband_lookup",
+            f"DROP INDEX IF EXISTS idx_{space_id}_fuzzy_pband_entity",
         ]
 
     # ------------------------------------------------------------------
@@ -665,11 +760,65 @@ class SparqlSQLSchema:
                 "document_segments vector bootstrap failed (non-critical): %s", ve
             )
 
+        # NOTE: kgtype_default search infra is NOT bootstrapped per-space.
+        # KG Types live in the centralized sp_kg_types system space only.
+
+        # Bootstrap FTS indexes for any registered vector indexes (non-critical)
+        try:
+            from vitalgraph.vectorization.fts_index_lifecycle import ensure_fts_index
+            vi_table = f"{space_id}_vector_index"
+            rows = await conn.fetch(
+                f"SELECT index_name FROM {vi_table}"
+            )
+            for row in rows:
+                await ensure_fts_index(conn, space_id, row['index_name'])
+        except Exception as fe:
+            logger.warning(
+                "FTS index bootstrap failed (non-critical): %s", fe
+            )
+
         logger.info("Created space tables for: %s", space_id)
 
     @staticmethod
     async def drop_space(conn, space_id: str) -> None:
-        """Drop all per-space tables and views."""
+        """Drop all per-space tables and views.
+
+        In addition to the well-known tables, dynamically discovers and drops
+        any ``_vec_*`` and ``_fts_*`` data tables that were created by
+        vector/FTS index lifecycle operations.
+        """
+        # First drop dynamically-named data tables (_vec_*, _fts_*)
+        # so foreign-key references don't block registry table drops.
+        dynamic_rows = await conn.fetch(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' "
+            "  AND (table_name LIKE $1 OR table_name LIKE $2)",
+            f"{space_id}_vec_%",
+            f"{space_id}_fts_%",
+        )
+        for row in dynamic_rows:
+            tbl = row["table_name"]
+            # Skip the registry tables (handled by drop_space_tables_sql)
+            if tbl in (f"{space_id}_fts_index", f"{space_id}_fts_document_segments"):
+                continue
+            await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
+            logger.debug("Dropped dynamic table: %s", tbl)
+
+        # Also drop any trigger functions left by FTS data tables
+        fn_rows = await conn.fetch(
+            "SELECT routine_name FROM information_schema.routines "
+            "WHERE routine_schema = 'public' "
+            "  AND routine_name LIKE $1",
+            f"{space_id}_fts_%_tsv_trigger",
+        )
+        for row in fn_rows:
+            await conn.execute(f"DROP FUNCTION IF EXISTS {row['routine_name']}() CASCADE")
+
+        # Drop legacy vector_mapping tables (superseded by search_mapping)
+        await conn.execute(f"DROP TABLE IF EXISTS {space_id}_vector_mapping_property CASCADE")
+        await conn.execute(f"DROP TABLE IF EXISTS {space_id}_vector_mapping CASCADE")
+
+        # Drop well-known tables
         schema = SparqlSQLSchema()
         for stmt in schema.drop_space_tables_sql(space_id):
             await conn.execute(stmt)
@@ -719,10 +868,6 @@ class SparqlSQLSchema:
                 subject_uuid    UUID NOT NULL,
                 context_uuid    UUID NOT NULL,
                 embedding       vector({dimensions}) NOT NULL,
-                search_text     TEXT,
-                tsv             tsvector GENERATED ALWAYS AS (
-                                    to_tsvector('english'::regconfig, COALESCE(search_text, ''))
-                                ) STORED,
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (subject_uuid, context_uuid)
             )''',
@@ -731,10 +876,6 @@ class SparqlSQLSchema:
                 ON {table}
                 USING hnsw (embedding {ops_class})
                 WITH (m = 16, ef_construction = 200)''',
-            # GIN index for full-text search
-            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_fts
-                ON {table}
-                USING gin (tsv)''',
             # Context index for graph-scoped queries
             f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_vec_{index_name}_ctx
                 ON {table} (context_uuid)''',
@@ -748,4 +889,107 @@ class SparqlSQLSchema:
         """Return SQL to drop a vector data table."""
         table = self.vec_table_name(space_id, index_name)
         return [f"DROP TABLE IF EXISTS {table} CASCADE"]
+
+    # ==================================================================
+    # FTS data tables (created dynamically per registered FTS index)
+    # ==================================================================
+
+    @staticmethod
+    def fts_table_name(space_id: str, index_name: str) -> str:
+        """Return the table name for a specific FTS index."""
+        return f"{space_id}_fts_{index_name}"
+
+    def create_fts_data_table_sql(
+        self, space_id: str, index_name: str, languages: List[str],
+    ) -> List[str]:
+        """Return SQL to create an FTS data table, indexes, and trigger.
+
+        The trigger automatically computes the ``tsv`` column by concatenating
+        ``to_tsvector(lang, search_text)`` for each configured language.
+        """
+        table = self.fts_table_name(space_id, index_name)
+        trigger_fn = f"{space_id}_fts_{index_name}_tsv_trigger"
+        trigger_name = f"trg_{space_id}_fts_{index_name}_tsv"
+
+        stmts = [
+            # Data table
+            f'''CREATE TABLE IF NOT EXISTS {table} (
+                subject_uuid    UUID NOT NULL,
+                context_uuid    UUID NOT NULL,
+                search_text     TEXT,
+                tsv             tsvector,
+                updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (subject_uuid, context_uuid)
+            )''',
+            # GIN index for full-text search
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_tsv
+                ON {table} USING gin (tsv)''',
+            # Context index for graph-scoped queries
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_ctx
+                ON {table} (context_uuid)''',
+            # Subject index for joins
+            f'''CREATE INDEX IF NOT EXISTS idx_{space_id}_fts_{index_name}_subj
+                ON {table} (subject_uuid)''',
+        ]
+
+        # Trigger function: concatenate tsvectors from all languages
+        tsv_expr = self._build_tsv_concat_expr(languages)
+        stmts.append(f'''CREATE OR REPLACE FUNCTION {trigger_fn}() RETURNS trigger AS $$
+BEGIN
+    NEW.tsv := {tsv_expr};
+    RETURN NEW;
+END
+$$ LANGUAGE plpgsql''')
+
+        stmts.append(
+            f'''DROP TRIGGER IF EXISTS {trigger_name} ON {table}'''
+        )
+        stmts.append(
+            f'''CREATE TRIGGER {trigger_name}
+                BEFORE INSERT OR UPDATE OF search_text ON {table}
+                FOR EACH ROW EXECUTE FUNCTION {trigger_fn}()'''
+        )
+
+        return stmts
+
+    def drop_fts_data_table_sql(self, space_id: str, index_name: str) -> List[str]:
+        """Return SQL to drop an FTS data table and its trigger function."""
+        table = self.fts_table_name(space_id, index_name)
+        trigger_fn = f"{space_id}_fts_{index_name}_tsv_trigger"
+        return [
+            f"DROP TABLE IF EXISTS {table} CASCADE",
+            f"DROP FUNCTION IF EXISTS {trigger_fn}() CASCADE",
+        ]
+
+    @staticmethod
+    def _build_tsv_concat_expr(languages: List[str]) -> str:
+        """Build a SQL expression that concatenates tsvectors for all languages.
+
+        Example for ['english', 'spanish']:
+            to_tsvector('english'::regconfig, COALESCE(NEW.search_text, ''))
+         || to_tsvector('spanish'::regconfig, COALESCE(NEW.search_text, ''))
+        """
+        if not languages:
+            languages = ["english"]
+        parts = [
+            f"to_tsvector('{lang}'::regconfig, COALESCE(NEW.search_text, ''))"
+            for lang in languages
+        ]
+        return "\n         || ".join(parts)
+
+    @staticmethod
+    def build_tsv_batch_expr(languages: List[str], text_col: str = "search_text") -> str:
+        """Build a SQL expression for batch tsvector computation (no NEW. prefix).
+
+        Used by the FTS populator for batch UPDATE after bulk insert.
+        Example: to_tsvector('english'::regconfig, COALESCE(search_text, ''))
+              || to_tsvector('spanish'::regconfig, COALESCE(search_text, ''))
+        """
+        if not languages:
+            languages = ["english"]
+        parts = [
+            f"to_tsvector('{lang}'::regconfig, COALESCE({text_col}, ''))"
+            for lang in languages
+        ]
+        return " || ".join(parts)
 

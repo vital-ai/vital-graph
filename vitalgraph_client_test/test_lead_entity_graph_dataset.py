@@ -50,6 +50,9 @@ from vitalgraph_client_test.entity_graph_lead_dataset.case_bulk_load_dataset imp
 from vitalgraph_client_test.entity_graph_lead_dataset.case_list_and_query_entities import ListAndQueryEntitiesTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_retrieve_entity_graphs import RetrieveEntityGraphsTester
 from vitalgraph_client_test.entity_graph_lead_dataset.case_kgquery_lead_queries import KGQueryLeadQueriesTester
+from vitalgraph_client_test.entity_graph_lead_dataset.case_kgquery_sort_queries import KGQuerySortQueriesTester
+from vitalgraph_client_test.entity_graph_lead_dataset.case_list_entities_sort import ListEntitiesSortTester
+from vitalgraph_client_test.entity_graph_lead_dataset.case_kgquery_property_filters import KGQueryPropertyFiltersTester
 
 
 def print_section(title: str):
@@ -134,7 +137,7 @@ async def main():
     max_files = 100 # None
     
     # Skip data loading if data is already loaded (set to True to skip)
-    skip_load = False
+    skip_load = True
     
     # Number of entities to sample for detailed retrieval testing
     sample_size = 5
@@ -279,6 +282,27 @@ async def main():
         kgquery_tester = KGQueryLeadQueriesTester(client, query_mode="edge")
         kgquery_results = await kgquery_tester.run_tests(space_id, graph_id, entity_count)
         all_results.append(kgquery_results)
+        
+        # ====================================================================
+        # STEP 5: KGQuery Sort Queries
+        # ====================================================================
+        sort_tester = KGQuerySortQueriesTester(client, query_mode="edge")
+        sort_results = await sort_tester.run_tests(space_id, graph_id, entity_count)
+        all_results.append(sort_results)
+        
+        # ====================================================================
+        # STEP 6: List Entities Sorting
+        # ====================================================================
+        list_sort_tester = ListEntitiesSortTester(client)
+        list_sort_results = await list_sort_tester.run_tests(space_id, graph_id)
+        all_results.append(list_sort_results)
+        
+        # ====================================================================
+        # STEP 7: Property Filters & Count Endpoints
+        # ====================================================================
+        pf_tester = KGQueryPropertyFiltersTester(client, query_mode="edge")
+        pf_results = await pf_tester.run_tests(space_id, graph_id, entity_count)
+        all_results.append(pf_results)
         
         # ====================================================================
         # Print Summary

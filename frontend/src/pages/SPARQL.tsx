@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
   Alert, Button, Select, Spinner, Textarea, ToggleSwitch
@@ -39,8 +40,9 @@ const SAMPLE_UPDATES = [
 
 const SPARQL: React.FC = () => {
   usePageTitle('SPARQL');
+  const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<SparqlMode>('query');
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(searchParams.get('query') || '');
   const [results, setResults] = useState<QueryResult | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,11 +61,16 @@ const SPARQL: React.FC = () => {
         setSpacesLoading(true);
         const data = await apiService.getSpaces();
         setSpaces(data);
-        if (data.length > 0) setSelectedSpace(data[0].space);
+        const spaceParam = searchParams.get('space');
+        if (spaceParam && data.some((s: SpaceInfo) => s.space === spaceParam)) {
+          setSelectedSpace(spaceParam);
+        } else if (data.length > 0) {
+          setSelectedSpace(data[0].space);
+        }
       } catch { setError('Failed to load spaces.'); }
       finally { setSpacesLoading(false); }
     })();
-  }, []);
+  }, [searchParams]);
 
   // Build paginated query
   const buildQuery = useCallback((page: number): string => {

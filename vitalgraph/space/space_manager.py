@@ -141,9 +141,37 @@ class SpaceManager:
                         
             self._initialized = True
             self.logger.info(f"✅ SpaceManager initialized with {len(self._spaces)} spaces from database")
-            
+
+            # Bootstrap system spaces
+            await self._ensure_system_spaces()
+
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize SpaceManager from database: {e}")
+
+    async def _ensure_system_spaces(self):
+        """Create system-defined spaces if they don't already exist."""
+        from vitalgraph.constants import SP_KG_TYPES
+
+        if SP_KG_TYPES in self._spaces:
+            self.logger.info(f"✅ System space '{SP_KG_TYPES}' already exists")
+            return
+
+        try:
+            created = await self.create_space_with_tables(
+                SP_KG_TYPES, "KG Types",
+                "System space for centralized KG Type definitions",
+            )
+            if created:
+                pool = getattr(self.db_impl, 'connection_pool', None)
+                if pool:
+                    async with pool.acquire() as conn:
+                        from vitalgraph.kg_impl.kgtype_index_setup import setup_kgtype_search
+                        await setup_kgtype_search(conn, SP_KG_TYPES)
+                self.logger.info(f"✅ System space '{SP_KG_TYPES}' created and indexed")
+            else:
+                self.logger.warning(f"System space '{SP_KG_TYPES}' creation returned False")
+        except Exception as e:
+            self.logger.warning(f"System space '{SP_KG_TYPES}' bootstrap failed (non-critical): {e}")
       
     async def create_space_with_tables(self, space_id: str, space_name: str, space_description: str = None) -> bool:
         """

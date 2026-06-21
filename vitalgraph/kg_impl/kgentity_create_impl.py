@@ -136,6 +136,11 @@ class KGEntityCreateProcessor:
                     self.grouping_manager.set_dual_grouping_uris_with_frame_separation(ent_objects, ent_uri)
                     self.logger.debug(f"🔍 Step 4: Set kGGraphURI={ent_uri} on {len(ent_objects)} objects")
             self.logger.debug(f"🔍 Dual grouping URIs set successfully")
+
+            # Step 4b: Set kGFormType on entity-enclosed frames (Aspect)
+            for obj in vitalsigns_objects:
+                if isinstance(obj, KGFrame) and not getattr(obj, 'kGFormType', None):
+                    obj.kGFormType = "http://vital.ai/ontology/haley-ai-kg#KGFormType_Aspect"
             
             # Step 5: Handle parent relationships if specified
             self.logger.debug(f"🔍 Step 5: Handling parent relationships (parent_uri={parent_uri})")

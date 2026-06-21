@@ -430,7 +430,7 @@ class EntityRegistryTestRunner:
             self._report("Change log", False, str(e))
 
     # ------------------------------------------------------------------
-    # Similar / Dedup tests
+    # Similar / Fuzzy tests
     # ------------------------------------------------------------------
 
     async def test_find_similar(self):

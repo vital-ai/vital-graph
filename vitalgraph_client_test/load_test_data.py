@@ -422,9 +422,9 @@ async def load_data():
         logger.info(f"  elena_vasquez: {resp.entity_id}")
 
         # ---------------------------------------------------------------
-        # Bulk entities for dedup / phonetic / typo testing
+        # Bulk entities for fuzzy / phonetic / typo testing
         # ---------------------------------------------------------------
-        logger.info("\nCreating bulk dedup test entities...")
+        logger.info("\nCreating bulk fuzzy test entities...")
 
         BULK_ENTITIES = [
             # ---- Phonetic cluster: Schneider / Snyder / Schnider ----

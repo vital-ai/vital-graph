@@ -4,7 +4,7 @@ VitalGraph Entity Registry CLI.
 
 Interactive REPL and non-interactive CLI for managing entities,
 entity types, aliases, identifiers, categories, relationships,
-same-as mappings, dedup, vector indexes, geo, and schema migrations.
+same-as mappings, fuzzy search, vector indexes, geo, and schema migrations.
 
 Usage:
     vitalgraphentityregistry                              # Start REPL
@@ -114,7 +114,7 @@ class EntityRegistryCLI:
     def __init__(self):
         self.pool = None
         self.registry = None
-        self.dedup = None
+        self.fuzzy = None
         self.connected = False
         self.output_format = "table"
 
@@ -141,29 +141,29 @@ class EntityRegistryCLI:
             max_size=5,
         )
 
-        # Initialize dedup index (optional)
-        dedup_index = None
+        # Initialize fuzzy index (optional)
+        fuzzy_index = None
         try:
             import os
-            if os.environ.get('ENTITY_DEDUP_BACKEND') == 'postgresql':
-                from vitalgraph.entity_registry.entity_dedup_pg import EntityDedupIndexPG
-                dedup_index = EntityDedupIndexPG(self.pool)
-                count = await dedup_index.initialize(self.pool)
-                logger.info(f"Dedup index (PG) loaded {count} entities")
-                self.dedup = dedup_index
-            elif os.environ.get('ENTITY_DEDUP_ENABLED', '').lower() == 'true':
-                from vitalgraph.entity_registry.entity_dedup import EntityDedupIndex
-                dedup_index = EntityDedupIndex.from_env()
-                if dedup_index:
-                    count = await dedup_index.initialize(self.pool)
-                    logger.info(f"Dedup index loaded {count} entities")
-                    self.dedup = dedup_index
+            if os.environ.get('ENTITY_FUZZY_BACKEND') == 'postgresql':
+                from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
+                fuzzy_index = EntityFuzzyIndexPG(self.pool)
+                count = await fuzzy_index.initialize(self.pool)
+                logger.info(f"Fuzzy index (PG) loaded {count} entities")
+                self.fuzzy = fuzzy_index
+            elif os.environ.get('ENTITY_FUZZY_ENABLED', '').lower() == 'true':
+                from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex
+                fuzzy_index = EntityFuzzyIndex.from_env()
+                if fuzzy_index:
+                    count = await fuzzy_index.initialize(self.pool)
+                    logger.info(f"Fuzzy index loaded {count} entities")
+                    self.fuzzy = fuzzy_index
         except Exception as e:
-            logger.debug(f"Dedup index not available: {e}")
+            logger.debug(f"Fuzzy index not available: {e}")
 
         self.registry = EntityRegistryImpl(
             self.pool,
-            dedup_index=dedup_index,
+            fuzzy_index=fuzzy_index,
         )
         self.connected = True
 
@@ -175,8 +175,8 @@ class EntityRegistryCLI:
     def connect(self):
         _run_async(self._connect())
         extras = []
-        if self.dedup:
-            extras.append("dedup")
+        if self.fuzzy:
+            extras.append("fuzzy")
         extra_str = f" (+{', '.join(extras)})" if extras else ""
         print(f"✅ Connected to database{extra_str}")
 
@@ -686,8 +686,8 @@ class EntityRegistryCLI:
         """Find near-duplicates: search-similar --name <name> [--entity-id E]"""
         if not self._require_connected():
             return True
-        if not self.dedup:
-            print("❌ Dedup index not enabled. Set ENTITY_DEDUP_ENABLED=true or ENTITY_DEDUP_BACKEND=postgresql")
+        if not self.fuzzy:
+            print("❌ Fuzzy index not enabled. Set ENTITY_FUZZY_ENABLED=true or ENTITY_FUZZY_BACKEND=postgresql")
             return True
         name = self._extract_flag(args, '--name')
         entity_id = self._extract_flag(args, '--entity-id')
@@ -699,12 +699,12 @@ class EntityRegistryCLI:
             if not entity:
                 print(f"❌ Entity not found: {entity_id}")
                 return True
-            candidates = self.dedup.find_similar(entity, limit=limit, min_score=min_score)
+            candidates = self.fuzzy.find_similar(entity, limit=limit, min_score=min_score)
             candidates = [c for c in candidates if c['entity_id'] != entity_id]
         elif name:
             country = self._extract_flag(args, '--country')
             region = self._extract_flag(args, '--region')
-            candidates = self.dedup.find_similar_by_name(
+            candidates = self.fuzzy.find_similar_by_name(
                 name=name, country=country, region=region,
                 limit=limit, min_score=min_score,
             )
@@ -908,469 +908,325 @@ class EntityRegistryCLI:
         return True
 
     # ------------------------------------------------------------------
-    # Dedup commands
+    # Fuzzy commands
     # ------------------------------------------------------------------
 
-    def cmd_dedup_status(self, args: list[str]) -> bool:
-        """Show dedup index status."""
+    def cmd_fuzzy_status(self, args: list[str]) -> bool:
+        """Show fuzzy index status."""
         if not self._require_connected():
             return True
-        if not self.dedup:
-            print("❌ Dedup index not enabled")
+        if not self.fuzzy:
+            print("❌ Fuzzy index not enabled")
             return True
-        print("Dedup Index Status")
+        print("Fuzzy Index Status")
         print(LINE)
-        print(f"  Entities indexed:  {self.dedup.entity_count:,}")
-        print(f"  Initialized:       {self.dedup._initialized}")
+        print(f"  Entities indexed:  {self.fuzzy.entity_count:,}")
+        print(f"  Initialized:       {self.fuzzy._initialized}")
         return True
 
-    def cmd_dedup_check(self, args: list[str]) -> bool:
-        """Verify dedup index matches PostgreSQL."""
+    def cmd_fuzzy_check(self, args: list[str]) -> bool:
+        """Verify fuzzy index matches PostgreSQL."""
         if not self._require_connected():
             return True
-        if not self.dedup:
-            print("❌ Dedup index not enabled")
+        if not self.fuzzy:
+            print("❌ Fuzzy index not enabled")
             return True
 
         async def _check():
             async with self.pool.acquire() as conn:
                 pg_count = await conn.fetchval("SELECT COUNT(*) FROM entity WHERE status = 'active'")
-            dedup_count = self.dedup.entity_count
-            print("Dedup Index Consistency Check")
+            fuzzy_count = self.fuzzy.entity_count
+            print("Fuzzy Index Consistency Check")
             print(LINE)
             print(f"  PostgreSQL active entities: {pg_count:,}")
-            print(f"  Dedup index entities:       {dedup_count:,}")
-            if pg_count == dedup_count:
+            print(f"  Fuzzy index entities:       {fuzzy_count:,}")
+            if pg_count == fuzzy_count:
                 print("  ✅ Counts match")
             else:
-                print(f"  ⚠️  Mismatch: {abs(pg_count - dedup_count):,} difference")
+                print(f"  ⚠️  Mismatch: {abs(pg_count - fuzzy_count):,} difference")
 
         _run_async(_check())
         return True
 
     # ------------------------------------------------------------------
-    # Vector commands
+    # Vector commands (entity registry dedicated tables)
     # ------------------------------------------------------------------
 
-    def _require_space(self, args: list[str]) -> str | None:
-        """Extract --space flag from args. Returns space_id or None."""
-        space = self._extract_flag(args, '--space')
-        if not space:
-            print("❌ --space <space_id> is required for this command")
-            return None
-        return space
-
     def cmd_vector_status(self, args: list[str]) -> bool:
-        """Show vector index status: vector-status --space <space_id>"""
+        """Show entity registry vector/FTS/geo table status: vector-status"""
         if not self._require_connected():
-            return True
-        space = self._require_space(args)
-        if not space:
             return True
 
         async def _status():
+            from vitalgraph.entity_registry.entity_registry_vector_schema import (
+                VECTOR_INDEX_TABLE, ENTITY_VECTOR_TABLE, LOCATION_VECTOR_TABLE,
+                GEO_TABLE, FTS_ENTITY_TABLE, FTS_LOCATION_TABLE,
+            )
+            tables = [
+                ('Vector Index Registry', VECTOR_INDEX_TABLE),
+                ('Entity Vectors', ENTITY_VECTOR_TABLE),
+                ('Location Vectors', LOCATION_VECTOR_TABLE),
+                ('Geo Points', GEO_TABLE),
+                ('FTS Entities', FTS_ENTITY_TABLE),
+                ('FTS Locations', FTS_LOCATION_TABLE),
+            ]
+            print(f"Entity Registry Vector/FTS/Geo Status")
+            print(LINE)
             async with self.pool.acquire() as conn:
-                vi_table = f"{space}_vector_index"
+                for label, table in tables:
+                    try:
+                        count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+                        print(f"  {label:25s} {table:45s} ({count:,} rows)")
+                    except Exception:
+                        print(f"  {label:25s} {table:45s} (not created)")
+
+                # Show index details
                 try:
                     rows = await conn.fetch(
-                        f"SELECT index_name, dimensions, provider, provider_config, "
-                        f"created_time FROM {vi_table} ORDER BY index_name"
+                        f"SELECT index_name, dimensions, provider, model_name, created_time "
+                        f"FROM {VECTOR_INDEX_TABLE} ORDER BY index_name"
                     )
+                    if rows:
+                        print(f"\n  Registered Indexes:")
+                        for r in rows:
+                            print(f"    {r['index_name']}: {r['dimensions']}d, "
+                                  f"{r['provider']}, model={r['model_name']}")
                 except Exception:
-                    print(f"❌ No vector_index table for space '{space}'")
-                    return
-                if not rows:
-                    print(f"No vector indexes defined for space '{space}'")
-                    return
-
-                print(f"Vector Indexes — {space}")
-                print(LINE)
-                for r in rows:
-                    idx_name = r["index_name"]
-                    vec_table = f"{space}_vec_{idx_name}"
-                    try:
-                        count = await conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}")
-                    except Exception:
-                        count = '(table missing)'
-                    print(f"\n  {idx_name}:")
-                    print(f"    Provider:    {r['provider']}")
-                    print(f"    Dimensions:  {r['dimensions']}")
-                    print(f"    Embeddings:  {count}")
-                    if r['provider_config']:
-                        model = r['provider_config'].get('model_name', '') if isinstance(r['provider_config'], dict) else ''
-                        if model:
-                            print(f"    Model:       {model}")
-                    print(f"    Created:     {r['created_time']}")
+                    pass
 
         _run_async(_status())
         return True
 
     def cmd_vector_check(self, args: list[str]) -> bool:
-        """Consistency check: vector-check --space <space_id> [--index <name>]"""
+        """Consistency check: vector-check — compare entity count vs vector/FTS/geo counts"""
         if not self._require_connected():
             return True
-        space = self._require_space(args)
-        if not space:
-            return True
-        filter_index = self._extract_flag(args, '--index')
 
         async def _check():
+            from vitalgraph.entity_registry.entity_registry_vector_schema import (
+                ENTITY_VECTOR_TABLE, LOCATION_VECTOR_TABLE, GEO_TABLE,
+                FTS_ENTITY_TABLE, FTS_LOCATION_TABLE,
+            )
             async with self.pool.acquire() as conn:
-                vi_table = f"{space}_vector_index"
-                try:
-                    rows = await conn.fetch(
-                        f"SELECT index_name FROM {vi_table} ORDER BY index_name"
-                    )
-                except Exception:
-                    print(f"❌ No vector_index table for space '{space}'")
-                    return
-                if not rows:
-                    print(f"No vector indexes for space '{space}'")
-                    return
+                entity_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity WHERE status = 'active'"
+                )
+                location_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity_location WHERE status = 'active'"
+                )
+                entities_with_geo = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity WHERE status = 'active' "
+                    "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                )
+                locations_with_geo = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity_location WHERE status = 'active' "
+                    "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                )
 
-                rdf_quad = f"{space}_rdf_quad"
-                # Count distinct subjects in all graphs
-                try:
-                    entity_count = await conn.fetchval(
-                        f"SELECT COUNT(DISTINCT subject_uuid) FROM {rdf_quad}"
-                    )
-                except Exception:
-                    entity_count = '?'
-
-                print(f"Vector Consistency Check — {space}")
+                print(f"Entity Registry Vector Consistency Check")
                 print(LINE)
-                print(f"  Distinct subjects (all graphs): {entity_count}")
+                print(f"  Source Data:")
+                print(f"    Active entities:            {entity_count:,}")
+                print(f"    Active locations:           {location_count:,}")
+                print(f"    Entities with lat/lon:      {entities_with_geo:,}")
+                print(f"    Locations with lat/lon:     {locations_with_geo:,}")
 
-                for r in rows:
-                    idx_name = r["index_name"]
-                    if filter_index and idx_name != filter_index:
-                        continue
-                    vec_table = f"{space}_vec_{idx_name}"
+                checks = [
+                    ('Entity Vectors', ENTITY_VECTOR_TABLE, entity_count),
+                    ('Location Vectors', LOCATION_VECTOR_TABLE, location_count),
+                    ('FTS Entities', FTS_ENTITY_TABLE, entity_count),
+                    ('FTS Locations', FTS_LOCATION_TABLE, location_count),
+                    ('Geo Points', GEO_TABLE, entities_with_geo + locations_with_geo),
+                ]
+
+                print(f"\n  Index Tables:")
+                for label, table, expected in checks:
                     try:
-                        vec_count = await conn.fetchval(f"SELECT COUNT(*) FROM {vec_table}")
-                    except Exception:
-                        vec_count = 0
-                    print(f"\n  {idx_name}:")
-                    print(f"    Embeddings: {vec_count:,}")
-                    if isinstance(entity_count, int):
-                        if vec_count == entity_count:
-                            print("    ✅ Matches subject count")
+                        actual = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+                        if actual == expected:
+                            print(f"    ✅ {label:25s} {actual:,} (matches)")
                         else:
-                            diff = abs(entity_count - vec_count)
-                            print(f"    ⚠️  Difference: {diff:,} ({entity_count:,} subjects vs {vec_count:,} vectors)")
+                            diff = expected - actual
+                            print(f"    ⚠️  {label:25s} {actual:,} (expected {expected:,}, diff {diff:,})")
+                    except Exception:
+                        print(f"    ❌ {label:25s} (table not found)")
 
         _run_async(_check())
         return True
 
     def cmd_vector_rebuild(self, args: list[str]) -> bool:
-        """Re-populate vectors: vector-rebuild --space <space_id> --graph <uri> [--index <name>]"""
+        """Full rebuild of entity registry vectors/FTS/geo: vector-rebuild"""
         if not self._require_connected():
             return True
-        space = self._require_space(args)
-        if not space:
-            return True
-        graph_uri = self._extract_flag(args, '--graph')
-        if not graph_uri:
-            print("❌ --graph <graph_uri> is required")
-            return True
-        filter_index = self._extract_flag(args, '--index')
 
         async def _rebuild():
-            import uuid as _uuid
-            _NS = _uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
-            context_uuid = _uuid.uuid5(_NS, f"U:{graph_uri}")
-
-            from vitalgraph.vectorization.vector_populator import populate_index
-            async with self.pool.acquire() as conn:
-                vi_table = f"{space}_vector_index"
-                try:
-                    rows = await conn.fetch(
-                        f"SELECT index_name FROM {vi_table} ORDER BY index_name"
-                    )
-                except Exception:
-                    print(f"❌ No vector_index table for space '{space}'")
-                    return
-
-                for r in rows:
-                    idx_name = r["index_name"]
-                    if filter_index and idx_name != filter_index:
-                        continue
-                    print(f"Rebuilding {idx_name} ...")
-                    stats = await populate_index(conn, space, idx_name, context_uuid)
-                    print(f"  ✅ {stats.embeddings_stored} stored, "
-                          f"{stats.subjects_skipped} skipped, "
-                          f"{stats.elapsed_seconds:.1f}s")
-                    if stats.errors:
-                        for err in stats.errors[:5]:
-                            print(f"  ⚠️  {err}")
+            from vitalgraph.entity_registry.entity_registry_vector_populator import (
+                EntityRegistryVectorPopulator,
+            )
+            populator = EntityRegistryVectorPopulator(self.pool)
+            print("Rebuilding entity registry vectors/FTS/geo ...")
+            stats = await populator.full_rebuild()
+            print(f"  ✅ Entities: {stats.entities_vectorized:,} vectorized")
+            print(f"  ✅ Locations: {stats.locations_vectorized:,} vectorized")
+            print(f"  ✅ Geo points: {stats.geo_rows_inserted:,} inserted")
+            print(f"  ⏱  {stats.elapsed_seconds:.1f}s")
+            if stats.errors:
+                print(f"  ⚠️  {stats.errors} errors")
 
         _run_async(_rebuild())
         return True
 
     def cmd_vector_sync(self, args: list[str]) -> bool:
-        """Incremental re-vectorize: vector-sync --space <space_id> --graph <uri> [--subject <uri>]"""
+        """Incremental sync: vector-sync --entity <entity_id> | --location <location_id>"""
         if not self._require_connected():
             return True
-        space = self._require_space(args)
-        if not space:
+        entity_id = self._extract_flag(args, '--entity')
+        location_id_str = self._extract_flag(args, '--location')
+
+        if not entity_id and not location_id_str:
+            print("❌ --entity <entity_id> or --location <location_id> is required")
             return True
-        graph_uri = self._extract_flag(args, '--graph')
-        if not graph_uri:
-            print("❌ --graph <graph_uri> is required")
-            return True
-        subject_uri = self._extract_flag(args, '--subject')
 
         async def _sync():
-            import uuid as _uuid
-            _NS = _uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
-            context_uuid = _uuid.uuid5(_NS, f"U:{graph_uri}")
-
-            from vitalgraph.vectorization.vector_populator import (
-                update_subject_vector, populate_index,
+            from vitalgraph.entity_registry.entity_registry_vector_populator import (
+                EntityRegistryVectorPopulator,
             )
-            async with self.pool.acquire() as conn:
-                vi_table = f"{space}_vector_index"
-                try:
-                    idx_rows = await conn.fetch(
-                        f"SELECT index_name FROM {vi_table} ORDER BY index_name"
-                    )
-                except Exception:
-                    print(f"❌ No vector_index table for space '{space}'")
-                    return
-
-                if subject_uri:
-                    subj_uuid = _uuid.uuid5(_NS, f"U:{subject_uri}")
-                    for r in idx_rows:
-                        idx_name = r["index_name"]
-                        ok = await update_subject_vector(
-                            conn, space, idx_name, subj_uuid, context_uuid,
-                        )
-                        status = "✅" if ok else "⚠️  skipped"
-                        print(f"  {idx_name}: {status}")
-                else:
-                    # Full re-sync (same as rebuild)
-                    for r in idx_rows:
-                        idx_name = r["index_name"]
-                        print(f"Syncing {idx_name} ...")
-                        stats = await populate_index(conn, space, idx_name, context_uuid)
-                        print(f"  ✅ {stats.embeddings_stored} stored, "
-                              f"{stats.subjects_skipped} skipped, "
-                              f"{stats.elapsed_seconds:.1f}s")
+            populator = EntityRegistryVectorPopulator(self.pool)
+            if entity_id:
+                await populator.sync_entity(entity_id)
+                print(f"  ✅ Synced entity {entity_id}")
+            if location_id_str:
+                await populator.sync_location(int(location_id_str))
+                print(f"  ✅ Synced location {location_id_str}")
 
         _run_async(_sync())
         return True
 
     # ------------------------------------------------------------------
-    # Search topic (pgvector similarity)
+    # Search topic (entity registry pgvector similarity)
     # ------------------------------------------------------------------
 
     def cmd_search_topic(self, args: list[str]) -> bool:
-        """Semantic search: search-topic --space <space_id> --query <text> [--index <name>] [--limit N]"""
+        """Semantic search: search-topic --query <text> [--type <key>] [--limit N]"""
         if not self._require_connected():
-            return True
-        space = self._require_space(args)
-        if not space:
             return True
         query = self._extract_flag(args, '--query')
         if not query:
             print("❌ --query <text> is required")
             return True
-        index_name = self._extract_flag(args, '--index')
+        type_key = self._extract_flag(args, '--type')
         limit_str = self._extract_flag(args, '--limit')
         limit = int(limit_str) if limit_str else 10
 
         async def _search():
-            from vitalgraph.vectorization.registry import get_provider
-            async with self.pool.acquire() as conn:
-                vi_table = f"{space}_vector_index"
+            from vitalgraph.entity_registry.entity_registry_search import EntityRegistrySearch
+            search = EntityRegistrySearch(self.pool)
+            results = await search.search_topic(
+                query=query, type_key=type_key, limit=limit,
+            )
 
-                # If no index specified, use the first one
-                if index_name:
-                    row = await conn.fetchrow(
-                        f"SELECT index_name, provider, provider_config FROM {vi_table} "
-                        f"WHERE index_name = $1", index_name,
-                    )
-                else:
-                    row = await conn.fetchrow(
-                        f"SELECT index_name, provider, provider_config FROM {vi_table} "
-                        f"ORDER BY index_name LIMIT 1"
-                    )
-                if row is None:
-                    print(f"❌ No vector index found for space '{space}'"
-                          + (f" with name '{index_name}'" if index_name else ""))
-                    return
+            if not results:
+                print("(no results)")
+                return
 
-                idx = row["index_name"]
-                provider = get_provider(
-                    row["provider"],
-                    row["provider_config"] or {},
-                    cache_key=f"{space}_{idx}",
-                )
-
-                print(f"Embedding query via {provider.provider_name} ...")
-                query_vec = await provider.vectorize_text(query)
-                vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-
-                vec_table = f"{space}_vec_{idx}"
-                term_table = f"{space}_term"
-
-                sql = (
-                    f"SELECT v.subject_uuid, v.search_text, "
-                    f"v.embedding <=> $1::vector AS distance, "
-                    f"t.term_text AS subject_uri "
-                    f"FROM {vec_table} v "
-                    f"LEFT JOIN {term_table} t ON v.subject_uuid = t.term_uuid "
-                    f"ORDER BY v.embedding <=> $1::vector "
-                    f"LIMIT $2"
-                )
-                results = await conn.fetch(sql, vec_str, limit)
-
-                if not results:
-                    print("(no results)")
-                    return
-
-                print(f"\nSemantic Search Results — {idx}  (top {limit})")
-                print(LINE)
-                for i, r in enumerate(results, 1):
-                    dist = r["distance"]
-                    uri = r["subject_uri"] or str(r["subject_uuid"])
-                    text = (r["search_text"] or "")[:120]
-                    print(f"  {i:3d}. [{dist:.4f}] {uri}")
-                    if text:
-                        print(f"       {text}")
+            print(f"\nSemantic Search Results (top {limit})")
+            print(LINE)
+            for i, r in enumerate(results, 1):
+                score = r.get('score', 0)
+                name = r.get('primary_name', '')
+                etype = r.get('type_label', '')
+                print(f"  {i:3d}. [{score:.4f}] {name} ({etype})")
+                desc = (r.get('description') or '')[:100]
+                if desc:
+                    print(f"       {desc}")
 
         _run_async(_search())
         return True
 
     # ------------------------------------------------------------------
-    # Geo commands
+    # Geo commands (entity registry dedicated geo table)
     # ------------------------------------------------------------------
 
     def cmd_geo_status(self, args: list[str]) -> bool:
-        """Show geo config and table status: geo-status --space <space_id>"""
+        """Show entity registry geo table status: geo-status"""
         if not self._require_connected():
-            return True
-        space = self._require_space(args)
-        if not space:
             return True
 
         async def _status():
-            from vitalgraph.vectorization.geo_config_manager import GeoConfigManager
+            from vitalgraph.entity_registry.entity_registry_vector_schema import GEO_TABLE
             async with self.pool.acquire() as conn:
-                mgr = GeoConfigManager(conn, space)
-                try:
-                    cfg = await mgr.get_config()
-                except Exception:
-                    print(f"❌ No geo_config table for space '{space}'")
-                    return
-
-                print(f"Geo Configuration — {space}")
+                print(f"Entity Registry Geo Status")
                 print(LINE)
-                if cfg is None:
-                    print("  (no config row — geo not initialized)")
-                else:
-                    print(f"  Enabled:      {cfg.enabled}")
-                    print(f"  Auto-sync:    {cfg.auto_sync}")
-                    print(f"  Lat preds:    {cfg.lat_predicates}")
-                    print(f"  Lon preds:    {cfg.lon_predicates}")
-                    if cfg.updated_time:
-                        print(f"  Updated:      {cfg.updated_time}")
-
-                geo_table = f"{space}_geo"
                 try:
-                    count = await conn.fetchval(f"SELECT COUNT(*) FROM {geo_table}")
-                    print(f"\n  Geo points:   {count:,}")
+                    total = await conn.fetchval(f"SELECT COUNT(*) FROM {GEO_TABLE}")
+                    entity_geo = await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {GEO_TABLE} WHERE source_type = 'entity'"
+                    )
+                    location_geo = await conn.fetchval(
+                        f"SELECT COUNT(*) FROM {GEO_TABLE} WHERE source_type = 'location'"
+                    )
+                    print(f"  Total geo points:   {total:,}")
+                    print(f"    From entities:    {entity_geo:,}")
+                    print(f"    From locations:   {location_geo:,}")
                 except Exception:
-                    print(f"\n  Geo table:    (not found)")
+                    print(f"  ❌ Geo table '{GEO_TABLE}' not found")
 
         _run_async(_status())
         return True
 
     def cmd_geo_populate(self, args: list[str]) -> bool:
-        """Populate geo table: geo-populate --space <space_id> --graph <uri>"""
+        """Populate geo table from entity + location lat/lon: geo-populate"""
         if not self._require_connected():
-            return True
-        space = self._require_space(args)
-        if not space:
-            return True
-        graph_uri = self._extract_flag(args, '--graph')
-        if not graph_uri:
-            print("❌ --graph <graph_uri> is required")
             return True
 
         async def _populate():
-            import uuid as _uuid
-            _NS = _uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
-            context_uuid = _uuid.uuid5(_NS, f"U:{graph_uri}")
-
-            from vitalgraph.vectorization.geo_populator import populate_geo
-            async with self.pool.acquire() as conn:
-                print(f"Populating geo for {space} / {graph_uri} ...")
-                stats = await populate_geo(conn, space, context_uuid)
-                print(f"  ✅ {stats.points_upserted} points upserted, "
-                      f"{stats.incomplete_pairs} incomplete, "
-                      f"{stats.elapsed_seconds:.1f}s")
-                if stats.errors:
-                    for err in stats.errors[:5]:
-                        print(f"  ⚠️  {err}")
+            from vitalgraph.entity_registry.entity_registry_vector_populator import (
+                EntityRegistryVectorPopulator,
+            )
+            populator = EntityRegistryVectorPopulator(self.pool)
+            print("Rebuilding entity registry geo + vectors ...")
+            stats = await populator.full_rebuild()
+            print(f"  ✅ {stats.geo_rows_inserted:,} geo points populated")
+            print(f"  ⏱  {stats.elapsed_seconds:.1f}s")
 
         _run_async(_populate())
         return True
 
     def cmd_geo_check(self, args: list[str]) -> bool:
-        """Consistency check: geo-check --space <space_id>"""
+        """Consistency check: geo-check — entities/locations with coords vs geo table"""
         if not self._require_connected():
-            return True
-        space = self._require_space(args)
-        if not space:
             return True
 
         async def _check():
-            from vitalgraph.vectorization.geo_config_manager import (
-                GeoConfigManager, DEFAULT_LAT_PREDICATES, DEFAULT_LON_PREDICATES,
-            )
+            from vitalgraph.entity_registry.entity_registry_vector_schema import GEO_TABLE
             async with self.pool.acquire() as conn:
-                mgr = GeoConfigManager(conn, space)
-                try:
-                    cfg = await mgr.get_config()
-                except Exception:
-                    cfg = None
-
-                lat_preds = list(cfg.lat_predicates) if cfg else list(DEFAULT_LAT_PREDICATES)
-                lon_preds = list(cfg.lon_predicates) if cfg else list(DEFAULT_LON_PREDICATES)
-                all_preds = lat_preds + lon_preds
-
-                term_table = f"{space}_term"
-                rdf_quad = f"{space}_rdf_quad"
-                geo_table = f"{space}_geo"
-
-                # Count subjects with lat/lon predicates
-                try:
-                    subjects_with_geo = await conn.fetchval(
-                        f"SELECT COUNT(DISTINCT q.subject_uuid) "
-                        f"FROM {rdf_quad} q "
-                        f"JOIN {term_table} t ON q.predicate_uuid = t.term_uuid "
-                        f"WHERE t.term_text = ANY($1)",
-                        all_preds,
-                    )
-                except Exception:
-                    subjects_with_geo = '?'
+                entities_with_geo = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity WHERE status = 'active' "
+                    "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                )
+                locations_with_geo = await conn.fetchval(
+                    "SELECT COUNT(*) FROM entity_location WHERE status = 'active' "
+                    "AND latitude IS NOT NULL AND longitude IS NOT NULL"
+                )
+                expected = entities_with_geo + locations_with_geo
 
                 try:
-                    geo_count = await conn.fetchval(f"SELECT COUNT(*) FROM {geo_table}")
+                    geo_count = await conn.fetchval(f"SELECT COUNT(*) FROM {GEO_TABLE}")
                 except Exception:
                     geo_count = '?'
 
-                print(f"Geo Consistency Check — {space}")
+                print(f"Geo Consistency Check — Entity Registry")
                 print(LINE)
-                print(f"  Subjects with lat/lon predicates: {subjects_with_geo}")
-                print(f"  Geo table rows:                   {geo_count}")
-                if isinstance(subjects_with_geo, int) and isinstance(geo_count, int):
-                    if geo_count >= subjects_with_geo:
-                        print("  ✅ Geo table covers all subjects")
+                print(f"  Entities with lat/lon:   {entities_with_geo:,}")
+                print(f"  Locations with lat/lon:  {locations_with_geo:,}")
+                print(f"  Expected geo rows:       {expected:,}")
+                print(f"  Actual geo rows:         {geo_count}")
+                if isinstance(geo_count, int):
+                    if geo_count >= expected:
+                        print("  ✅ Geo table covers all sources")
                     else:
-                        diff = subjects_with_geo - geo_count
-                        print(f"  ⚠️  {diff:,} subjects missing from geo table")
+                        diff = expected - geo_count
+                        print(f"  ⚠️  {diff:,} sources missing from geo table")
 
         _run_async(_check())
         return True
@@ -1533,9 +1389,9 @@ class EntityRegistryCLI:
             'changelog':             self.cmd_changelog,
             # Export
             'export':                self.cmd_export,
-            # Dedup
-            'dedup-status':          self.cmd_dedup_status,
-            'dedup-check':           self.cmd_dedup_check,
+            # Fuzzy
+            'fuzzy-status':          self.cmd_fuzzy_status,
+            'fuzzy-check':           self.cmd_fuzzy_check,
             # Vector
             'vector-status':         self.cmd_vector_status,
             'vector-check':          self.cmd_vector_check,
@@ -1627,23 +1483,23 @@ Data:
   export [--type T] [--format json|csv] [--output file] [--include-aliases] [--include-identifiers]
   delete-by-prefix --prefix <prefix> [--dry-run]
 
-Dedup:
-  dedup-status                              Dedup index status
-  dedup-check                               Verify dedup index vs PostgreSQL
+Fuzzy:
+  fuzzy-status                              Fuzzy index status
+  fuzzy-check                               Verify fuzzy index vs PostgreSQL
 
-Vector (all require --space <space_id>):
-  vector-status                             Show vector index stats
-  vector-check [--index <name>]             Consistency: subjects vs embeddings
-  vector-rebuild --graph <uri> [--index N]  Re-populate all embeddings
-  vector-sync --graph <uri> [--subject U]   Incremental re-vectorize
+Vector / FTS / Geo (entity registry dedicated tables):
+  vector-status                             Show vector/FTS/geo table status
+  vector-check                              Consistency: entity count vs index counts
+  vector-rebuild                            Full rebuild all vectors/FTS/geo
+  vector-sync --entity <id> | --location N  Incremental re-vectorize
 
 Search:
-  search-topic --space <S> --query <text> [--index N] [--limit N]   Semantic search
+  search-topic --query <text> [--type <key>] [--limit N]   Semantic entity search
 
-Geo (all require --space <space_id>):
-  geo-status                                Show geo config + point count
-  geo-populate --graph <uri>                Populate geo table from lat/lon triples
-  geo-check                                 Consistency: lat/lon subjects vs geo table
+Geo:
+  geo-status                                Show geo point counts
+  geo-populate                              Populate geo table from entity/location coords
+  geo-check                                 Consistency: sources with coords vs geo table
 
 Schema:
   migrate [--dry-run]                       Run schema migrations
@@ -1873,11 +1729,11 @@ Schema:
                     cmd_args.append('--include-identifiers')
                 self.cmd_export(cmd_args)
 
-            elif command == 'dedup-status':
-                self.cmd_dedup_status([])
+            elif command == 'fuzzy-status':
+                self.cmd_fuzzy_status([])
 
-            elif command == 'dedup-check':
-                self.cmd_dedup_check([])
+            elif command == 'fuzzy-check':
+                self.cmd_fuzzy_check([])
 
             elif command == 'vector-status':
                 self.cmd_vector_status(['--space', args.space] if args.space else [])
@@ -2002,8 +1858,8 @@ Examples:
             "stats", "stats-types", "changelog",
             # Data
             "export", "delete-by-prefix",
-            # Dedup
-            "dedup-status", "dedup-check",
+            # Fuzzy
+            "fuzzy-status", "fuzzy-check",
             # Vector
             "vector-status", "vector-check", "vector-rebuild", "vector-sync",
             # Search

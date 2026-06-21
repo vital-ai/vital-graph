@@ -22,11 +22,15 @@ import { MetricsEndpoint } from './endpoint/MetricsEndpoint.js';
 import { AdminEndpoint } from './endpoint/AdminEndpoint.js';
 import { ProcessEndpoint } from './endpoint/ProcessEndpoint.js';
 import { VectorMappingsEndpoint } from './endpoint/VectorMappingsEndpoint.js';
+import { FuzzyMappingsEndpoint } from './endpoint/FuzzyMappingsEndpoint.js';
 import { VectorIndexesEndpoint } from './endpoint/VectorIndexesEndpoint.js';
+import { SearchMappingsEndpoint } from './endpoint/SearchMappingsEndpoint.js';
+import { FtsIndexesEndpoint } from './endpoint/FtsIndexesEndpoint.js';
 import { GeoConfigEndpoint } from './endpoint/GeoConfigEndpoint.js';
 import { GeoPointsEndpoint } from './endpoint/GeoPointsEndpoint.js';
 import { AgentRegistryEndpoint } from './endpoint/AgentRegistryEndpoint.js';
 import { EntityRegistryEndpoint } from './endpoint/EntityRegistryEndpoint.js';
+import { OntologyEndpoint } from './endpoint/OntologyEndpoint.js';
 
 interface AuthState {
   accessToken: string;
@@ -60,11 +64,15 @@ export class VitalGraphClient {
   readonly admin: AdminEndpoint;
   readonly processes: ProcessEndpoint;
   readonly vectorMappings: VectorMappingsEndpoint;
+  readonly fuzzyMappings: FuzzyMappingsEndpoint;
   readonly vectorIndexes: VectorIndexesEndpoint;
+  readonly searchMappings: SearchMappingsEndpoint;
+  readonly ftsIndexes: FtsIndexesEndpoint;
   readonly geoConfig: GeoConfigEndpoint;
   readonly geoPoints: GeoPointsEndpoint;
   readonly agentRegistry: AgentRegistryEndpoint;
   readonly entityRegistry: EntityRegistryEndpoint;
+  readonly ontology: OntologyEndpoint;
 
   constructor(options: VitalGraphClientOptions) {
     this.config = new ClientConfig(options);
@@ -89,11 +97,15 @@ export class VitalGraphClient {
     this.admin = new AdminEndpoint(this);
     this.processes = new ProcessEndpoint(this);
     this.vectorMappings = new VectorMappingsEndpoint(this);
+    this.fuzzyMappings = new FuzzyMappingsEndpoint(this);
     this.vectorIndexes = new VectorIndexesEndpoint(this);
+    this.searchMappings = new SearchMappingsEndpoint(this);
+    this.ftsIndexes = new FtsIndexesEndpoint(this);
     this.geoConfig = new GeoConfigEndpoint(this);
     this.geoPoints = new GeoPointsEndpoint(this);
     this.agentRegistry = new AgentRegistryEndpoint(this);
     this.entityRegistry = new EntityRegistryEndpoint(this);
+    this.ontology = new OntologyEndpoint(this);
   }
 
   /**

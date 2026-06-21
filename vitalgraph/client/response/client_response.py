@@ -528,6 +528,84 @@ class KGTypeDeleteResponse(VitalGraphResponse):
         return self.deleted and not self.error_code
 
 
+class KGTypeRelationshipsResponse(VitalGraphResponse):
+    """Response for KGType relationships query."""
+    source_type: Dict[str, Any] = Field(default_factory=dict, description="Queried type info")
+    edges: List[Dict[str, Any]] = Field(default_factory=list, description="Type-level edges")
+    connected_types: List[Dict[str, Any]] = Field(default_factory=list, description="Connected types")
+
+    @property
+    def is_success(self) -> bool:
+        return not self.error_code
+
+
+class KGTypeRelationshipCreateResponse(VitalGraphResponse):
+    """Response for creating a type-level relationship edge."""
+    edge_uri: str = Field("", description="URI of created edge")
+    edge_type: str = Field("", description="Edge vitaltype URI")
+    source_uri: str = Field("", description="Source type URI")
+    destination_uri: str = Field("", description="Destination type URI")
+
+    @property
+    def is_success(self) -> bool:
+        return bool(self.edge_uri) and not self.error_code
+
+
+class KGTypeRelationshipDeleteResponse(VitalGraphResponse):
+    """Response for deleting a type-level relationship edge."""
+    deleted: bool = Field(False, description="Whether edge was deleted")
+    edge_uri: str = Field("", description="URI of deleted edge")
+
+    @property
+    def is_success(self) -> bool:
+        return self.deleted and not self.error_code
+
+
+class KGTypeDocumentationResponse(VitalGraphResponse):
+    """Response for getting type documentation."""
+    type_uri: str = Field("", description="Type URI")
+    content: Optional[str] = Field(None, description="Markdown documentation content")
+    document_uri: Optional[str] = Field(None, description="KGDocument URI")
+    has_documentation: bool = Field(False, description="Whether documentation exists")
+
+    @property
+    def is_success(self) -> bool:
+        return not self.error_code
+
+
+class KGTypeDocumentationUpdateResponse(VitalGraphResponse):
+    """Response for creating/updating type documentation."""
+    type_uri: str = Field("", description="Type URI")
+    document_uri: str = Field("", description="KGDocument URI")
+    created: bool = Field(False, description="Whether new doc was created vs updated")
+
+    @property
+    def is_success(self) -> bool:
+        return bool(self.document_uri) and not self.error_code
+
+
+class KGTypeDocumentationDeleteResponse(VitalGraphResponse):
+    """Response for deleting type documentation."""
+    type_uri: str = Field("", description="Type URI")
+    deleted: bool = Field(False, description="Whether documentation was deleted")
+
+    @property
+    def is_success(self) -> bool:
+        return not self.error_code
+
+
+class KGTypeSearchResponse(VitalGraphResponse):
+    """Response for searching KG types."""
+    types: List[Dict[str, Any]] = Field(default_factory=list, description="Matching types")
+    count: int = Field(0, description="Number of results")
+    search_mode: str = Field("keyword", description="Search mode used")
+    query: str = Field("", description="Original query")
+
+    @property
+    def is_success(self) -> bool:
+        return not self.error_code
+
+
 # ============================================================================
 # Objects Response Classes
 # ============================================================================

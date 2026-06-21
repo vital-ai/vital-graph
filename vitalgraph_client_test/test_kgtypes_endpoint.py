@@ -32,6 +32,12 @@ from vitalgraph_client_test.kgtypes.case_kgtype_list import KGTypeListTester
 from vitalgraph_client_test.kgtypes.case_kgtype_get import KGTypeGetTester
 from vitalgraph_client_test.kgtypes.case_kgtype_update import KGTypeUpdateTester
 from vitalgraph_client_test.kgtypes.case_kgtype_delete import KGTypeDeleteTester
+from vitalgraph_client_test.kgtypes.case_kgtype_relationships import KGTypeRelationshipsTester
+from vitalgraph_client_test.kgtypes.case_kgtype_documentation import KGTypeDocumentationTester
+from vitalgraph_client_test.kgtypes.case_kgtype_search import KGTypeSearchTester
+
+from ai_haley_kg_domain.model.KGEntityType import KGEntityType
+from ai_haley_kg_domain.model.KGFrameType import KGFrameType
 
 
 # Setup logging
@@ -142,8 +148,10 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
         test_kgtypes = data_creator.create_test_kgtype_objects()
         print(f"   ✓ Created {len(test_kgtypes)} test KGType objects")
         
-        # Extract URIs for tracking
+        # Extract URIs for tracking, classify by type
         created_kgtypes = [str(kgtype.URI) for kgtype in test_kgtypes]
+        entity_type_uris = [str(kt.URI) for kt in test_kgtypes if isinstance(kt, KGEntityType)]
+        frame_type_uris = [str(kt.URI) for kt in test_kgtypes if isinstance(kt, KGFrameType)]
         
         # Test 1: KGType creation using client KGTypes endpoint
         print("\n3. Testing KGType creation using client KGTypes endpoint...")
@@ -207,8 +215,54 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
             print(f"   ❌ KGType updating tests FAILED: {update_results['total_tests'] - update_results['passed_tests']} failures")
             test_results['failed_tests'].extend([r['name'] for r in update_results['results'] if not r['passed']])
         
-        # Test 5: KGType deletion using client KGTypes endpoint (AFTER get tests)
-        print("\n7. Testing KGType deletion using client KGTypes endpoint...")
+        # Test 5: KGType relationship CRUD using client KGTypes endpoint
+        print("\n7. Testing KGType relationships (get/create/delete)...")
+        rel_tester = KGTypeRelationshipsTester(client)
+        rel_results = await rel_tester.run_tests(
+            test_space_id, test_graph_id, created_kgtypes,
+            entity_type_uris, frame_type_uris,
+        )
+        test_results['test_details'].append(rel_results)
+        test_results['total_tests'] += rel_results['total_tests']
+        test_results['passed_tests'] += rel_results['passed_tests']
+        
+        if rel_results['passed']:
+            print(f"   ✓ KGType relationship tests PASSED: {rel_results['passed_tests']}/{rel_results['total_tests']}")
+        else:
+            print(f"   ❌ KGType relationship tests FAILED: {rel_results['total_tests'] - rel_results['passed_tests']} failures")
+            test_results['failed_tests'].extend([r['name'] for r in rel_results['results'] if not r['passed']])
+        
+        # Test 6: KGType documentation CRUD using client KGTypes endpoint
+        print("\n8. Testing KGType documentation (get/update/delete)...")
+        doc_tester = KGTypeDocumentationTester(client)
+        doc_type_uri = entity_type_uris[0] if entity_type_uris else created_kgtypes[0]
+        doc_results = await doc_tester.run_tests(test_space_id, test_graph_id, doc_type_uri)
+        test_results['test_details'].append(doc_results)
+        test_results['total_tests'] += doc_results['total_tests']
+        test_results['passed_tests'] += doc_results['passed_tests']
+        
+        if doc_results['passed']:
+            print(f"   ✓ KGType documentation tests PASSED: {doc_results['passed_tests']}/{doc_results['total_tests']}")
+        else:
+            print(f"   ❌ KGType documentation tests FAILED: {doc_results['total_tests'] - doc_results['passed_tests']} failures")
+            test_results['failed_tests'].extend([r['name'] for r in doc_results['results'] if not r['passed']])
+        
+        # Test 7: KGType search using client KGTypes endpoint
+        print("\n9. Testing KGType search (keyword, type_uri filter)...")
+        search_tester = KGTypeSearchTester(client)
+        search_results = await search_tester.run_tests(test_space_id, test_graph_id)
+        test_results['test_details'].append(search_results)
+        test_results['total_tests'] += search_results['total_tests']
+        test_results['passed_tests'] += search_results['passed_tests']
+        
+        if search_results['passed']:
+            print(f"   ✓ KGType search tests PASSED: {search_results['passed_tests']}/{search_results['total_tests']}")
+        else:
+            print(f"   ❌ KGType search tests FAILED: {search_results['total_tests'] - search_results['passed_tests']} failures")
+            test_results['failed_tests'].extend([r['name'] for r in search_results['results'] if not r['passed']])
+        
+        # Test 8: KGType deletion using client KGTypes endpoint (AFTER get tests)
+        print("\n10. Testing KGType deletion using client KGTypes endpoint...")
         delete_tester = KGTypeDeleteTester(client)
         delete_results = await delete_tester.run_tests(test_space_id, test_graph_id, created_kgtypes)
         test_results['test_details'].append(delete_results)
@@ -222,7 +276,7 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
             test_results['failed_tests'].extend([r['name'] for r in delete_results['results'] if not r['passed']])
         
         # Cleanup remaining test KGTypes
-        print(f"\n8. Cleaning up remaining test KGTypes...")
+        print(f"\n11. Cleaning up remaining test KGTypes...")
         try:
             # List remaining KGTypes
             list_response = await client.list_kgtypes(test_space_id, test_graph_id, page_size=100)
@@ -248,7 +302,7 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
             print(f"   ⚠️  Cleanup warning: {e}")
         
         # Cleanup test space
-        print(f"\n9. Cleaning up test space...")
+        print(f"\n12. Cleaning up test space...")
         try:
             delete_response = await client.delete_space(test_space_id)
             if delete_response and hasattr(delete_response, 'success') and delete_response.success:
@@ -264,7 +318,7 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
         
         # Close client
         await client.close()
-        print(f"\n10. Client closed successfully")
+        print(f"\n13. Client closed successfully")
         
         # Print comprehensive test summary
         print(f"\n✅ KGTypes endpoint testing completed!")
@@ -290,9 +344,16 @@ async def test_kgtypes_endpoint(config_path: str) -> bool:
             print(f"\n🎉 All KGTypes endpoint tests PASSED!")
             print(f"   KGType operations validated using VitalGraph client KGTypes endpoint methods:")
             print(f"   - client.create_kgtypes()")
-            print(f"   - client.list_kgtypes()")
+            print(f"   - client.list_kgtypes(type_uri=...)")
             print(f"   - client.update_kgtypes()")
             print(f"   - client.delete_kgtypes()")
+            print(f"   - client.kgtypes.get_type_relationships()")
+            print(f"   - client.kgtypes.create_type_relationship()")
+            print(f"   - client.kgtypes.delete_type_relationship()")
+            print(f"   - client.kgtypes.get_type_documentation()")
+            print(f"   - client.kgtypes.update_type_documentation()")
+            print(f"   - client.kgtypes.delete_type_documentation()")
+            print(f"   - client.kgtypes.search_types()")
             print(f"\n🎉 KGTypes endpoint testing completed successfully!")
             print(f"✅ KGType operations validated with VitalGraph client KGTypes endpoint!")
             print(f"   All KGType CRUD operations are working correctly through the client interface.")

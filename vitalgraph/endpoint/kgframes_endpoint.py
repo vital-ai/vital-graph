@@ -562,17 +562,46 @@ class KGFramesEndpoint:
             uri: Optional[str] = Query(None, description="Single frame URI to retrieve"),
             uri_list: Optional[str] = Query(None, description="Comma-separated list of frame URIs"),
             include_frame_graph: bool = Query(False, description="If True, include complete frame graph with slots"),
-            sort_by: Optional[str] = Query(None, description="Sort by: 'name', 'uri', 'created_date', or 'frame_type'"),
+            sort_by: Optional[str] = Query(None, description="Property URI to sort by (e.g. vital-core:hasName). Must be one of the allowed sortable properties."),
             sort_order: str = Query("asc", description="Sort order: 'asc' or 'desc'"),
+            form_type: Optional[str] = Query(None, description="Filter by hasKGFormType: 'Assertion', 'Aspect', or full URI"),
+            frame_type_uri: Optional[str] = Query(None, description="Filter by hasKGFrameTypeURI (frame type URI)"),
+            status: Optional[str] = Query(None, description="Filter by status URI (exact match on hasObjectStatusType)"),
+            exclude_status: Optional[str] = Query(None, description="Exclude frames with this status URI"),
+            created_after: Optional[str] = Query(None, description="Frames created after this ISO 8601 datetime"),
+            created_before: Optional[str] = Query(None, description="Frames created before this ISO 8601 datetime"),
+            modified_after: Optional[str] = Query(None, description="Frames modified after this ISO 8601 datetime"),
+            modified_before: Optional[str] = Query(None, description="Frames modified before this ISO 8601 datetime"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             """
-            List KG frames with pagination, or get specific frames by URI(s).
-            
-            - If uri is provided: returns single frame
-            - If uri_list is provided: returns multiple frames  
-            - Otherwise: returns paginated list of all frames
-            - include_frame_graph: retrieves complete frame graphs with slots
+            List KG frames with pagination, filtering, and sorting — or get specific frames by URI(s).
+
+            **Retrieval modes:**
+            - `uri` provided → returns single frame
+            - `uri_list` provided → returns multiple frames
+            - Otherwise → paginated list with optional filters
+
+            **Form Type Classification (`form_type`):**
+
+            Every KGFrame is automatically classified via `hasKGFormType`:
+
+            | Value | URI | Meaning |
+            |---|---|---|
+            | `Assertion` | `haley-ai-kg#KGFormType_Assertion` | Standalone top-level frame — an independent fact |
+            | `Aspect` | `haley-ai-kg#KGFormType_Aspect` | Entity-enclosed frame or child of an Assertion |
+
+            Pass the short label (`Assertion`, `Aspect`) or the full URI.
+
+            **Sorting (`sort_by`):**
+
+            Must be one of the allowed property URIs:
+            - `http://vital.ai/ontology/vital-core#hasName`
+            - `http://vital.ai/ontology/vital#hasObjectModificationDateTime`
+            - `http://vital.ai/ontology/vital-aimp#hasObjectCreationTime`
+            - `http://vital.ai/ontology/vital-aimp#hasObjectStatusType`
+            - `http://vital.ai/ontology/haley-ai-kg#hasKGFormType`
+            - `http://vital.ai/ontology/haley-ai-kg#hasKGFrameTypeURI`
             """
             
             require_space_read(current_user, space_id)
@@ -586,20 +615,34 @@ class KGFramesEndpoint:
                 uris = [u.strip() for u in uri_list.split(',') if u.strip()]
                 return await self._get_frames_by_uris(space_id, graph_id, uris, include_frame_graph, current_user)
             
-            # Validate sort_by
-            allowed_sort_fields = ("name", "uri", "created_date", "frame_type")
-            if sort_by and sort_by not in allowed_sort_fields:
-                from fastapi import HTTPException
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"sort_by '{sort_by}' is not valid. Allowed: {', '.join(allowed_sort_fields)}"
-                )
+            # Validate sort_by against property registry
+            if sort_by:
+                from ..model.kgframes_model import _FRAME_SORT_PROPERTIES
+                if sort_by not in _FRAME_SORT_PROPERTIES:
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"sort_by '{sort_by}' is not a sortable property. Allowed: {', '.join(sorted(_FRAME_SORT_PROPERTIES))}"
+                    )
             if sort_order not in ("asc", "desc"):
                 from fastapi import HTTPException
                 raise HTTPException(status_code=400, detail="sort_order must be 'asc' or 'desc'")
 
+            # Resolve form_type short label to full URI
+            resolved_form_type = None
+            if form_type:
+                from ..model.kgframes_model import resolve_form_type
+                resolved_form_type = resolve_form_type(form_type)
+
             # Handle paginated list of all frames
-            return await self._list_frames(space_id, graph_id, page_size, offset, search, current_user, sort_by=sort_by, sort_order=sort_order)
+            return await self._list_frames(
+                space_id, graph_id, page_size, offset, search, current_user,
+                sort_by=sort_by, sort_order=sort_order,
+                form_type=resolved_form_type, frame_type_uri=frame_type_uri,
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
 
         @self.router.post("/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Frames"])
         async def create_or_update_frames(
@@ -732,7 +775,17 @@ class KGFramesEndpoint:
     
     # Implementation methods following MockKGFramesEndpoint patterns with VitalSigns integration
     
-    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int, search: Optional[str], current_user: Dict, sort_by: Optional[str] = None, sort_order: str = "asc") -> QuadResponse:
+    async def _list_frames(self, space_id: str, graph_id: str, page_size: int, offset: int,
+                           search: Optional[str], current_user: Dict,
+                           sort_by: Optional[str] = None, sort_order: str = "asc",
+                           form_type: Optional[str] = None,
+                           frame_type_uri: Optional[str] = None,
+                           status: Optional[str] = None,
+                           exclude_status: Optional[str] = None,
+                           created_after: Optional[str] = None,
+                           created_before: Optional[str] = None,
+                           modified_after: Optional[str] = None,
+                           modified_before: Optional[str] = None) -> QuadResponse:
         """List KG frames with pagination using backend interface."""
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
@@ -747,7 +800,14 @@ class KGFramesEndpoint:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
             
             # Build SPARQL query for listing frames
-            sparql_query = self._build_list_frames_query(backend, space_id, graph_id, search, page_size, offset, sort_by=sort_by, sort_order=sort_order)
+            sparql_query = self._build_list_frames_query(
+                backend, space_id, graph_id, search, page_size, offset,
+                sort_by=sort_by, sort_order=sort_order,
+                form_type=form_type, frame_type_uri=frame_type_uri,
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
             
             # Execute query via backend interface
             results = await backend.execute_sparql_query(space_id, sparql_query)
@@ -755,7 +815,13 @@ class KGFramesEndpoint:
             # Convert results to VitalSigns frame objects
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
             
-            count_query = self._build_count_frames_query(backend, space_id, graph_id, search)
+            count_query = self._build_count_frames_query(
+                backend, space_id, graph_id, search,
+                form_type=form_type, frame_type_uri=frame_type_uri,
+                status=status, exclude_status=exclude_status,
+                created_after=created_after, created_before=created_before,
+                modified_after=modified_after, modified_before=modified_before,
+            )
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
@@ -1440,57 +1506,113 @@ class KGFramesEndpoint:
             )
     
     # Helper methods for SPARQL query building and VitalSigns conversion
-    
-    def _build_list_frames_query(self, backend, space_id: str, graph_id: str, search: Optional[str], page_size: int, offset: int, sort_by: Optional[str] = None, sort_order: str = "asc") -> str:
-        """Build SPARQL query for listing frame subjects by finding objects with frameGraphURI property."""
+
+    def _build_frame_filter_clauses(self, *,
+                                    search: Optional[str] = None,
+                                    form_type: Optional[str] = None,
+                                    frame_type_uri: Optional[str] = None,
+                                    status: Optional[str] = None,
+                                    exclude_status: Optional[str] = None,
+                                    created_after: Optional[str] = None,
+                                    created_before: Optional[str] = None,
+                                    modified_after: Optional[str] = None,
+                                    modified_before: Optional[str] = None) -> str:
+        """Build SPARQL filter clause fragments for frame list queries."""
+        parts = []
+
+        # Text search on name / description / URI
+        if search:
+            parts.append(f"""
+                OPTIONAL {{ ?frame <{self.vital_prefix}hasName> ?name }}
+                OPTIONAL {{ ?frame <{self.haley_prefix}hasKGraphDescription> ?description }}
+                FILTER(
+                    CONTAINS(LCASE(STR(?name)), LCASE("{search}")) ||
+                    CONTAINS(LCASE(STR(?description)), LCASE("{search}")) ||
+                    CONTAINS(LCASE(STR(?frame)), LCASE("{search}"))
+                )""")
+
+        # Form type (Assertion / Aspect)
+        if form_type:
+            parts.append(f'?frame <{self.haley_prefix}hasKGFormType> <{form_type}> .')
+
+        # Frame type URI
+        if frame_type_uri:
+            parts.append(f'?frame <{self.haley_prefix}hasKGFrameType> <{frame_type_uri}> .')
+
+        # Status filter
+        if status:
+            parts.append(f'?frame <http://vital.ai/ontology/vital-aimp#hasObjectStatusType> <{status}> .')
+
+        # Exclude status
+        if exclude_status:
+            parts.append(f"""
+                OPTIONAL {{ ?frame <http://vital.ai/ontology/vital-aimp#hasObjectStatusType> ?_excl_status . }}
+                FILTER(!BOUND(?_excl_status) || ?_excl_status != <{exclude_status}>)""")
+
+        # Date range filters
+        creation_prop = "http://vital.ai/ontology/vital-aimp#hasObjectCreationTime"
+        modification_prop = "http://vital.ai/ontology/vital#hasObjectModificationDateTime"
+
+        if created_after or created_before:
+            parts.append(f'?frame <{creation_prop}> ?_created .')
+            if created_after:
+                parts.append(f'FILTER(?_created >= "{created_after}"^^xsd:dateTime)')
+            if created_before:
+                parts.append(f'FILTER(?_created <= "{created_before}"^^xsd:dateTime)')
+
+        if modified_after or modified_before:
+            parts.append(f'?frame <{modification_prop}> ?_modified .')
+            if modified_after:
+                parts.append(f'FILTER(?_modified >= "{modified_after}"^^xsd:dateTime)')
+            if modified_before:
+                parts.append(f'FILTER(?_modified <= "{modified_before}"^^xsd:dateTime)')
+
+        return "\n                ".join(parts)
+
+    def _build_list_frames_query(self, backend, space_id: str, graph_id: str,
+                                 search: Optional[str], page_size: int, offset: int,
+                                 sort_by: Optional[str] = None, sort_order: str = "asc",
+                                 form_type: Optional[str] = None,
+                                 frame_type_uri: Optional[str] = None,
+                                 status: Optional[str] = None,
+                                 exclude_status: Optional[str] = None,
+                                 created_after: Optional[str] = None,
+                                 created_before: Optional[str] = None,
+                                 modified_after: Optional[str] = None,
+                                 modified_before: Optional[str] = None) -> str:
+        """Build SPARQL query for listing frame subjects with filtering and sorting."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
             full_graph_uri = graph_id
-            
-        search_filter = ""
-        if search:
-            # Search using actual KGFrame properties from schema
-            # hasName: http://vital.ai/ontology/vital-core#hasName
-            # hasKGraphDescription: http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription
-            search_filter = f"""
-            OPTIONAL {{ ?frame <{self.vital_prefix}hasName> ?name }}
-            OPTIONAL {{ ?frame <{self.haley_prefix}hasKGraphDescription> ?description }}
-            FILTER(
-                CONTAINS(LCASE(STR(?name)), LCASE("{search}")) ||
-                CONTAINS(LCASE(STR(?description)), LCASE("{search}")) ||
-                CONTAINS(LCASE(STR(?frame)), LCASE("{search}"))
-            )
-            """
-        
-        # Build sort-specific OPTIONAL and ORDER BY
-        sort_optional = ""
+
+        filters = self._build_frame_filter_clauses(
+            search=search, form_type=form_type, frame_type_uri=frame_type_uri,
+            status=status, exclude_status=exclude_status,
+            created_after=created_after, created_before=created_before,
+            modified_after=modified_after, modified_before=modified_before,
+        )
+
+        # Build sort clause
         direction = "DESC" if sort_order == "desc" else "ASC"
-        if sort_by == "name":
-            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}hasName> ?sortName }}"
-            order_clause = f"ORDER BY {direction}(?sortName)"
-        elif sort_by == "created_date":
-            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}hasCreatedDate> ?sortDate }}"
-            order_clause = f"ORDER BY {direction}(?sortDate)"
-        elif sort_by == "frame_type":
-            sort_optional = f"OPTIONAL {{ ?frame <{self.vital_prefix}vitaltype> ?sortType }}"
-            order_clause = f"ORDER BY {direction}(?sortType)"
-        elif sort_by == "uri":
-            order_clause = f"ORDER BY {direction}(?frame)"
+        sort_optional = ""
+        if sort_by:
+            sort_optional = f"OPTIONAL {{ ?frame <{sort_by}> ?sort_val . }}"
+            order_clause = f"ORDER BY {direction}(?sort_val) ?frame"
         else:
             order_clause = "ORDER BY ?frame"
-        
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         
         SELECT DISTINCT ?frame WHERE {{
             GRAPH <{full_graph_uri}> {{
-                # Find objects that have hasFrameGraphURI property (these are frame objects)
                 ?frame haley:hasFrameGraphURI ?frameGraphURI .
                 ?frame a haley:KGFrame .
-                {search_filter}
+                {filters}
                 {sort_optional}
             }}
         }}
@@ -1499,23 +1621,40 @@ class KGFramesEndpoint:
         OFFSET {offset}
         """
     
-    def _build_count_frames_query(self, backend, space_id: str, graph_id: str, search: Optional[str]) -> str:
-        """Build SPARQL count query for frames by finding objects with frameGraphURI property."""
+    def _build_count_frames_query(self, backend, space_id: str, graph_id: str,
+                                  search: Optional[str],
+                                  form_type: Optional[str] = None,
+                                  frame_type_uri: Optional[str] = None,
+                                  status: Optional[str] = None,
+                                  exclude_status: Optional[str] = None,
+                                  created_after: Optional[str] = None,
+                                  created_before: Optional[str] = None,
+                                  modified_after: Optional[str] = None,
+                                  modified_before: Optional[str] = None) -> str:
+        """Build SPARQL count query for frames with filtering."""
         # Get the proper space-specific graph URI
         if hasattr(backend, '_get_space_graph_uri'):
             full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
         else:
             full_graph_uri = graph_id
-            
+
+        filters = self._build_frame_filter_clauses(
+            search=search, form_type=form_type, frame_type_uri=frame_type_uri,
+            status=status, exclude_status=exclude_status,
+            created_after=created_after, created_before=created_before,
+            modified_after=modified_after, modified_before=modified_before,
+        )
+
         return f"""
         PREFIX haley: <{self.haley_prefix}>
         PREFIX vital: <{self.vital_prefix}>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         
         SELECT (COUNT(DISTINCT ?frame) as ?count) WHERE {{
             GRAPH <{full_graph_uri}> {{
-                # Find objects that have hasFrameGraphURI property (these are frame objects)
                 ?frame haley:hasFrameGraphURI ?frameGraphURI .
                 ?frame a haley:KGFrame .
+                {filters}
             }}
         }}
         """

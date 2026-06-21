@@ -5,8 +5,8 @@ Uses MinHash for signature computation and PostgreSQL tables for LSH
 band storage. Replaces the Redis/MemoryDB backend with direct SQL —
 all operations are natively async.
 
-The scoring layer (RapidFuzz + phonetic bonus) is unchanged from the
-original EntityDedupIndex.
+Refactored to use shared fuzzy_core.py algorithms and lazy-load
+scoring metadata from the database (no in-memory cache rebuild).
 """
 
 import asyncio
@@ -15,17 +15,30 @@ import logging
 import time as _time_mod
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import jellyfish
-import numpy as np
 from datasketch import MinHash
-from rapidfuzz import fuzz
 
-from .entity_dedup_storage import (
-    TABLE_PHONETIC,
-    TABLE_PRIMARY,
-    PostgreSQLDedupStorage,
+from vitalgraph.vectorization.fuzzy_core import (
+    build_band_entries,
+    build_band_queries as core_build_band_queries,
+    build_minhash,
+    build_typo_variants,
     compute_band_hash,
     compute_band_ranges,
+    compute_phonetic_codes,
+    compute_shingles,
+    entity_id_from_lsh_key,
+    extract_entity_ids as core_extract_entity_ids,
+    make_lsh_key,
+    make_phonetic_lsh_key,
+    match_level,
+    phonetic_match,
+    score_pair,
+)
+
+from .entity_fuzzy_storage import (
+    TABLE_PHONETIC,
+    TABLE_PRIMARY,
+    PostgreSQLFuzzyStorage,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,8 +55,8 @@ DEFAULT_MIN_CANDIDATES = 20
 BULK_BATCH_SIZE = 1000
 
 
-def compute_dedup_hash(entity: Dict[str, Any]) -> str:
-    """Compute a deterministic MD5 hash of the dedup-relevant fields.
+def compute_fuzzy_hash(entity: Dict[str, Any]) -> str:
+    """Compute a deterministic MD5 hash of the fuzzy-relevant fields.
 
     Fields: type_key, primary_name, country, region, locality, sorted aliases.
     Returns a 32-char hex string.
@@ -65,7 +78,7 @@ def compute_dedup_hash(entity: Dict[str, Any]) -> str:
     return hashlib.md5('|'.join(parts).encode('utf-8')).hexdigest()
 
 
-class EntityDedupIndexPG:
+class EntityFuzzyIndexPG:
     """PostgreSQL-backed near-duplicate detection index.
 
     Two-layer approach:
@@ -84,7 +97,7 @@ class EntityDedupIndexPG:
         phonetic_bonus: float = DEFAULT_PHONETIC_BONUS,
         phonetic_threshold: float = DEFAULT_PHONETIC_LSH_THRESHOLD,
     ):
-        """Initialize the PostgreSQL-backed dedup index.
+        """Initialize the PostgreSQL-backed fuzzy index.
 
         Args:
             pool: asyncpg connection pool.
@@ -95,7 +108,7 @@ class EntityDedupIndexPG:
             phonetic_threshold: Jaccard threshold for phonetic LSH.
         """
         self.pool = pool
-        self.storage = PostgreSQLDedupStorage(pool)
+        self.storage = PostgreSQLFuzzyStorage(pool)
         self.num_perm = num_perm
         self.threshold = threshold
         self.phonetic_threshold = phonetic_threshold
@@ -112,22 +125,22 @@ class EntityDedupIndexPG:
         self._initialized = False
 
     @classmethod
-    def from_env(cls, pool) -> 'EntityDedupIndexPG':
-        """Create an EntityDedupIndexPG from environment variables.
+    def from_env(cls, pool) -> 'EntityFuzzyIndexPG':
+        """Create an EntityFuzzyIndexPG from environment variables.
 
         Args:
             pool: asyncpg connection pool.
 
         Reads:
-            ENTITY_DEDUP_NUM_PERM: Number of permutations (default 64)
-            ENTITY_DEDUP_THRESHOLD: LSH threshold (default 0.3)
+            ENTITY_FUZZY_NUM_PERM: Number of permutations (default 64)
+            ENTITY_FUZZY_THRESHOLD: LSH threshold (default 0.3)
         """
         from vitalgraph.config.config_loader import get_scoped_env
 
-        num_perm = int(get_scoped_env('ENTITY_DEDUP_NUM_PERM', str(DEFAULT_NUM_PERM)))
-        threshold = float(get_scoped_env('ENTITY_DEDUP_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
+        num_perm = int(get_scoped_env('ENTITY_FUZZY_NUM_PERM', str(DEFAULT_NUM_PERM)))
+        threshold = float(get_scoped_env('ENTITY_FUZZY_THRESHOLD', str(DEFAULT_LSH_THRESHOLD)))
 
-        logger.info(f"Entity dedup using PostgreSQL backend (num_perm={num_perm}, threshold={threshold})")
+        logger.info(f"Entity fuzzy using PostgreSQL backend (num_perm={num_perm}, threshold={threshold})")
         return cls(pool=pool, num_perm=num_perm, threshold=threshold)
 
     @property
@@ -135,12 +148,20 @@ class EntityDedupIndexPG:
         """Number of entities currently in the local scoring cache."""
         return len(self._entity_cache)
 
+    async def get_entity_count_db(self) -> int:
+        """Get the total number of entities indexed (from PostgreSQL)."""
+        async with self.pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(DISTINCT entity_key) FROM entity_fuzzy_band"
+            )
+            return count or 0
+
     # ------------------------------------------------------------------
     # Entity lifecycle (async)
     # ------------------------------------------------------------------
 
     async def add_entity(self, entity_id: str, entity: Dict[str, Any]):
-        """Add or update an entity in the dedup index.
+        """Add or update an entity in the fuzzy index.
 
         Computes MinHash band hashes and stores them in PostgreSQL.
         Also updates the in-memory scoring cache.
@@ -197,9 +218,9 @@ class EntityDedupIndexPG:
         if phonetic_entries:
             await self.storage.insert_bands(TABLE_PHONETIC, phonetic_entries)
 
-        # Store dedup hash
-        h = compute_dedup_hash(entity)
-        await self.storage.set_dedup_hash(entity_id, h)
+        # Store fuzzy hash
+        h = compute_fuzzy_hash(entity)
+        await self.storage.set_fuzzy_hash(entity_id, h)
 
         # Update local scoring cache
         self._entity_cache[entity_id] = {
@@ -228,7 +249,7 @@ class EntityDedupIndexPG:
         # Remove from PostgreSQL
         await self.storage.remove_entity_bands(TABLE_PRIMARY, primary_keys)
         await self.storage.remove_entity_bands(TABLE_PHONETIC, phonetic_keys)
-        await self.storage.delete_dedup_hash(entity_id)
+        await self.storage.delete_fuzzy_hash(entity_id)
 
         # Remove from local cache
         self._entity_cache.pop(entity_id, None)
@@ -342,37 +363,114 @@ class EntityDedupIndexPG:
 
         candidate_ids = await self.get_candidate_ids(entity, query_names=query_names)
 
-        # Phase 2: RapidFuzz scoring + phonetic bonus
+        # Phase 2: Lazy-load scoring metadata from DB for candidates
+        # Try local cache first, fall back to DB
+        candidate_data = await self._load_candidate_data(
+            candidate_ids - exclude_ids, type_key=type_key
+        )
+
+        # Phase 3: RapidFuzz scoring + phonetic bonus
         results = []
-        for cid in candidate_ids:
-            if cid in exclude_ids:
-                continue
-            cached = self._entity_cache.get(cid)
-            if not cached:
-                continue
-            if type_key and cached.get('type_key') != type_key:
-                continue
+        for cid, cached in candidate_data.items():
+            score_result = score_pair(query_names, self._candidate_names(cached))
+            score_val = score_result.score
 
-            score_info = self._score_pair(query_names, cached)
-            score = score_info['score']
-
-            is_phonetic = self._phonetic_match(query_names, cached)
+            candidate_names = self._candidate_names(cached)
+            is_phonetic = phonetic_match(query_names, candidate_names)
             if is_phonetic and self.phonetic_bonus > 0:
-                score = min(score + self.phonetic_bonus, 100.0)
-            score_info['detail']['phonetic_match'] = is_phonetic
+                score_val = min(score_val + self.phonetic_bonus, 100.0)
 
-            if score >= min_score:
+            if score_val >= min_score:
                 results.append({
                     'entity_id': cid,
                     'primary_name': cached['primary_name'],
                     'type_key': cached.get('type_key'),
-                    'score': round(score, 1),
-                    'match_level': self._match_level(score),
-                    'score_detail': score_info['detail'],
+                    'score': round(score_val, 1),
+                    'match_level': match_level(score_val),
+                    'score_detail': {
+                        **score_result.detail,
+                        'phonetic_match': is_phonetic,
+                    },
                 })
 
         results.sort(key=lambda x: x['score'], reverse=True)
         return results[:limit]
+
+    async def _load_candidate_data(
+        self,
+        candidate_ids: Set[str],
+        type_key: Optional[str] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Lazy-load scoring metadata for candidate entities.
+
+        Checks the local cache first; fetches missing entities from
+        the database to avoid full cache rebuilds on restart.
+        """
+        if not candidate_ids:
+            return {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        missing_ids: List[str] = []
+
+        for cid in candidate_ids:
+            cached = self._entity_cache.get(cid)
+            if cached is not None:
+                if type_key and cached.get('type_key') != type_key:
+                    continue
+                result[cid] = cached
+            else:
+                missing_ids.append(cid)
+
+        if not missing_ids:
+            return result
+
+        # Lazy-load from PostgreSQL
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT e.entity_id, e.primary_name, et.type_key, "
+                "e.country, e.region, e.locality, ea.alias_name "
+                "FROM entity e "
+                "JOIN entity_type et ON et.type_id = e.entity_type_id "
+                "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
+                "AND ea.status != 'retracted' "
+                "WHERE e.status != 'deleted' AND e.entity_id = ANY($1)",
+                missing_ids,
+            )
+
+        # Group by entity_id
+        loaded: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            eid = row['entity_id']
+            if eid not in loaded:
+                loaded[eid] = {
+                    'primary_name': row['primary_name'],
+                    'type_key': row['type_key'],
+                    'alias_names': [],
+                    'country': row['country'],
+                    'region': row['region'],
+                    'locality': row['locality'],
+                }
+            alias = row['alias_name']
+            if alias:
+                loaded[eid]['alias_names'].append(alias)
+
+        # Cache loaded entities and filter by type
+        for eid, data in loaded.items():
+            self._entity_cache[eid] = data
+            if type_key and data.get('type_key') != type_key:
+                continue
+            result[eid] = data
+
+        return result
+
+    @staticmethod
+    def _candidate_names(cached: Dict[str, Any]) -> List[str]:
+        """Extract all name variants from cached entity data."""
+        names = []
+        if cached.get('primary_name'):
+            names.append(cached['primary_name'])
+        names.extend(cached.get('alias_names') or [])
+        return names
 
     async def find_similar_by_name(
         self,
@@ -419,22 +517,25 @@ class EntityDedupIndexPG:
             if type_key and cached.get('type_key') != type_key:
                 continue
 
-            score_info = self._score_pair(query_names, cached)
-            score = score_info['score']
+            cand_names = self._candidate_names(cached)
+            score_result = score_pair(query_names, cand_names)
+            score_val = score_result.score
 
-            is_phonetic = self._phonetic_match(query_names, cached)
+            is_phonetic = phonetic_match(query_names, cand_names)
             if is_phonetic and self.phonetic_bonus > 0:
-                score = min(score + self.phonetic_bonus, 100.0)
-            score_info['detail']['phonetic_match'] = is_phonetic
+                score_val = min(score_val + self.phonetic_bonus, 100.0)
 
-            if score >= min_score:
+            if score_val >= min_score:
                 results.append({
                     'entity_id': cid,
                     'primary_name': cached['primary_name'],
                     'type_key': cached.get('type_key'),
-                    'score': round(score, 1),
-                    'match_level': self._match_level(score),
-                    'score_detail': score_info['detail'],
+                    'score': round(score_val, 1),
+                    'match_level': match_level(score_val),
+                    'score_detail': {
+                        **score_result.detail,
+                        'phonetic_match': is_phonetic,
+                    },
                 })
 
         results.sort(key=lambda x: x['score'], reverse=True)
@@ -468,7 +569,7 @@ class EntityDedupIndexPG:
         if not skip_lock:
             acquired = await self.storage.try_advisory_lock()
             if not acquired:
-                raise RuntimeError("Could not acquire advisory lock for dedup initialize")
+                raise RuntimeError("Could not acquire advisory lock for fuzzy initialize")
 
         try:
             return await self._do_initialize(pool, since=since, chunk_size=chunk_size)
@@ -592,7 +693,7 @@ class EntityDedupIndexPG:
         self._initialized = True
         duration = _time_mod.time() - start
         logger.info(
-            f"Entity dedup index (PG): {count:,} entities indexed in {duration:.1f}s"
+            f"Entity fuzzy index (PG): {count:,} entities indexed in {duration:.1f}s"
             f"{' (incremental)' if since else ' (full)'}"
         )
         return count
@@ -658,8 +759,8 @@ class EntityDedupIndexPG:
             '_variant_count': len(all_names),
         }
 
-        # Dedup hash
-        hash_buffer[entity_id] = compute_dedup_hash(entity)
+        # Fuzzy hash
+        hash_buffer[entity_id] = compute_fuzzy_hash(entity)
 
     async def _flush_buffers(
         self,
@@ -684,11 +785,11 @@ class EntityDedupIndexPG:
             phonetic_buffer.clear()
 
         if hash_buffer:
-            await self.storage.set_dedup_hashes_batch(hash_buffer)
+            await self.storage.set_fuzzy_hashes_batch(hash_buffer)
             hash_buffer.clear()
 
     async def clear_index(self):
-        """Wipe all dedup tables and local cache."""
+        """Wipe all fuzzy tables and local cache."""
         acquired = await self.storage.try_advisory_lock()
         if not acquired:
             raise RuntimeError("Could not acquire advisory lock for clear_index")
@@ -696,7 +797,7 @@ class EntityDedupIndexPG:
             await self.storage.truncate_all()
             self._entity_cache.clear()
             self._initialized = False
-            logger.info("Dedup index cleared (PostgreSQL)")
+            logger.info("Fuzzy index cleared (PostgreSQL)")
         finally:
             await self.storage.release_advisory_lock()
 
@@ -774,47 +875,36 @@ class EntityDedupIndexPG:
         return entity_ids
 
     # ------------------------------------------------------------------
-    # Internal: shingling, MinHash, keys
+    # Internal: shingling, MinHash, keys (delegates to fuzzy_core)
     # ------------------------------------------------------------------
 
     def _name_shingles(self, name: str, entity: Dict[str, Any]) -> set:
         """Build shingles for a single name variant, including location tokens."""
-        shingles = set()
-        normalized = name.lower().strip()
-        if not normalized:
-            return shingles
-        if len(normalized) < self.shingle_k:
-            shingles.add(normalized)
-        else:
-            for i in range(len(normalized) - self.shingle_k + 1):
-                shingles.add(normalized[i:i + self.shingle_k])
+        context_tokens = {}
         for field in ('country', 'region', 'locality'):
             val = entity.get(field)
             if val:
-                shingles.add(f"{field}:{val.lower().strip()}")
-        return shingles
+                context_tokens[field] = val
+        return compute_shingles(name, self.shingle_k, context_tokens=context_tokens)
 
     def _build_minhash(self, shingles: set) -> MinHash:
         """Build a MinHash signature from a shingle set."""
-        mh = MinHash(num_perm=self.num_perm)
-        for s in shingles:
-            mh.update(s.encode('utf-8'))
-        return mh
+        return build_minhash(shingles, self.num_perm)
 
     @staticmethod
     def _lsh_key(entity_id: str, idx: int) -> str:
         """Compound LSH key: entity_id::variant_index."""
-        return f"{entity_id}::{idx}"
+        return make_lsh_key(entity_id, idx)
 
     @staticmethod
     def _entity_id_from_lsh_key(lsh_key: str) -> str:
         """Extract entity_id from a compound LSH key."""
-        return lsh_key.rsplit('::', 1)[0]
+        return entity_id_from_lsh_key(lsh_key)
 
     @staticmethod
     def _phonetic_lsh_key(entity_id: str, idx: int) -> str:
         """Compound phonetic LSH key: P::entity_id::variant_index."""
-        return f"P::{entity_id}::{idx}"
+        return make_phonetic_lsh_key(entity_id, idx)
 
     def _get_name_variants(self, entity: Dict[str, Any]) -> List[str]:
         """Extract all name variants from an entity dict."""
@@ -829,97 +919,42 @@ class EntityDedupIndexPG:
         return names
 
     # ------------------------------------------------------------------
-    # Internal: scoring (RapidFuzz)
+    # Internal: scoring (delegates to fuzzy_core)
     # ------------------------------------------------------------------
 
     def _score_pair(
         self, query_names: List[str], candidate: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Score a query against a candidate using RapidFuzz."""
-        candidate_names = [candidate['primary_name']]
-        candidate_names.extend(candidate.get('alias_names') or [])
-
-        best_score = 0.0
-        best_detail = {
-            'ratio': 0.0,
-            'partial_ratio': 0.0,
-            'token_sort_ratio': 0.0,
-            'token_set_ratio': 0.0,
-        }
-
-        for qn in query_names:
-            for cn in candidate_names:
-                r = fuzz.ratio(qn, cn)
-                pr = fuzz.partial_ratio(qn, cn)
-                tsr = fuzz.token_sort_ratio(qn, cn)
-                tsetr = fuzz.token_set_ratio(qn, cn)
-                composite = max(tsr, tsetr)
-
-                if composite > best_score:
-                    best_score = composite
-                    best_detail = {
-                        'ratio': round(r, 1),
-                        'partial_ratio': round(pr, 1),
-                        'token_sort_ratio': round(tsr, 1),
-                        'token_set_ratio': round(tsetr, 1),
-                    }
-
+        """Score a query against a candidate using RapidFuzz (via fuzzy_core)."""
+        candidate_names = self._candidate_names(candidate)
+        result = score_pair(query_names, candidate_names)
         return {
-            'score': round(best_score, 1),
-            'match_level': self._match_level(best_score),
-            'detail': best_detail,
+            'score': result.score,
+            'match_level': result.match_level,
+            'detail': result.detail,
         }
 
     @staticmethod
     def _match_level(score: float) -> str:
         """Determine match level from score."""
-        if score >= 90:
-            return 'high'
-        elif score >= 70:
-            return 'likely'
-        return 'possible'
+        return match_level(score)
 
     # ------------------------------------------------------------------
-    # Internal: phonetic matching
+    # Internal: phonetic matching (delegates to fuzzy_core)
     # ------------------------------------------------------------------
 
     @staticmethod
     def _phonetic_codes(name: str) -> List[str]:
         """Get phonetic codes for a name using Metaphone and Soundex."""
-        codes = set()
-        for word in name.split():
-            word = word.strip()
-            if len(word) < 2:
-                continue
-            try:
-                mp = jellyfish.metaphone(word)
-                if mp:
-                    codes.add(f"M:{mp}")
-                sx = jellyfish.soundex(word)
-                if sx:
-                    codes.add(f"S:{sx}")
-            except Exception:
-                pass
-        return list(codes)
+        return compute_phonetic_codes(name)
 
     def _phonetic_match(self, query_names: List[str], candidate: Dict[str, Any]) -> bool:
         """Check if any query name shares a phonetic code with any candidate name."""
-        query_codes = set()
-        for qn in query_names:
-            query_codes.update(self._phonetic_codes(qn))
-        if not query_codes:
-            return False
-
-        candidate_names = [candidate['primary_name']] + (candidate.get('alias_names') or [])
-        for cn in candidate_names:
-            if cn:
-                for code in self._phonetic_codes(cn):
-                    if code in query_codes:
-                        return True
-        return False
+        candidate_names = self._candidate_names(candidate)
+        return phonetic_match(query_names, candidate_names)
 
     # ------------------------------------------------------------------
-    # Internal: typo matching
+    # Internal: typo matching (delegates to fuzzy_core)
     # ------------------------------------------------------------------
 
     def _build_typo_minhashes(
@@ -929,26 +964,9 @@ class EntityDedupIndexPG:
         max_variants: int = 50,
     ) -> List[MinHash]:
         """Build MinHash signatures for edit-distance-1 typo variants."""
-        all_minhashes: List[MinHash] = []
-        for name in query_names:
-            words = name.split()
-            for word_idx, word in enumerate(words):
-                lower_word = word.lower().strip()
-                if len(lower_word) < 3 or len(lower_word) > 8:
-                    continue
-                splits = [(lower_word[:i], lower_word[i:])
-                          for i in range(len(lower_word) + 1)]
-                variants = (
-                    {L + R[1:] for L, R in splits if R}
-                    | {L + R[1] + R[0] + R[2:] for L, R in splits if len(R) > 1}
-                )
-                for variant in variants:
-                    variant_words = list(words)
-                    variant_words[word_idx] = variant
-                    variant_name = ' '.join(variant_words)
-                    shingles = self._name_shingles(variant_name, entity)
-                    if shingles:
-                        all_minhashes.append(self._build_minhash(shingles))
-                    if len(all_minhashes) >= max_variants:
-                        return all_minhashes
-        return all_minhashes
+        return build_typo_variants(
+            query_names,
+            shingle_k=self.shingle_k,
+            num_perm=self.num_perm,
+            max_variants=max_variants,
+        )

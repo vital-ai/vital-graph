@@ -33,16 +33,19 @@ const KGFrames = lazy(() => import('./pages/KGFrames'));
 const ObjectDetail = lazy(() => import('./pages/ObjectDetail'));
 const KGEntityDetail = lazy(() => import('./pages/KGEntityDetail'));
 const KGFrameDetail = lazy(() => import('./pages/KGFrameDetail'));
+const SearchResultDetail = lazy(() => import('./pages/SearchResultDetail'));
 const Triples = lazy(() => import('./pages/Triples'));
 const SPARQL = lazy(() => import('./pages/SPARQL'));
 const Data = lazy(() => import('./pages/Data'));
 const DataImportDetail = lazy(() => import('./pages/DataImportDetail'));
 const DataExportDetail = lazy(() => import('./pages/DataExportDetail'));
-const VectorIndexes = lazy(() => import('./pages/VectorIndexes'));
-const VectorMappings = lazy(() => import('./pages/VectorMappings'));
-const VectorMappingDetail = lazy(() => import('./pages/VectorMappingDetail'));
-const VectorSearch = lazy(() => import('./pages/VectorSearch'));
-const GeoPoints = lazy(() => import('./pages/GeoPoints'));
+const FuzzyMappingDetail = lazy(() => import('./pages/FuzzyMappingDetail'));
+const SearchMappingDetail = lazy(() => import('./pages/SearchMappingDetail'));
+const VectorIndexDetail = lazy(() => import('./pages/VectorIndexDetail'));
+const SemanticSearch = lazy(() => import('./pages/SemanticSearch'));
+const IndexMappings = lazy(() => import('./pages/IndexMappings'));
+const Indexes = lazy(() => import('./pages/Indexes'));
+const GeoShapes = lazy(() => import('./pages/GeoShapes'));
 const ApiKeys = lazy(() => import('./pages/ApiKeys'));
 const Admin = lazy(() => import('./pages/Admin'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
@@ -104,6 +107,8 @@ export default function App() {
               <Route path="/files" element={<Files />} />
               <Route path="/triples" element={<Triples />} />
               <Route path="/kg-types" element={<KGTypes />} />
+              <Route path="/kg-types/new" element={<KGTypeDetail />} />
+              <Route path="/kg-types/:kgTypeId" element={<KGTypeDetail />} />
               <Route path="/kg-query-builder" element={<KGQueryBuilder />} />
               
               {/* Hierarchical routes */}
@@ -118,6 +123,7 @@ export default function App() {
               <Route path="/space/:spaceId/graph/:graphId/files" element={<Files />} />
               <Route path="/space/:spaceId/graph/:graphId/triples" element={<Triples />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types" element={<KGTypes />} />
+              <Route path="/space/:spaceId/kg-types" element={<KGTypes />} />
               
               {/* Creation routes */}
               <Route path="/space/:spaceId/graph/new" element={<GraphDetail />} />
@@ -143,21 +149,26 @@ export default function App() {
               {/* Visualization */}
               <Route path="/visualization" element={<GraphVisualization />} />
 
-              {/* Vector/Geo routes */}
-              <Route path="/vector-indexes" element={<VectorIndexes />} />
-              <Route path="/vector-mappings" element={<VectorMappings />} />
-              <Route path="/space/:spaceId/vector-mappings/:mappingId" element={<VectorMappingDetail />} />
-              <Route path="/vector-search" element={<VectorSearch />} />
-              <Route path="/geo-points" element={<GeoPoints />} />
-              
+              {/* Semantic Indexes routes */}
+              <Route path="/semantic-search" element={<SemanticSearch />} />
+              <Route path="/index-mappings" element={<IndexMappings />} />
+              <Route path="/indexes" element={<Indexes />} />
+              <Route path="/geo-shapes" element={<GeoShapes />} />
+              <Route path="/space/:spaceId/index-mappings/:mappingId" element={<SearchMappingDetail />} />
+              <Route path="/space/:spaceId/fuzzy-mappings/:mappingId" element={<FuzzyMappingDetail />} />
+              <Route path="/space/:spaceId/indexes/:indexType/:indexName" element={<VectorIndexDetail />} />
+
               {/* Detail routes */}
               <Route path="/space/:id" element={<SpaceDetail />} />
               <Route path="/space/:spaceId/graph/:graphId" element={<GraphDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/object/:objectId" element={<ObjectDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/entity/:entityId" element={<KGEntityDetail />} />
+              <Route path="/space/:spaceId/graph/:graphId/search-result/:subjectUri" element={<SearchResultDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/frame/:frameId" element={<KGFrameDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types/new" element={<KGTypeDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types/:kgTypeId" element={<KGTypeDetail />} />
+              <Route path="/space/:spaceId/kg-types/new" element={<KGTypeDetail />} />
+              <Route path="/space/:spaceId/kg-types/:kgTypeId" element={<KGTypeDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/objects/new" element={<ObjectDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/objects/:objectId" element={<ObjectDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/document/:documentId" element={<KGDocumentDetail />} />
