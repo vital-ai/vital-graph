@@ -8,8 +8,8 @@ RUN npm ci && npm install --no-save /vitalgraph-client-ts
 COPY frontend/ ./
 RUN npm run build:only
 
-# ---- Stage 2: Install Python dependencies ----
-FROM python:3.12-slim AS python-deps
+# ---- Stage 2a: Install slow-building dependencies (cached long-term) ----
+FROM python:3.12-slim AS python-heavy
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
@@ -20,6 +20,15 @@ RUN apt-get update && apt-get install -y \
     libodbc2 \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+# Install slow-building deps first (native compilation + large downloads).
+# This layer only rebuilds when the [heavy] group in pyproject.toml changes.
+COPY pyproject.toml README.md LICENSE MANIFEST.in ./
+RUN mkdir -p vitalgraph && touch vitalgraph/__init__.py \
+    && pip install --no-cache-dir ".[heavy]" \
+    && rm -rf vitalgraph
+
+# ---- Stage 2b: Install remaining Python dependencies ----
+FROM python-heavy AS python-deps
 COPY pyproject.toml README.md LICENSE MANIFEST.in ./
 RUN mkdir -p vitalgraph && touch vitalgraph/__init__.py \
     && pip install --no-cache-dir ".[server]" \

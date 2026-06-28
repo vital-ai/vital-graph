@@ -34,6 +34,16 @@ dependencies = [
 
 # Optional dependency groups
 [project.optional-dependencies]
+# Slow-building deps (native compilation / large downloads) — cached separately in Docker
+heavy = [
+    "vital-ai-vitalsigns>=0.1.53",
+    "vital-ai-haley-kg>=0.1.24",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "sentencepiece>=0.1.99",
+    "numpy>=1.24.0",
+]
+
 # Client installation - lightweight for connecting to VitalGraph servers
 client = [
     "httpx>=0.27.0",
@@ -47,6 +57,7 @@ client = [
 
 # Server installation - full database and API capabilities
 server = [
+    "vital-graph[heavy]",
     "fastapi[standard,models]>=0.104.0",
     "uvicorn",
     "SQLAlchemy[asyncio]>=2.0.23",
@@ -70,12 +81,7 @@ server = [
     "redis>=5.0.0",
     "rapidfuzz>=3.0.0",
     "jellyfish>=1.0.0",
-    # Local vectorizer — replicates Weaviate text2vec-transformers
-    "torch>=2.0.0",
-    "transformers>=4.30.0",
     "nltk>=3.8.0",
-    "numpy>=1.24.0",
-    "sentencepiece>=0.1.99",
     # VitalSigns ONNX embedding model (paraphrase-multilingual-MiniLM-L12-v2, 384 dims)
     "vital-model-paraphrase-MiniLM-onnx>=0.2.1",
 ]

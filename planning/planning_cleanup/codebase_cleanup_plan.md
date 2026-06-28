@@ -1,7 +1,7 @@
 # VitalGraph Codebase Cleanup & Modernization Plan
 
 **Date:** 2026-06-28
-**Status:** Initial draft — discussion phase
+**Status:** In Progress
 
 ---
 
@@ -134,11 +134,21 @@ into `archive/` for consistency.
 
 Delete empty directories and files that provide no value:
 
-- **Empty dirs:** `notes/`, `k8s_config/`, `minioFiles/`, `lead_test_data/`, `lead_test_data_docs/`, `test_data/`, `web_assets/`, `planning_internal/`, `frontend-archive/`, `frontend-old/`, `rdflib_sqlalchemy/`, `oxigraph/`, `registry_generated_vectors/`, `registry_output/`
-- **Empty/dead files:** `test_rdflib_parsing.py`, `notes.txt`
+- - ~~**Empty dirs:** `notes/`, `k8s_config/`, `minioFiles/`, `lead_test_data/`, `lead_test_data_docs/`, `test_data/`, `web_assets/`, `planning_internal/`, `frontend-archive/`, `frontend-old/`, `rdflib_sqlalchemy/`, `oxigraph/`, `registry_generated_vectors/`, `registry_output/`~~
+- ~~**Empty/dead files:** `test_rdflib_parsing.py`, `notes.txt`~~
 - **Build artifacts (gitignore):** `dist/`, `vital_graph.egg-info/`, `__pycache__/`
 - **Large stray files:** `crossref_repair_20260410_123010.txt` (9MB), `space_realistic_org_test_quads.nq` (60KB), `vitalhome.zip` (6KB)
-- **One-off debug scripts at root:** `_debug_industry.py`, `test_term_uuid_ddl.py`, `test_term_uuid_match.py`
+- ~~**One-off debug scripts at root:** `_debug_industry.py`, `test_term_uuid_ddl.py`, `test_term_uuid_match.py`~~
+
+**Completed items:**
+- `test_rdflib_parsing.py` — deleted (empty)
+- `test_term_uuid_ddl.py`, `test_term_uuid_match.py` — moved to `test_scripts/database/`
+- `lead_test_data/`, `lead_test_data_docs/` — moved to `internal_data/`
+- `notes.txt` — extracted to `planning/planning_misc/historical_notes_and_decisions.md`, deleted
+- `rdflib_sqlalchemy/` — confirmed no active references, pending deletion
+- `web_assets/` — confirmed no active references, pending deletion
+- `minioFiles/` — confirmed no active references (only mock tests, now removed), pending deletion
+- `localTestFiles/` — confirmed no active references (only mock tests, now removed), pending deletion
 
 ### Phase 2: Consolidate Test Directories
 
@@ -157,7 +167,7 @@ Merge 11+ test directories into a single `tests/` tree (per testing_plan.md):
 | `test_files_download/` (1) | Delete/gitignore |
 | `localTestFiles/` (2) | Delete/gitignore |
 | `vitalgraph_client_test/` (212) | Port → `tests/api/` + `tests/integration/` |
-| `vitalgraph_mock_client_test/` (33) | Port → `tests/integration/mock/` |
+| ~~`vitalgraph_mock_client_test/` (33)~~ | ✅ Deleted — mock removed |
 | `vitalgraph_service_tests/` (5) | Port → `tests/integration/service/` |
 | `vitalsigns_test_scripts/` (3) | Port → `tests/unit/vitalsigns/` |
 
@@ -168,8 +178,8 @@ Merge 11+ test directories into a single `tests/` tree (per testing_plan.md):
 | `debug_scripts/` (36) | → `scripts/debug/` |
 | `sql_scripts/` (34) | → `scripts/sql/` |
 | `log_analysis/` (5) | → `scripts/log_analysis/` |
-| `agent_registry/` (2) | → `scripts/agent_registry/` or into `vitalgraph/` |
-| `tool_utils/` (2) | → `vitalgraph/utils/` or delete |
+| ~~`agent_registry/`~~ | ✅ Moved to `apps/agent_registry/` |
+| ~~`tool_utils/` (2)~~ | ✅ Moved to `test_scripts/sparql/` with consumers |
 | `fuseki_deploy_test/` (62) | → `deploy_docs/fuseki/` or archive |
 | `generated_instances/` (4) | → `domain_schema/generated/` or gitignore |
 
@@ -256,8 +266,49 @@ vital-graph/
 
 ---
 
+## Progress Log
+
+### 2026-06-28 — Session 1
+
+**Mock removal (✅ complete):**
+- Deleted `vitalgraph/mock/` (~24 files, ~200K code)
+- Deleted `vitalgraph_mock_client_test/` (33 test scripts)
+- Deleted `vitalgraph/db/mock/` (empty stubs)
+- Removed `BackendType.MOCK` from `backend_config.py`
+- Removed mock branch and `create_mock_client()` from `client_factory.py`
+- Removed `use_mock_client` config from `client_config_loader.py`
+- Deleted 10 mock-dependent scripts from `test_scripts/test_scripts_misc/`
+- See: `planning_cleanup/remove_mock_implementation_plan.md`
+
+**Docs directory review (✅ complete):**
+- Reviewed all 31 files, `docs/` now empty
+- 25 archived → `archive/docs/`, 2 moved → `planning/planning_features/`, 1 moved → `planning/planning_sql/`, 1 deleted
+- Created `docs/OVERVIEW.md` as new documentation entry point
+- Created `planning/planning_docs/documentation_plan.md` for ongoing docs work
+- See: `planning_cleanup/docs_review_plan.md`
+
+**File reorganization:**
+- `entity_registry/`, `agent_registry/` → `apps/` (path refs fixed in impl files)
+- `lead_test_data/`, `lead_test_data_docs/` → `internal_data/` (test script refs updated)
+- `tool_utils/` → `test_scripts/sparql/` (13 consumer scripts updated)
+- `test_term_uuid_ddl.py`, `test_term_uuid_match.py` → `test_scripts/database/`
+- `test_rdflib_parsing.py` deleted (empty)
+- `notes.txt` → `planning/planning_misc/historical_notes_and_decisions.md`
+- `pyrightconfig.json` updated (stale entries removed, moved dirs fixed)
+
+**Confirmed safe to delete (pending):**
+- `rdflib_sqlalchemy/` — no active references
+- `web_assets/` — replaced by `frontend/`
+- `minioFiles/` — only mock tests referenced it (now removed)
+- `localTestFiles/` — only mock tests referenced it (now removed)
+
+---
+
 ## References
 
 - `planning_cleanup/testing_plan.md` — Formal testing plan (includes "Project Cleanup" section)
 - `planning_cleanup/codebase_simplification_plan.md` — Internal package cleanup (partially done)
 - `planning_cleanup/archive_db_postgresql_plan.md` — V1 backend archive (✅ complete)
+- `planning_cleanup/remove_mock_implementation_plan.md` — Mock removal (✅ complete)
+- `planning_cleanup/docs_review_plan.md` — Docs directory review (✅ complete)
+- `planning/planning_docs/documentation_plan.md` — Ongoing documentation plan

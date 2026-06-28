@@ -310,3 +310,7 @@ pyrightconfig.json
 internal_data
 generated_instances
 
+# Fuseki TDB database files (large binaries)
+deploy/fuseki_deploy_test/docker/databases/
+*.dat
+
