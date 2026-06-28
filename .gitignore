@@ -259,14 +259,11 @@ logs
 # .dockerignore
 
 # Kubernetes
-k8s_config/
+k8s/k8s_config/
 
 # Project specific
-frontend-archive/
-frontend-old/
-web_assets/
-rdflib_sqlalchemy/
-notes/
+archive/frontend-archive/
+archive/frontend-old/
 
 # Configuration files that might contain secrets
 **/*.yaml
@@ -287,22 +284,17 @@ dist/
 
 test_data
 
-minioFiles
-
-lead_test_data
-
-lead_test_data_docs
 
 registry_output
 registry_generated_vectors
 
 # W3C DAWG SPARQL test suite (cloned separately)
-vitalgraph_sparql_sql/dawg_tests/
+vitalgraph_sparql_sql_dev/dawg_tests/
 
-jena-main-source
+jena/jena-main-source
+jena/localTestFiles
 
-
-planning_internal
+planning/planning_internal
 
 # Pyright config
 pyrightconfig.json
