@@ -22,14 +22,14 @@ const ToastContainer: React.FC = () => {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[200] flex flex-col gap-2 max-w-sm">
+    <div className="fixed bottom-4 right-4 z-200 flex flex-col gap-2 max-w-sm">
       {toasts.map((toast) => (
         <div
           key={toast.id}
           className="flex items-center gap-3 p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg animate-in slide-in-from-right"
           role="alert"
         >
-          <div className={`inline-flex items-center justify-center flex-shrink-0 w-8 h-8 rounded-lg ${colorMap[toast.type]}`}>
+          <div className={`inline-flex items-center justify-center shrink-0 w-8 h-8 rounded-lg ${colorMap[toast.type]}`}>
             {iconMap[toast.type]}
           </div>
           <div className="text-sm font-normal text-gray-900 dark:text-white flex-1">

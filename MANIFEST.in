@@ -10,59 +10,43 @@ include LICENSE
 # Users should create their own config files from templates in documentation
 
 # Exclude development and test files
-exclude setup.py
-exclude setup.py.bak
-exclude notes.txt
 exclude .env
 exclude .env.example
+exclude .env.sparql-sql
 exclude docker-compose.yml
 exclude Dockerfile
 exclude .dockerignore
 exclude environment.yml
+exclude pyrightconfig.json
 
 # Exclude config directories
 recursive-exclude vitalgraphdb_config *
-recursive-exclude vitalgraphclient_config *
 recursive-exclude vitalhome *
-recursive-exclude k8s_config *
 
 # Exclude test directories
 recursive-exclude test_scripts *
-recursive-exclude test_script_kg_impl *
-recursive-exclude vitalgraph_client_test *
-recursive-exclude vitalgraph_mock_client_test *
-recursive-exclude vitalgraph_service_tests *
-recursive-exclude vitalsigns_test_scripts *
-recursive-exclude test_sparql *
-recursive-exclude test_client_api *
+recursive-exclude test_data *
 recursive-exclude test_files *
 recursive-exclude test_files_download *
-recursive-exclude test_data *
-recursive-exclude lead_test_data *
-recursive-exclude lead_test_data_docs *
 
 # Exclude development directories
 recursive-exclude frontend *
-recursive-exclude frontend-archive *
-recursive-exclude frontend-old *
+recursive-exclude vitalgraph-client-ts *
+recursive-exclude vitalgraph-jena-sidecar *
+recursive-exclude vitalgraph_sparql_sql_dev *
 recursive-exclude docs *
 recursive-exclude planning *
-recursive-exclude planning_fuseki *
-recursive-exclude debug_scripts *
-recursive-exclude examples *
-recursive-exclude archive_vitalgraph_old *
-recursive-exclude fuseki_deploy_test *
-recursive-exclude oxigraph *
-recursive-exclude rdflib_sqlalchemy *
-recursive-exclude domain_schema *
-recursive-exclude generated_instances *
-recursive-exclude sql_scripts *
+recursive-exclude deploy *
 recursive-exclude scripts *
-recursive-exclude localTestFiles *
-recursive-exclude minioFiles *
-recursive-exclude web_assets *
-recursive-exclude notes *
-recursive-exclude vitalgraph-client-ts *
+recursive-exclude apps *
+recursive-exclude archive *
+recursive-exclude internal_data *
+recursive-exclude generated_instances *
+recursive-exclude domain_schema *
+recursive-exclude jena *
+recursive-exclude k8s *
+recursive-exclude bin *
+recursive-exclude registry *
 
 # Exclude IDE and build artifacts
 recursive-exclude .vscode *

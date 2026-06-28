@@ -84,7 +84,7 @@ const SearchMappings: React.FC = () => {
       }
     };
     loadSpaces();
-  }, []);
+  }, [selectedSpace]);
 
   // Load mappings and FTS indexes when space changes
   const loadData = useCallback(async () => {
@@ -414,7 +414,7 @@ const SearchMappings: React.FC = () => {
         <ModalHeader>Delete Search Mapping</ModalHeader>
         <ModalBody>
           <div className="flex items-center gap-3">
-            <HiExclamation className="h-8 w-8 text-red-500 flex-shrink-0" />
+            <HiExclamation className="h-8 w-8 text-red-500 shrink-0" />
             <div>
               <p className="text-gray-700 dark:text-gray-300">
                 Are you sure you want to delete this search mapping?

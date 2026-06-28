@@ -16,9 +16,9 @@ pip install vital-graph[client]
 
 This installs dependencies for the VitalGraph client library:
 - Basic RDF processing (rdflib, PyLD)
-- Advanced graph processing (pyoxigraph) - now included by default
-- AI capabilities (openai) - now included by default
-- HTTP client (requests)
+- Advanced graph processing (pyoxigraph)
+- AI capabilities (openai)
+- HTTP client (httpx, aiohttp)
 - Configuration management (PyYAML, pydantic)
 - CLI tools (click-repl, tabulate)
 
@@ -36,7 +36,8 @@ This includes all server dependencies:
 - Database ORM (SQLAlchemy, alembic)
 - Vector database support (pgvector)
 - Authentication (PyJWT, email-validator)
-- TiDB integration (pytidb[models], pytidb)
+- ML/vectorization (torch, transformers, sentencepiece)
+- Fuzzy search (rapidfuzz, jellyfish, datasketch)
 
 ### Development Setup
 
@@ -128,17 +129,18 @@ Import/export is also available via the REST API (`/api/data/import`, `/api/data
 VitalGraph consists of:
 
 - **Client Library** (`vitalgraph.client`): Lightweight REST API client
-- **Server** (`vitalgraph.server`): FastAPI-based graph database server
-- **Database Layer** (`vitalgraph.db`): PostgreSQL integration with SPARQL translation
+- **Server** (`vitalgraph.api`): FastAPI-based graph database server
+- **SPARQL-to-SQL Engine** (`vitalgraph.db.sparql_sql`): Translates SPARQL 1.1 to PostgreSQL
+- **Jena Sidecar** (`vitalgraph-jena-sidecar`): Java service for SPARQL algebra compilation
+- **React Admin UI** (`frontend`): Web interface for space/graph/entity management
 - **Admin Tools** (`vitalgraphadmin`): Database administration utilities
 - **Import/Export CLIs** (`vitalgraphimport`, `vitalgraphexport`): Standalone data import/export tools
+- **TypeScript Client** (`vitalgraph-client-ts`): TypeScript/JS client SDK
 
 ## Documentation
 
-- [Installation Guide](docs/installation.md)
-- [Client API Reference](docs/client-api.md)
-- [Server Configuration](docs/server-config.md)
-- [SPARQL Examples](docs/sparql-examples.md)
+- [System Overview](docs/OVERVIEW.md)
+- [Packaging Guide](PACKAGING.md)
 
 ## License
 

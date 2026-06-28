@@ -69,7 +69,6 @@ debug_scripts/
 # Archives and data
 archive/
 internal_data/
-examples/
 apps/
 
 # Other

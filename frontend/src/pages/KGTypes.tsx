@@ -235,7 +235,7 @@ const KGTypes: React.FC = () => {
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
           </div>
-          <div className="w-36 flex-shrink-0">
+          <div className="w-36 shrink-0">
             <Select value={searchMode} onChange={(e) => { setSearchMode(e.target.value as typeof searchMode); setCurrentPage(1); }}>
               <option value="client">Client filter</option>
               <option value="keyword">Keyword</option>
@@ -244,7 +244,7 @@ const KGTypes: React.FC = () => {
               <option value="hybrid">Hybrid</option>
             </Select>
           </div>
-          <div className="w-32 flex-shrink-0">
+          <div className="w-32 shrink-0">
             <Select value={itemsPerPage} onChange={(e) => { setItemsPerPage(parseInt(e.target.value)); setCurrentPage(1); }}>
               <option value={10}>10 / page</option>
               <option value={25}>25 / page</option>

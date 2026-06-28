@@ -24,11 +24,21 @@ pip install vital-graph
 pip install vital-graph[client]
 ```
 **Additional Dependencies**: Client functionality
-- requests, pydantic, PyYAML, tabulate, click-repl
+- httpx, aiohttp, pydantic, PyYAML, tabulate, click-repl, aiofiles
 
 **Use Case**: Applications that connect to existing VitalGraph servers
 
-### 3. Server Installation
+### 3. Heavy Dependencies (Docker caching)
+```bash
+pip install vital-graph[heavy]
+```
+**Dependencies**: Slow-building packages cached separately in Docker
+- vital-ai-vitalsigns, vital-ai-haley-kg (owlready2, hnswlib compilation)
+- torch, transformers, sentencepiece, numpy (large ML downloads)
+
+**Use Case**: Pre-installed in Docker Stage 2a for layer caching. Automatically included by `[server]`.
+
+### 4. Server Installation
 ```bash
 pip install vital-graph[server]
 ```
@@ -39,7 +49,7 @@ pip install vital-graph[server]
 
 **Use Case**: Running a complete VitalGraph server with database
 
-### 4. Development Tools
+### 5. Development Tools
 ```bash
 pip install vital-graph[dev]
 ```
@@ -48,7 +58,7 @@ pip install vital-graph[dev]
 
 **Use Case**: Development, code formatting, type checking
 
-### 5. Testing Utilities
+### 6. Testing Utilities
 ```bash
 pip install vital-graph[test]
 ```
@@ -57,7 +67,7 @@ pip install vital-graph[test]
 
 **Use Case**: Running test suites with coverage
 
-### 6. Documentation Tools
+### 7. Documentation Tools
 ```bash
 pip install vital-graph[docs]
 ```
@@ -66,13 +76,13 @@ pip install vital-graph[docs]
 
 **Use Case**: Building documentation
 
-### 7. Full Installation
+### 8. Full Installation
 ```bash
 pip install vital-graph[all]
 ```
 **Includes**: All optional dependencies (client, server, dev, test, docs)
 
-### 8. Custom Combinations
+### 9. Custom Combinations
 ```bash
 pip install vital-graph[client,dev]
 pip install vital-graph[server,test,docs]
@@ -88,18 +98,26 @@ Console scripts are available based on installation:
 
 ## Docker Build
 
-The Docker build process has been updated to use the new packaging:
+The Docker build uses a two-stage Python dependency install for optimal caching:
 
 ```dockerfile
-# Copy requirements files
-COPY pyproject.toml .
-COPY README.md .
-COPY LICENSE .
-COPY MANIFEST.in .
+# Stage 2a: Install slow-building deps (cached long-term)
+FROM python:3.12-slim AS python-heavy
+COPY pyproject.toml README.md LICENSE MANIFEST.in ./
+RUN mkdir -p vitalgraph && touch vitalgraph/__init__.py \
+    && pip install --no-cache-dir ".[heavy]" \
+    && rm -rf vitalgraph
 
-# Install Python dependencies with server extras
-RUN pip install --no-cache-dir -e ".[server]"
+# Stage 2b: Install remaining server deps (rebuilds on pyproject.toml changes)
+FROM python-heavy AS python-deps
+COPY pyproject.toml README.md LICENSE MANIFEST.in ./
+RUN mkdir -p vitalgraph && touch vitalgraph/__init__.py \
+    && pip install --no-cache-dir ".[server]" \
+    && rm -rf vitalgraph
 ```
+
+The `[heavy]` group (VitalSigns, torch, transformers) is installed first so its layer
+is cached even when other server dependencies change.
 
 ## Development Workflow
 
@@ -146,16 +164,28 @@ This script tests:
 
 ```
 vital-graph/
-├── vitalgraph/                 # Main package
-│   ├── client/                # Client library (always included)
-│   ├── server/                # Server components (server extras)
-│   ├── db/                    # Database layer (server extras)
-│   ├── api/                   # REST API (server extras)
+├── vitalgraph/                 # Main Python package (shipped)
+│   ├── client/                # Client library
+│   ├── db/                    # Database layer (SPARQL-to-SQL)
+│   ├── api/                   # REST API (FastAPI)
+│   ├── endpoint/              # API endpoint implementations
+│   ├── impl/                  # Service implementations
+│   ├── document/              # KGDocument segmentation
 │   └── ...
-├── pyproject.toml             # Modern packaging configuration
-├── MANIFEST.in                # Package data inclusion rules
-├── README.md                  # Package documentation
-└── test_pip_install.py        # Installation test script
+├── frontend/                   # React admin UI
+├── vitalgraph-client-ts/       # TypeScript client SDK
+├── vitalgraph-jena-sidecar/    # Java SPARQL compiler sidecar
+├── apps/                       # Standalone tools (entity/agent registry)
+├── test_scripts/               # Integration and client tests
+├── scripts/                    # Operational scripts
+├── planning/                   # Planning documents
+├── docs/                       # Documentation (OVERVIEW.md)
+├── deploy/                     # Deployment configs
+├── pyproject.toml              # Packaging configuration
+├── MANIFEST.in                 # Package data inclusion rules
+├── Dockerfile                  # Multi-stage Docker build
+├── docker-compose.yml          # App + sidecar + MinIO
+└── README.md                   # Package documentation
 ```
 
 ## Migration from setup.py
