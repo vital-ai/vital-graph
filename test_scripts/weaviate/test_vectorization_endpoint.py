@@ -26,15 +26,16 @@ def load_weaviate_config():
         sys.exit(1)
     
     load_dotenv(env_path)
+    from vitalgraph.config.config_loader import get_scoped_env
     
     config = {
-        "keycloak_url": os.getenv("WEAVIATE_KEYCLOAK_URL"),
-        "client_id": os.getenv("WEAVIATE_CLIENT_ID"),
-        "client_secret": os.getenv("WEAVIATE_CLIENT_SECRET"),
-        "username": os.getenv("WEAVIATE_USERNAME"),
-        "password": os.getenv("WEAVIATE_PASSWORD"),
-        "rest_url": os.getenv("WEAVIATE_REST_URL"),
-        "http_host": os.getenv("WEAVIATE_HTTP_HOST"),
+        "keycloak_url": get_scoped_env("WEAVIATE_KEYCLOAK_URL"),
+        "client_id": get_scoped_env("WEAVIATE_CLIENT_ID"),
+        "client_secret": get_scoped_env("WEAVIATE_CLIENT_SECRET"),
+        "username": get_scoped_env("WEAVIATE_USERNAME"),
+        "password": get_scoped_env("WEAVIATE_PASSWORD"),
+        "rest_url": get_scoped_env("WEAVIATE_REST_URL"),
+        "http_host": get_scoped_env("WEAVIATE_HTTP_HOST"),
     }
     
     missing = [k for k, v in config.items() if not v]

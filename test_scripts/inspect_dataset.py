@@ -74,7 +74,7 @@ def main():
     print(f'  Entities with locations: {len(with_locs)}')
     print(f'  Entities with geo locations: {len(with_geo_locs)}')
 
-    # --- DBA names (interesting for phonetic/dedup testing) ---
+    # --- DBA names (interesting for phonetic/fuzzy testing) ---
     dba_entities = [e for e in entities if ' DBA ' in e['primary_name'].upper() or ' dba ' in e['primary_name'].lower()]
     print(f'\n=== DBA ENTITIES (interesting names) ({len(dba_entities)}) ===')
     for e in dba_entities[:15]:

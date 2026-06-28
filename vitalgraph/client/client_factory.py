@@ -7,7 +7,6 @@ based on configuration settings.
 import logging
 from typing import Optional
 from .vitalgraph_client import VitalGraphClient
-from ..mock.client.mock_vitalgraph_client import MockVitalGraphClient
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from .config.client_config_loader import VitalGraphClientConfig, ClientConfigurationError
 from .utils.client_utils import VitalGraphClientError
@@ -19,16 +18,15 @@ def create_vitalgraph_client(config_path: Optional[str] = None, *, config: Optio
     """
     Create a VitalGraph client based on configuration settings.
     
-    This factory function reads the client configuration and returns either
-    a real VitalGraphClient or a MockVitalGraphClient based on the 
-    'use_mock_client' setting in the configuration.
+    This factory function reads the client configuration and returns a
+    VitalGraphClient instance.
     
     Args:
         config_path: Path to the client configuration YAML file (optional if config provided)
         config: Pre-configured VitalGraphClientConfig object (takes precedence over config_path)
         
     Returns:
-        VitalGraphClientInterface: Either VitalGraphClient or MockVitalGraphClient
+        VitalGraphClientInterface: VitalGraphClient instance
         
     Raises:
         VitalGraphClientError: If configuration loading fails
@@ -51,15 +49,8 @@ def create_vitalgraph_client(config_path: Optional[str] = None, *, config: Optio
         
         client_config.validate_config()
         
-        # Check if mock client should be used
-        use_mock = client_config.use_mock_client()
-        
-        if use_mock:
-            logger.info("Creating MockVitalGraphClient based on configuration setting")
-            return MockVitalGraphClient(config_path, config=client_config)
-        else:
-            logger.info("Creating VitalGraphClient based on configuration setting")
-            return VitalGraphClient(config_path, config=client_config)
+        logger.info("Creating VitalGraphClient based on configuration setting")
+        return VitalGraphClient(config_path, config=client_config)
             
     except ClientConfigurationError as e:
         logger.error(f"Configuration error while creating client: {e}")
@@ -67,21 +58,6 @@ def create_vitalgraph_client(config_path: Optional[str] = None, *, config: Optio
     except Exception as e:
         logger.error(f"Unexpected error while creating client: {e}")
         raise VitalGraphClientError(f"Failed to create client: {e}")
-
-
-def create_mock_client(config_path: Optional[str] = None, *, config: Optional[VitalGraphClientConfig] = None) -> MockVitalGraphClient:
-    """
-    Create a mock VitalGraph client for testing.
-    
-    Args:
-        config_path: Optional path to configuration file (ignored by mock client)
-        config: Optional config object (ignored by mock client)
-        
-    Returns:
-        MockVitalGraphClient: Mock client instance
-    """
-    logger.info("Creating MockVitalGraphClient for testing")
-    return MockVitalGraphClient(config_path, config=config)
 
 
 def create_real_client(config_path: Optional[str] = None, *, config: Optional[VitalGraphClientConfig] = None) -> VitalGraphClient:

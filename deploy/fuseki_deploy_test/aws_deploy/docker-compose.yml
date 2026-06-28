@@ -1,0 +1,23 @@
+# Docker Compose for local testing of AWS deployment
+services:
+  fuseki-aws:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vitalai/kgraphdb-aws:5.6.0
+    container_name: vitalgraph-fuseki-aws
+    ports:
+      - "3030:3030"
+    environment:
+      - MEMORY_LIMIT=2048
+      - EFS_MOUNT_POINT=/efs
+    volumes:
+      # Simulate EFS mount for local testing
+      - ./efs-data:/efs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3030/$/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

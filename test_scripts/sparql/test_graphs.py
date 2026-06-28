@@ -29,7 +29,7 @@ from vitalgraph.config.config_loader import get_config
 from vitalgraph.db.postgresql.postgresql_sparql_impl import PostgreSQLSparqlImpl
 
 # Import test utilities for consistent test execution and reporting
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+sys.path.insert(0, str(Path(__file__).parent))
 from tool_utils import TestToolUtils
 
 # Configure logging to see graph operations

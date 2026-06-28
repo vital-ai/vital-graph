@@ -2,7 +2,7 @@
 Backend configuration and factory for VitalGraph space backends.
 
 This module provides configuration classes and factory methods for creating
-different backend implementations (PostgreSQL, Fuseki, Oxigraph, Mock) based
+different backend implementations (PostgreSQL, Fuseki, Oxigraph) based
 on configuration settings.
 """
 
@@ -23,7 +23,6 @@ class BackendType(Enum):
     FUSEKI_POSTGRESQL = "fuseki_postgresql"
     SPARQL_SQL = "sparql_sql"
     OXIGRAPH = "oxigraph"
-    MOCK = "mock"
 
 
 @dataclass
@@ -98,13 +97,6 @@ class BackendFactory:
             except ImportError as e:
                 raise ImportError(f"Oxigraph backend dependencies not available: {e}")
                 
-        elif config.backend_type == BackendType.MOCK:
-            try:
-                from .mock.mock_space_impl import MockSpaceImpl
-                return MockSpaceImpl(**config.connection_params)
-            except ImportError as e:
-                raise ImportError(f"Mock backend dependencies not available: {e}")
-                
         else:
             raise ValueError(f"Unsupported backend type: {config.backend_type}")
     
@@ -168,13 +160,6 @@ class BackendFactory:
             except ImportError as e:
                 raise ImportError(f"SPARQL SQL SPARQL backend dependencies not available: {e}")
                 
-        elif config.backend_type == BackendType.MOCK:
-            try:
-                from .mock.mock_sparql_impl import MockSparqlImpl
-                return MockSparqlImpl(**config.connection_params)
-            except ImportError as e:
-                raise ImportError(f"Mock SPARQL backend dependencies not available: {e}")
-                
         else:
             raise ValueError(f"SPARQL backend not supported for: {config.backend_type}")
     
@@ -225,13 +210,6 @@ class BackendFactory:
                 return PostgreSQLSignalManager(**signal_config)
             except ImportError as e:
                 raise ImportError(f"SPARQL SQL signal manager dependencies not available: {e}")
-                
-        elif config.backend_type == BackendType.MOCK:
-            try:
-                from .mock.mock_signal_manager import MockSignalManager
-                return MockSignalManager(**signal_config)
-            except ImportError as e:
-                raise ImportError(f"Mock signal manager dependencies not available: {e}")
                 
         else:
             raise ValueError(f"Signal manager not supported for: {config.backend_type}")

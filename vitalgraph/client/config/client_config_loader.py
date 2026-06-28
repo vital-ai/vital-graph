@@ -94,12 +94,7 @@ class VitalGraphClientConfig:
             'client': {
                 'timeout': int(self._get_profile_env('TIMEOUT', '30')),
                 'max_retries': int(self._get_profile_env('MAX_RETRIES', '3')),
-                'retry_delay': int(self._get_profile_env('RETRY_DELAY', '1')),
-                'use_mock_client': self._get_profile_env('USE_MOCK_CLIENT', 'false').lower() == 'true',
-                'mock': {
-                    'use_temp_storage': self._get_profile_env('MOCK_USE_TEMP_STORAGE', 'true').lower() == 'true',
-                    'filePath': self._get_profile_env('MOCK_FILE_PATH', '') or None
-                }
+                'retry_delay': int(self._get_profile_env('RETRY_DELAY', '1'))
             }
         }
     
@@ -192,46 +187,6 @@ class VitalGraphClientConfig:
         client_config = self.get_client_config()
         return client_config.get('retry_delay', 1)
     
-    def use_mock_client(self) -> bool:
-        """
-        Get whether to use the mock client instead of real HTTP client.
-        
-        Returns:
-            True if mock client should be used, False otherwise (default: False)
-        """
-        client_config = self.get_client_config()
-        return client_config.get('use_mock_client', False)
-    
-    def get_mock_config(self) -> Dict[str, Any]:
-        """
-        Get mock client configuration section.
-        
-        Returns:
-            Dictionary containing mock configuration
-        """
-        client_config = self.get_client_config()
-        return client_config.get('mock', {})
-    
-    def get_mock_file_path(self) -> Optional[str]:
-        """
-        Get the mock file path for loading mock data.
-        
-        Returns:
-            Mock file path string, or None if not specified
-        """
-        mock_config = self.get_mock_config()
-        return mock_config.get('filePath')
-    
-    def use_temp_storage(self) -> bool:
-        """
-        Get whether to use temporary storage for mock files.
-        
-        Returns:
-            True if temporary storage should be used, False for configured path (default: True)
-        """
-        mock_config = self.get_mock_config()
-        return mock_config.get('use_temp_storage', True)
-    
     def validate_config(self) -> None:
         """
         Validate the loaded configuration.
@@ -259,11 +214,6 @@ class VitalGraphClientConfig:
         timeout = self.get_timeout()
         if not isinstance(timeout, int) or timeout <= 0:
             raise ClientConfigurationError("Timeout must be a positive integer")
-        
-        # Validate use_mock_client
-        use_mock = self.use_mock_client()
-        if not isinstance(use_mock, bool):
-            raise ClientConfigurationError("use_mock_client must be a boolean value")
         
         logger.info("Client configuration validation passed")
     

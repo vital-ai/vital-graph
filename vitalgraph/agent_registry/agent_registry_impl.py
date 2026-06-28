@@ -49,7 +49,7 @@ class AgentRegistryImpl:
     async def ensure_tables(self) -> bool:
         """Verify that agent registry tables exist. Does NOT create or modify schema.
 
-        Run agent_registry/migrate_agents.py to create tables.
+        Run apps/agent_registry/migrate_agents.py to create tables.
         """
         try:
             async with self.pool.acquire() as conn:
@@ -60,7 +60,7 @@ class AgentRegistryImpl:
                 if not exists:
                     raise RuntimeError(
                         "Agent registry tables not found. "
-                        "Run 'python agent_registry/migrate_agents.py' to create them."
+                        "Run 'python apps/agent_registry/migrate_agents.py' to create them."
                     )
             logger.info("Agent registry tables verified")
             return True

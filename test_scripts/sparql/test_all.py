@@ -31,7 +31,7 @@ from typing import List, Dict, Any
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Import test utilities
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tool_utils"))
+sys.path.insert(0, str(Path(__file__).parent))
 from tool_utils import TestToolUtils
 
 # Import test suite functions

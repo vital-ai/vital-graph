@@ -1,0 +1,16 @@
+services:
+  fuseki:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vitalai/kgraphdb:5.6.0
+    container_name: vitalgraph-fuseki
+    ports:
+      - "3030:3030"
+    volumes:
+      - ./fuseki-data:/fuseki-data
+      - ./config/config.ttl:/fuseki/config.ttl
+      - ./config/shiro.ini:/fuseki/shiro.ini
+      - ./configuration:/fuseki/configuration
+      - ./databases:/fuseki/databases
+    restart: unless-stopped

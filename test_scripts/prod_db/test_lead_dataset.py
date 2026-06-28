@@ -60,7 +60,7 @@ for name in (
 # ===========================================================================
 TEST_SPACE_ID = "prod_lead_dataset_test"
 TEST_GRAPH_URI = "urn:prod_lead_dataset"
-LEAD_DATA_DIR = PROJECT_ROOT / "lead_test_data"
+LEAD_DATA_DIR = PROJECT_ROOT / "internal_data" / "lead_test_data"
 MAX_FILES = 100
 SAMPLE_SIZE = 5
 SIDECAR_URL = "http://localhost:7070"

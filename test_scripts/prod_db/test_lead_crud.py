@@ -56,7 +56,7 @@ for name in (
 # ===========================================================================
 TEST_SPACE_ID = "prod_lead_crud_test"
 TEST_GRAPH_URI = "urn:prod_lead_crud"
-LEAD_DATA_DIR = PROJECT_ROOT / "lead_test_data"
+LEAD_DATA_DIR = PROJECT_ROOT / "internal_data" / "lead_test_data"
 LEAD_FILE_LIMIT = 3
 DELETE_SPACE_AT_END = True
 SIDECAR_URL = "http://localhost:7070"

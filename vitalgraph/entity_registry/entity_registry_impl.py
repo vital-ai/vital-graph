@@ -89,7 +89,7 @@ class EntityRegistryImpl(
     async def ensure_tables(self) -> bool:
         """Verify that entity registry tables exist. Does NOT create or modify schema.
 
-        Run entity_registry/migrate.py to create tables and apply migrations.
+        Run apps/entity_registry/migrate.py to create tables and apply migrations.
         """
         try:
             async with self.pool.acquire() as conn:
@@ -100,7 +100,7 @@ class EntityRegistryImpl(
                 if not exists:
                     raise RuntimeError(
                         "Entity registry tables not found. "
-                        "Run 'python entity_registry/migrate.py' to create them."
+                        "Run 'python apps/entity_registry/migrate.py' to create them."
                     )
             logger.info("Entity registry tables verified")
 

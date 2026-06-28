@@ -307,3 +307,6 @@ planning_internal
 # Pyright config
 pyrightconfig.json
 
+internal_data
+generated_instances
+

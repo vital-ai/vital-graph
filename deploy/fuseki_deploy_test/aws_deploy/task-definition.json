@@ -1,0 +1,69 @@
+{
+  "family": "vitalgraph-fuseki",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "cpu": "1024",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/vitalgraph-fuseki-task-role",
+  "containerDefinitions": [
+    {
+      "name": "fuseki",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/vitalgraph-fuseki:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3030,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "MEMORY_LIMIT",
+          "value": "4096"
+        },
+        {
+          "name": "EFS_MOUNT_POINT",
+          "value": "/efs"
+        },
+        {
+          "name": "JAVA_OPTIONS",
+          "value": "-Xmx1536m -Xms1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "fuseki-efs",
+          "containerPath": "/efs",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/vitalgraph-fuseki",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "fuseki-efs",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-XXXXXXXXX",
+        "rootDirectory": "/",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-XXXXXXXXX",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ]
+}

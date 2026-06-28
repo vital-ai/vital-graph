@@ -1,0 +1,148 @@
+name: Test Packaging
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-client-install:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install client-only package
+      run: |
+        pip install -e .
+    
+    - name: Test client imports
+      run: |
+        python -c "import vitalgraph.client.vitalgraph_client; print('✅ Client import OK')"
+        python -c "import vitalgraph.client.config.client_config_loader; print('✅ Config loader OK')"
+        python -c "import requests; print('✅ Requests OK')"
+        python -c "import pydantic; print('✅ Pydantic OK')"
+    
+    - name: Test client console script
+      run: |
+        vitalgraph --help || echo "⚠️ Client script not available (expected in client-only install)"
+
+  test-server-install:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install server package
+      run: |
+        pip install -e ".[server]"
+    
+    - name: Test server imports
+      run: |
+        python -c "import vitalgraph.main.main; print('✅ Server main OK')"
+        python -c "import fastapi; print('✅ FastAPI OK')"
+        python -c "import sqlalchemy; print('✅ SQLAlchemy OK')"
+        python -c "import psycopg; print('✅ psycopg OK')"
+        python -c "import uvicorn; print('✅ uvicorn OK')"
+    
+    - name: Test server console scripts
+      run: |
+        vitalgraphdb --help
+        vitalgraphadmin --help
+
+  test-full-install:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    
+    - name: Install full package
+      run: |
+        pip install -e ".[all]"
+    
+    - name: Test all imports
+      run: |
+        python -c "import vitalgraph.client.vitalgraph_client; print('✅ Client OK')"
+        python -c "import vitalgraph.main.main; print('✅ Server OK')"
+        python -c "import openai; print('✅ OpenAI OK')"
+        python -c "import pyoxigraph; print('✅ pyoxigraph OK')"
+        python -c "import pytest; print('✅ pytest OK')"
+    
+    - name: Test all console scripts
+      run: |
+        vitalgraph --help
+        vitalgraphdb --help
+        vitalgraphadmin --help
+    
+    - name: Run packaging test script
+      run: |
+        python test_pip_install.py
+
+  test-docker-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Build Docker image
+      run: |
+        docker build -t vitalgraph-test .
+    
+    - name: Test Docker image
+      run: |
+        docker run --rm vitalgraph-test python -c "import vitalgraph.main.main; print('✅ Docker server OK')"
+        docker run --rm vitalgraph-test vitalgraphdb --help
+
+  test-build-distribution:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+    
+    - name: Install build tools
+      run: |
+        pip install build twine check-manifest
+    
+    - name: Check manifest
+      run: |
+        check-manifest
+    
+    - name: Build distribution
+      run: |
+        python -m build
+    
+    - name: Check distribution
+      run: |
+        twine check dist/*
+    
+    - name: Test wheel installation
+      run: |
+        pip install dist/*.whl
+        python -c "import vitalgraph.client; print('✅ Wheel install OK')"

@@ -1,0 +1,4318 @@
+{
+  "test_summary": {
+    "light_load": {
+      "total_queries": 15,
+      "successful_queries": 15,
+      "failed_queries": 0,
+      "success_rate": 1.0,
+      "avg_execution_time": 0.06517303784688314,
+      "avg_connection_delta": 1.3333333333333333,
+      "max_connection_delta": 4,
+      "avg_memory_delta": 0.07708333333333334,
+      "max_memory_delta": 0.34375,
+      "connection_leak_detected": true,
+      "memory_leak_detected": false,
+      "performance_degradation": false
+    },
+    "medium_load": {
+      "total_queries": 50,
+      "successful_queries": 50,
+      "failed_queries": 0,
+      "success_rate": 1.0,
+      "avg_execution_time": 0.019234910011291503,
+      "avg_connection_delta": 1.0,
+      "max_connection_delta": 5,
+      "avg_memory_delta": 0.051875,
+      "max_memory_delta": 0.359375,
+      "connection_leak_detected": false,
+      "memory_leak_detected": false,
+      "performance_degradation": false
+    },
+    "heavy_load": {
+      "total_queries": 105,
+      "successful_queries": 105,
+      "failed_queries": 0,
+      "success_rate": 1.0,
+      "avg_execution_time": 0.05220031284150623,
+      "avg_connection_delta": 0.5333333333333333,
+      "max_connection_delta": 5,
+      "avg_memory_delta": 0.05,
+      "max_memory_delta": 0.53125,
+      "connection_leak_detected": false,
+      "memory_leak_detected": false,
+      "performance_degradation": false
+    },
+    "overall": {
+      "total_queries": 170,
+      "successful_queries": 170,
+      "failed_queries": 0,
+      "success_rate": 1.0,
+      "avg_execution_time": 0.04364925833309398,
+      "avg_connection_delta": 0.7411764705882353,
+      "max_connection_delta": 5,
+      "avg_memory_delta": 0.052941176470588235,
+      "max_memory_delta": 0.53125,
+      "connection_leak_detected": false,
+      "memory_leak_detected": false,
+      "performance_degradation": false
+    }
+  },
+  "raw_results": {
+    "light_load": [
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10263395309448242,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 38.921875,
+          "open_files": 1,
+          "connections": 1,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.402677
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.505744
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.07137012481689453,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.610137
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.682955
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02361321449279785,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 2,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.7898161
+        },
+        "metrics_after": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.8136058
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10090899467468262,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 38.8125,
+          "open_files": 0,
+          "connections": 1,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.405169
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.50629
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06749582290649414,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.613548
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.68142
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.024831056594848633,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.78643
+        },
+        "metrics_after": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.81166
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10935807228088379,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 38.75,
+          "open_files": 0,
+          "connections": 1,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.401919
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.513352
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06394100189208984,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.6159139
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.6802418
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03620100021362305,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.786108
+        },
+        "metrics_after": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.8225532
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10401511192321777,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.046875,
+          "open_files": 0,
+          "connections": 1,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.404727
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.509193
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.05451512336730957,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.623224
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.683116
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03165912628173828,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 2,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.791065
+        },
+        "metrics_after": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.8228018
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10350298881530762,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 38.84375,
+          "open_files": 0,
+          "connections": 1,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.4030778
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.513571
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.07093095779418945,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.62462
+        },
+        "metrics_after": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.69632
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0126190185546875,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.810389
+        },
+        "metrics_after": {
+          "memory_mb": 39.109375,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996042.823075
+        }
+      }
+    ],
+    "medium_load": [
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012404203414916992,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.015625,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.934286
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9468758
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008069992065429688,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0479271
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0562692
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.006559133529663086,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.1609569
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.167777
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.003309965133666992,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.2686641
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.2722108
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.004321098327636719,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.375082
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.379573
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.015046834945678711,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.046875,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9357738
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.951395
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025380849838256836,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.057111
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.082678
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.04485487937927246,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.19053
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.235619
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025799274444580078,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.348366
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.374315
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008066177368164062,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4758499
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.48416
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.019424915313720703,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.296875,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.938874
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.959681
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025206804275512695,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.067033
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.093169
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01589179039001465,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.2206788
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.236738
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025391817092895508,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.347863
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.3735502
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012648344039916992,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4749591
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.488597
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02336287498474121,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.078125,
+          "open_files": 0,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.935435
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9595242
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.028641939163208008,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.063926
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0947042
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.011719942092895508,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.225569
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.237547
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.024086952209472656,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.349748
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.373943
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01119089126586914,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.47763
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.489015
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.019038915634155273,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.140625,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.937427
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.958534
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.020721912384033203,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0589519
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.079937
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.013278961181640625,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.22476
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.238192
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025307178497314453,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.349519
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.37493
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012495040893554688,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4770198
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.489645
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.019853830337524414,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.203125,
+          "open_files": 2,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.937216
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.957603
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.030178070068359375,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0632389
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.09409
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.021004915237426758,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.206762
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.227992
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.024714946746826172,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.350919
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.3768032
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012993097305297852,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4797142
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4932768
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01478719711303711,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.109375,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.936394
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.951624
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.027739286422729492,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.05651
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.084532
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0212709903717041,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.208757
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.230166
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02518916130065918,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.350073
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.375911
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.013712882995605469,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.476565
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.490686
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.019593000411987305,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.234375,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.939425
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9598
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03623819351196289,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0659058
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.102766
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.015534162521362305,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.21414
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.229856
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.026989221572875977,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.349612
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.376746
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.009891033172607422,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.481487
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4923441
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.010239839553833008,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.03125,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9349551
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.945864
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03463411331176758,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.048428
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0834482
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01817011833190918,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.213093
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.231453
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.027161836624145508,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.348916
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.376189
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01271820068359375,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.480361
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.493741
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02173638343811035,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.171875,
+          "open_files": 1,
+          "connections": 5,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9376059
+        },
+        "metrics_after": {
+          "memory_mb": 39.375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996044.9598532
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.026608943939208984,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.0663512
+        },
+        "metrics_after": {
+          "memory_mb": 39.390625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.093107
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.011979103088378906,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.224036
+        },
+        "metrics_after": {
+          "memory_mb": 39.40625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.236901
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.023227214813232422,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.40625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.351418
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.375374
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01335906982421875,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4786339
+        },
+        "metrics_after": {
+          "memory_mb": 39.421875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996045.4922152
+        }
+      }
+    ],
+    "heavy_load": [
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.033895015716552734,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.1875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.609545
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6453462
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.018783092498779297,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7496698
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.769541
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.013232707977294922,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.872243
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.8866088
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0036721229553222656,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.992262
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9961631
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0032079219818115234,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.099712
+        },
+        "metrics_after": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.1030998
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.050653934478759766,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.210167
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.262815
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.1743929386138916,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 2,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.407975
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.583232
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.025291919708251953,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.484375,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.62246
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.647895
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01748514175415039,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.749799
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7700539
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02458977699279785,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.8755
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.904999
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.006494998931884766,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0068119
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.013469
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.006476163864135742,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.118269
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.1259542
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.05475306510925293,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2667708
+        },
+        "metrics_after": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.325647
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.11385393142700195,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 12,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.4926121
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.606954
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03970694541931152,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.21875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.608661
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.648549
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.014329910278320312,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.748887
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.763357
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008283138275146484,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.870861
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.8793988
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0075800418853759766,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.98051
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9884312
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008094072341918945,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.091289
+        },
+        "metrics_after": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0998468
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06729722023010254,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.209908
+        },
+        "metrics_after": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.277605
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0977318286895752,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 4,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.584264
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.682165
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03458094596862793,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.1875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6073248
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 14,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6422322
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.020344018936157227,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7477078
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.770324
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.014129877090454102,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.875007
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.900359
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.00669097900390625,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.005138
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0120199
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008865118026733398,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.117435
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.1268601
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.2564687728881836,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.272789
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.534421
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02531886100769043,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 1,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.656978
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.6823921
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.026539087295532227,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.3125,
+          "open_files": 4,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.614065
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.644276
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.00952005386352539,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.750035
+        },
+        "metrics_after": {
+          "memory_mb": 39.640625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.761976
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007093191146850586,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.862664
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.870135
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008297920227050781,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9784598
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.988312
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.00671076774597168,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.091159
+        },
+        "metrics_after": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.099048
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.060147762298583984,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.21061
+        },
+        "metrics_after": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.271443
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.2817368507385254,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 7,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.3976278
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.679565
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03101801872253418,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.203125,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.610243
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.645219
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012542963027954102,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.751112
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7639098
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007122039794921875,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.871308
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.87874
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007302999496459961,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9813461
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.989247
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.003775358200073242,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.091386
+        },
+        "metrics_after": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.095419
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.05335879325866699,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2105181
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2649422
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.293107271194458,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 3,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.382787
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.6763031
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03289294242858887,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.265625,
+          "open_files": 3,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.61318
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.646687
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0276639461517334,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 3,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.750977
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.779522
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.023913145065307617,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.884112
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9082198
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008505105972290039,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0103931
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.019134
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0059719085693359375,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.1197922
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.126519
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.10249185562133789,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2663949
+        },
+        "metrics_after": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.37214
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0955650806427002,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 5,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.588765
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.684521
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.027817964553833008,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.515625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.624459
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 12,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.652652
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.022622108459472656,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 3,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.75442
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.778124
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.015346765518188477,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.900807
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9166021
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007689952850341797,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0222158
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.030294
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.026916980743408203,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.190151
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2175832
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.23966407775878906,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.337573
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.579533
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008086919784545898,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 13,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.680748
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.689707
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03020000457763672,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.34375,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6193202
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 14,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.649877
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.031229019165039062,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7536051
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7849212
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.012749195098876953,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.903689
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.916668
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.00768280029296875,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.019852
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.027736
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0246279239654541,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.193655
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.219151
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.1468048095703125,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.329154
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.4763389
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.00926518440246582,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 8,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.680217
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.68981
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.04118680953979492,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.09375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.605737
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.647212
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.014230012893676758,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.748458
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7685912
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.030051231384277344,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.874495
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.905226
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.005470991134643555,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.005929
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.012634
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007442951202392578,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.671875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.117755
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.126455
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.21726584434509277,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.274584
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.632612
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008404016494750977,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 0,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.740074
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.7489438
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.03326010704040527,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.46875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.624177
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.658138
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.018018007278442383,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.766447
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.784679
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01814866065979004,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.897612
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.916737
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.006891727447509766,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.022702
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.029782
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.024419784545898438,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.194336
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.218983
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.1919538974761963,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.468344
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.660795
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0579988956451416,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 11,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.7626371
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.821103
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.029005050659179688,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.375,
+          "open_files": 3,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6185238
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 15,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6486871
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01846480369567871,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.756844
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.775798
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.028921127319335938,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.879742
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.908808
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.007596731185913086,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.013634
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0219479
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06918501853942871,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.123242
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.192735
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.31652188301086426,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2987342
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.6583822
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.05259299278259277,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 9,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.763597
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.82158
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.028928041458129883,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.5625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.623805
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 12,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.653428
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01215219497680664,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7696671
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.782059
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.015604257583618164,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.89819
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.914444
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.006588935852050781,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.0175738
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.024362
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06729006767272949,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.126077
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.193939
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.3637278079986572,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.31317
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.6801002
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.008823871612548828,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 14,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.8214421
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.8303869
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.035506248474121094,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.28125,
+          "open_files": 4,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.6134121
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 14,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.649378
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02056717872619629,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.753969
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.776744
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.02907109260559082,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.879902
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.909072
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.0070648193359375,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.01386
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.021099
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.06760716438293457,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.124415
+        },
+        "metrics_after": {
+          "memory_mb": 39.6875,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.2095912
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.28230977058410645,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.71875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.395468
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.67795
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.014696121215820312,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 6,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.815126
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.8300831
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.036353111267089844,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 0,
+        "query": "{{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.421875,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.621485
+        },
+        "metrics_after": {
+          "memory_mb": 39.625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.658043
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.01577305793762207,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 1,
+        "query": "}}}}}}}}",
+        "metrics_before": {
+          "memory_mb": 39.640625,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.760208
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.7799208
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.028612852096557617,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 2,
+        "query": "{{{{}}}}{{{{}}}}{{{{{{{",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.8864
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996047.9152372
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.011822700500488281,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 3,
+        "query": "((((((((",
+        "metrics_before": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.018251
+        },
+        "metrics_after": {
+          "memory_mb": 39.65625,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.030198
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.05863690376281738,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 4,
+        "query": "(((())))(((())))((((",
+        "metrics_before": {
+          "memory_mb": 39.6875,
+          "open_files": 2,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.20097
+        },
+        "metrics_after": {
+          "memory_mb": 39.703125,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.260156
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.291532039642334,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 5,
+        "query": "<<<<<<<<",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 1,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.3897119
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.68141
+        }
+      },
+      {
+        "success": true,
+        "status_code": 200,
+        "execution_time": 0.009148836135864258,
+        "response_size": 205,
+        "error": null,
+        "result_count": 1,
+        "thread_id": 10,
+        "query_index": 6,
+        "query": "<<<<>>>><<<<<>>>",
+        "metrics_before": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.821738
+        },
+        "metrics_after": {
+          "memory_mb": 39.734375,
+          "open_files": 0,
+          "connections": 10,
+          "cpu_percent": 0.0,
+          "timestamp": 1753996048.831039
+        }
+      }
+    ]
+  }
+}

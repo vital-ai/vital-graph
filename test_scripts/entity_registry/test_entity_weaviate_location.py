@@ -12,6 +12,7 @@ Usage:
     ENTITY_WEAVIATE_ENABLED=true python test_scripts/entity_registry/test_entity_weaviate_location.py
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -28,8 +29,9 @@ if env_path.exists():
     load_dotenv(env_path)
 
 # Override env to use isolated test collections
-os.environ['ENTITY_WEAVIATE_ENV'] = 'wvloctest'
+os.environ['VITALGRAPH_ENVIRONMENT'] = 'wvloctest'
 
+from typing import Optional
 from vitalgraph.entity_registry.entity_weaviate import EntityWeaviateIndex
 from vitalgraph.entity_registry.entity_weaviate_schema import (
     get_collection_name,
@@ -225,7 +227,7 @@ class WeaviateLocationTestRunner:
     def __init__(self):
         self.tests_passed = 0
         self.tests_failed = 0
-        self.index = None
+        self.index: Optional[EntityWeaviateIndex] = None
 
     def _report(self, test_name: str, passed: bool, detail: str = ""):
         if passed:
@@ -235,7 +237,7 @@ class WeaviateLocationTestRunner:
             self.tests_failed += 1
             logger.error(f"  FAIL: {test_name}{' - ' + detail if detail else ''}")
 
-    def run_all(self):
+    async def run_all(self):
         logger.info("=" * 70)
         logger.info("Weaviate LocationIndex + Cross-Reference Tests")
         logger.info(f"  EntityIndex:   {get_collection_name()}")
@@ -246,28 +248,28 @@ class WeaviateLocationTestRunner:
         self.test_schema_utilities()
 
         # Connect to Weaviate
-        self.index = EntityWeaviateIndex.from_env()
+        self.index = await EntityWeaviateIndex.from_env()
         if not self.index:
             logger.error("Cannot connect to Weaviate. Set ENTITY_WEAVIATE_ENABLED=true and WEAVIATE_* env vars.")
             return
 
         try:
-            self.test_create_collections()
-            self.test_upsert_entities()
-            self.test_upsert_locations()
-            self.test_set_cross_references()
+            await self.test_create_collections()
+            await self.test_upsert_entities()
+            await self.test_upsert_locations()
+            await self.test_set_cross_references()
 
             # Allow time for vectorization
             logger.info("\nWaiting 3s for Weaviate vectorization...")
             time.sleep(3)
 
-            self.test_search_locations_near()
-            self.test_search_topic_near()
-            self.test_search_entities_near()
-            self.test_status()
+            await self.test_search_locations_near()
+            await self.test_search_topic_near()
+            await self.test_search_entities_near()
+            await self.test_status()
         finally:
-            self.cleanup()
-            self.index.close()
+            await self.cleanup()
+            await self.index.close()
 
         logger.info("=" * 70)
         total = self.tests_passed + self.tests_failed
@@ -326,34 +328,36 @@ class WeaviateLocationTestRunner:
     # Collection management
     # ------------------------------------------------------------------
 
-    def test_create_collections(self):
+    async def test_create_collections(self):
+        assert self.index is not None
         logger.info("\n--- Create Test Collections ---")
 
         # Clean slate: delete if they exist from a previous failed run
         ename = self.index.collection_name
         lname = self.index.location_collection_name
-        if self.index.client.collections.exists(ename):
-            self.index.client.collections.delete(ename)
+        if await self.index.client.collections.exists(ename):
+            await self.index.client.collections.delete(ename)
             logger.info(f"  Deleted pre-existing {ename}")
-        if self.index.client.collections.exists(lname):
-            self.index.client.collections.delete(lname)
+        if await self.index.client.collections.exists(lname):
+            await self.index.client.collections.delete(lname)
             logger.info(f"  Deleted pre-existing {lname}")
 
-        result = self.index.ensure_collection()
+        result = await self.index.ensure_collection()
         self._report("ensure_collection creates both", result is True)
         self._report("EntityIndex exists",
-                     self.index.client.collections.exists(ename))
+                     await self.index.client.collections.exists(ename))
         self._report("LocationIndex exists",
-                     self.index.client.collections.exists(lname))
+                     await self.index.client.collections.exists(lname))
 
     # ------------------------------------------------------------------
     # Entity upsert
     # ------------------------------------------------------------------
 
-    def test_upsert_entities(self):
+    async def test_upsert_entities(self):
+        assert self.index is not None
         logger.info("\n--- Upsert Entities ---")
 
-        count = self.index.upsert_entities_batch(TEST_ENTITIES)
+        count = await self.index.upsert_entities_batch(TEST_ENTITIES)
         self._report("Batch upsert entities", count == len(TEST_ENTITIES),
                      f"upserted={count}/{len(TEST_ENTITIES)}")
 
@@ -361,16 +365,17 @@ class WeaviateLocationTestRunner:
     # Location upsert
     # ------------------------------------------------------------------
 
-    def test_upsert_locations(self):
+    async def test_upsert_locations(self):
+        assert self.index is not None
         logger.info("\n--- Upsert Locations ---")
 
-        count = self.index.upsert_locations_batch(TEST_LOCATIONS)
+        count = await self.index.upsert_locations_batch(TEST_LOCATIONS)
         self._report("Batch upsert locations", count == len(TEST_LOCATIONS),
                      f"upserted={count}/{len(TEST_LOCATIONS)}")
 
         # Verify a single location can be fetched
         loc_uuid = location_id_to_weaviate_uuid(90001)
-        obj = self.index.location_collection.query.fetch_object_by_id(loc_uuid)
+        obj = await self.index.location_collection.query.fetch_object_by_id(loc_uuid)
         self._report("Location 90001 fetchable", obj is not None)
         if obj:
             self._report("Location props correct",
@@ -381,7 +386,8 @@ class WeaviateLocationTestRunner:
     # Cross-references
     # ------------------------------------------------------------------
 
-    def test_set_cross_references(self):
+    async def test_set_cross_references(self):
+        assert self.index is not None
         logger.info("\n--- Set Entity->Location Cross-References ---")
 
         # Build entity_id -> [location_id] map
@@ -390,7 +396,7 @@ class WeaviateLocationTestRunner:
             entity_loc_map.setdefault(loc['entity_id'], []).append(loc['location_id'])
 
         for eid, loc_ids in entity_loc_map.items():
-            self.index.set_entity_location_refs(eid, loc_ids)
+            await self.index.set_entity_location_refs(eid, loc_ids)
 
         self._report("Cross-refs set for all entities", True,
                      f"entities={len(entity_loc_map)}")
@@ -398,7 +404,7 @@ class WeaviateLocationTestRunner:
         # Verify cross-ref on entity e_loctest_001 (should have 2 locations)
         from weaviate.classes.query import QueryReference
         eid_uuid = entity_id_to_weaviate_uuid('e_loctest_001')
-        obj = self.index.collection.query.fetch_object_by_id(
+        obj = await self.index.collection.query.fetch_object_by_id(
             eid_uuid,
             return_references=[QueryReference(
                 link_on="locations",
@@ -415,11 +421,12 @@ class WeaviateLocationTestRunner:
     # search_locations_near
     # ------------------------------------------------------------------
 
-    def test_search_locations_near(self):
+    async def test_search_locations_near(self):
+        assert self.index is not None
         logger.info("\n--- Search: Locations Near ---")
 
         # Near SF (37.79, -122.40) within 15 km — should find SF + Oakland locations
-        results = self.index.search_locations_near(
+        results = await self.index.search_locations_near(
             latitude=37.79, longitude=-122.40, radius_km=15, limit=10,
         )
         self._report("Locations near SF returns results", len(results) > 0,
@@ -432,7 +439,7 @@ class WeaviateLocationTestRunner:
         self._report("NYC locations NOT found", 90004 not in loc_ids and 90005 not in loc_ids)
 
         # Near NYC (40.74, -73.99) within 20 km
-        results_nyc = self.index.search_locations_near(
+        results_nyc = await self.index.search_locations_near(
             latitude=40.74, longitude=-73.99, radius_km=20, limit=10,
         )
         self._report("Locations near NYC returns results", len(results_nyc) > 0,
@@ -443,7 +450,7 @@ class WeaviateLocationTestRunner:
         self._report("SF locations NOT in NYC results", 90001 not in nyc_loc_ids)
 
         # Filter by location_type_key
-        results_hq = self.index.search_locations_near(
+        results_hq = await self.index.search_locations_near(
             latitude=37.79, longitude=-122.40, radius_km=15,
             location_type_key='headquarters', limit=10,
         )
@@ -452,7 +459,7 @@ class WeaviateLocationTestRunner:
                      f"count={len(results_hq)}")
 
         # Very tight radius — should find nothing far away
-        results_tight = self.index.search_locations_near(
+        results_tight = await self.index.search_locations_near(
             latitude=40.74, longitude=-73.99, radius_km=0.1, limit=10,
         )
         self._report("Tight radius (100m NYC) returns few/no results",
@@ -462,11 +469,12 @@ class WeaviateLocationTestRunner:
     # search_topic_near (the key cross-ref query)
     # ------------------------------------------------------------------
 
-    def test_search_topic_near(self):
+    async def test_search_topic_near(self):
+        assert self.index is not None
         logger.info("\n--- Search: Topic + Near (Cross-Reference) ---")
 
         # "plumbing" near SF — should find Ace Plumbing (SF), not NYC Plumbing
-        results = self.index.search_topic_near(
+        results = await self.index.search_topic_near(
             query="plumbing contractor",
             latitude=37.79, longitude=-122.40, radius_km=20,
             min_certainty=0.5, limit=10,
@@ -491,7 +499,7 @@ class WeaviateLocationTestRunner:
                 self._report("Ace Plumbing in results for detail check", False)
 
         # "plumbing" near NYC — should find NYC Plumbing, not Ace
-        results_nyc = self.index.search_topic_near(
+        results_nyc = await self.index.search_topic_near(
             query="plumbing repair",
             latitude=40.74, longitude=-73.99, radius_km=20,
             min_certainty=0.5, limit=10,
@@ -503,7 +511,7 @@ class WeaviateLocationTestRunner:
         self._report("Ace Plumbing NOT in NYC results", 'e_loctest_001' not in nyc_ids)
 
         # "environmental consulting" near SF Bay Area — should find GreenTech
-        results_env = self.index.search_topic_near(
+        results_env = await self.index.search_topic_near(
             query="environmental consulting sustainability",
             latitude=37.40, longitude=-122.00, radius_km=50,
             min_certainty=0.5, limit=10,
@@ -514,7 +522,7 @@ class WeaviateLocationTestRunner:
         self._report("GreenTech in results", 'e_loctest_004' in env_ids)
 
         # Type filter: "contractor" near SF, type_key=business
-        results_typed = self.index.search_topic_near(
+        results_typed = await self.index.search_topic_near(
             query="contractor",
             latitude=37.79, longitude=-122.40, radius_km=20,
             type_key='business', min_certainty=0.5, limit=10,
@@ -527,11 +535,12 @@ class WeaviateLocationTestRunner:
     # search_entities_near (geo only, no vector)
     # ------------------------------------------------------------------
 
-    def test_search_entities_near(self):
+    async def test_search_entities_near(self):
+        assert self.index is not None
         logger.info("\n--- Search: Entities Near (Geo Only) ---")
 
         # Entities with a location near SF
-        results = self.index.search_entities_near(
+        results = await self.index.search_entities_near(
             latitude=37.79, longitude=-122.40, radius_km=20, limit=10,
         )
         self._report("Entities near SF returns results", len(results) > 0,
@@ -545,7 +554,7 @@ class WeaviateLocationTestRunner:
                      'e_loctest_003' not in entity_ids)
 
         # Entities near San Jose (50 km) — should include GreenTech + possibly SF entities
-        results_sj = self.index.search_entities_near(
+        results_sj = await self.index.search_entities_near(
             latitude=37.34, longitude=-121.89, radius_km=10, limit=10,
         )
         sj_ids = {r['entity_id'] for r in results_sj}
@@ -561,9 +570,10 @@ class WeaviateLocationTestRunner:
     # Status
     # ------------------------------------------------------------------
 
-    def test_status(self):
+    async def test_status(self):
+        assert self.index is not None
         logger.info("\n--- Status ---")
-        st = self.index.get_status()
+        st = await self.index.get_status()
         self._report("Status has entity_index", 'entity_index' in st)
         self._report("Status has location_index", 'location_index' in st)
         entity_count = st.get('entity_index', {}).get('object_count', 0)
@@ -579,18 +589,19 @@ class WeaviateLocationTestRunner:
     # Cleanup
     # ------------------------------------------------------------------
 
-    def cleanup(self):
+    async def cleanup(self):
+        assert self.index is not None
         logger.info("\n--- Cleanup: Deleting Test Collections ---")
         try:
             ename = self.index.collection_name
             lname = self.index.location_collection_name
 
             # Delete EntityIndex first (it references LocationIndex)
-            if self.index.client.collections.exists(ename):
-                self.index.client.collections.delete(ename)
+            if await self.index.client.collections.exists(ename):
+                await self.index.client.collections.delete(ename)
                 logger.info(f"  Deleted {ename}")
-            if self.index.client.collections.exists(lname):
-                self.index.client.collections.delete(lname)
+            if await self.index.client.collections.exists(lname):
+                await self.index.client.collections.delete(lname)
                 logger.info(f"  Deleted {lname}")
             logger.info("  Cleanup complete")
         except Exception as e:
@@ -599,4 +610,4 @@ class WeaviateLocationTestRunner:
 
 if __name__ == '__main__':
     runner = WeaviateLocationTestRunner()
-    runner.run_all()
+    asyncio.run(runner.run_all())

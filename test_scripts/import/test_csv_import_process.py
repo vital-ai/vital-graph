@@ -273,7 +273,7 @@ class NTriplesCSVConverter:
         
         def _create_term_hash(term_uuid: str, term_text: str, term_type: str, 
                              language: str = '', datatype: str = '') -> str:
-            """Create a hash for term deduplication."""
+            """Create a hash for term fuzzylication."""
             components = [term_uuid, term_text, term_type, language, datatype]
             term_string = "\x00".join(components)
             return hashlib.sha256(term_string.encode('utf-8')).hexdigest()

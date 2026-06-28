@@ -17,15 +17,15 @@ SPARQL Integration: SPARQL queries/updates ↔ REST API ↔ endpoint
 Uses modular test implementations from test_script_kg_impl/sparql/ package.
 
 SPARQL Endpoints Tested:
-- GET  /api/graphs/sparql/{space_id}/query
-- POST /api/graphs/sparql/{space_id}/query
-- POST /api/graphs/sparql/{space_id}/update
-- POST /api/graphs/sparql/{space_id}/update-form
-- POST /api/graphs/sparql/{space_id}/insert
-- POST /api/graphs/sparql/{space_id}/insert-form
-- POST /api/graphs/sparql/{space_id}/insert-data
-- POST /api/graphs/sparql/{space_id}/delete
-- POST /api/graphs/sparql/{space_id}/delete-form
+- GET  /api/graphs/sparql/query?space_id=
+- POST /api/graphs/sparql/query?space_id=
+- POST /api/graphs/sparql/update?space_id=
+- POST /api/graphs/sparql/update-form?space_id=
+- POST /api/graphs/sparql/insert?space_id=
+- POST /api/graphs/sparql/insert-form?space_id=
+- POST /api/graphs/sparql/insert-data?space_id=
+- POST /api/graphs/sparql/delete?space_id=
+- POST /api/graphs/sparql/delete-form?space_id=
 """
 
 import asyncio
