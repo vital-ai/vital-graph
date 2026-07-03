@@ -1,0 +1,80 @@
+{
+  "name": "simple_select",
+  "sparql": "SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:fd83347404310b0bfbdc1a00e41adf2920ff468d21ea10ea6c60d91589446b3c"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "p",
+          "o"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": 10,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpSlice",
+          "start": -9223372036854775808,
+          "length": 10,
+          "subOp": {
+            "type": "OpProject",
+            "vars": [
+              "s",
+              "p",
+              "o"
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "var",
+                    "name": "p"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "o"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(slice _ 10\n  (project (?s ?p ?o)\n    (bgp (triple ?s ?p ?o))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

@@ -298,6 +298,7 @@ class VectorIndexesEndpoint:
 
             expected_dims = idx_row["dimensions"]
             vec_table = self.schema.vec_table_name(space_id, index_name)
+            term_table = f"{space_id}_term"
 
             ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
             upserted = 0
@@ -315,6 +316,18 @@ class VectorIndexesEndpoint:
                 vec_str = "[" + ",".join(str(v) for v in entry.embedding) + "]"
 
                 try:
+                    # Ensure URIs are in the term table so get_vectors can
+                    # resolve UUIDs back to human-readable URIs (issue #008)
+                    await conn.execute(
+                        f"INSERT INTO {term_table} (term_uuid, term_text, term_type) "
+                        f"VALUES ($1, $2, 'U') ON CONFLICT DO NOTHING",
+                        subject_uuid, entry.subject_uri,
+                    )
+                    await conn.execute(
+                        f"INSERT INTO {term_table} (term_uuid, term_text, term_type) "
+                        f"VALUES ($1, $2, 'U') ON CONFLICT DO NOTHING",
+                        context_uuid, entry.graph_uri,
+                    )
                     await conn.execute(
                         f"""INSERT INTO {vec_table}
                             (subject_uuid, context_uuid, embedding, updated_time)

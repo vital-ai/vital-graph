@@ -1,0 +1,63 @@
+{
+  "name": "ask_basic",
+  "sparql": "ASK WHERE {\n            <http://example.org/entity1> a <http://example.org/TypeA> .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:4a60e82ca349f786fd0d9f6e3a2137340756fc05213e264555af7dad816b6f3e"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "ASK",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpBGP",
+          "triples": [
+            {
+              "subject": {
+                "type": "uri",
+                "value": "http://example.org/entity1"
+              },
+              "predicate": {
+                "type": "uri",
+                "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+              },
+              "object": {
+                "type": "uri",
+                "value": "http://example.org/TypeA"
+              }
+            }
+          ]
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (bgp (triple <http://example.org/entity1> rdf:type <http://example.org/TypeA>)))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

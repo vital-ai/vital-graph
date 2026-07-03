@@ -97,6 +97,14 @@ def _var_to_sql(expr: ExprVar, ctx: EmitContext) -> Optional[str]:
     if info and info.text_col:
         return info.text_col
     # Rule 1: NULL = unbound (§10.5). Variable not in registry.
+    if ctx.query_all_vars and expr.var in ctx.query_all_vars:
+        logger.warning(
+            "Variable ?%s exists in query but is out of scope in current "
+            "context (depth=%d). This typically means a BIND inside a UNION "
+            "branch references a variable from a sibling pattern. Per SPARQL "
+            "1.1 semantics, each UNION branch is evaluated independently — "
+            "move the source pattern into the UNION branch or use a different "
+            "query structure.", expr.var, ctx.depth)
     return "NULL"
 
 

@@ -1,0 +1,74 @@
+{
+  "name": "distinct_select",
+  "sparql": "SELECT DISTINCT ?type WHERE {\n            ?s a ?type .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:db8449394fd35994d491900ec132575ca0517dbe38ede71a8a2dfc125ebf8cf9"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "type"
+        ],
+        "distinct": true,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpDistinct",
+          "subOp": {
+            "type": "OpProject",
+            "vars": [
+              "type"
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "type"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (distinct\n    (project (?type)\n      (bgp (triple ?s rdf:type ?type)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

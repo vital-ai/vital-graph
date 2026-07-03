@@ -181,7 +181,8 @@ class VitalGraphAPI:
                 if user_role == 'admin' or '*' in user_spaces or space_record.space_id in user_spaces:
                     spaces.append({
                         'space': space_record.space_id,
-                        'space_name': space_record.space_id,  # Use space_id as name for now
+                        'space_name': getattr(space_record.space_impl, 'space_name', space_record.space_id),
+                        'space_description': getattr(space_record.space_impl, 'space_description', ''),
                         'exists': True
                     })
             logger.debug(f"Returning {len(spaces)} spaces")
@@ -400,7 +401,8 @@ class VitalGraphAPI:
             all_spaces = []
             for space_id, space_record in self.space_manager._spaces.items():
                 space_name = getattr(space_record.space_impl, 'space_name', space_id)
-                if name_filter.lower() in space_name.lower():
+                if (name_filter.lower() in space_name.lower()
+                        or name_filter.lower() in space_id.lower()):
                     space_data = {
                         'space': space_id,
                         'space_name': space_name,
@@ -417,7 +419,7 @@ class VitalGraphAPI:
             )
     
     # User management methods
-    async def list_users(self, current_user: Dict) -> List[Dict[str, Any]]:
+    async def list_users(self, current_user: Dict, name_filter: Optional[str] = None) -> List[Dict[str, Any]]:
         """List users for the authenticated admin user."""
         if not self.db:
             raise HTTPException(
@@ -430,6 +432,13 @@ class VitalGraphAPI:
             # Add an ID field for consistency with frontend expectations
             for u in users:
                 u['id'] = u.get('username', '')
+            if name_filter:
+                lf = name_filter.lower()
+                users = [
+                    u for u in users
+                    if lf in (u.get('username') or '').lower()
+                    or lf in (u.get('full_name') or '').lower()
+                ]
             return users
         except Exception as e:
             raise HTTPException(
@@ -500,10 +509,22 @@ class VitalGraphAPI:
         try:
             # Capture pre-update state for audit
             old_user = await self.db.get_user_by_username(user_id)
-            old_role = old_user.get("role") if old_user else None
-            old_active = old_user.get("is_active") if old_user else None
+            if not old_user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found"
+                )
+            old_role = old_user.get("role")
+            old_active = old_user.get("is_active")
+            db_user_id = old_user["user_id"]
 
-            updated_user = await self.db.update_user(user_id, user_data)
+            updated_user = await self.db.update_user(
+                db_user_id,
+                email=user_data.get("email"),
+                full_name=user_data.get("full_name"),
+                role=user_data.get("role"),
+                is_active=user_data.get("is_active"),
+            )
             if updated_user:
                 actor = current_user.get("username", "system")
                 # Audit role change

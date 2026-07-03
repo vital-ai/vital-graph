@@ -50,8 +50,14 @@ class S3FileManager:
         # Initialize MinIO client
         if endpoint_url:
             # MinIO or custom S3-compatible endpoint
+            # Strip scheme if present — Minio() expects host:port only
+            clean_endpoint = endpoint_url
+            if clean_endpoint.startswith("http://"):
+                clean_endpoint = clean_endpoint[len("http://"):]
+            elif clean_endpoint.startswith("https://"):
+                clean_endpoint = clean_endpoint[len("https://"):]
             self.client = Minio(
-                endpoint_url,
+                clean_endpoint,
                 access_key=access_key_id,
                 secret_key=secret_access_key,
                 secure=use_ssl

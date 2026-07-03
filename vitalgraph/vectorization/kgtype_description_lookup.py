@@ -119,18 +119,18 @@ class KGTypeDescriptionLookup:
         quad_table = f"{space_id}_rdf_quad"
 
         sql = f"""
-            SELECT ot.text
+            SELECT ot.term_text
             FROM {quad_table} q
-            JOIN {term_table} pt ON pt.id = q.predicate_id
-            JOIN {term_table} ot ON ot.id = q.object_id
-            WHERE q.subject_id = $1
-              AND q.context_id = $2
-              AND pt.text = $3
-              AND ot.type IN ('uri', 'iri')
+            JOIN {term_table} pt ON pt.term_uuid = q.predicate_uuid
+            JOIN {term_table} ot ON ot.term_uuid = q.object_uuid
+            WHERE q.subject_uuid = $1
+              AND q.context_uuid = $2
+              AND pt.term_text = $3
+              AND ot.term_type = 'U'
             LIMIT 1
         """
         row = await conn.fetchrow(sql, subject_uuid, context_uuid, self.type_uri_property)
-        return row["text"] if row else None
+        return row["term_text"] if row else None
 
     async def get_subject_type_uris_batch(
         self, conn, space_id: str, subject_uuids: List, context_uuid
@@ -147,17 +147,17 @@ class KGTypeDescriptionLookup:
         quad_table = f"{space_id}_rdf_quad"
 
         sql = f"""
-            SELECT q.subject_id, ot.text
+            SELECT q.subject_uuid, ot.term_text
             FROM {quad_table} q
-            JOIN {term_table} pt ON pt.id = q.predicate_id
-            JOIN {term_table} ot ON ot.id = q.object_id
-            WHERE q.subject_id = ANY($1)
-              AND q.context_id = $2
-              AND pt.text = $3
-              AND ot.type IN ('uri', 'iri')
+            JOIN {term_table} pt ON pt.term_uuid = q.predicate_uuid
+            JOIN {term_table} ot ON ot.term_uuid = q.object_uuid
+            WHERE q.subject_uuid = ANY($1)
+              AND q.context_uuid = $2
+              AND pt.term_text = $3
+              AND ot.term_type = 'U'
         """
         rows = await conn.fetch(sql, subject_uuids, context_uuid, self.type_uri_property)
-        return {row["subject_id"]: row["text"] for row in rows}
+        return {row["subject_uuid"]: row["term_text"] for row in rows}
 
     # ------------------------------------------------------------------
     # Internal
@@ -169,18 +169,18 @@ class KGTypeDescriptionLookup:
         quad_table = f"{self.SPACE_ID}_rdf_quad"
 
         sql = f"""
-            SELECT ot.text
+            SELECT ot.term_text
             FROM {quad_table} q
-            JOIN {term_table} st ON st.id = q.subject_id
-            JOIN {term_table} pt ON pt.id = q.predicate_id
-            JOIN {term_table} ot ON ot.id = q.object_id
-            WHERE st.text = $1
-              AND pt.text = $2
-              AND ot.type = 'literal'
+            JOIN {term_table} st ON st.term_uuid = q.subject_uuid
+            JOIN {term_table} pt ON pt.term_uuid = q.predicate_uuid
+            JOIN {term_table} ot ON ot.term_uuid = q.object_uuid
+            WHERE st.term_text = $1
+              AND pt.term_text = $2
+              AND ot.term_type = 'L'
             LIMIT 1
         """
         row = await conn.fetchrow(sql, type_uri, self.desc_property)
-        return row["text"] if row else None
+        return row["term_text"] if row else None
 
     async def _fetch_descriptions_batch(
         self, conn, type_uris: List[str]
@@ -190,14 +190,14 @@ class KGTypeDescriptionLookup:
         quad_table = f"{self.SPACE_ID}_rdf_quad"
 
         sql = f"""
-            SELECT st.text AS type_uri, ot.text AS description
+            SELECT st.term_text AS type_uri, ot.term_text AS description
             FROM {quad_table} q
-            JOIN {term_table} st ON st.id = q.subject_id
-            JOIN {term_table} pt ON pt.id = q.predicate_id
-            JOIN {term_table} ot ON ot.id = q.object_id
-            WHERE st.text = ANY($1)
-              AND pt.text = $2
-              AND ot.type = 'literal'
+            JOIN {term_table} st ON st.term_uuid = q.subject_uuid
+            JOIN {term_table} pt ON pt.term_uuid = q.predicate_uuid
+            JOIN {term_table} ot ON ot.term_uuid = q.object_uuid
+            WHERE st.term_text = ANY($1)
+              AND pt.term_text = $2
+              AND ot.term_type = 'L'
         """
         rows = await conn.fetch(sql, type_uris, self.desc_property)
         return {row["type_uri"]: row["description"] for row in rows}

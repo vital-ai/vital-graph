@@ -1,0 +1,101 @@
+{
+  "name": "filter_not_exists",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s <http://example.org/hasName> ?name .\n            FILTER NOT EXISTS { ?s <http://example.org/deleted> \"true\" }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 2,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:39779ecf887d343556a0e697b9f0112dea9b1cbdfcffb302aeae33a7d18249bd"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpFilter",
+            "exprs": [
+              {
+                "type": "ExprFunctionOp",
+                "name": "notexists",
+                "graphPattern": {
+                  "type": "OpBGP",
+                  "triples": [
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "s"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://example.org/deleted"
+                      },
+                      "object": {
+                        "type": "literal",
+                        "value": "true"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?name)\n  (filter (notexists (bgp (triple ?s <http://example.org/deleted> \"true\")))\n    (bgp (triple ?s <http://example.org/hasName> ?name))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

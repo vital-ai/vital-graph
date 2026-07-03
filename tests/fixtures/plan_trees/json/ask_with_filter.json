@@ -1,0 +1,86 @@
+{
+  "name": "ask_with_filter",
+  "sparql": "ASK WHERE {\n            ?s <http://example.org/hasAge> ?age .\n            FILTER(?age > 18)\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:34f9209ab47d7d4c49d9108810e1647a1cbfd33492121a27b2fec6a1415673ed"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "ASK",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpFilter",
+          "exprs": [
+            {
+              "type": "ExprFunction2",
+              "name": "gt",
+              "args": [
+                {
+                  "type": "ExprVar",
+                  "var": "age"
+                },
+                {
+                  "type": "NodeValue",
+                  "node": {
+                    "type": "literal",
+                    "value": "18",
+                    "datatype": "http://www.w3.org/2001/XMLSchema#integer"
+                  }
+                }
+              ]
+            }
+          ],
+          "subOp": {
+            "type": "OpBGP",
+            "triples": [
+              {
+                "subject": {
+                  "type": "var",
+                  "name": "s"
+                },
+                "predicate": {
+                  "type": "uri",
+                  "value": "http://example.org/hasAge"
+                },
+                "object": {
+                  "type": "var",
+                  "name": "age"
+                }
+              }
+            ]
+          }
+        },
+        "pretty": "(filter (> ?age 18)\n  (bgp (triple ?s <http://example.org/hasAge> ?age)))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

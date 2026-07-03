@@ -1,0 +1,208 @@
+{
+  "name": "entity_list_type_union",
+  "sparql": "SELECT ?entity ?name ?type WHERE {\n            {\n                ?entity a <http://vital.ai/ontology/vital#KGEntity> .\n                BIND(<http://vital.ai/ontology/vital#KGEntity> AS ?type)\n            } UNION {\n                ?entity a <http://vital.ai/ontology/vital#KGNewsEntity> .\n                BIND(<http://vital.ai/ontology/vital#KGNewsEntity> AS ?type)\n            } UNION {\n                ?entity a <http://vital.ai/ontology/vital#KGProductEntity> .\n                BIND(<http://vital.ai/ontology/vital#KGProductEntity> AS ?type)\n            }\n            ?entity <http://vital.ai/ontology/vital#hasName> ?name .\n        } ORDER BY ?name LIMIT 50",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:67bfd0092ee5486a43c99cff096b08b60fccb41695998cef3a53ce788cb4a249"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "entity",
+          "name",
+          "type"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": 50,
+        "offset": 0,
+        "orderBy": [
+          {
+            "direction": "ASC",
+            "expr": "?name"
+          }
+        ],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpSlice",
+          "start": -9223372036854775808,
+          "length": 50,
+          "subOp": {
+            "type": "OpProject",
+            "vars": [
+              "entity",
+              "name",
+              "type"
+            ],
+            "subOp": {
+              "type": "OpOrder",
+              "conditions": [
+                {
+                  "direction": "ASC",
+                  "expr": {
+                    "type": "ExprVar",
+                    "var": "name"
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpJoin",
+                "left": {
+                  "type": "OpUnion",
+                  "left": {
+                    "type": "OpUnion",
+                    "left": {
+                      "type": "OpExtend",
+                      "extensions": [
+                        {
+                          "var": "type",
+                          "expr": {
+                            "type": "NodeValue",
+                            "node": {
+                              "type": "uri",
+                              "value": "http://vital.ai/ontology/vital#KGEntity"
+                            }
+                          }
+                        }
+                      ],
+                      "subOp": {
+                        "type": "OpBGP",
+                        "triples": [
+                          {
+                            "subject": {
+                              "type": "var",
+                              "name": "entity"
+                            },
+                            "predicate": {
+                              "type": "uri",
+                              "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                            },
+                            "object": {
+                              "type": "uri",
+                              "value": "http://vital.ai/ontology/vital#KGEntity"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "right": {
+                      "type": "OpExtend",
+                      "extensions": [
+                        {
+                          "var": "type",
+                          "expr": {
+                            "type": "NodeValue",
+                            "node": {
+                              "type": "uri",
+                              "value": "http://vital.ai/ontology/vital#KGNewsEntity"
+                            }
+                          }
+                        }
+                      ],
+                      "subOp": {
+                        "type": "OpBGP",
+                        "triples": [
+                          {
+                            "subject": {
+                              "type": "var",
+                              "name": "entity"
+                            },
+                            "predicate": {
+                              "type": "uri",
+                              "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                            },
+                            "object": {
+                              "type": "uri",
+                              "value": "http://vital.ai/ontology/vital#KGNewsEntity"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "right": {
+                    "type": "OpExtend",
+                    "extensions": [
+                      {
+                        "var": "type",
+                        "expr": {
+                          "type": "NodeValue",
+                          "node": {
+                            "type": "uri",
+                            "value": "http://vital.ai/ontology/vital#KGProductEntity"
+                          }
+                        }
+                      }
+                    ],
+                    "subOp": {
+                      "type": "OpBGP",
+                      "triples": [
+                        {
+                          "subject": {
+                            "type": "var",
+                            "name": "entity"
+                          },
+                          "predicate": {
+                            "type": "uri",
+                            "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                          },
+                          "object": {
+                            "type": "uri",
+                            "value": "http://vital.ai/ontology/vital#KGProductEntity"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "right": {
+                  "type": "OpBGP",
+                  "triples": [
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "entity"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://vital.ai/ontology/vital#hasName"
+                      },
+                      "object": {
+                        "type": "var",
+                        "name": "name"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (slice _ 50\n    (project (?entity ?name ?type)\n      (order (?name)\n        (join\n          (union\n            (union\n              (extend ((?type <http://vital.ai/ontology/vital#KGEntity>))\n                (bgp (triple ?entity rdf:type <http://vital.ai/ontology/vital#KGEntity>)))\n              (extend ((?type <http://vital.ai/ontology/vital#KGNewsEntity>))\n                (bgp (triple ?entity rdf:type <http://vital.ai/ontology/vital#KGNewsEntity>))))\n            (extend ((?type <http://vital.ai/ontology/vital#KGProductEntity>))\n              (bgp (triple ?entity rdf:type <http://vital.ai/ontology/vital#KGProductEntity>))))\n          (bgp (triple ?entity <http://vital.ai/ontology/vital#hasName> ?name)))))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

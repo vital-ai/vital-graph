@@ -1,0 +1,80 @@
+{
+  "name": "describe_variable",
+  "sparql": "DESCRIBE ?s WHERE {\n            ?s a <http://example.org/TypeA> .\n        } LIMIT 5",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:da47a6ea415b3982ad0605c33bcbfd679b17fac794e8b026605f44be8ecdb0e5"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "DESCRIBE",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": 5,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "describeNodes": [
+          {
+            "type": "var",
+            "name": "s"
+          }
+        ],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpSlice",
+          "start": -9223372036854775808,
+          "length": 5,
+          "subOp": {
+            "type": "OpProject",
+            "vars": [
+              "s"
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                  },
+                  "object": {
+                    "type": "uri",
+                    "value": "http://example.org/TypeA"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (slice _ 5\n    (project (?s)\n      (bgp (triple ?s rdf:type <http://example.org/TypeA>)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

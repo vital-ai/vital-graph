@@ -59,6 +59,39 @@ class User(BaseModel):
         }
 
 
+class UserCreate(BaseModel):
+    """Request model for creating a new user account.
+
+    Includes a write-only ``password`` field that is never returned in
+    responses.  The ``User`` model is used for all read operations.
+    """
+    username: str = Field(
+        ...,
+        description="Unique username for authentication (required)",
+        example="newuser"
+    )
+    password: str = Field(
+        ...,
+        min_length=8,
+        description="Initial password (write-only, minimum 8 characters)"
+    )
+    full_name: Optional[str] = Field(
+        "",
+        description="Full display name of the user",
+        example="New User"
+    )
+    email: Optional[str] = Field(
+        "",
+        description="User email address",
+        example="newuser@example.com"
+    )
+    role: str = Field(
+        "user",
+        description="User role: admin, user, or reader",
+        example="user"
+    )
+
+
 class UsersListResponse(BasePaginatedResponse):
     """Response model for users listing operations."""
     users: List[User] = Field(..., description="List of users")

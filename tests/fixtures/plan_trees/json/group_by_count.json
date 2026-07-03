@@ -1,0 +1,110 @@
+{
+  "name": "group_by_count",
+  "sparql": "SELECT ?type (COUNT(?s) AS ?count) WHERE {\n            ?s a ?type .\n        } GROUP BY ?type",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:8cab9af10c4b56bcc646dddae60510b2d8dbbd26d094174d9c6836c4405790e3"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "type",
+          "count"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [
+          "type"
+        ],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "type",
+            "count"
+          ],
+          "subOp": {
+            "type": "OpExtend",
+            "extensions": [
+              {
+                "var": "count",
+                "expr": {
+                  "type": "ExprVar",
+                  "var": ".0"
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpGroup",
+              "groupVars": [
+                {
+                  "var": "type",
+                  "expr": null
+                }
+              ],
+              "aggregators": [
+                {
+                  "var": ".0",
+                  "aggregator": {
+                    "type": "ExprAggregator",
+                    "name": "COUNT",
+                    "distinct": false,
+                    "expr": {
+                      "type": "ExprVar",
+                      "var": "s"
+                    }
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "type"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?type ?count)\n    (extend ((?count ?.0))\n      (group (?type) ((?.0 (count ?s)))\n        (bgp (triple ?s rdf:type ?type))))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

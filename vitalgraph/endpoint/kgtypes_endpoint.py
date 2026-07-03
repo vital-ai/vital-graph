@@ -322,7 +322,11 @@ class KGTypesEndpoint:
             raise HTTPException(status_code=503, detail="KG Types system space not available")
 
         backend = space_record.space_impl.get_db_space_impl()
-        pool = getattr(backend, 'connection_pool', None) or getattr(backend, '_pool', None)
+        db_impl = getattr(backend, 'db_impl', None)
+        pool = getattr(db_impl, 'connection_pool', None) if db_impl else None
+        if not pool:
+            pool = getattr(backend, '_db', None)
+            pool = getattr(pool, '_pool', None) if pool else None
         if not pool:
             raise HTTPException(status_code=503, detail="No connection pool for sp_kg_types")
 

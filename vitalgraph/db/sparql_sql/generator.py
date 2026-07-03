@@ -499,6 +499,9 @@ async def generate_sql(
         ctx.vector_index_meta = vector_index_meta
         ctx.fts_index_meta = fts_index_meta
         ctx.search_mapping_meta = search_mapping_meta
+        # Compute all variables in the plan for out-of-scope diagnostics
+        from .var_scope import compute_scope
+        ctx.query_all_vars = frozenset(compute_scope(plan).all_visible)
         sql_str = emit(plan, ctx)
 
         # Stage 4: Substitute constants

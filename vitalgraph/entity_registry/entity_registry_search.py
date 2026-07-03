@@ -63,7 +63,7 @@ class EntityRegistrySearch:
         param_idx = 4
 
         if type_key:
-            filters.append(f"e.type_key = ${param_idx}")
+            filters.append(f"et.type_key = ${param_idx}")
             params.append(type_key)
             param_idx += 1
         if category_key:
@@ -155,7 +155,7 @@ class EntityRegistrySearch:
         param_idx = 4
 
         if type_key:
-            filters.append(f"e.type_key = ${param_idx}")
+            filters.append(f"et.type_key = ${param_idx}")
             params.append(type_key)
             param_idx += 1
         if category_key:
@@ -530,7 +530,7 @@ class EntityRegistrySearch:
 
         filters = []
         if type_key:
-            filters.append(f"e.type_key = ${param_idx}")
+            filters.append(f"et.type_key = ${param_idx}")
             params.append(type_key)
             param_idx += 1
         if category_key:

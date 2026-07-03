@@ -268,6 +268,11 @@ class EmitContext:
         # Maps mapping_name → {'vector': index_name, 'fts': index_name}.
         # Used by hybrid_search_sql to resolve mapping name to actual indexes.
         self.search_mapping_meta: Dict[str, Dict[str, str]] = {}
+        # All variables defined anywhere in the full query plan.
+        # Set by the generator before emission.  Used to detect out-of-scope
+        # variable references (e.g., BIND inside UNION referencing a sibling
+        # JOIN variable) and emit a diagnostic warning.
+        self.query_all_vars: Optional[frozenset] = None
 
     @property
     def depth(self) -> int:
@@ -381,6 +386,8 @@ class EmitContext:
             text_needed_vars=self.text_needed_vars,
         )
         ctx._depth = self._depth + 1
+        # Propagate query-wide variable set for diagnostic warnings
+        ctx.query_all_vars = self.query_all_vars
         # Share vector requests list across parent/child contexts
         ctx._vector_requests = self._vector_requests
         # Share fuzzy requests list across parent/child contexts

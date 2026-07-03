@@ -1,0 +1,101 @@
+{
+  "name": "filter_exists",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s <http://example.org/hasName> ?name .\n            FILTER EXISTS { ?s a <http://example.org/TypeA> }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:81639fb44c1d25edd7d558edc9bf6173d8a4c87b1bf75f49fc2288ce56105568"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpFilter",
+            "exprs": [
+              {
+                "type": "ExprFunctionOp",
+                "name": "exists",
+                "graphPattern": {
+                  "type": "OpBGP",
+                  "triples": [
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "s"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                      },
+                      "object": {
+                        "type": "uri",
+                        "value": "http://example.org/TypeA"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?name)\n  (filter (exists (bgp (triple ?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/TypeA>)))\n    (bgp (triple ?s <http://example.org/hasName> ?name))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

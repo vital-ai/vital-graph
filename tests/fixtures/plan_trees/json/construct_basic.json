@@ -1,0 +1,84 @@
+{
+  "name": "construct_basic",
+  "sparql": "CONSTRUCT {\n            ?s <http://example.org/label> ?name .\n        } WHERE {\n            ?s <http://example.org/hasName> ?name .\n        } LIMIT 10",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 4,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:8f2330b69de9b6173de0a09983e58babf3a91e97bdac3841d37027664db3180b"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "CONSTRUCT",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": 10,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "constructTemplate": [
+          {
+            "subject": {
+              "type": "var",
+              "name": "s"
+            },
+            "predicate": {
+              "type": "uri",
+              "value": "http://example.org/label"
+            },
+            "object": {
+              "type": "var",
+              "name": "name"
+            }
+          }
+        ],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpSlice",
+          "start": -9223372036854775808,
+          "length": 10,
+          "subOp": {
+            "type": "OpBGP",
+            "triples": [
+              {
+                "subject": {
+                  "type": "var",
+                  "name": "s"
+                },
+                "predicate": {
+                  "type": "uri",
+                  "value": "http://example.org/hasName"
+                },
+                "object": {
+                  "type": "var",
+                  "name": "name"
+                }
+              }
+            ]
+          }
+        },
+        "pretty": "(slice _ 10\n  (bgp (triple ?s <http://example.org/hasName> ?name)))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

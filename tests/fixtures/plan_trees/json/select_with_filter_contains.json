@@ -1,0 +1,95 @@
+{
+  "name": "select_with_filter_contains",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s <http://example.org/hasName> ?name .\n            FILTER(CONTAINS(?name, \"hello\"))\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:6abcd22772a3e8562123b22e50e3781429d9ccb77d9edc7e0fd50db4f36e9fc6"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpFilter",
+            "exprs": [
+              {
+                "type": "ExprFunction2",
+                "name": "contains",
+                "args": [
+                  {
+                    "type": "ExprVar",
+                    "var": "name"
+                  },
+                  {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "hello"
+                    }
+                  }
+                ]
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?name)\n  (filter (contains ?name \"hello\")\n    (bgp (triple ?s <http://example.org/hasName> ?name))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

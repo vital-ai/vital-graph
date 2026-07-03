@@ -285,75 +285,83 @@ class KGDocumentsEndpoint:
         """Handle segmentation status query."""
         from vitalgraph.document.segmentation_job_manager import SegmentationJobManager
 
-        manager = await self._get_job_manager(space_id)
+        manager, pool, conn = await self._get_job_manager(space_id)
         if not manager:
             return SegmentationStatusSummaryResponse()
 
-        # If querying for a specific document, return its latest job
-        if document_uri:
-            job = await manager.get_job_status(document_uri)
-            if not job:
-                return SegmentationStatusSummaryResponse()
-            job_resp = SegmentationJobStatusResponse(
-                job_id=job.job_id,
-                document_uri=job.document_uri,
-                status=job.status,
-                attempt_count=job.attempt_count,
-                segment_count=job.segment_count,
-                segment_method_uri=job.segment_method_uri,
-                error_message=job.error_message,
-                created_at=job.created_at,
-                updated_at=job.updated_at,
-            )
-            return SegmentationStatusSummaryResponse(
-                **{job.status: 1},
-                jobs=[job_resp],
-            )
+        try:
+            # If querying for a specific document, return its latest job
+            if document_uri:
+                job = await manager.get_job_status(document_uri)
+                if not job:
+                    return SegmentationStatusSummaryResponse()
+                job_resp = SegmentationJobStatusResponse(
+                    job_id=job.job_id,
+                    document_uri=job.document_uri,
+                    status=job.status,
+                    attempt_count=job.attempt_count,
+                    segment_count=job.segment_count,
+                    segment_method_uri=job.segment_method_uri,
+                    error_message=job.error_message,
+                    created_at=job.created_at,
+                    updated_at=job.updated_at,
+                )
+                return SegmentationStatusSummaryResponse(
+                    **{job.status: 1},
+                    jobs=[job_resp],
+                )
 
-        # Space-level summary
-        summary = await manager.get_space_summary()
-        jobs = await manager.list_jobs(status=status_filter, limit=limit, offset=offset)
-        job_responses = [
-            SegmentationJobStatusResponse(
-                job_id=j.job_id,
-                document_uri=j.document_uri,
-                status=j.status,
-                attempt_count=j.attempt_count,
-                segment_count=j.segment_count,
-                segment_method_uri=j.segment_method_uri,
-                error_message=j.error_message,
-                created_at=j.created_at,
-                updated_at=j.updated_at,
+            # Space-level summary
+            summary = await manager.get_space_summary()
+            jobs = await manager.list_jobs(status=status_filter, limit=limit, offset=offset)
+            job_responses = [
+                SegmentationJobStatusResponse(
+                    job_id=j.job_id,
+                    document_uri=j.document_uri,
+                    status=j.status,
+                    attempt_count=j.attempt_count,
+                    segment_count=j.segment_count,
+                    segment_method_uri=j.segment_method_uri,
+                    error_message=j.error_message,
+                    created_at=j.created_at,
+                    updated_at=j.updated_at,
+                )
+                for j in jobs
+            ]
+            return SegmentationStatusSummaryResponse(
+                pending=summary.get("pending", 0),
+                in_progress=summary.get("in_progress", 0),
+                completed=summary.get("completed", 0),
+                failed=summary.get("failed", 0),
+                cancelled=summary.get("cancelled", 0),
+                jobs=job_responses,
             )
-            for j in jobs
-        ]
-        return SegmentationStatusSummaryResponse(
-            pending=summary.get("pending", 0),
-            in_progress=summary.get("in_progress", 0),
-            completed=summary.get("completed", 0),
-            failed=summary.get("failed", 0),
-            cancelled=summary.get("cancelled", 0),
-            jobs=job_responses,
-        )
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     async def _get_job_manager(self, space_id: str):
-        """Get SegmentationJobManager for a space."""
+        """Get SegmentationJobManager for a space.
+
+        Returns (manager, pool, conn) so callers can release the connection.
+        Returns (None, None, None) on failure.
+        """
         from vitalgraph.document.segmentation_job_manager import SegmentationJobManager
 
         try:
             backend_adapter, space_impl = await self._get_backend(space_id)
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return None
-            conn = await self._get_connection(backend_impl)
+                return None, None, None
+            conn, pool = await self._get_connection(backend_impl)
             if not conn:
-                return None
+                return None, None, None
             manager = SegmentationJobManager(conn, space_id)
             await manager.ensure_table()
-            return manager
+            return manager, pool, conn
         except Exception as e:
             self.logger.error(f"Error getting job manager for {space_id}: {e}")
-            return None
+            return None, None, None
 
     async def _enqueue_segmentation_job(
         self, space_id: str, graph_id: str, document_uri: str,
@@ -361,7 +369,7 @@ class KGDocumentsEndpoint:
         max_segment_tokens: Optional[int] = None,
     ) -> Optional[int]:
         """Enqueue a background segmentation job. Returns job_id or None."""
-        manager = await self._get_job_manager(space_id)
+        manager, pool, conn = await self._get_job_manager(space_id)
         if not manager:
             self.logger.warning(f"Could not enqueue segmentation job for {document_uri}")
             return None
@@ -376,6 +384,9 @@ class KGDocumentsEndpoint:
         except Exception as e:
             self.logger.error(f"Error enqueuing segmentation job: {e}")
             return None
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     # ------------------------------------------------------------------
     # Segmentation handler
@@ -407,9 +418,13 @@ class KGDocumentsEndpoint:
                     async_mode=True,
                 )
 
-            # Fallback: synchronous processing if job queue unavailable
-            logger.warning(f"Job queue unavailable for {body.document_uri}, falling back to sync")
-            return await self._handle_segment_sync(space_id, graph_id, body)
+            # Job queue unavailable — return error instead of blocking with sync fallback
+            logger.warning(f"Job queue unavailable for {body.document_uri}")
+            return SegmentDocumentResponse(
+                success=False,
+                message="Segmentation job queue unavailable; cannot process request",
+                document_uri=body.document_uri,
+            )
 
         except Exception as e:
             logger.error(f"Error segmenting document {body.document_uri}: {e}")
@@ -758,59 +773,75 @@ class KGDocumentsEndpoint:
         self, space_id: str, enabled_only: bool
     ) -> SegmentationConfigListResponse:
         """List segmentation configs."""
-        manager = await self._get_config_manager(space_id)
-        configs = await manager.list_configs(enabled_only=enabled_only)
-        return SegmentationConfigListResponse(
-            configs=[self._dto_to_response(c) for c in configs],
-            total_count=len(configs),
-        )
+        manager, pool, conn = await self._get_config_manager(space_id)
+        try:
+            configs = await manager.list_configs(enabled_only=enabled_only)
+            return SegmentationConfigListResponse(
+                configs=[self._dto_to_response(c) for c in configs],
+                total_count=len(configs),
+            )
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     async def _handle_create_config(
         self, space_id: str, body: SegmentationConfigRequest
     ) -> SegmentationConfigResponse:
         """Create a new segmentation config."""
-        manager = await self._get_config_manager(space_id)
-        config_id = await manager.create_config(
-            document_type_uri=body.document_type_uri,
-            segment_method_uri=body.segment_method_uri,
-            max_segment_tokens=body.max_segment_tokens,
-            min_segment_tokens=body.min_segment_tokens,
-            overlap_tokens=body.overlap_tokens,
-            enabled=body.enabled,
-            auto_vectorize=body.auto_vectorize,
-        )
+        manager, pool, conn = await self._get_config_manager(space_id)
+        try:
+            config_id = await manager.create_config(
+                document_type_uri=body.document_type_uri,
+                segment_method_uri=body.segment_method_uri,
+                max_segment_tokens=body.max_segment_tokens,
+                min_segment_tokens=body.min_segment_tokens,
+                overlap_tokens=body.overlap_tokens,
+                enabled=body.enabled,
+                auto_vectorize=body.auto_vectorize,
+            )
 
-        config = await manager.get_config(config_id)
-        if not config:
-            raise HTTPException(status_code=500, detail="Failed to retrieve created config")
-        return self._dto_to_response(config)
+            config = await manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=500, detail="Failed to retrieve created config")
+            return self._dto_to_response(config)
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     async def _handle_update_config(
         self, space_id: str, config_id: int, body: SegmentationConfigRequest
     ) -> SegmentationConfigResponse:
         """Update an existing segmentation config."""
-        manager = await self._get_config_manager(space_id)
-        await manager.update_config(
-            config_id,
-            max_segment_tokens=body.max_segment_tokens,
-            min_segment_tokens=body.min_segment_tokens,
-            overlap_tokens=body.overlap_tokens,
-            enabled=body.enabled,
-            auto_vectorize=body.auto_vectorize,
-        )
+        manager, pool, conn = await self._get_config_manager(space_id)
+        try:
+            await manager.update_config(
+                config_id,
+                max_segment_tokens=body.max_segment_tokens,
+                min_segment_tokens=body.min_segment_tokens,
+                overlap_tokens=body.overlap_tokens,
+                enabled=body.enabled,
+                auto_vectorize=body.auto_vectorize,
+            )
 
-        config = await manager.get_config(config_id)
-        if not config:
-            raise HTTPException(status_code=404, detail="Config not found")
-        return self._dto_to_response(config)
+            config = await manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail="Config not found")
+            return self._dto_to_response(config)
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     async def _handle_delete_config(self, space_id: str, config_id: int):
         """Delete a segmentation config."""
-        manager = await self._get_config_manager(space_id)
-        deleted = await manager.delete_config(config_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Config not found")
-        return {"success": True, "message": f"Deleted config {config_id}"}
+        manager, pool, conn = await self._get_config_manager(space_id)
+        try:
+            deleted = await manager.delete_config(config_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Config not found")
+            return {"success": True, "message": f"Deleted config {config_id}"}
+        finally:
+            if pool and conn:
+                await pool.release(conn)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -821,6 +852,8 @@ class KGDocumentsEndpoint:
 
         Uses _get_backend to ensure the space is properly loaded/initialised,
         then obtains a DB connection for the config manager.
+
+        Returns (manager, pool, conn) so callers can release the connection.
         """
         from vitalgraph.document.segmentation_config_manager import SegmentationConfigManager
 
@@ -830,16 +863,18 @@ class KGDocumentsEndpoint:
         if not backend_impl:
             raise HTTPException(status_code=503, detail="DB backend not available for space")
 
-        conn = await self._get_connection(backend_impl)
+        conn, pool = await self._get_connection(backend_impl)
         if not conn:
             raise HTTPException(status_code=503, detail="Could not obtain DB connection")
 
         manager = SegmentationConfigManager(conn, space_id)
         await manager.ensure_table()
-        return manager
+        return manager, pool, conn
 
     async def _get_connection(self, backend_impl):
         """Get a database connection from the backend.
+
+        Returns (conn, pool) tuple so callers can release the connection.
 
         Supports both backend types:
           - SparqlSQLSpaceImpl  → pool at backend_impl.db_impl._pool
@@ -851,23 +886,29 @@ class KGDocumentsEndpoint:
             if db is not None:
                 pool = getattr(db, "_pool", None) or getattr(db, "connection_pool", None)
                 if pool is not None:
-                    return await pool.acquire()
+                    conn = await pool.acquire()
+                    return conn, pool
 
             # FusekiPostgreSQLSpaceImpl path
             pg = getattr(backend_impl, "postgresql_impl", None)
             if pg is not None:
                 pool = getattr(pg, "connection_pool", None)
                 if pool is not None:
-                    return await pool.acquire()
+                    conn = await pool.acquire()
+                    return conn, pool
 
             # Fallback: direct attributes
             if hasattr(backend_impl, "_pool"):
-                return await backend_impl._pool.acquire()
+                pool = backend_impl._pool
+                conn = await pool.acquire()
+                return conn, pool
             if hasattr(backend_impl, "connection_pool"):
-                return await backend_impl.connection_pool.acquire()
+                pool = backend_impl.connection_pool
+                conn = await pool.acquire()
+                return conn, pool
         except Exception as e:
             logger.error(f"Error getting DB connection: {e}")
-        return None
+        return None, None
 
     @staticmethod
     def _dto_to_response(dto) -> SegmentationConfigResponse:

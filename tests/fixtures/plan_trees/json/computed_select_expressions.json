@@ -1,0 +1,109 @@
+{
+  "name": "computed_select_expressions",
+  "sparql": "SELECT ?s ?name (STRLEN(?name) AS ?nameLen) (UCASE(?name) AS ?upper) WHERE {\n            ?s <http://example.org/hasName> ?name .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:30af77be035ca39ec5daef93209493a696f74703ee8ad5dadd7366ffad38117c"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name",
+          "nameLen",
+          "upper"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name",
+            "nameLen",
+            "upper"
+          ],
+          "subOp": {
+            "type": "OpExtend",
+            "extensions": [
+              {
+                "var": "upper",
+                "expr": {
+                  "type": "ExprFunction1",
+                  "name": "ucase",
+                  "arg": {
+                    "type": "ExprVar",
+                    "var": "name"
+                  }
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpExtend",
+              "extensions": [
+                {
+                  "var": "nameLen",
+                  "expr": {
+                    "type": "ExprFunction1",
+                    "name": "strlen",
+                    "arg": {
+                      "type": "ExprVar",
+                      "var": "name"
+                    }
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://example.org/hasName"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "name"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "pretty": "(project (?s ?name ?nameLen ?upper)\n  (extend ((?upper (ucase ?name)))\n    (extend ((?nameLen (strlen ?name)))\n      (bgp (triple ?s <http://example.org/hasName> ?name)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

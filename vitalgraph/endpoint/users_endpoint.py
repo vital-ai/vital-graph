@@ -13,7 +13,7 @@ from ..auth.audit import emit_audit_event
 from ..auth.role_dependencies import require_admin
 from ..auth.password import verify_password, hash_password
 from ..model.users_model import (
-    User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse,
+    User, UserCreate, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse,
     PasswordChangeRequest, PasswordChangeResponse
 )
 
@@ -38,9 +38,12 @@ class UsersEndpoint:
             summary="List Users",
             description="Get a list of all accessible user accounts (admin only)"
         )
-        async def list_users(current_user: Dict = Depends(self.auth_dependency)):
+        async def list_users(
+            name_filter: Optional[str] = Query(None, description="Case-insensitive substring filter on username or full_name"),
+            current_user: Dict = Depends(self.auth_dependency),
+        ):
             require_admin(current_user)
-            users = await self.api.list_users(current_user)
+            users = await self.api.list_users(current_user, name_filter=name_filter)
             return UsersListResponse(
                 users=users,
                 total_count=len(users),
@@ -55,9 +58,9 @@ class UsersEndpoint:
             summary="Create User",
             description="Create a new user account (admin only)"
         )
-        async def add_user(user: User, current_user: Dict = Depends(self.auth_dependency)):
+        async def add_user(user: UserCreate, current_user: Dict = Depends(self.auth_dependency)):
             require_admin(current_user)
-            created_user = await self.api.add_user(user.dict(), current_user)
+            created_user = await self.api.add_user(user.model_dump(), current_user)
             return UserCreateResponse(
                 message="User created successfully",
                 created_count=1,
@@ -91,10 +94,10 @@ class UsersEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             require_admin(current_user)
-            updated_user = await self.api.update_user(user_id, user.dict(), current_user)
+            await self.api.update_user(user_id, user.model_dump(), current_user)
             return UserUpdateResponse(
                 message="User updated successfully",
-                updated_uri=str(updated_user.get('id', user_id))
+                updated_uri=user_id
             )
         
         @self.router.delete(
@@ -109,7 +112,12 @@ class UsersEndpoint:
             current_user: Dict = Depends(self.auth_dependency),
         ):
             require_admin(current_user)
-            return await self.api.delete_user(user_id, current_user)
+            await self.api.delete_user(user_id, current_user)
+            return UserDeleteResponse(
+                message="User deleted successfully",
+                deleted_count=1,
+                deleted_uris=[user_id]
+            )
 
         @self.router.get(
             "/users/spaces",

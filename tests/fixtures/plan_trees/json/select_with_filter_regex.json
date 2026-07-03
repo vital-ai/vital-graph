@@ -1,0 +1,102 @@
+{
+  "name": "select_with_filter_regex",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s <http://example.org/hasName> ?name .\n            FILTER(REGEX(?name, \"^foo.*bar$\", \"i\"))\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:8f322ac5e7b0884994cdcfed49d68fb6a9e8f0b1cfb84e7247e806af8159ecf8"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpFilter",
+            "exprs": [
+              {
+                "type": "ExprFunctionN",
+                "name": "regex",
+                "args": [
+                  {
+                    "type": "ExprVar",
+                    "var": "name"
+                  },
+                  {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "^foo.*bar$"
+                    }
+                  },
+                  {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "i"
+                    }
+                  }
+                ]
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?name)\n  (filter (regex ?name \"^foo.*bar$\" \"i\")\n    (bgp (triple ?s <http://example.org/hasName> ?name))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

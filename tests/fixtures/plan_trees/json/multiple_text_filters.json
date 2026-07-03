@@ -1,0 +1,128 @@
+{
+  "name": "multiple_text_filters",
+  "sparql": "SELECT ?s ?name ?desc WHERE {\n            ?s <http://example.org/hasName> ?name .\n            ?s <http://example.org/hasDescription> ?desc .\n            FILTER(CONTAINS(?name, \"foo\"))\n            FILTER(STRSTARTS(?desc, \"bar\"))\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:883a44af2cca0928c87fcb141318b60698e1be1d49cbe8629d737d1d8f2be689"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name",
+          "desc"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name",
+            "desc"
+          ],
+          "subOp": {
+            "type": "OpFilter",
+            "exprs": [
+              {
+                "type": "ExprFunction2",
+                "name": "contains",
+                "args": [
+                  {
+                    "type": "ExprVar",
+                    "var": "name"
+                  },
+                  {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "foo"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "ExprFunction2",
+                "name": "strstarts",
+                "args": [
+                  {
+                    "type": "ExprVar",
+                    "var": "desc"
+                  },
+                  {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "bar"
+                    }
+                  }
+                ]
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                },
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasDescription"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "desc"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?name ?desc)\n  (filter (exprlist (contains ?name \"foo\") (strstarts ?desc \"bar\"))\n    (bgp\n      (triple ?s <http://example.org/hasName> ?name)\n      (triple ?s <http://example.org/hasDescription> ?desc)\n    )))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

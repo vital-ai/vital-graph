@@ -1,0 +1,144 @@
+{
+  "name": "construct_with_optional",
+  "sparql": "CONSTRUCT {\n            ?s a <http://example.org/Person> .\n            ?s <http://example.org/name> ?name .\n            ?s <http://example.org/email> ?email .\n        } WHERE {\n            ?s a <http://example.org/Person> .\n            ?s <http://example.org/hasName> ?name .\n            OPTIONAL { ?s <http://example.org/hasEmail> ?email }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:2161bbc54cf22f7d8f52c106d30dc614e2ca486bbc1bfcb57ecaf8ed628ada12"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "CONSTRUCT",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "constructTemplate": [
+          {
+            "subject": {
+              "type": "var",
+              "name": "s"
+            },
+            "predicate": {
+              "type": "uri",
+              "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+            },
+            "object": {
+              "type": "uri",
+              "value": "http://example.org/Person"
+            }
+          },
+          {
+            "subject": {
+              "type": "var",
+              "name": "s"
+            },
+            "predicate": {
+              "type": "uri",
+              "value": "http://example.org/name"
+            },
+            "object": {
+              "type": "var",
+              "name": "name"
+            }
+          },
+          {
+            "subject": {
+              "type": "var",
+              "name": "s"
+            },
+            "predicate": {
+              "type": "uri",
+              "value": "http://example.org/email"
+            },
+            "object": {
+              "type": "var",
+              "name": "email"
+            }
+          }
+        ],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpLeftJoin",
+          "left": {
+            "type": "OpBGP",
+            "triples": [
+              {
+                "subject": {
+                  "type": "var",
+                  "name": "s"
+                },
+                "predicate": {
+                  "type": "uri",
+                  "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                },
+                "object": {
+                  "type": "uri",
+                  "value": "http://example.org/Person"
+                }
+              },
+              {
+                "subject": {
+                  "type": "var",
+                  "name": "s"
+                },
+                "predicate": {
+                  "type": "uri",
+                  "value": "http://example.org/hasName"
+                },
+                "object": {
+                  "type": "var",
+                  "name": "name"
+                }
+              }
+            ]
+          },
+          "right": {
+            "type": "OpBGP",
+            "triples": [
+              {
+                "subject": {
+                  "type": "var",
+                  "name": "s"
+                },
+                "predicate": {
+                  "type": "uri",
+                  "value": "http://example.org/hasEmail"
+                },
+                "object": {
+                  "type": "var",
+                  "name": "email"
+                }
+              }
+            ]
+          },
+          "exprs": []
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (leftjoin\n    (bgp\n      (triple ?s rdf:type <http://example.org/Person>)\n      (triple ?s <http://example.org/hasName> ?name)\n    )\n    (bgp (triple ?s <http://example.org/hasEmail> ?email))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

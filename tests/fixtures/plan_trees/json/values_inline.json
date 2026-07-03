@@ -1,0 +1,110 @@
+{
+  "name": "values_inline",
+  "sparql": "SELECT ?s ?name WHERE {\n            VALUES ?type { <http://example.org/TypeA> <http://example.org/TypeB> }\n            ?s a ?type .\n            ?s <http://example.org/hasName> ?name .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 1
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:89517e901716d65708fa078886d99564cd9c9e92ddd785a8f1186e140e94f55f"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpJoin",
+            "left": {
+              "type": "OpTable",
+              "vars": [
+                "type"
+              ],
+              "rows": [
+                {
+                  "type": {
+                    "type": "uri",
+                    "value": "http://example.org/TypeA"
+                  }
+                },
+                {
+                  "type": {
+                    "type": "uri",
+                    "value": "http://example.org/TypeB"
+                  }
+                }
+              ]
+            },
+            "right": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "type"
+                  }
+                },
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?s ?name)\n    (join\n      (table (vars ?type)\n        (row [?type <http://example.org/TypeA>])\n        (row [?type <http://example.org/TypeB>])\n      )\n      (bgp\n        (triple ?s rdf:type ?type)\n        (triple ?s <http://example.org/hasName> ?name)\n      ))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

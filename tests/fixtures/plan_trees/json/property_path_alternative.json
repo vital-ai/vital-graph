@@ -1,0 +1,71 @@
+{
+  "name": "property_path_alternative",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s (<http://example.org/hasName>|<http://example.org/hasLabel>) ?name .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:5349440091cec3c834969f13a565da1d2e666d1b9d0a203f4b48aa5e604c395e"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpPath",
+            "triplePath": {
+              "subject": {
+                "type": "var",
+                "name": "s"
+              },
+              "predicate": {
+                "type": "path",
+                "value": "<http://example.org/hasName>|<http://example.org/hasLabel>"
+              },
+              "object": {
+                "type": "var",
+                "name": "name"
+              }
+            }
+          }
+        },
+        "pretty": "(project (?s ?name)\n  (path ?s (alt <http://example.org/hasName> <http://example.org/hasLabel>) ?name))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

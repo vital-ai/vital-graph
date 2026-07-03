@@ -1,0 +1,112 @@
+{
+  "name": "multi_pattern_entity",
+  "sparql": "SELECT ?entity ?name ?desc WHERE {\n            ?entity a <http://vital.ai/ontology/vital#KGEntity> .\n            ?entity <http://vital.ai/ontology/vital#hasName> ?name .\n            OPTIONAL { ?entity <http://vital.ai/ontology/vital#hasDescription> ?desc }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:1385b65eb176b9e977c1b1785530b85a33755d5ddeb3379d3d72065a18c41eba"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "entity",
+          "name",
+          "desc"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "entity",
+            "name",
+            "desc"
+          ],
+          "subOp": {
+            "type": "OpLeftJoin",
+            "left": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "entity"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                  },
+                  "object": {
+                    "type": "uri",
+                    "value": "http://vital.ai/ontology/vital#KGEntity"
+                  }
+                },
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "entity"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://vital.ai/ontology/vital#hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            },
+            "right": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "entity"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://vital.ai/ontology/vital#hasDescription"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "desc"
+                  }
+                }
+              ]
+            },
+            "exprs": []
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?entity ?name ?desc)\n    (leftjoin\n      (bgp\n        (triple ?entity rdf:type <http://vital.ai/ontology/vital#KGEntity>)\n        (triple ?entity <http://vital.ai/ontology/vital#hasName> ?name)\n      )\n      (bgp (triple ?entity <http://vital.ai/ontology/vital#hasDescription> ?desc)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

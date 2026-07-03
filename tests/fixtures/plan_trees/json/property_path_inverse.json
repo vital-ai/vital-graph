@@ -1,0 +1,71 @@
+{
+  "name": "property_path_inverse",
+  "sparql": "SELECT ?child ?parent WHERE {\n            ?child ^<http://example.org/hasChild> ?parent .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:c7f6e631e4e9dfc5be1f2bd0a9ee3a971d0072d064a0520bebeb4a955d81c891"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "child",
+          "parent"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "child",
+            "parent"
+          ],
+          "subOp": {
+            "type": "OpPath",
+            "triplePath": {
+              "subject": {
+                "type": "var",
+                "name": "child"
+              },
+              "predicate": {
+                "type": "path",
+                "value": "^<http://example.org/hasChild>"
+              },
+              "object": {
+                "type": "var",
+                "name": "parent"
+              }
+            }
+          }
+        },
+        "pretty": "(project (?child ?parent)\n  (path ?child (reverse <http://example.org/hasChild>) ?parent))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

@@ -13,6 +13,7 @@ Routes (all under /api/fuzzy-mappings):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Dict, List, Optional, Union
 
@@ -183,25 +184,55 @@ class FuzzyMappingsEndpoint:
     async def populate_mapping(
         self, space_id: str, mapping_id: int, current_user: Dict,
     ):
-        """Trigger full population of fuzzy bands for a mapping."""
+        """Start fuzzy population as a background task and return immediately.
+
+        With large datasets the population can take minutes; running it
+        synchronously inside the HTTP handler would hold a DB connection,
+        block the caller, and risk an upstream timeout.  The background
+        task acquires its own connection so the request connection is
+        released immediately.
+        """
         require_space_write(current_user, space_id)
         manager, conn = await self._get_manager(space_id)
         try:
             dto = await manager.get_mapping(mapping_id)
             if dto is None:
                 raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
-
-            from ..vectorization.fuzzy_populator import populate_fuzzy_index
-            count = await populate_fuzzy_index(
-                conn, space_id, index_name=dto.index_name,
-            )
-            return {
-                "message": "Fuzzy index populated",
-                "mapping_id": mapping_id,
-                "entities_indexed": count,
-            }
+            index_name = dto.index_name
         finally:
             await self._release(conn)
+
+        # Spawn background task (acquires its own connection)
+        asyncio.ensure_future(self._run_populate(space_id, mapping_id, index_name))
+
+        return {
+            "message": f"Fuzzy population started for mapping {mapping_id}",
+            "mapping_id": mapping_id,
+            "entities_indexed": 0,
+        }
+
+    async def _run_populate(
+        self, space_id: str, mapping_id: int, index_name: str,
+    ):
+        """Background worker: populate the fuzzy index."""
+        db_impl = self.app_impl.db_impl
+        conn = await db_impl.connection_pool.acquire()
+        try:
+            from ..vectorization.fuzzy_populator import populate_fuzzy_index
+            count = await populate_fuzzy_index(
+                conn, space_id, index_name=index_name,
+            )
+            logger.info(
+                "Fuzzy populate complete: %s/mapping_%s — %d entities",
+                space_id, mapping_id, count,
+            )
+        except Exception:
+            logger.exception("Fuzzy populate failed: %s/mapping_%s", space_id, mapping_id)
+        finally:
+            try:
+                await db_impl.connection_pool.release(conn)
+            except Exception:
+                logger.exception("Error releasing fuzzy populate connection")
 
     async def get_stats(
         self, space_id: str, mapping_id: int, current_user: Dict,

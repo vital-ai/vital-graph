@@ -921,19 +921,127 @@ class KGFramesEndpoint:
             return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
     
     def _build_frames_with_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], page_size: int, offset: int) -> str:
-        """Build SPARQL query for frames with slots."""
-        # For now, use the same query as regular frames listing
-        return self._build_list_frames_query(backend, space_id, graph_id, search, page_size, offset)
+        """Build SPARQL query for frames with slots.
+
+        Returns DISTINCT ?subject where ?subject is either a frame or a slot
+        reachable from it via Edge_hasKGSlot.
+        """
+        if hasattr(backend, '_get_space_graph_uri'):
+            full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
+        else:
+            full_graph_uri = graph_id
+
+        frame_filter = ""
+        if frame_uri:
+            frame_filter = f"FILTER(?frame = <{frame_uri}>)"
+
+        slot_type_filter = ""
+        if kGSlotType:
+            slot_type_filter = f"?subject <{self.haley_prefix}hasKGSlotType> <{kGSlotType}> ."
+
+        return f"""
+        PREFIX haley: <{self.haley_prefix}>
+        PREFIX vital: <{self.vital_prefix}>
+        PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+        SELECT DISTINCT ?subject WHERE {{
+            {{
+                GRAPH <{full_graph_uri}> {{
+                    ?subject a haley:KGFrame .
+                    {frame_filter.replace('?frame', '?subject') if frame_filter else ''}
+                    ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
+                    ?slot_edge vital-core:hasEdgeSource ?subject .
+                    ?slot_edge vital-core:hasEdgeDestination ?slot .
+                }}
+            }} UNION {{
+                GRAPH <{full_graph_uri}> {{
+                    ?frame a haley:KGFrame .
+                    {frame_filter}
+                    ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
+                    ?slot_edge vital-core:hasEdgeSource ?frame .
+                    ?slot_edge vital-core:hasEdgeDestination ?subject .
+                    {slot_type_filter}
+                }}
+            }}
+        }}
+        LIMIT {page_size}
+        OFFSET {offset}
+        """
     
     def _build_count_frames_with_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str]) -> str:
         """Build SPARQL count query for frames with slots."""
-        # For now, use the same query as regular frames count
+        if frame_uri:
+            # When filtering by a specific frame, count slots for that frame
+            if hasattr(backend, '_get_space_graph_uri'):
+                full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
+            else:
+                full_graph_uri = graph_id
+            return f"""
+            PREFIX haley: <{self.haley_prefix}>
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            SELECT (COUNT(DISTINCT ?slot) AS ?count) WHERE {{
+                GRAPH <{full_graph_uri}> {{
+                    ?slot_edge vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
+                    ?slot_edge vital-core:hasEdgeSource <{frame_uri}> .
+                    ?slot_edge vital-core:hasEdgeDestination ?slot .
+                }}
+            }}
+            """
         return self._build_count_frames_query(backend, space_id, graph_id, search)
     
     async def _sparql_results_to_frames_with_slots(self, backend, graph_id: str, results, space_id: str):
-        """Convert SPARQL results to VitalSigns frame objects with slots."""
-        # For now, use the same conversion as regular frames
-        return await self._sparql_results_to_frames(backend, graph_id, results, space_id)
+        """Convert SPARQL results to VitalSigns objects (frames AND slots).
+
+        Unlike ``_sparql_results_to_frames`` which filters for KGFrame only,
+        this returns *all* GraphObjects produced from the subject URIs so that
+        both KGFrame and KGSlot instances are included in the response.
+        """
+        try:
+            if not results:
+                return []
+
+            bindings = results.get("bindings") or results.get("results", {}).get("bindings")
+            if not bindings:
+                return []
+
+            subject_uris = []
+            for binding in bindings:
+                uri = (
+                    binding.get("subject", {}).get("value")
+                    or binding.get("frame", {}).get("value")
+                )
+                if uri:
+                    subject_uris.append(uri)
+
+            if not subject_uris:
+                return []
+
+            triples = await self._get_all_triples_for_subjects(backend, graph_id, subject_uris, space_id)
+            if not triples:
+                return []
+
+            # Convert to VitalSigns objects — return ALL types, not just KGFrame
+            from vital_ai_vitalsigns.vitalsigns import VitalSigns
+            from rdflib import URIRef, Literal
+            vs = VitalSigns()
+
+            def triples_generator():
+                for t in triples:
+                    s = URIRef(t["subject"])
+                    p = URIRef(t["predicate"])
+                    o_val = t["object"]
+                    if o_val.startswith(("http://", "https://", "urn:")):
+                        o = URIRef(o_val)
+                    else:
+                        o = Literal(o_val)
+                    yield (s, p, o)
+
+            all_objects = await asyncio.to_thread(vs.from_triples_list, list(triples_generator()))
+            return list(all_objects)
+
+        except Exception as e:
+            self.logger.error(f"Error converting SPARQL results to frames with slots: {e}", exc_info=True)
+            return []
         
     async def _get_frames_by_uris(self, space_id: str, graph_id: str, frame_uris: List[str], include_frame_graph: bool = False, current_user: Dict = None) -> QuadResponse:
         """Get multiple frames by URI list."""
@@ -1491,6 +1599,7 @@ class KGFramesEndpoint:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, validated_slots[:deleted_count], "delete")
 
             return SlotDeleteResponse(
+                success=True,
                 message=f"Successfully deleted {deleted_count} slots from frame {frame_uri}",
                 deleted_count=deleted_count,
                 deleted_uris=validated_slots[:deleted_count]
@@ -2134,12 +2243,11 @@ class KGFramesEndpoint:
     async def _frame_exists_in_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
         """Check if frame exists in backend."""
         try:
-            # Use SELECT query instead of ASK to check existence
-            # ASK queries are being executed as SELECT and return results array
             query = f"""
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
             SELECT ?s WHERE {{
                 GRAPH <{graph_id}> {{
-                    <{frame_uri}> a <{self.haley_prefix}KGFrame> .
+                    <{frame_uri}> vital-core:vitaltype <{self.haley_prefix}KGFrame> .
                     BIND(<{frame_uri}> as ?s)
                 }}
             }}
@@ -2689,12 +2797,11 @@ class KGFramesEndpoint:
     async def _slot_exists_in_backend(self, backend, space_id: str, graph_id: str, slot_uri: str) -> bool:
         """Check if slot exists in backend."""
         try:
-            # Use SELECT query instead of ASK to check existence
-            # ASK queries are being executed as SELECT and return results array
             query = f"""
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
             SELECT ?s WHERE {{
                 GRAPH <{graph_id}> {{
-                    <{slot_uri}> a ?type .
+                    <{slot_uri}> vital-core:vitaltype ?type .
                     FILTER(STRSTARTS(STR(?type), "{self.haley_prefix}KG") && STRENDS(STR(?type), "Slot"))
                     BIND(<{slot_uri}> as ?s)
                 }}
@@ -2720,16 +2827,21 @@ class KGFramesEndpoint:
         """Check if slot is connected to frame via Edge_hasKGSlot."""
         try:
             query = f"""
-            ASK {{
+            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+            SELECT ?edge WHERE {{
                 GRAPH <{graph_id}> {{
-                    ?edge a <{self.haley_prefix}Edge_hasKGSlot> ;
-                          <{self.vital_prefix}hasEdgeSource> <{frame_uri}> ;
-                          <{self.vital_prefix}hasEdgeDestination> <{slot_uri}> .
+                    ?edge vital-core:vitaltype <{self.haley_prefix}Edge_hasKGSlot> .
+                    ?edge vital-core:hasEdgeSource <{frame_uri}> .
+                    ?edge vital-core:hasEdgeDestination <{slot_uri}> .
                 }}
             }}
+            LIMIT 1
             """
             result = await backend.execute_sparql_query(space_id, query)
-            return result.get("boolean", False) if result else False
+            if isinstance(result, dict):
+                bindings = result.get("bindings") or result.get("results", {}).get("bindings")
+                return bool(bindings and len(bindings) > 0)
+            return False
             
         except Exception as e:
             self.logger.error(f"Error checking slot-frame connection: {e}")
@@ -2814,6 +2926,7 @@ class KGFramesEndpoint:
                     
                     # Delete the Edge_hasKGSlot connecting frame to slot
                     delete_edge_query = f"""
+                    PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
                     DELETE {{
                         GRAPH <{graph_id}> {{
                             ?edge ?ep ?eo .
@@ -2821,9 +2934,9 @@ class KGFramesEndpoint:
                     }}
                     WHERE {{
                         GRAPH <{graph_id}> {{
-                            ?edge a <{self.haley_prefix}Edge_hasKGSlot> ;
-                                  <{self.vital_prefix}hasEdgeSource> <{frame_uri}> ;
-                                  <{self.vital_prefix}hasEdgeDestination> <{slot_uri}> .
+                            ?edge vital-core:vitaltype <{self.haley_prefix}Edge_hasKGSlot> .
+                            ?edge vital-core:hasEdgeSource <{frame_uri}> .
+                            ?edge vital-core:hasEdgeDestination <{slot_uri}> .
                             ?edge ?ep ?eo .
                         }}
                     }}

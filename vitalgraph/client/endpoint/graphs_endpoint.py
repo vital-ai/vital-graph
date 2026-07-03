@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params
-from ...model.sparql_model import GraphInfo, SPARQLGraphRequest, SPARQLGraphResponse
+from ...model.sparql_model import GraphInfo, SPARQLGraphRequest, SPARQLGraphResponse, GraphCountsResponse
 from ..response.client_response import (
     GraphResponse,
     GraphsListResponse,
@@ -276,3 +276,22 @@ class GraphsEndpoint(BaseEndpoint):
                 status_code=500,
                 error_message=str(e)
             )
+
+    async def get_graph_counts(self, space_id: str, graph_id: str) -> GraphCountsResponse:
+        """
+        Get entity, frame, and relation counts for a graph.
+
+        Args:
+            space_id: Space identifier
+            graph_id: Graph URI
+
+        Returns:
+            GraphCountsResponse with entity_count, frame_count, relation_count
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id, graph_id=graph_id)
+
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/graph_counts"
+        params = {'space_id': space_id, 'graph_id': graph_id}
+
+        return await self._make_typed_request('GET', url, GraphCountsResponse, params=params)

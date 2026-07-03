@@ -1,0 +1,71 @@
+{
+  "name": "property_path_star",
+  "sparql": "SELECT ?s ?ancestor WHERE {\n            ?s <http://example.org/subClassOf>* ?ancestor .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 1,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:3d9932b95646b0d8efbe25fe7748ba92b87142a3bfdb02112671ca5d05a51fa7"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "ancestor"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "ancestor"
+          ],
+          "subOp": {
+            "type": "OpPath",
+            "triplePath": {
+              "subject": {
+                "type": "var",
+                "name": "s"
+              },
+              "predicate": {
+                "type": "path",
+                "value": "(<http://example.org/subClassOf>)*"
+              },
+              "object": {
+                "type": "var",
+                "name": "ancestor"
+              }
+            }
+          }
+        },
+        "pretty": "(project (?s ?ancestor)\n  (path ?s (path* <http://example.org/subClassOf>) ?ancestor))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

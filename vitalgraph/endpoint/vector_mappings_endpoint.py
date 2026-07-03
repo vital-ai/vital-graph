@@ -14,7 +14,7 @@ Routes (all under /api/vector-mappings):
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -216,7 +216,7 @@ class VectorMappingsEndpoint:
 
         @self.router.get(
             "/vector-mappings",
-            response_model=MappingListResponse,
+            response_model=Union[MappingOut, MappingListResponse],
             tags=["Vector Mappings"],
             summary="List or Get Vector Mappings",
             description="List all vector mappings for a space (with optional filters), or get a single mapping if mapping_id is provided",

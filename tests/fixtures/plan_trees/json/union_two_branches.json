@@ -1,0 +1,125 @@
+{
+  "name": "union_two_branches",
+  "sparql": "SELECT ?s ?type WHERE {\n            {\n                ?s a <http://example.org/TypeA> .\n                BIND(\"A\" AS ?type)\n            } UNION {\n                ?s a <http://example.org/TypeB> .\n                BIND(\"B\" AS ?type)\n            }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:b6ad6d870c9370b51c29366827efe406467367f8c15129b61f9a7d25e24d0ebb"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "type"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "type"
+          ],
+          "subOp": {
+            "type": "OpUnion",
+            "left": {
+              "type": "OpExtend",
+              "extensions": [
+                {
+                  "var": "type",
+                  "expr": {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "A"
+                    }
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    },
+                    "object": {
+                      "type": "uri",
+                      "value": "http://example.org/TypeA"
+                    }
+                  }
+                ]
+              }
+            },
+            "right": {
+              "type": "OpExtend",
+              "extensions": [
+                {
+                  "var": "type",
+                  "expr": {
+                    "type": "NodeValue",
+                    "node": {
+                      "type": "literal",
+                      "value": "B"
+                    }
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    },
+                    "object": {
+                      "type": "uri",
+                      "value": "http://example.org/TypeB"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?s ?type)\n    (union\n      (extend ((?type \"A\"))\n        (bgp (triple ?s rdf:type <http://example.org/TypeA>)))\n      (extend ((?type \"B\"))\n        (bgp (triple ?s rdf:type <http://example.org/TypeB>))))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

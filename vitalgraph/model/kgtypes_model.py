@@ -173,3 +173,10 @@ class KGTypeSearchResponse(BaseModel):
     search_mode: str = Field("keyword", description="Search mode used (keyword or vector)")
     query: str = Field("", description="Original search query")
 
+
+class KGTypeDescriptionResponse(BaseModel):
+    """Response model for GET /api/graphs/kgtypes/description."""
+    type_uri: str = Field(..., description="The KGType URI queried")
+    mapping_type: str = Field("kgentity", description="Mapping type used")
+    description: Optional[str] = Field(None, description="Type description text")
+

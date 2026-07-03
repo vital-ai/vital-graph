@@ -90,6 +90,7 @@ server = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pglast>=7.0",
     "black>=23.0.0",
     "flake8>=6.0.0",
     "mypy>=1.5.0",
@@ -208,9 +209,13 @@ exclude = [
 minversion = "7.0"
 addopts = "-ra -q --strict-markers"
 testpaths = [
-    "vitalgraph_service_tests",
+    "tests",
 ]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "integration: Tier 3 integration tests (require PG + Jena sidecar)",
+    "api: Tier 4 API end-to-end tests (require running VitalGraph server)",
+]

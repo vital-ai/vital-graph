@@ -50,6 +50,13 @@ class GraphInfoResponse(BaseModel):
     )
 
 
+class GraphCountsResponse(BaseModel):
+    """Response model for graph object counts."""
+    entity_count: int = Field(0, description="Number of entities in the graph")
+    frame_count: int = Field(0, description="Number of frames in the graph")
+    relation_count: int = Field(0, description="Number of relations in the graph")
+
+
 # SPARQL Query Models
 class SPARQLQueryRequest(BaseModel):
     """Request model for SPARQL query operations."""

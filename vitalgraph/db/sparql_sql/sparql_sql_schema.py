@@ -697,6 +697,7 @@ class SparqlSQLSchema:
             f"DROP TABLE IF EXISTS {t['fuzzy_mapping_property']} CASCADE",
             f"DROP TABLE IF EXISTS {t['fuzzy_mapping']} CASCADE",
             f"DROP TABLE IF EXISTS {t['fts_index']} CASCADE",
+            f"DROP TABLE IF EXISTS {t['search_mapping_index']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping_property']} CASCADE",
             f"DROP TABLE IF EXISTS {t['search_mapping']} CASCADE",
         ]
@@ -798,8 +799,8 @@ class SparqlSQLSchema:
         )
         for row in dynamic_rows:
             tbl = row["table_name"]
-            # Skip the registry tables (handled by drop_space_tables_sql)
-            if tbl in (f"{space_id}_fts_index", f"{space_id}_fts_document_segments"):
+            # Skip the registry table (handled by drop_space_tables_sql)
+            if tbl == f"{space_id}_fts_index":
                 continue
             await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
             logger.debug("Dropped dynamic table: %s", tbl)

@@ -1,0 +1,95 @@
+{
+  "name": "order_limit_offset",
+  "sparql": "SELECT ?s ?name WHERE {\n            ?s <http://example.org/hasName> ?name .\n        } ORDER BY ?name LIMIT 20 OFFSET 10",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:9f82512697bd20e8e9dc324bd0a0fef1a3c387bc37f677b7da2d472364e3f431"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": 20,
+        "offset": 10,
+        "orderBy": [
+          {
+            "direction": "ASC",
+            "expr": "?name"
+          }
+        ],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpSlice",
+          "start": 10,
+          "length": 20,
+          "subOp": {
+            "type": "OpProject",
+            "vars": [
+              "s",
+              "name"
+            ],
+            "subOp": {
+              "type": "OpOrder",
+              "conditions": [
+                {
+                  "direction": "ASC",
+                  "expr": {
+                    "type": "ExprVar",
+                    "var": "name"
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://example.org/hasName"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "name"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "pretty": "(slice 10 20\n  (project (?s ?name)\n    (order (?name)\n      (bgp (triple ?s <http://example.org/hasName> ?name)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

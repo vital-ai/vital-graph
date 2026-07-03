@@ -1,0 +1,92 @@
+{
+  "name": "xsd_cast_integer",
+  "sparql": "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n        SELECT ?s (xsd:integer(?val) AS ?intval) WHERE {\n            ?s <http://example.org/hasValue> ?val .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:13e52eb84ea8418ab804d1de21d20efa96441d228560328bead98edcccd5ab43"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "intval"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "intval"
+          ],
+          "subOp": {
+            "type": "OpExtend",
+            "extensions": [
+              {
+                "var": "intval",
+                "expr": {
+                  "type": "ExprFunctionN",
+                  "name": "function",
+                  "functionIRI": "http://www.w3.org/2001/XMLSchema#integer",
+                  "args": [
+                    {
+                      "type": "ExprVar",
+                      "var": "val"
+                    }
+                  ]
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasValue"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "val"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(project (?s ?intval)\n  (extend ((?intval (<http://www.w3.org/2001/XMLSchema#integer> ?val)))\n    (bgp (triple ?s <http://example.org/hasValue> ?val))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

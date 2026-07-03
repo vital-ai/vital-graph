@@ -1,0 +1,164 @@
+{
+  "name": "aggregate_sum_avg",
+  "sparql": "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n        SELECT ?type (SUM(xsd:integer(?val)) AS ?total) (AVG(xsd:integer(?val)) AS ?average) WHERE {\n            ?s a ?type .\n            ?s <http://example.org/hasValue> ?val .\n        } GROUP BY ?type",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 3,
+        "compile": 0,
+        "serialize": 2
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:b04fad8008121660302fb6aa21747bdc45e38014616a8378e869c95843f2f8c2"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "type",
+          "total",
+          "average"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [
+          "type"
+        ],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "type",
+            "total",
+            "average"
+          ],
+          "subOp": {
+            "type": "OpExtend",
+            "extensions": [
+              {
+                "var": "average",
+                "expr": {
+                  "type": "ExprVar",
+                  "var": ".1"
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpExtend",
+              "extensions": [
+                {
+                  "var": "total",
+                  "expr": {
+                    "type": "ExprVar",
+                    "var": ".0"
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpGroup",
+                "groupVars": [
+                  {
+                    "var": "type",
+                    "expr": null
+                  }
+                ],
+                "aggregators": [
+                  {
+                    "var": ".0",
+                    "aggregator": {
+                      "type": "ExprAggregator",
+                      "name": "SUM",
+                      "distinct": false,
+                      "expr": {
+                        "type": "ExprFunctionN",
+                        "name": "function",
+                        "functionIRI": "http://www.w3.org/2001/XMLSchema#integer",
+                        "args": [
+                          {
+                            "type": "ExprVar",
+                            "var": "val"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "var": ".1",
+                    "aggregator": {
+                      "type": "ExprAggregator",
+                      "name": "AVG",
+                      "distinct": false,
+                      "expr": {
+                        "type": "ExprFunctionN",
+                        "name": "function",
+                        "functionIRI": "http://www.w3.org/2001/XMLSchema#integer",
+                        "args": [
+                          {
+                            "type": "ExprVar",
+                            "var": "val"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ],
+                "subOp": {
+                  "type": "OpBGP",
+                  "triples": [
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "s"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                      },
+                      "object": {
+                        "type": "var",
+                        "name": "type"
+                      }
+                    },
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "s"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://example.org/hasValue"
+                      },
+                      "object": {
+                        "type": "var",
+                        "name": "val"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?type ?total ?average)\n    (extend ((?average ?.1))\n      (extend ((?total ?.0))\n        (group (?type) ((?.0 (sum (<http://www.w3.org/2001/XMLSchema#integer> ?val))) (?.1 (avg (<http://www.w3.org/2001/XMLSchema#integer> ?val))))\n          (bgp\n            (triple ?s rdf:type ?type)\n            (triple ?s <http://example.org/hasValue> ?val)\n          ))))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

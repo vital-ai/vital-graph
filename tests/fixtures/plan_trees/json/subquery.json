@@ -1,0 +1,106 @@
+{
+  "name": "subquery",
+  "sparql": "SELECT ?s ?name WHERE {\n            {\n                SELECT ?s WHERE {\n                    ?s a <http://example.org/TypeA> .\n                } LIMIT 100\n            }\n            ?s <http://example.org/hasName> ?name .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:1bca37b3c4f30f38c8b8d75dead0a9d72d06a61d072df18e26ee4d5201c64e11"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name"
+          ],
+          "subOp": {
+            "type": "OpJoin",
+            "left": {
+              "type": "OpSlice",
+              "start": -9223372036854775808,
+              "length": 100,
+              "subOp": {
+                "type": "OpProject",
+                "vars": [
+                  "s"
+                ],
+                "subOp": {
+                  "type": "OpBGP",
+                  "triples": [
+                    {
+                      "subject": {
+                        "type": "var",
+                        "name": "s"
+                      },
+                      "predicate": {
+                        "type": "uri",
+                        "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                      },
+                      "object": {
+                        "type": "uri",
+                        "value": "http://example.org/TypeA"
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "right": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?s ?name)\n    (join\n      (slice _ 100\n        (project (?s)\n          (bgp (triple ?s rdf:type <http://example.org/TypeA>))))\n      (bgp (triple ?s <http://example.org/hasName> ?name)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

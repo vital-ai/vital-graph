@@ -22,6 +22,7 @@ from ...model.kgtypes_model import (
     KGTypeCreateResponse as ServerKGTypeCreateResponse,
     KGTypeUpdateResponse as ServerKGTypeUpdateResponse,
     KGTypeDeleteResponse as ServerKGTypeDeleteResponse,
+    KGTypeDescriptionResponse,
 )
 from ..response.client_response import (
     KGTypeResponse,
@@ -654,7 +655,7 @@ class KGTypesEndpoint(BaseEndpoint):
 
     # ── Search ─────────────────────────────────────────────────────
 
-    async def search_types(self, space_id: str, query: str, type: Optional[str] = None, search_mode: Optional[str] = None) -> KGTypeSearchResponse:
+    async def search_types(self, space_id: str, query: str, type: Optional[str] = None, search_mode: Optional[str] = None, alpha: Optional[float] = None) -> KGTypeSearchResponse:
         """
         Search KG types by keyword or vector similarity.
 
@@ -662,7 +663,8 @@ class KGTypesEndpoint(BaseEndpoint):
             space_id: Space identifier
             query: Search query string
             type: Optional type filter (e.g. 'frame', 'entity', or full URI)
-            search_mode: 'keyword' (default) or 'vector'
+            search_mode: 'keyword' (default), 'fts', 'vector', or 'hybrid'
+            alpha: Hybrid search alpha (0.0=pure BM25, 1.0=pure vector). Only used when search_mode='hybrid'.
 
         Returns:
             KGTypeSearchResponse with types, count, search_mode, query
@@ -672,7 +674,7 @@ class KGTypesEndpoint(BaseEndpoint):
 
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes/search"
-            params = build_query_params(space_id=space_id, q=query, type=type, search_mode=search_mode)
+            params = build_query_params(space_id=space_id, q=query, type=type, search_mode=search_mode, alpha=alpha)
             response = await self._make_authenticated_request('GET', url, params=params)
             data = response.json()
             return build_success_response(
@@ -689,3 +691,24 @@ class KGTypesEndpoint(BaseEndpoint):
         except Exception as e:
             logger.error(f"Error searching types: {e}")
             return build_error_response(KGTypeSearchResponse, error_code=500, error_message=str(e), status_code=500)
+
+    # ── Description ────────────────────────────────────────────────
+
+    async def get_type_description(self, type_uri: str, mapping_type: str = "kgentity") -> KGTypeDescriptionResponse:
+        """
+        Get the description text for a KGType.
+
+        Args:
+            type_uri: The KGType URI to fetch description for
+            mapping_type: Mapping type (kgentity, kgframe, kgdocument, kgslot)
+
+        Returns:
+            KGTypeDescriptionResponse with type_uri, mapping_type, description
+        """
+        self._check_connection()
+        validate_required_params(type_uri=type_uri)
+
+        url = f"{self._get_server_url().rstrip('/')}/api/graphs/kgtypes/description"
+        params = {'type_uri': type_uri, 'mapping_type': mapping_type}
+
+        return await self._make_typed_request('GET', url, KGTypeDescriptionResponse, params=params)

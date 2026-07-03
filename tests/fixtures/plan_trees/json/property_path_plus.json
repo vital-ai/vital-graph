@@ -1,0 +1,71 @@
+{
+  "name": "property_path_plus",
+  "sparql": "SELECT ?s ?descendant WHERE {\n            ?s <http://example.org/hasChild>+ ?descendant .\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:4dc5d7325d1066d8c7fee0c0483657a51dfff4a3c01414c5f80e50956e47c537"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "descendant"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "descendant"
+          ],
+          "subOp": {
+            "type": "OpPath",
+            "triplePath": {
+              "subject": {
+                "type": "var",
+                "name": "s"
+              },
+              "predicate": {
+                "type": "path",
+                "value": "(<http://example.org/hasChild>)+"
+              },
+              "object": {
+                "type": "var",
+                "name": "descendant"
+              }
+            }
+          }
+        },
+        "pretty": "(project (?s ?descendant)\n  (path ?s (path+ <http://example.org/hasChild>) ?descendant))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

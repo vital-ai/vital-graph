@@ -42,6 +42,7 @@ from .endpoint.geo_config_endpoint import GeoConfigClientEndpoint
 from .endpoint.geo_points_endpoint import GeoPointsClientEndpoint
 from .endpoint.kgdocuments_endpoint import KGDocumentsEndpoint as KGDocumentsClientEndpoint
 from .endpoint.metrics_endpoint import MetricsClientEndpoint
+from .endpoint.ontology_endpoint import OntologyClientEndpoint
 from .utils.client_utils import VitalGraphClientError
 from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
@@ -63,7 +64,7 @@ if TYPE_CHECKING:
         SPARQLInsertRequest, SPARQLInsertResponse, SPARQLDeleteRequest, SPARQLDeleteResponse,
     )
     from ..model.triples_model import TripleListResponse, TripleOperationResponse
-    from ..model.users_model import User, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
+    from ..model.users_model import User, UserCreate, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse
     from ..model.spaces_model import Space
     from ..model.import_model import (
         ImportJobCreate, ImportJobResponse, ImportDeleteResponse, ImportExecuteResponse,
@@ -179,6 +180,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.geo_config = GeoConfigClientEndpoint(self)
         self.geo_points = GeoPointsClientEndpoint(self)
         self.metrics = MetricsClientEndpoint(self)
+        self.ontology = OntologyClientEndpoint(self)
     
     async def open(self) -> None:
         """
@@ -776,7 +778,7 @@ class VitalGraphClient(VitalGraphClientInterface):
         """
         return await self.users.list_users(tenant)
     
-    async def add_user(self, user: 'User') -> 'UserCreateResponse':
+    async def add_user(self, user: 'UserCreate') -> 'UserCreateResponse':
         """
         Add a new user.
         

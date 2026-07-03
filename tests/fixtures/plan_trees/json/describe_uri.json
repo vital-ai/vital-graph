@@ -1,0 +1,54 @@
+{
+  "name": "describe_uri",
+  "sparql": "DESCRIBE <http://example.org/entity1>",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:4ce951c559cb768df768a70428f991867981912cf28f546b3d0f8e40568954a0"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "DESCRIBE",
+        "baseURI": "file:///app/",
+        "projectVars": [],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "describeNodes": [
+          {
+            "type": "uri",
+            "value": "http://example.org/entity1"
+          }
+        ],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpNull",
+          "string": "(null)\n"
+        },
+        "pretty": "(null)"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

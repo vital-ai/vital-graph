@@ -1,0 +1,125 @@
+{
+  "name": "aggregate_group_concat",
+  "sparql": "SELECT ?type (GROUP_CONCAT(?name; separator=\", \") AS ?names) WHERE {\n            ?s a ?type .\n            ?s <http://example.org/hasName> ?name .\n        } GROUP BY ?type",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 11,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:61d2e1e7283c8d7536282783c25e004cee458e49b2f842796feccef82181130f"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "type",
+          "names"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [
+          "type"
+        ],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "type",
+            "names"
+          ],
+          "subOp": {
+            "type": "OpExtend",
+            "extensions": [
+              {
+                "var": "names",
+                "expr": {
+                  "type": "ExprVar",
+                  "var": ".0"
+                }
+              }
+            ],
+            "subOp": {
+              "type": "OpGroup",
+              "groupVars": [
+                {
+                  "var": "type",
+                  "expr": null
+                }
+              ],
+              "aggregators": [
+                {
+                  "var": ".0",
+                  "aggregator": {
+                    "type": "ExprAggregator",
+                    "name": "GROUP_CONCAT",
+                    "distinct": false,
+                    "expr": {
+                      "type": "ExprVar",
+                      "var": "name"
+                    },
+                    "separator": ", "
+                  }
+                }
+              ],
+              "subOp": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "type"
+                    }
+                  },
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://example.org/hasName"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "name"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?type ?names)\n    (extend ((?names ?.0))\n      (group (?type) ((?.0 (group_concat(separator ', ') ?name)))\n        (bgp\n          (triple ?s rdf:type ?type)\n          (triple ?s <http://example.org/hasName> ?name)\n        )))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

@@ -749,6 +749,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
+        uri = str(uri)
         validate_required_params(space_id=space_id, graph_id=graph_id, uri=uri)
         
         try:
@@ -813,6 +814,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             VitalGraphClientError: If request fails
         """
         self._check_connection()
+        uri_list = [str(u) for u in uri_list]
         validate_required_params(space_id=space_id, graph_id=graph_id, uri_list=uri_list)
         
         try:

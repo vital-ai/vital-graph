@@ -1,0 +1,98 @@
+{
+  "name": "optional_pattern",
+  "sparql": "SELECT ?s ?name ?email WHERE {\n            ?s <http://example.org/hasName> ?name .\n            OPTIONAL { ?s <http://example.org/hasEmail> ?email }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:13c8e84eb984781585d95a99e0f867c82a62000cdf5816fe1fc83985ef9ff2fd"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name",
+          "email"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name",
+            "email"
+          ],
+          "subOp": {
+            "type": "OpLeftJoin",
+            "left": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            },
+            "right": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasEmail"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "email"
+                  }
+                }
+              ]
+            },
+            "exprs": []
+          }
+        },
+        "pretty": "(project (?s ?name ?email)\n  (leftjoin\n    (bgp (triple ?s <http://example.org/hasName> ?name))\n    (bgp (triple ?s <http://example.org/hasEmail> ?email))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

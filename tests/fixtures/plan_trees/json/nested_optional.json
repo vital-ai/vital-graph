@@ -1,0 +1,123 @@
+{
+  "name": "nested_optional",
+  "sparql": "SELECT ?s ?name ?email ?phone WHERE {\n            ?s <http://example.org/hasName> ?name .\n            OPTIONAL {\n                ?s <http://example.org/hasEmail> ?email .\n                OPTIONAL { ?s <http://example.org/hasPhone> ?phone }\n            }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:e9683632fa866236e2569ee58973b2ee367ead54400df1e5d1fee93565eb2782"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s",
+          "name",
+          "email",
+          "phone"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s",
+            "name",
+            "email",
+            "phone"
+          ],
+          "subOp": {
+            "type": "OpLeftJoin",
+            "left": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/hasName"
+                  },
+                  "object": {
+                    "type": "var",
+                    "name": "name"
+                  }
+                }
+              ]
+            },
+            "right": {
+              "type": "OpLeftJoin",
+              "left": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://example.org/hasEmail"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "email"
+                    }
+                  }
+                ]
+              },
+              "right": {
+                "type": "OpBGP",
+                "triples": [
+                  {
+                    "subject": {
+                      "type": "var",
+                      "name": "s"
+                    },
+                    "predicate": {
+                      "type": "uri",
+                      "value": "http://example.org/hasPhone"
+                    },
+                    "object": {
+                      "type": "var",
+                      "name": "phone"
+                    }
+                  }
+                ]
+              },
+              "exprs": []
+            },
+            "exprs": []
+          }
+        },
+        "pretty": "(project (?s ?name ?email ?phone)\n  (leftjoin\n    (bgp (triple ?s <http://example.org/hasName> ?name))\n    (leftjoin\n      (bgp (triple ?s <http://example.org/hasEmail> ?email))\n      (bgp (triple ?s <http://example.org/hasPhone> ?phone)))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

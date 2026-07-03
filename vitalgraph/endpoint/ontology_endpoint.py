@@ -7,7 +7,8 @@ for a given KG class URI using VitalSigns introspection.
 import logging
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+
+from ..model.ontology_model import OntologyProperty, OntologyPropertiesResponse, OntologyClassesResponse
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +28,6 @@ _CLASS_MAP: Dict[str, str] = {
 
 # Cache: class_uri → list of property dicts
 _CACHE: Dict[str, List[Dict]] = {}
-
-
-class OntologyProperty(BaseModel):
-    uri: str
-    local_name: Optional[str] = None
-    short_name: Optional[str] = None
-    property_class: Optional[str] = None
-
-
-class OntologyPropertiesResponse(BaseModel):
-    class_uri: str
-    properties: List[OntologyProperty]
-    total_count: int
 
 
 def _import_class(dotted_path: str):
@@ -124,6 +112,7 @@ def create_ontology_router(auth_dependency) -> APIRouter:
 
     @router.get(
         "/ontology/classes",
+        response_model=OntologyClassesResponse,
         tags=["Ontology"],
         summary="List Known Classes",
         description="Returns the list of class URIs known to the ontology endpoint.",
@@ -131,6 +120,6 @@ def create_ontology_router(auth_dependency) -> APIRouter:
     async def list_ontology_classes(
         current_user: Dict = Depends(auth_dependency),
     ):
-        return {"classes": list(_CLASS_MAP.keys())}
+        return OntologyClassesResponse(classes=list(_CLASS_MAP.keys()))
 
     return router

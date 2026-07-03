@@ -1,0 +1,93 @@
+{
+  "name": "minus_pattern",
+  "sparql": "SELECT ?s WHERE {\n            ?s a <http://example.org/TypeA> .\n            MINUS { ?s <http://example.org/deleted> \"true\" }\n        }",
+  "sidecar_response": {
+    "ok": true,
+    "meta": {
+      "serviceVersion": "1.0.0",
+      "jenaVersion": "<development>",
+      "timingMs": {
+        "parse": 0,
+        "compile": 0,
+        "serialize": 0
+      }
+    },
+    "input": {
+      "sparqlHash": "sha256:c3a5dec647a402eecf3c4d677e67cbc15944531cca9a7560e3d6e59a20543cf0"
+    },
+    "phases": {
+      "parsedQuery": {
+        "queryType": "SELECT",
+        "baseURI": "file:///app/",
+        "projectVars": [
+          "s"
+        ],
+        "distinct": false,
+        "reduced": false,
+        "limit": -1,
+        "offset": 0,
+        "orderBy": [],
+        "groupBy": [],
+        "having": [],
+        "datasetDefaultGraphs": [],
+        "datasetNamedGraphs": [],
+        "sparqlForm": "QUERY"
+      },
+      "algebraCompiled": {
+        "op": {
+          "type": "OpProject",
+          "vars": [
+            "s"
+          ],
+          "subOp": {
+            "type": "OpMinus",
+            "left": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                  },
+                  "object": {
+                    "type": "uri",
+                    "value": "http://example.org/TypeA"
+                  }
+                }
+              ]
+            },
+            "right": {
+              "type": "OpBGP",
+              "triples": [
+                {
+                  "subject": {
+                    "type": "var",
+                    "name": "s"
+                  },
+                  "predicate": {
+                    "type": "uri",
+                    "value": "http://example.org/deleted"
+                  },
+                  "object": {
+                    "type": "literal",
+                    "value": "true"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "pretty": "(prefix ((rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>))\n  (project (?s)\n    (minus\n      (bgp (triple ?s rdf:type <http://example.org/TypeA>))\n      (bgp (triple ?s <http://example.org/deleted> \"true\")))))"
+      },
+      "algebraOptimized": null,
+      "normalizedSparql": null,
+      "updateOperations": null
+    },
+    "error": null,
+    "warnings": []
+  }
+}

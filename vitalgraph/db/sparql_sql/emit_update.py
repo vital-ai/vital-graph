@@ -19,7 +19,7 @@ from ..jena_sparql.jena_types import (
     QuadPattern, URINode, LiteralNode, BNodeNode, VarNode, RDFNode,
     UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
     UpdateLoad, UpdateClear, UpdateDrop, UpdateCreate, UpdateCopy,
-    UpdateMove, UpdateAdd, UpdateOp,
+    UpdateMove, UpdateAdd, UpdateOp, Op,
     OpBGP, OpGraph, OpJoin, OpUnion, TriplePattern,
     CompileResult, ParsedQueryMeta,
 )
@@ -199,19 +199,20 @@ def _term_upsert(term_table: str, text: str, ttype: str,
 
 
 def _term_uuid_subquery(term_table: str, text: str, ttype: str,
-                        datatype_id: Optional[int] = None) -> str:
+                        datatype_id: Optional[int] = None,
+                        lang: Optional[str] = None) -> str:
     """Return a UUID expression for a constant term.
 
-    When datatype_id is known the deterministic UUID is computed
+    When datatype_id or lang is known the deterministic UUID is computed
     in Python and emitted as a literal — no subquery needed.
-    For URIs / blank-nodes / untyped literals the existing
+    For URIs / blank-nodes / untyped plain literals the existing
     text+type lookup is used as a safe fallback.
     """
-    if datatype_id is not None or ttype != 'L':
+    if datatype_id is not None or lang is not None or ttype != 'L':
         # Deterministic — matches the main write-path UUID exactly.
-        computed = _generate_term_uuid(text, ttype, datatype_id=datatype_id)
+        computed = _generate_term_uuid(text, ttype, lang=lang, datatype_id=datatype_id)
         return f"'{computed}'::uuid"
-    # Fallback: text + type lookup (for plain literals without datatype)
+    # Fallback: text + type lookup (for plain literals without datatype/lang)
     return (
         f"(SELECT term_uuid FROM {term_table} "
         f"WHERE term_text = '{_esc(text)}' AND term_type = '{ttype}' LIMIT 1)"
@@ -296,7 +297,8 @@ def _node_to_uuid_expr(node: RDFNode, term_table: str,
     dt_uri = _node_datatype_uri(node)
     if dt_uri and dt_map:
         dt_id = dt_map.get(dt_uri)
-    return _term_uuid_subquery(term_table, text, ttype, datatype_id=dt_id)
+    lang = _node_lang(node)
+    return _term_uuid_subquery(term_table, text, ttype, datatype_id=dt_id, lang=lang)
 
 
 # ===========================================================================
@@ -401,7 +403,7 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
     term_table = f"{space_id}_term"
     quad_table = f"{space_id}_rdf_quad"
     stmts: List[str] = []
-    seen_terms: Set[Tuple[str, str, Optional[int]]] = set()
+    seen_terms: Set[Tuple[str, str, Optional[int], Optional[str]]] = set()
 
     def _node_dt_id(node: RDFNode) -> Optional[int]:
         dt_uri = _node_datatype_uri(node)
@@ -417,15 +419,15 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
             text = _node_text(node)
             ttype = _node_type(node)
             dt_id = _node_dt_id(node)
-            key = (text, ttype, dt_id)
+            lang = _node_lang(node)
+            key = (text, ttype, dt_id, lang)
             if key not in seen_terms:
                 seen_terms.add(key)
-                lang = _node_lang(node)
                 stmts.append(_term_upsert(term_table, text, ttype, lang,
                                           datatype_id=dt_id))
 
         # Graph term
-        key = (graph_uri, "U", None)
+        key = (graph_uri, "U", None, None)
         if key not in seen_terms:
             seen_terms.add(key)
             stmts.append(_term_upsert(term_table, graph_uri, "U"))
@@ -434,7 +436,8 @@ def _insert_data_sql(quads: List[QuadPattern], space_id: str,
         s_uuid = _term_uuid_subquery(term_table, _node_text(q.subject), _node_type(q.subject))
         p_uuid = _term_uuid_subquery(term_table, _node_text(q.predicate), _node_type(q.predicate))
         o_uuid = _term_uuid_subquery(term_table, _node_text(q.object), _node_type(q.object),
-                                     datatype_id=_node_dt_id(q.object))
+                                     datatype_id=_node_dt_id(q.object),
+                                     lang=_node_lang(q.object))
         g_uuid = _term_uuid_subquery(term_table, graph_uri, "U")
 
         stmts.append(
@@ -473,10 +476,12 @@ def _delete_data_sql(quads: List[QuadPattern], space_id: str,
         o_text, o_type = _node_text(q.object), _node_type(q.object)
         o_dt_id = _obj_dt_id(q.object)
 
+        o_lang = _node_lang(q.object)
+
         where_parts = [
             f"subject_uuid = {_term_uuid_subquery(term_table, s_text, s_type)}",
             f"predicate_uuid = {_term_uuid_subquery(term_table, p_text, p_type)}",
-            f"object_uuid = {_term_uuid_subquery(term_table, o_text, o_type, datatype_id=o_dt_id)}",
+            f"object_uuid = {_term_uuid_subquery(term_table, o_text, o_type, datatype_id=o_dt_id, lang=o_lang)}",
         ]
         if q.graph:
             graph_text = _node_text(q.graph)
@@ -778,8 +783,9 @@ def _delete_from_bindings(dq: QuadPattern, space_id: str,
         o_dt_uri = _node_datatype_uri(dq.object)
         if o_dt_uri and dt_map:
             o_dt_id = dt_map.get(o_dt_uri)
+        o_lang = _node_lang(dq.object)
         conditions.append(
-            f"q.object_uuid = {_term_uuid_subquery(term_table, _node_text(dq.object), _node_type(dq.object), datatype_id=o_dt_id)}"
+            f"q.object_uuid = {_term_uuid_subquery(term_table, _node_text(dq.object), _node_type(dq.object), datatype_id=o_dt_id, lang=o_lang)}"
         )
 
     # Graph
