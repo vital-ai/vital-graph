@@ -48,7 +48,7 @@ jobs:
             ${{ runner.os }}-pip-seed-
 
       - name: Install Python dependencies for seeding
-        run: pip install -e .
+        run: pip install -e ".[client]"
 
       - name: Seed test data
         run: python -m tests.shared.seed_ui_test_data --server-url http://localhost:8002
