@@ -99,13 +99,13 @@ const Spaces: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="spaces-page">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <HiViewBoards className="w-6 h-6 text-blue-600" />
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Spaces</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="spaces-title">Spaces</h1>
           </div>
           <p className="text-gray-500 dark:text-gray-400 mt-1">
             {spaces.length} space{spaces.length !== 1 ? 's' : ''}
@@ -147,12 +147,13 @@ const Spaces: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-testid="spaces-grid">
           {filteredSpaces.map((space) => (
             <Link
               key={space.space}
               to={`/space/${space.space}`}
               className="block rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 hover:shadow-md hover:border-blue-300 dark:hover:border-blue-600 transition-all group"
+              data-testid={`space-card-${space.space}`}
             >
               <div className="flex items-start justify-between mb-3">
                 <div className="min-w-0 flex-1">

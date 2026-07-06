@@ -123,7 +123,7 @@ const Files: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="files-page">
       <NavigationBreadcrumb spaceId={spaceId} graphId={graphId} currentPageName="Files" currentPageIcon={HiDocumentDuplicate} />
 
       {/* Header */}

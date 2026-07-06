@@ -5,8 +5,9 @@ Provides CRUD operations for agents, agent types, endpoints, and change logs.
 All resource identification uses query parameters (not path parameters).
 """
 
+import json
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -29,11 +30,56 @@ from .agent_models import (
 logger = logging.getLogger(__name__)
 
 
+def _parse_jsonb(val: Any) -> Any:
+    """Parse a JSONB value that asyncpg may return as a string."""
+    if val is None:
+        return {}
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return val
+
+
+def _endpoint_to_response(ep: dict) -> AgentEndpointResponse:
+    """Convert an endpoint dict, parsing JSONB strings."""
+    return AgentEndpointResponse(
+        endpoint_id=ep['endpoint_id'],
+        agent_id=ep['agent_id'],
+        endpoint_uri=ep['endpoint_uri'],
+        endpoint_url=ep['endpoint_url'],
+        protocol=ep.get('protocol', 'websocket'),
+        status=ep.get('status', 'active'),
+        transport_config=_parse_jsonb(ep.get('transport_config')),
+        created_time=ep.get('created_time'),
+        updated_time=ep.get('updated_time'),
+        notes=ep.get('notes'),
+    )
+
+
+def _function_to_response(fn: dict) -> AgentFunctionResponse:
+    """Convert a function dict, parsing JSONB strings."""
+    return AgentFunctionResponse(
+        function_id=fn['function_id'],
+        agent_id=fn['agent_id'],
+        function_uri=fn['function_uri'],
+        function_name=fn['function_name'],
+        description=fn.get('description'),
+        parameters=_parse_jsonb(fn.get('parameters')),
+        output_schema=_parse_jsonb(fn.get('output_schema')),
+        status=fn.get('status', 'active'),
+        created_time=fn.get('created_time'),
+        updated_time=fn.get('updated_time'),
+        notes=fn.get('notes'),
+    )
+
+
 def _agent_to_response(agent: dict) -> AgentResponse:
     """Convert an agent dict from the impl layer to an AgentResponse."""
     endpoints = []
     if agent.get('endpoints'):
-        endpoints = [AgentEndpointResponse(**ep) for ep in agent['endpoints']]
+        endpoints = [_endpoint_to_response(ep) for ep in agent['endpoints']]
 
     return AgentResponse(
         agent_id=agent['agent_id'],
@@ -47,9 +93,10 @@ def _agent_to_response(agent: dict) -> AgentResponse:
         status=agent['status'],
         protocol_format_uri=agent.get('protocol_format_uri'),
         auth_service_uri=agent.get('auth_service_uri'),
-        auth_service_config=agent.get('auth_service_config') or {},
-        capabilities=agent.get('capabilities') or [],
-        metadata=agent.get('metadata') or {},
+        auth_service_config=_parse_jsonb(agent.get('auth_service_config')),
+        capabilities=_parse_jsonb(agent.get('capabilities')) or [],
+        metadata=_parse_jsonb(agent.get('metadata')),
+        protocol_config=_parse_jsonb(agent.get('protocol_config')),
         endpoints=endpoints,
         created_time=agent.get('created_time'),
         updated_time=agent.get('updated_time'),
@@ -201,6 +248,7 @@ class AgentRegistryEndpoint:
                     auth_service_config=request.auth_service_config,
                     capabilities=request.capabilities,
                     metadata=request.metadata,
+                    protocol_config=request.protocol_config,
                     notes=request.notes,
                     created_by=current_user.get('username'),
                     endpoints=endpoints,
@@ -243,6 +291,7 @@ class AgentRegistryEndpoint:
                     auth_service_config=request.auth_service_config,
                     capabilities=request.capabilities,
                     metadata=request.metadata,
+                    protocol_config=request.protocol_config,
                     notes=request.notes,
                     updated_by=current_user.get('username'),
                 )
@@ -309,7 +358,7 @@ class AgentRegistryEndpoint:
             current_user: Dict = Depends(auth),
         ):
             eps = await self.registry.list_endpoints(agent_id)
-            return [AgentEndpointResponse(**ep) for ep in eps]
+            return [_endpoint_to_response(ep) for ep in eps]
 
         @self.router.post("/agent/endpoints", response_model=AgentEndpointResponse,
                           tags=["Agent Registry"])
@@ -324,10 +373,11 @@ class AgentRegistryEndpoint:
                     endpoint_uri=request.endpoint_uri,
                     endpoint_url=request.endpoint_url,
                     protocol=request.protocol,
+                    transport_config=request.transport_config,
                     notes=request.notes,
                     created_by=current_user.get('username'),
                 )
-                return AgentEndpointResponse(**ep)
+                return _endpoint_to_response(ep)
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
                     raise HTTPException(
@@ -349,6 +399,7 @@ class AgentRegistryEndpoint:
                 endpoint_id=endpoint_id,
                 endpoint_url=request.endpoint_url,
                 protocol=request.protocol,
+                transport_config=request.transport_config,
                 status=request.status,
                 notes=request.notes,
                 updated_by=current_user.get('username'),
@@ -358,7 +409,7 @@ class AgentRegistryEndpoint:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Endpoint not found: {endpoint_id}",
                 )
-            return AgentEndpointResponse(**ep)
+            return _endpoint_to_response(ep)
 
         @self.router.delete("/agent/endpoints", tags=["Agent Registry"])
         async def delete_endpoint_route(
@@ -386,7 +437,7 @@ class AgentRegistryEndpoint:
             current_user: Dict = Depends(auth),
         ):
             fns = await self.registry.list_functions(agent_id)
-            return [AgentFunctionResponse(**fn) for fn in fns]
+            return [_function_to_response(fn) for fn in fns]
 
         @self.router.post("/agent/functions", response_model=AgentFunctionResponse,
                           tags=["Agent Registry"])
@@ -402,10 +453,11 @@ class AgentRegistryEndpoint:
                     function_name=request.function_name,
                     description=request.description,
                     parameters=request.parameters,
+                    output_schema=request.output_schema,
                     notes=request.notes,
                     created_by=current_user.get('username'),
                 )
-                return AgentFunctionResponse(**fn)
+                return _function_to_response(fn)
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
                     raise HTTPException(
@@ -428,7 +480,7 @@ class AgentRegistryEndpoint:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Function not found: {function_id}",
                 )
-            return AgentFunctionResponse(**fn)
+            return _function_to_response(fn)
 
         @self.router.put("/agent/functions", response_model=AgentFunctionResponse,
                          tags=["Agent Registry"])
@@ -443,6 +495,7 @@ class AgentRegistryEndpoint:
                     function_name=request.function_name,
                     description=request.description,
                     parameters=request.parameters,
+                    output_schema=request.output_schema,
                     status=request.status,
                     notes=request.notes,
                     updated_by=current_user.get('username'),
@@ -452,7 +505,7 @@ class AgentRegistryEndpoint:
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Function not found: {function_id}",
                     )
-                return AgentFunctionResponse(**fn)
+                return _function_to_response(fn)
             except ValueError as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
@@ -485,6 +538,115 @@ class AgentRegistryEndpoint:
             return {"function_uri": function_uri, "agents": results}
 
         # ============================================================
+        # General Agent Discovery
+        # ============================================================
+
+        @self.router.get("/agent/discover", tags=["Agent Registry"])
+        async def discover_agents_route(
+            capability: Optional[str] = Query(None, description="Filter by capability"),
+            type_key: Optional[str] = Query(None, description="Filter by agent type key"),
+            protocol_format_uri: Optional[str] = Query(None, description="Filter by protocol URI"),
+            protocol_config_key: Optional[str] = Query(None, description="Filter by protocol_config JSONB key existence"),
+            protocol_config_contains: Optional[str] = Query(
+                None,
+                description="JSON fragment that protocol_config must contain (JSONB @> containment), "
+                "e.g. {\"mcp\":{\"capabilities\":[\"tools\"]}}",
+            ),
+            agent_status: str = Query('active', description="Filter agents by status"),
+            current_user: Dict = Depends(auth),
+        ):
+            import json as _json
+            pc_contains = None
+            if protocol_config_contains:
+                try:
+                    pc_contains = _json.loads(protocol_config_contains)
+                except _json.JSONDecodeError:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="protocol_config_contains must be valid JSON",
+                    )
+            agents = await self.registry.discover_agents(
+                capability=capability,
+                type_key=type_key,
+                protocol_format_uri=protocol_format_uri,
+                protocol_config_key=protocol_config_key,
+                protocol_config_contains=pc_contains,
+                status=agent_status,
+            )
+            return {
+                "count": len(agents),
+                "agents": [_agent_to_response(a).model_dump() for a in agents],
+            }
+
+        # ============================================================
+        # Rollback
+        # ============================================================
+
+        @self.router.put("/agent/rollback", tags=["Agent Registry"])
+        async def rollback_agent_route(
+            agent_id: str = Query(..., description="Agent ID"),
+            log_id: int = Query(..., description="Change log entry ID to rollback to"),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                agent = await self.registry.rollback_agent(
+                    agent_id=agent_id,
+                    log_id=log_id,
+                    rolled_back_by=current_user.get('username'),
+                )
+                if agent is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Agent not found: {agent_id}",
+                    )
+                return _agent_to_response(agent)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                )
+
+        # ============================================================
+        # Semantic / FTS Search
+        # ============================================================
+
+        @self.router.get("/agent/search/vector", tags=["Agent Registry"])
+        async def vector_search_route(
+            query: str = Query(..., description="Natural language search query"),
+            limit: int = Query(10, ge=1, le=100),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                agents = await self.registry.vector_search(query, limit=limit)
+                return {
+                    "query": query,
+                    "count": len(agents),
+                    "agents": [
+                        {**_agent_to_response(a).model_dump(), "similarity": a.get("similarity")}
+                        for a in agents
+                    ],
+                }
+            except RuntimeError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e),
+                )
+
+        @self.router.get("/agent/search/fts", tags=["Agent Registry"])
+        async def fts_search_route(
+            query: str = Query(..., description="Full-text search query"),
+            limit: int = Query(20, ge=1, le=100),
+            current_user: Dict = Depends(auth),
+        ):
+            agents = await self.registry.fts_search(query, limit=limit)
+            return {
+                "query": query,
+                "count": len(agents),
+                "agents": [
+                    {**_agent_to_response(a).model_dump(), "fts_rank": a.get("fts_rank")}
+                    for a in agents
+                ],
+            }
+
+        # ============================================================
         # Change Log
         # ============================================================
 
@@ -495,6 +657,9 @@ class AgentRegistryEndpoint:
             current_user: Dict = Depends(auth),
         ):
             entries = await self.registry.get_change_log(agent_id, limit=limit)
+            for entry in entries:
+                if 'change_detail' in entry:
+                    entry['change_detail'] = _parse_jsonb(entry['change_detail'])
             return {"agent_id": agent_id, "entries": entries}
 
 

@@ -162,7 +162,7 @@ class FilesEndpoint:
                 deleted_uris=[]
             )
         
-        @self.router.post("/files/upload", response_model=FileUploadResponse, tags=["Files"])
+        @self.router.post("/files/upload", response_model=FileUploadResponse, tags=["Files", "Deprecated"], deprecated=True)
         async def upload_file_content(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -171,12 +171,13 @@ class FilesEndpoint:
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Upload binary file content to existing file node.
+            [DEPRECATED] Upload binary file content to existing file node.
+            Use POST /files/stream/upload instead — it streams without buffering the entire file in memory.
             """
             require_space_write(current_user, space_id)
             return await self._upload_file_content(space_id, graph_id, uri, file, current_user)
         
-        @self.router.get("/files/download", tags=["Files"])
+        @self.router.get("/files/download", tags=["Files", "Deprecated"], deprecated=True)
         async def download_file_content(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -184,8 +185,8 @@ class FilesEndpoint:
             current_user: Dict = Depends(self.auth_dependency)
         ):
             """
-            Download binary file content by URI.
-            Returns streaming response with file content.
+            [DEPRECATED] Download binary file content by URI.
+            Use GET /files/stream/download instead — it streams without buffering the entire file in memory.
             """
             require_space_read(current_user, space_id)
             return await self._download_file_content(space_id, graph_id, uri, current_user)

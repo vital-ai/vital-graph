@@ -37,7 +37,6 @@ export { ExportEndpoint } from './endpoint/ExportEndpoint.js';
 export { MetricsEndpoint } from './endpoint/MetricsEndpoint.js';
 export { AdminEndpoint } from './endpoint/AdminEndpoint.js';
 export { ProcessEndpoint } from './endpoint/ProcessEndpoint.js';
-export { VectorMappingsEndpoint } from './endpoint/VectorMappingsEndpoint.js';
 export { FuzzyMappingsEndpoint } from './endpoint/FuzzyMappingsEndpoint.js';
 export type { FuzzyMapping, FuzzyMappingProperty, FuzzyMappingResponse, FuzzyMappingsListResponse } from './endpoint/FuzzyMappingsEndpoint.js';
 export { VectorIndexesEndpoint } from './endpoint/VectorIndexesEndpoint.js';

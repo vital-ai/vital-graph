@@ -223,7 +223,7 @@ const FuzzyMappingDetail: React.FC = () => {
   }
 
   return (
-    <div>
+    <div data-testid="fuzzy-mapping-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>

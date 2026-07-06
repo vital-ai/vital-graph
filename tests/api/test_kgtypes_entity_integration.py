@@ -87,7 +87,15 @@ async def type_entity_env(vg_client, test_space, test_graph):
     cr = await vg_client.kgtypes.create_kgtypes(SP_KG_TYPES, types)
     assert cr.is_success, f"Failed to create types: {cr.error_message}"
 
-    # ── 2. Create vector index + mapping with source_type='type_description' ──
+    # ── 2. Create search mapping + vector index (mapping first, then attach index) ──
+    mapping = await vg_client.search_mappings.create_mapping(
+        space_id=test_space,
+        index_name=INDEX_NAME,
+        mapping_type="kgentity",
+        enabled=True,
+        source_type="type_description",
+    )
+
     await vg_client.vector_indexes.create_index(
         space_id=test_space,
         index_name=INDEX_NAME,
@@ -97,12 +105,11 @@ async def type_entity_env(vg_client, test_space, test_graph):
         description="Type integration test vector index",
     )
 
-    mapping = await vg_client.vector_mappings.create_mapping(
+    await vg_client.search_mappings.add_index(
         space_id=test_space,
+        mapping_id=mapping.mapping_id,
+        index_type="vector",
         index_name=INDEX_NAME,
-        mapping_type="kgentity",
-        enabled=True,
-        source_type="type_description",
     )
 
     # ── 3. Create typed entities ──────────────────────────────────────
@@ -158,7 +165,7 @@ async def type_entity_env(vg_client, test_space, test_graph):
 
     # Delete mapping and index
     try:
-        await vg_client.vector_mappings.delete_mapping(test_space, mapping.mapping_id)
+        await vg_client.search_mappings.delete_mapping(test_space, mapping.mapping_id)
     except Exception:
         pass
     try:

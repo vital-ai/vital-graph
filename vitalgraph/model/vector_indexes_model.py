@@ -50,6 +50,7 @@ class ReindexRequest(BaseModel):
 class ReindexResponse(BaseModel):
     message: str
     index_name: str
+    job_id: Optional[str] = Field(None, description="Background job ID for status polling")
     subjects_processed: int = 0
     embeddings_stored: int = 0
     subjects_skipped: int = 0
@@ -92,3 +93,30 @@ class VectorGetOut(BaseModel):
 class VectorGetResponse(BaseModel):
     vectors: List[VectorGetOut]
     total_count: int
+    page_size: int = 100
+    offset: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Reindex job status tracking
+# ---------------------------------------------------------------------------
+
+class ReindexJobStatus(BaseModel):
+    """Status of a background reindex task."""
+    job_id: str = Field(..., description="Unique reindex job identifier")
+    index_name: str = Field(..., description="Index being reindexed")
+    space_id: str = Field(..., description="Space ID")
+    status: str = Field(..., description="pending | running | completed | failed")
+    subjects_processed: int = 0
+    embeddings_stored: int = 0
+    subjects_skipped: int = 0
+    elapsed_seconds: float = 0.0
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class ReindexJobListResponse(BaseModel):
+    """List of reindex job statuses."""
+    jobs: List[ReindexJobStatus] = []
+    total_count: int = 0

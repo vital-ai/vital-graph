@@ -92,6 +92,12 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     return <Badge color={badgeConfig.color}>{badgeConfig.text}</Badge>;
   };
 
+  // Generate a random URI for new objects
+  const generateUri = () => {
+    const uuid = crypto.randomUUID();
+    return `urn:${config.objectTypeName.toLowerCase().replace(/\s+/g, '')}:${uuid}`;
+  };
+
   // API functions
   const fetchObject = async () => {
     if (isCreateMode) {
@@ -223,7 +229,11 @@ export function useObjectDetail<T extends BaseRDFObject = BaseRDFObject>(
     try {
       setSaving(true);
       setError(null);
-      const requestData = buildApiRequestData(object);
+      // Auto-generate a URI for new objects if not provided
+      const saveObject = isCreateMode && !object.object_uri
+        ? { ...object, object_uri: generateUri() }
+        : object;
+      const requestData = buildApiRequestData(saveObject);
 
       if (isCreateMode) {
         await config.crudOps.create(

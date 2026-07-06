@@ -16,6 +16,7 @@ from vitalgraph.agent_registry.agent_models import (
     AgentEndpointUpdate,
     AgentFunctionCreate,
     AgentFunctionUpdate,
+    AgentListResponse,
     AgentProtocol,
     AgentStatusChange,
     AgentTypeCreate,
@@ -213,4 +214,214 @@ class TestAgentRegistryCrud:
         assert function_id not in active_ids
 
         # Cleanup agent
+        await ar.delete_agent(agent_id)
+
+
+class TestAgentRegistryNewFields:
+    """Tests for protocol_config, transport_config, output_schema fields."""
+
+    async def test_protocol_config_roundtrip(self, vg_client):
+        """Create agent with protocol_config and verify it round-trips."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:pc-test-{uuid.uuid4().hex[:8]}"
+        pc = {"version": "1.0", "supported_methods": ["tools/list", "tools/call"]}
+
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Protocol Config Test",
+            agent_uri=agent_uri,
+            protocol_format_uri=AgentProtocol.MCP,
+            protocol_config=pc,
+        ))
+        agent_id = agent.agent_id
+        assert agent.protocol_config == pc
+
+        # Verify via get
+        resp = await ar.get_agent(agent_id)
+        assert resp.agents[0].protocol_config == pc
+
+        # Update protocol_config
+        new_pc = {"version": "2.0", "supported_methods": ["tools/list"]}
+        updated = await ar.update_agent(agent_id, AgentUpdate(protocol_config=new_pc))
+        assert updated.protocol_config == new_pc
+
+        await ar.delete_agent(agent_id)
+
+    async def test_transport_config_roundtrip(self, vg_client):
+        """Create endpoint with transport_config and verify it round-trips."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:tc-test-{uuid.uuid4().hex[:8]}"
+
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Transport Config Test",
+            agent_uri=agent_uri,
+        ))
+        agent_id = agent.agent_id
+
+        tc = {"tls": True, "timeout_ms": 30000, "headers": {"X-Custom": "test"}}
+        ep = await ar.create_endpoint(agent_id, AgentEndpointCreate(
+            endpoint_uri=f"urn:ep:{uuid.uuid4().hex[:6]}",
+            endpoint_url="https://example.com/api",
+            protocol="https",
+            transport_config=tc,
+        ))
+        assert ep.transport_config == tc
+
+        # Update transport_config
+        new_tc = {"tls": True, "timeout_ms": 60000}
+        updated_ep = await ar.update_endpoint(ep.endpoint_id, AgentEndpointUpdate(
+            transport_config=new_tc,
+        ))
+        assert updated_ep.transport_config == new_tc
+
+        await ar.delete_agent(agent_id)
+
+    async def test_output_schema_roundtrip(self, vg_client):
+        """Create function with output_schema and verify it round-trips."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:os-test-{uuid.uuid4().hex[:8]}"
+
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Output Schema Test",
+            agent_uri=agent_uri,
+        ))
+        agent_id = agent.agent_id
+
+        out_schema = {"type": "object", "properties": {"result": {"type": "string"}}}
+        fn = await ar.create_function(agent_id, AgentFunctionCreate(
+            function_uri=f"urn:fn:{uuid.uuid4().hex[:6]}",
+            function_name="Test Func",
+            parameters={"input": {"type": "string"}},
+            output_schema=out_schema,
+        ))
+        assert fn.output_schema == out_schema
+
+        # Update output_schema
+        new_os = {"type": "object", "properties": {"result": {"type": "integer"}}}
+        updated_fn = await ar.update_function(fn.function_id, AgentFunctionUpdate(
+            output_schema=new_os,
+        ))
+        assert updated_fn.output_schema == new_os
+
+        await ar.delete_agent(agent_id)
+
+    async def test_new_protocol_constants(self, vg_client):
+        """Verify new protocol constants exist."""
+        assert AgentProtocol.OPENAI_RESPONSES == "urn:vital-ai:protocol:openai-responses:1.0"
+        assert AgentProtocol.REST == "urn:vital-ai:protocol:rest:1.0"
+        assert "urn:vital-ai:protocol:openai-responses:1.0" in AgentProtocol.ALL
+        assert "urn:vital-ai:protocol:rest:1.0" in AgentProtocol.ALL
+
+
+class TestAgentRegistryRollback:
+    """Tests for changelog snapshots and agent rollback."""
+
+    async def test_update_captures_snapshot(self, vg_client):
+        """Update agent and verify changelog has before/after snapshot."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:snap-test-{uuid.uuid4().hex[:8]}"
+
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Snapshot Test Original",
+            agent_uri=agent_uri,
+            version="1.0.0",
+            capabilities=["chat"],
+        ))
+        agent_id = agent.agent_id
+
+        # Update
+        await ar.update_agent(agent_id, AgentUpdate(
+            agent_name="Snapshot Test Updated",
+            version="2.0.0",
+            capabilities=["chat", "search"],
+        ))
+
+        # Check changelog
+        log = await ar.get_change_log(agent_id)
+        entries = log.get("entries", [])
+        update_entries = [e for e in entries if e["change_type"] == "agent_updated"]
+        assert len(update_entries) >= 1
+
+        detail = update_entries[0].get("change_detail", {})
+        assert "before" in detail
+        assert "after" in detail
+        assert detail["before"]["agent_name"] == "Snapshot Test Original"
+        assert detail["after"]["agent_name"] == "Snapshot Test Updated"
+        assert detail["before"]["version"] == "1.0.0"
+        assert detail["after"]["version"] == "2.0.0"
+
+        await ar.delete_agent(agent_id)
+
+    async def test_rollback_agent(self, vg_client):
+        """Create -> update -> rollback -> verify original state restored."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:rb-test-{uuid.uuid4().hex[:8]}"
+
+        # Create with initial state
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Rollback Test Original",
+            agent_uri=agent_uri,
+            version="1.0.0",
+            description="Original description",
+        ))
+        agent_id = agent.agent_id
+
+        # Update to new state
+        await ar.update_agent(agent_id, AgentUpdate(
+            agent_name="Rollback Test Changed",
+            version="2.0.0",
+            description="Changed description",
+        ))
+
+        # Verify updated
+        resp = await ar.get_agent(agent_id)
+        assert resp.agents[0].agent_name == "Rollback Test Changed"
+        assert resp.agents[0].version == "2.0.0"
+
+        # Get the update log entry
+        log = await ar.get_change_log(agent_id)
+        entries = log.get("entries", [])
+        update_entry = next(
+            (e for e in entries if e["change_type"] == "agent_updated"), None
+        )
+        assert update_entry is not None
+        log_id = update_entry["log_id"]
+
+        # Rollback
+        rolled_back = await ar.rollback_agent(agent_id, log_id)
+        assert rolled_back.agent_name == "Rollback Test Original"
+        assert rolled_back.version == "1.0.0"
+        assert rolled_back.description == "Original description"
+
+        # Verify rollback logged
+        log_after = await ar.get_change_log(agent_id)
+        entries_after = log_after.get("entries", [])
+        rollback_entries = [e for e in entries_after if e["change_type"] == "agent_rollback"]
+        assert len(rollback_entries) >= 1
+        rb_detail = rollback_entries[0].get("change_detail", {})
+        assert rb_detail.get("rollback_from_log_id") == log_id
+
+        await ar.delete_agent(agent_id)
+
+    async def test_rollback_invalid_log_id(self, vg_client):
+        """Rollback with invalid log_id should fail."""
+        ar = vg_client.agent_registry
+        agent_uri = f"urn:vital-ai:agent:rbi-test-{uuid.uuid4().hex[:8]}"
+
+        agent = await ar.create_agent(AgentCreate(
+            agent_type_key="urn:vital-ai:agent-type:chat",
+            agent_name="Rollback Invalid Test",
+            agent_uri=agent_uri,
+        ))
+        agent_id = agent.agent_id
+
+        # Try rollback with bogus log_id — should get 400
+        with pytest.raises(Exception) as exc_info:
+            await ar.rollback_agent(agent_id, 999999999)
+        assert "400" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
+
         await ar.delete_agent(agent_id)

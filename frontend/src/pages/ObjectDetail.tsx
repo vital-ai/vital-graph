@@ -63,7 +63,7 @@ const ObjectDetail: React.FC = () => {
   const hookData = useObjectDetail(config, createDefaultObject, buildApiRequestData);
 
   // Render with shared component
-  return <ObjectDetailRenderer {...hookData} config={config} />;
+  return <div data-testid="object-detail-page"><ObjectDetailRenderer {...hookData} config={config} /></div>;
 };
 
 export default ObjectDetail;

@@ -37,7 +37,7 @@ const DataImportDetail: React.FC = () => {
   const navigate = useNavigate();
   const { importId } = useParams<{ importId: string }>();
   const [searchParams] = useSearchParams();
-  const isNew = importId === 'new';
+  const isNew = !importId || importId === 'new';
 
   const [job, setJob] = useState<ImportExportJob | null>(null);
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
@@ -182,7 +182,7 @@ const DataImportDetail: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="data-import-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-4">
         <BreadcrumbItem href="/" icon={HiHome}>

@@ -3,7 +3,7 @@
 Pydantic models for KG entity operations including entities, frames, and slots.
 """
 
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Literal, Optional, Any, Union
 from pydantic import BaseModel, Field, model_validator
 
 from .quad_model import QuadResponse, QuadResultsResponse
@@ -252,6 +252,15 @@ class GeoSearchCriteria(BaseModel):
     radius_m: Optional[float] = Field(None, description="Filter to within radius (meters)", gt=0)
     sort_by_distance: bool = Field(False, description="Sort results by distance ascending")
     top_k: Optional[int] = Field(None, description="Limit results for nearest-N queries", ge=1, le=1000)
+    geo_target: Optional[str] = Field(
+        None,
+        description=(
+            "Which SPARQL variable the geo function binds to. "
+            "'slot' = bind to the geo slot variable from frame_criteria; "
+            "'entity' = bind to ?entity (default, backward-compatible). "
+            "If None, defaults to 'entity'."
+        ),
+    )
 
 
 class EntityQueryCriteria(BaseModel):
@@ -295,6 +304,141 @@ class EntityGraphDeleteResponse(BaseDeleteResponse):
 class EntitiesGraphResponse(QuadResponse):
     """Enhanced response model for entities with optional graph data (paginated quad results)."""
     complete_graphs: Optional[Dict[str, QuadResultsResponse]] = Field(None, description="Complete graphs by entity URI when include_entity_graph=True")
+
+
+class DocumentSearchCriteria(BaseModel):
+    """Criteria for document queries — document-specific fields that map to
+    SPARQL triple patterns in _build_document_where_clause.
+
+    Sits alongside VectorSearchCriteria/GeoSearchCriteria on KGQueryCriteria.
+    vector_criteria, multi_vector_criteria, geo_criteria, sort_criteria,
+    entity_property_filters, and frame_criteria remain on KGQueryCriteria
+    (shared with entity queries).
+    """
+
+    # ── Document type filtering ──
+    document_type_uri: Optional[str] = Field(
+        None,
+        description="Filter by hasKGDocumentType URI (e.g. urn:kgdoctype:technical_article). "
+                    "Generates: ?entity haley:hasKGDocumentType <uri> ."
+    )
+
+    # ── Segment scoping ──
+    search_scope: Optional[Literal["all", "segments", "originals", "summaries"]] = Field(
+        None,
+        description="Controls which tier of documents to search. "
+                    "'segments' → segmentIndex > 0 (chunk-level results). "
+                    "'summaries' → segmentTypeURI = segmentation_parent (parent copies with summary text). "
+                    "'originals' → no segmentTypeURI at all (unprocessed docs). "
+                    "'all' / None → no scope filter."
+    )
+
+    # ── Segmentation method/type filtering ──
+    segment_method_uri: Optional[str] = Field(
+        None,
+        description="Filter by segmentation method URI (e.g. urn:segmethod:markdown_heading_split). "
+                    "Generates: ?entity haley:hasKGDocumentSegmentMethodURI <uri> ."
+    )
+    segment_type_uri: Optional[str] = Field(
+        None,
+        description="Filter by segment type URI (e.g. urn:segtype:markdown_section). "
+                    "Generates: ?entity haley:hasKGDocumentSegmentTypeURI <uri> ."
+    )
+
+    # ── Parent scoping ──
+    parent_document_uri: Optional[str] = Field(
+        None,
+        description="Filter to segments of a specific parent document (via Edge_hasKGDocumentSegment). "
+                    "Generates: ?_seg_edge vital-core:hasEdgeSource <uri> . "
+                    "?_seg_edge vital-core:hasEdgeDestination ?entity ."
+    )
+
+    # ── Content type filtering ──
+    content_type: Optional[str] = Field(
+        None,
+        description="Filter by hasKGContentType (MIME type). "
+                    "Generates: ?entity haley:hasKGContentType \"mime_type\" ."
+    )
+
+    # ── Token length range ──
+    min_token_length: Optional[int] = Field(
+        None, ge=0,
+        description="Minimum segment token length. "
+                    "Generates: ?entity haley:hasKGDocumentSegmentTokenLength ?_tlen . FILTER(?_tlen >= N)"
+    )
+    max_token_length: Optional[int] = Field(
+        None, ge=1,
+        description="Maximum segment token length. "
+                    "Generates: FILTER(?_tlen <= N)  (reuses ?_tlen from min_token_length or adds binding)"
+    )
+
+    # ── Text search ──
+    search_text: Optional[str] = Field(
+        None,
+        description="Full-text search on headline/content. "
+                    "When fts_index_name is set, uses GIN-indexed BM25 search via vg:textSearch. "
+                    "Otherwise falls back to CONTAINS(LCASE(...)) brute-force scan."
+    )
+    fts_index_name: Optional[str] = Field(
+        None,
+        description="Name of the FTS index to use for search_text. "
+                    "When set, generates BIND(vg:textSearch(?entity, 'text', 'index') AS ?_fts_score) "
+                    "FILTER(?_fts_score > 0). When None, falls back to CONTAINS string matching."
+    )
+
+    # ── Segmentation-aware response enrichment ──
+    include_parent_context: bool = Field(
+        False,
+        description="When True (and searching segments), follow Edge_hasKGDocumentSegment "
+                    "backwards to include the parent document URI and headline in the response. "
+                    "Generates an additional OPTIONAL block in the SPARQL query."
+    )
+    include_original_uri: bool = Field(
+        False,
+        description="When True (and include_parent_context=True), also follow the "
+                    "parent→original edge to return the original document URI. "
+                    "Generates a second OPTIONAL hop."
+    )
+    exclude_managed_segments: bool = Field(
+        True,
+        description="When True (default), exclude managed segment types from results "
+                    "(segmentation_parent, markdown_section, text_chunk) — same as "
+                    "GET /api/kgdocuments default behavior. Set False to include all."
+    )
+
+    # ── Inline content projection ──
+    include_segment_text: bool = Field(
+        False,
+        description="When True, project segment text directly in the SPARQL query "
+                    "(hasKGDocumentContent, hasKGDocumentHeadline) so the response "
+                    "contains chunk content without a second fetch. Populates "
+                    "DocumentResult.segment_text and .segment_headline."
+    )
+
+    # ── Grouping ──
+    group_by_document: bool = Field(
+        False,
+        description="When True, collapse segment results by parent document. "
+                    "Returns one DocumentResult per parent, keeping the segment with "
+                    "the highest vector score. Requires include_parent_context=True. "
+                    "Generates SPARQL GROUP BY ?_parent_doc with MAX(?vg_score) "
+                    "and SAMPLE(?entity) aggregation. "
+                    "Note: when combined with include_segment_text, the text returned "
+                    "is from the SAMPLE'd segment (not guaranteed to be the best-scoring one)."
+    )
+
+    # ── Validators ──
+    @model_validator(mode='after')
+    def _validate_dependencies(self) -> 'DocumentSearchCriteria':
+        if self.include_original_uri and not self.include_parent_context:
+            raise ValueError(
+                "include_original_uri requires include_parent_context=True "
+                "(original is resolved via parent → original edge traversal)")
+        if self.group_by_document and not self.include_parent_context:
+            raise ValueError(
+                "group_by_document requires include_parent_context=True "
+                "(grouping key is ?_parent_doc from parent context OPTIONAL)")
+        return self
 
 
 # Update forward references for recursive models

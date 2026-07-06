@@ -5,7 +5,7 @@ Client-side implementation for KG entity-to-entity connection query operations.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Literal, Optional, List
 
 from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
@@ -16,8 +16,13 @@ from ...model.kgqueries_model import (
     FrameQueryResponse,
     KGEntityQueryResponse,
     RelationQueryResponse,
+    DocumentQueryResponse,
 )
-from ...model.kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria
+from ...model.kgentities_model import (
+    EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria,
+    VectorSearchCriteria, MultiVectorSearchCriteria, GeoSearchCriteria,
+    DocumentSearchCriteria,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -368,3 +373,77 @@ class KGQueriesEndpoint(BaseEndpoint):
             response.entity_graph_objects = hydrated
         
         return response
+    
+    async def query_documents(
+        self,
+        space_id: str,
+        graph_id: str,
+        # Document-specific criteria (all map to SPARQL patterns)
+        document_type_uri: Optional[str] = None,
+        search_scope: Optional[Literal["all", "segments", "originals", "summaries"]] = None,
+        segment_method_uri: Optional[str] = None,
+        segment_type_uri: Optional[str] = None,
+        parent_document_uri: Optional[str] = None,
+        content_type: Optional[str] = None,
+        min_token_length: Optional[int] = None,
+        max_token_length: Optional[int] = None,
+        search_text: Optional[str] = None,
+        fts_index_name: Optional[str] = None,
+        document_uris: Optional[List[str]] = None,
+        # Segmentation-aware response enrichment
+        include_parent_context: bool = False,
+        include_original_uri: bool = False,
+        exclude_managed_segments: bool = True,
+        include_segment_text: bool = False,
+        group_by_document: bool = False,
+        # Shared criteria (same as entity queries)
+        vector_criteria: Optional[VectorSearchCriteria] = None,
+        multi_vector_criteria: Optional[MultiVectorSearchCriteria] = None,
+        geo_criteria: Optional[GeoSearchCriteria] = None,
+        sort_criteria: Optional[List[SortCriteria]] = None,
+        entity_property_filters: Optional[List[EntityPropertyFilter]] = None,
+        frame_criteria: Optional[List[FrameCriteria]] = None,
+        # Pagination
+        page_size: int = 10,
+        offset: int = 0,
+        count_only: bool = False,
+    ) -> DocumentQueryResponse:
+        """Query KGDocuments matching criteria. Returns document URIs.
+
+        Document-specific fields are packed into DocumentSearchCriteria;
+        shared fields (vector, geo, sort, etc.) go on KGQueryCriteria.
+        """
+        doc_criteria = DocumentSearchCriteria(
+            document_type_uri=document_type_uri,
+            search_scope=search_scope,
+            segment_method_uri=segment_method_uri,
+            segment_type_uri=segment_type_uri,
+            parent_document_uri=parent_document_uri,
+            content_type=content_type,
+            min_token_length=min_token_length,
+            max_token_length=max_token_length,
+            search_text=search_text,
+            fts_index_name=fts_index_name,
+            include_parent_context=include_parent_context,
+            include_original_uri=include_original_uri,
+            exclude_managed_segments=exclude_managed_segments,
+            include_segment_text=include_segment_text,
+            group_by_document=group_by_document,
+        )
+        criteria = KGQueryCriteria(
+            query_type="document",
+            document_criteria=doc_criteria,
+            source_entity_uris=document_uris,
+            vector_criteria=vector_criteria,
+            multi_vector_criteria=multi_vector_criteria,
+            geo_criteria=geo_criteria,
+            sort_criteria=sort_criteria,
+            entity_property_filters=entity_property_filters,
+            frame_criteria=frame_criteria,
+        )
+        raw = await self.query_connections(
+            space_id=space_id, graph_id=graph_id,
+            criteria=criteria, page_size=page_size,
+            offset=offset, count_only=count_only,
+        )
+        return DocumentQueryResponse.from_raw(raw)

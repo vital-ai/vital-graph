@@ -305,7 +305,7 @@ const IndexMappings: React.FC = () => {
   };
 
   return (
-    <div>
+    <div data-testid="index-mappings-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem>Index Mappings</BreadcrumbItem>

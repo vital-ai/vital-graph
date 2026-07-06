@@ -169,7 +169,7 @@ const FileUpload: React.FC = () => {
   const isFormValid = fileForm.file && fileForm.name.trim().length > 0;
 
   return (
-    <div className="p-6">
+    <div className="p-6" data-testid="file-upload-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>

@@ -171,7 +171,7 @@ const Admin: React.FC = () => {
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="admin-page">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

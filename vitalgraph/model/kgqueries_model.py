@@ -7,7 +7,7 @@ Single endpoint with query criteria that specifies relation, frame, or entity qu
 from typing import Dict, List, Optional, Any, Union
 from pydantic import BaseModel, Field
 
-from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria, VectorSearchCriteria, MultiVectorSearchCriteria, GeoSearchCriteria
+from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria, VectorSearchCriteria, MultiVectorSearchCriteria, GeoSearchCriteria, DocumentSearchCriteria
 from .api_model import BasePaginatedResponse
 
 
@@ -15,7 +15,10 @@ class KGQueryCriteria(BaseModel):
     """Criteria for KG entity-to-entity queries."""
     
     # Query type specification
-    query_type: str = Field(..., description="Query type: 'relation', 'frame', 'entity', or 'frame_query'")
+    query_type: str = Field(..., description="Query type: 'relation', 'frame', 'entity', 'frame_query', or 'document'")
+    
+    # Document-specific criteria (only used when query_type="document")
+    document_criteria: Optional[DocumentSearchCriteria] = Field(None, description="Document-specific criteria for query_type='document'")
     
     # Query mode specification (for frame queries)
     query_mode: str = Field("edge", description="Query mode: 'edge' (use Edge_hasEntityKGFrame) or 'direct' (use vg-direct:hasEntityFrame)")
@@ -104,6 +107,9 @@ class KGQueryResponse(BasePaginatedResponse):
     entity_graphs: Optional[Dict[str, List[Dict[str, Any]]]] = Field(None, description="Entity graphs as JSON quads ({s,p,o,g}) keyed by entity URI (when include_entity_graph=True)")
     # Case 3 (relation)
     relation_connections: Optional[List[RelationConnection]] = Field(None, description="Relation connections (when query_type='relation')")
+    # Case 4 (document)
+    document_uris: Optional[List[str]] = Field(None, description="Matching document/segment URIs (when query_type='document')")
+    document_results: Optional[List['DocumentResult']] = Field(None, description="Enriched document results with parent context (when query_type='document' with include_parent_context=True)")
     # Legacy (query_type='frame' — unchanged)
     frame_connections: Optional[List[FrameConnection]] = Field(None, description="Frame connections (when query_type='frame')")
 
@@ -155,6 +161,34 @@ class RelationQueryResponse(BasePaginatedResponse):
     def from_raw(cls, raw: 'KGQueryResponse') -> 'RelationQueryResponse':
         return cls(
             connections=raw.relation_connections or [],
+            total_count=raw.total_count,
+            page_size=raw.page_size,
+            offset=raw.offset,
+        )
+
+
+class DocumentResult(BaseModel):
+    """A single document result with optional parent/original context."""
+    document_uri: str = Field(..., description="Document or segment URI")
+    score: Optional[float] = Field(None, description="Vector similarity or hybrid score (when vector_criteria used)")
+    segment_text: Optional[str] = Field(None, description="Segment chunk text (when include_segment_text=True)")
+    segment_headline: Optional[str] = Field(None, description="Segment heading (when include_segment_text=True)")
+    parent_document_uri: Optional[str] = Field(None, description="Parent copy URI (when include_parent_context=True)")
+    parent_document_name: Optional[str] = Field(None, description="Parent copy name (when include_parent_context=True)")
+    original_document_uri: Optional[str] = Field(None, description="Original document URI (when include_original_uri=True)")
+
+
+class DocumentQueryResponse(BasePaginatedResponse):
+    """Typed response from query_documents() — Case 4 (document as top-most object)."""
+    document_uris: List[str] = Field(default_factory=list, description="Flat list of document/segment URIs")
+    document_results: Optional[List[DocumentResult]] = Field(
+        None, description="Enriched results with parent context (populated when include_parent_context=True)")
+
+    @classmethod
+    def from_raw(cls, raw: 'KGQueryResponse') -> 'DocumentQueryResponse':
+        return cls(
+            document_uris=raw.document_uris or [],
+            document_results=raw.document_results,
             total_count=raw.total_count,
             page_size=raw.page_size,
             offset=raw.offset,

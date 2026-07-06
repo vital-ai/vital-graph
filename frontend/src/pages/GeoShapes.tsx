@@ -121,7 +121,7 @@ const GeoShapes: React.FC = () => {
   const totalPages = Math.ceil(totalCount / pageSize);
 
   return (
-    <div>
+    <div data-testid="geo-shapes-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem>Geo Shapes</BreadcrumbItem>

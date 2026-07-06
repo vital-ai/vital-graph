@@ -129,7 +129,7 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="object-detail">
       {/* Navigation Breadcrumb */}
       <NavigationBreadcrumb 
         spaceId={spaceId} 
@@ -156,10 +156,10 @@ export function ObjectDetailRenderer<T extends BaseRDFObject = BaseRDFObject>(pr
             ← Back to {config.objectTypeName}s
           </Button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="object-detail-title">
               {getPageTitle()}
             </h1>
-            <p className="text-gray-600 dark:text-gray-400">
+            <p className="text-gray-600 dark:text-gray-400" data-testid="object-detail-name">
               {getObjectDisplayName()}
             </p>
           </div>

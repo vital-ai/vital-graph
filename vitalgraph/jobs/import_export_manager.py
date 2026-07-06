@@ -69,12 +69,14 @@ class ImportExportJobManager:
         pool,
         signal_manager=None,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+        backfill_task=None,
     ):
         self._pool = pool
         self._signal = signal_manager
         self._max_concurrent = max_concurrent
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._cancel_events: Dict[str, asyncio.Event] = {}
+        self._backfill_task = backfill_task
 
     # ------------------------------------------------------------------
     # Job CRUD (DB)
@@ -353,6 +355,10 @@ class ImportExportJobManager:
                     records_done=result.get("quads", result.get("records", 0)),
                     completed_at=True,
                 )
+                # Nudge the backfill task so it stamps server-managed
+                # properties on newly imported entities promptly.
+                if job['job_type'] == 'import' and self._backfill_task:
+                    self._backfill_task.nudge()
             else:
                 await self._update_status(
                     job_id, "failed",

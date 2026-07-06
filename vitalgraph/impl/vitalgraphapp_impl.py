@@ -192,6 +192,91 @@ class VitalGraphAppImpl:
             else:
                 self.logger.warning(f"Static files directory not found at {static_dir}")
 
+    async def _auto_init_tables(self):
+        """Auto-initialize admin tables if they don't exist.
+
+        Triggered by VG_AUTO_INIT=true — intended for test environments only.
+        Mirrors the ``vitalgraphadmin init`` CLI command.
+        """
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
+        self.logger.info(f"VG_AUTO_INIT: initializing {backend_type} admin tables...")
+
+        try:
+            if backend_type == 'sparql_sql':
+                from vitalgraph.db.sparql_sql.sparql_sql_admin import SparqlSQLAdmin
+                admin = SparqlSQLAdmin()
+            elif backend_type == 'fuseki_postgresql':
+                from vitalgraph.db.fuseki_postgresql.fuseki_admin import FusekiPostgreSQLAdmin
+                admin = FusekiPostgreSQLAdmin()
+            else:
+                self.logger.warning(f"VG_AUTO_INIT: unsupported backend type '{backend_type}', skipping")
+                return
+
+            await admin.init_tables(self.db_impl)
+            self.logger.info("VG_AUTO_INIT: admin tables initialized successfully")
+
+            # Auth migration tables (api_key, audit_log)
+            await self._auto_init_auth_tables()
+            # Entity registry tables
+            await self._auto_init_entity_registry()
+
+            # Ensure the bootstrap admin user exists in the DB so JWT
+            # token-version validation succeeds after login.
+            admin_user = os.getenv('AUTH_ROOT_USERNAME', 'admin')
+            admin_pass = os.getenv('AUTH_ROOT_PASSWORD', 'admin')
+            existing = await self.db_impl.get_user_by_username(admin_user)
+            if existing is None:
+                from vitalgraph.auth.password import hash_password
+                await self.db_impl.create_user(
+                    username=admin_user,
+                    password_hash=hash_password(admin_pass),
+                    email=f"{admin_user}@localhost",
+                    full_name="Bootstrap Admin",
+                    role="admin",
+                )
+                self.logger.info(f"VG_AUTO_INIT: created admin user '{admin_user}' in database")
+            else:
+                self.logger.info(f"VG_AUTO_INIT: admin user '{admin_user}' already exists")
+        except Exception as e:
+            self.logger.error(f"VG_AUTO_INIT: failed to initialize tables: {e}")
+            raise
+
+    async def _auto_init_entity_registry(self):
+        """Create entity registry tables if they don't exist."""
+        try:
+            from vitalgraph.entity_registry.entity_registry_schema import EntityRegistrySchema
+            schema = EntityRegistrySchema()
+            pool = self.db_impl.connection_pool
+            for sql in schema.create_tables_sql():
+                await pool.execute(sql)
+            for sql in schema.create_indexes_sql():
+                await pool.execute(sql)
+            for sql in schema.create_views_sql():
+                await pool.execute(sql)
+            await pool.execute(schema.seed_entity_types_sql())
+            await pool.execute(schema.seed_entity_categories_sql())
+            await pool.execute(schema.seed_location_types_sql())
+            await pool.execute(schema.seed_relationship_types_sql())
+            for sql in schema.migrations_sql():
+                await pool.execute(sql)
+            self.logger.info("VG_AUTO_INIT: entity registry tables initialized")
+        except Exception as e:
+            self.logger.error(f"VG_AUTO_INIT: entity registry init failed: {e}")
+            raise
+
+    async def _auto_init_auth_tables(self):
+        """Create api_key and audit_log tables if they don't exist."""
+        try:
+            from vitalgraph.db.migrations.migrate_auth_schema import migrate_auth_schema
+            pool = self.db_impl.connection_pool
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await migrate_auth_schema(conn)
+            self.logger.info("VG_AUTO_INIT: auth tables (api_key, audit_log) initialized")
+        except Exception as e:
+            self.logger.error(f"VG_AUTO_INIT: auth tables init failed: {e}")
+            raise
+
     def _setup_startup_events(self):
         """Setup FastAPI startup and shutdown events"""
         @self.app.on_event("startup")
@@ -220,6 +305,10 @@ class VitalGraphAppImpl:
                     self.db_impl = self.vital_graph_impl.get_db_impl()
                     self.auth.set_db_impl(self.db_impl)
                     self.api.db = self.db_impl
+                    
+                    # Auto-init admin tables if VG_AUTO_INIT=true (test environments only)
+                    if os.getenv('VG_AUTO_INIT', '').lower() == 'true':
+                        await self._auto_init_tables()
                     
                     # Update space_manager reference after database connection
                     self.space_manager = self.vital_graph_impl.get_space_manager()
@@ -318,6 +407,14 @@ class VitalGraphAppImpl:
                             from vitalgraph.agent_registry.agent_registry_impl import AgentRegistryImpl
                             self.agent_registry = AgentRegistryImpl(pool)
                             self.logger.info("✅ Agent Registry initialized")
+                            # Attach vector/FTS populator if vectorization is available
+                            try:
+                                from vitalgraph.agent_registry.agent_registry_vector_populator import AgentRegistryVectorPopulator
+                                populator = AgentRegistryVectorPopulator(pool)
+                                self.agent_registry.set_vector_populator(populator)
+                                self.logger.info("✅ Agent Registry Vector Populator attached")
+                            except Exception as vec_err:
+                                self.logger.info(f"Agent Registry Vector Populator not available: {vec_err}")
                         else:
                             self.logger.warning("Agent Registry skipped - no connection pool available")
                             self.agent_registry = None
@@ -630,10 +727,16 @@ class VitalGraphAppImpl:
                     try:
                         pool = getattr(self.db_impl, 'connection_pool', None)
                         if pool and self.space_manager:
-                            from vitalgraph.tasks.backfill_server_properties_task import BackfillServerPropertiesTask
+                            from vitalgraph.tasks.backfill_server_properties_task import (
+                                BackfillServerPropertiesTask, set_backfill_task,
+                            )
                             self._backfill_task = BackfillServerPropertiesTask(pool, self.space_manager)
                             self._backfill_task.start()
+                            set_backfill_task(self._backfill_task)
                             self.logger.info("✅ Server-properties backfill task started")
+                            # Wire backfill nudge into import/export manager
+                            if hasattr(self, 'import_export_manager') and self.import_export_manager:
+                                self.import_export_manager._backfill_task = self._backfill_task
                         else:
                             self.logger.warning("Backfill task skipped — no connection pool or space_manager")
                     except Exception as e:
@@ -775,8 +878,6 @@ class VitalGraphAppImpl:
         self._init_process_routes()
         self.logger.info("Initializing admin routes...")
         self._init_admin_routes()
-        self.logger.info("Initializing vector mapping routes...")
-        self._init_vector_mapping_routes()
         self.logger.info("Initializing fuzzy mapping routes...")
         self._init_fuzzy_mapping_routes()
         self.logger.info("Initializing vector index routes...")
@@ -848,7 +949,7 @@ class VitalGraphAppImpl:
         kgframes_router = create_kgframes_router(self.space_manager, self.get_current_user)
         kgrelations_router = create_kgrelations_router(self.space_manager, self.get_current_user)
         kgqueries_router = create_kgqueries_router(self.space_manager, self.get_current_user)
-        kgdocuments_router = create_kgdocuments_router(self.space_manager, self.get_current_user)
+        kgdocuments_router = create_kgdocuments_router(self.space_manager, self.get_current_user, segmentation_worker=self._segmentation_worker)
         files_router = create_files_router(self.space_manager, self.get_current_user, config=self.config.config_data)
         
         # Include routers in the FastAPI app  
@@ -1012,12 +1113,6 @@ class VitalGraphAppImpl:
         admin_router = create_admin_router(self.space_manager, self.get_current_user)
         self.app.include_router(admin_router, prefix="/api/admin", tags=["Admin"])
     
-    def _init_vector_mapping_routes(self):
-        """Initialize vector mapping CRUD endpoint routes."""
-        from vitalgraph.endpoint.vector_mappings_endpoint import create_vector_mappings_router
-        
-        vector_mappings_router = create_vector_mappings_router(self, self.get_current_user)
-        self.app.include_router(vector_mappings_router, prefix="/api", tags=["Vector Mappings"])
     
     def _init_fuzzy_mapping_routes(self):
         """Initialize fuzzy mapping CRUD endpoint routes."""

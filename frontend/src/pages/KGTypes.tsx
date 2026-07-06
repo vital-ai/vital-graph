@@ -179,7 +179,7 @@ const KGTypes: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="kgtypes-page">
       <NavigationBreadcrumb spaceId={SP_KG_TYPES} currentPageName="KG Types" currentPageIcon={KGTypesIcon} />
 
       {/* Header */}
@@ -187,7 +187,7 @@ const KGTypes: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <KGTypesIcon className="w-6 h-6 text-indigo-600" />
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Types</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="kgtypes-title">KG Types</h1>
           </div>
           {hasSelection && !loading && (
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{totalCount} type{totalCount !== 1 ? 's' : ''}</p>
@@ -309,7 +309,7 @@ const KGTypes: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {filtered.map((t, i) => (
-                  <tr key={t.uri || i} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                  <tr key={t.uri || i} data-testid="type-row" className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                     <td className="px-4 py-2.5">
                       <div className="max-w-xs">
                         <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{t.type_name}</p>

@@ -68,6 +68,7 @@ TABLES = [
             auth_service_config JSONB DEFAULT '{}',
             capabilities JSONB DEFAULT '[]',
             metadata JSONB DEFAULT '{}',
+            protocol_config JSONB DEFAULT '{}',
             created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             created_by VARCHAR(255),
@@ -82,6 +83,7 @@ TABLES = [
             endpoint_url VARCHAR(1000) NOT NULL,
             protocol VARCHAR(20) NOT NULL DEFAULT 'websocket',
             status VARCHAR(20) NOT NULL DEFAULT 'active',
+            transport_config JSONB DEFAULT '{}',
             created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             notes TEXT
@@ -95,6 +97,7 @@ TABLES = [
             function_name VARCHAR(255) NOT NULL,
             description TEXT,
             parameters JSONB DEFAULT '{}',
+            output_schema JSONB DEFAULT '{}',
             status VARCHAR(20) NOT NULL DEFAULT 'active',
             created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -130,11 +133,13 @@ INDEXES = [
     'CREATE INDEX IF NOT EXISTS idx_agent_created ON agent(created_time)',
     'CREATE INDEX IF NOT EXISTS idx_agent_capabilities ON agent USING GIN(capabilities)',
     'CREATE INDEX IF NOT EXISTS idx_agent_metadata ON agent USING GIN(metadata)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_protocol_config ON agent USING GIN(protocol_config)',
     # agent_endpoint table
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_agent ON agent_endpoint(agent_id)',
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_uri ON agent_endpoint(agent_id, endpoint_uri)',
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_protocol ON agent_endpoint(protocol)',
     'CREATE INDEX IF NOT EXISTS idx_agent_ep_status ON agent_endpoint(status)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_ep_transport_config ON agent_endpoint USING GIN(transport_config)',
     # agent_function table
     'CREATE INDEX IF NOT EXISTS idx_agent_fn_agent ON agent_function(agent_id)',
     'CREATE INDEX IF NOT EXISTS idx_agent_fn_key ON agent_function(agent_id, function_uri)',
@@ -217,6 +222,29 @@ async def run_create(pool: asyncpg.Pool, dry_run: bool):
             await pool.execute(ddl)
             print(f"  ✅ {label}")
 
+    # Schema evolution — add new columns idempotently for existing deployments
+    # (must run before indexes that reference these columns)
+    alter_stmts = [
+        ("agent.protocol_config",
+         "ALTER TABLE agent ADD COLUMN IF NOT EXISTS protocol_config JSONB DEFAULT '{}'"),
+        ("agent.notes",
+         "ALTER TABLE agent ADD COLUMN IF NOT EXISTS notes TEXT"),
+        ("agent_endpoint.transport_config",
+         "ALTER TABLE agent_endpoint ADD COLUMN IF NOT EXISTS transport_config JSONB DEFAULT '{}'"),
+        ("agent_endpoint.notes",
+         "ALTER TABLE agent_endpoint ADD COLUMN IF NOT EXISTS notes TEXT"),
+        ("agent_function.output_schema",
+         "ALTER TABLE agent_function ADD COLUMN IF NOT EXISTS output_schema JSONB DEFAULT '{}'"),
+        ("agent_function.notes",
+         "ALTER TABLE agent_function ADD COLUMN IF NOT EXISTS notes TEXT"),
+    ]
+    for label, stmt in alter_stmts:
+        if dry_run:
+            print(f"  [DRY RUN] alter: {label}")
+        else:
+            await pool.execute(stmt)
+            print(f"  ✅ alter: {label}")
+
     # Indexes
     for idx_sql in INDEXES:
         idx_name = idx_sql.split('IF NOT EXISTS ')[1].split(' ON')[0]
@@ -239,15 +267,16 @@ async def run_create(pool: asyncpg.Pool, dry_run: bool):
             )
             print(f"  ✅ seed: {type_key}")
 
-    # Views
+    # Views (drop first to handle column changes in underlying tables)
     for view_name, view_sql in VIEWS:
         if dry_run:
             print(f"  [DRY RUN] view: {view_name}")
         else:
+            await pool.execute(f"DROP VIEW IF EXISTS {view_name} CASCADE")
             await pool.execute(view_sql)
             print(f"  ✅ view: {view_name}")
 
-    total = len(TABLES) + len(INDEXES) + len(SEED_AGENT_TYPES) + len(VIEWS)
+    total = len(TABLES) + len(alter_stmts) + len(INDEXES) + len(SEED_AGENT_TYPES) + len(VIEWS)
     if dry_run:
         print(f"\nDRY RUN — {total} statements would be executed.")
     else:

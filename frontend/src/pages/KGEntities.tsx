@@ -155,11 +155,11 @@ const KGEntities: React.FC = () => {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="kgentities-page">
       {/* Page Title */}
       <div className="flex items-center gap-2 mb-2">
         <HiCollection className="w-6 h-6 text-blue-600" />
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Entities</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="kgentities-title">KG Entities</h1>
       </div>
 
       {/* Space / Graph selectors */}
@@ -289,7 +289,7 @@ const KGEntities: React.FC = () => {
       {hasSelection && !loading && entities.length > 0 && (
         <>
           <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-            <table className="w-full text-sm text-left">
+            <table className="w-full text-sm text-left" data-testid="entities-table">
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">
@@ -304,7 +304,7 @@ const KGEntities: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {entities.map((entity) => (
-                  <tr key={entity.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                  <tr key={entity.uri} data-testid="entity-row" className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                     <td className="px-4 py-2.5">
                       <div className="max-w-xs">
                         <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{entity.name}</p>
@@ -322,6 +322,7 @@ const KGEntities: React.FC = () => {
                         <button
                           onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/entity/${encodeURIComponent(entity.uri)}`)}
                           className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 hover:text-blue-500 transition-colors" title="View"
+                          data-testid={`entity-view-${entity.uri}`}
                         >
                           <HiEye className="h-4 w-4" />
                         </button>

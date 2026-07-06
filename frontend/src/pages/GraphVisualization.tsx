@@ -256,7 +256,7 @@ export default function GraphVisualization() {
   }, []);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)]">
+    <div className="flex flex-col h-[calc(100vh-120px)]" data-testid="graph-visualization-page">
       {/* Header */}
       <div className="flex items-center gap-3 mb-3">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Graph Visualization</h1>

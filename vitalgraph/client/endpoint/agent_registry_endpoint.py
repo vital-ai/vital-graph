@@ -244,6 +244,75 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
         )
         return response.json()
 
+    async def discover_agents(
+        self,
+        capability: Optional[str] = None,
+        type_key: Optional[str] = None,
+        protocol_format_uri: Optional[str] = None,
+        protocol_config_key: Optional[str] = None,
+        protocol_config_contains: Optional[Dict[str, Any]] = None,
+        agent_status: str = 'active',
+    ) -> Dict[str, Any]:
+        """Discover agents by capability, type, protocol, protocol_config, and status.
+
+        Args:
+            protocol_config_key: Check that protocol_config has this top-level key.
+            protocol_config_contains: JSONB containment filter — pass a dict fragment
+                that the agent's protocol_config must contain (uses @> operator).
+                Example: {"mcp": {"capabilities": ["tools"]}}
+        """
+        self._check_connection()
+        import json
+        params: Dict[str, Any] = {"agent_status": agent_status}
+        if capability is not None:
+            params["capability"] = capability
+        if type_key is not None:
+            params["type_key"] = type_key
+        if protocol_format_uri is not None:
+            params["protocol_format_uri"] = protocol_format_uri
+        if protocol_config_key is not None:
+            params["protocol_config_key"] = protocol_config_key
+        if protocol_config_contains is not None:
+            params["protocol_config_contains"] = json.dumps(protocol_config_contains)
+        response = await self._make_authenticated_request(
+            "GET", self._url("/agent/discover"), params=params,
+        )
+        return response.json()
+
+    # ------------------------------------------------------------------
+    # Rollback
+    # ------------------------------------------------------------------
+
+    async def rollback_agent(self, agent_id: str, log_id: int) -> AgentResponse:
+        """Rollback an agent to a previous changelog state."""
+        self._check_connection()
+        return await self._make_typed_request(
+            "PUT", self._url("/agent/rollback"), AgentResponse,
+            params={"agent_id": agent_id, "log_id": log_id},
+        )
+
+    # ------------------------------------------------------------------
+    # Semantic / FTS Search
+    # ------------------------------------------------------------------
+
+    async def vector_search(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """Semantic agent search using vector embeddings."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "GET", self._url("/agent/search/vector"),
+            params={"query": query, "limit": limit},
+        )
+        return response.json()
+
+    async def fts_search(self, query: str, limit: int = 20) -> Dict[str, Any]:
+        """Full-text agent search."""
+        self._check_connection()
+        response = await self._make_authenticated_request(
+            "GET", self._url("/agent/search/fts"),
+            params={"query": query, "limit": limit},
+        )
+        return response.json()
+
     # ------------------------------------------------------------------
     # Change Log
     # ------------------------------------------------------------------

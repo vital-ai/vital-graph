@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .vg_functions import FuzzyRequest, VectorRequest
@@ -273,6 +273,11 @@ class EmitContext:
         # variable references (e.g., BIND inside UNION referencing a sibling
         # JOIN variable) and emit a diagnostic warning.
         self.query_all_vars: Optional[frozenset] = None
+        # Deferred UUID column resolution: when a vg: function references a
+        # variable not yet in the TypeRegistry, a placeholder token is emitted
+        # and recorded here.  After child emission populates the TypeRegistry,
+        # callers resolve the placeholders via pop_deferred_uuids().
+        self._deferred_uuids: List[Tuple[str, str]] = []
 
     @property
     def depth(self) -> int:
@@ -364,6 +369,24 @@ class EmitContext:
         """
         self._fuzzy_requests.append(request)
 
+    def add_deferred_uuid(self, var: str, placeholder: str) -> None:
+        """Record a deferred UUID column placeholder for later resolution.
+
+        Called by _resolve_uuid_col when a variable is not yet in the
+        TypeRegistry (the child pattern hasn't been emitted yet).
+        """
+        self._deferred_uuids.append((var, placeholder))
+
+    def pop_deferred_uuids(self) -> List[Tuple[str, str]]:
+        """Pop and return all pending deferred UUID placeholders.
+
+        Called after child emission to resolve placeholders now that
+        the TypeRegistry has been populated by child patterns.
+        """
+        pending = self._deferred_uuids
+        self._deferred_uuids = []
+        return pending
+
     @property
     def fuzzy_requests(self) -> List['FuzzyRequest']:
         """Pending fuzzy search requests for this query."""
@@ -392,6 +415,8 @@ class EmitContext:
         ctx._vector_requests = self._vector_requests
         # Share fuzzy requests list across parent/child contexts
         ctx._fuzzy_requests = self._fuzzy_requests
+        # Share deferred UUIDs list across parent/child contexts
+        ctx._deferred_uuids = self._deferred_uuids
         # Share multi-vector config and index metadata
         ctx.multi_vector_config = self.multi_vector_config
         ctx.vector_index_meta = self.vector_index_meta

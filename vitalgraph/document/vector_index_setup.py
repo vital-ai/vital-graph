@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Default index configuration
 DOCUMENT_SEGMENTS_INDEX_NAME = "document_segments"
-DEFAULT_DIMENSIONS = 384
+DEFAULT_DIMENSIONS = 1536
 DEFAULT_DISTANCE_METRIC = "cosine"
-DEFAULT_PROVIDER = "vitalsigns"
-DEFAULT_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_PROVIDER = "openai"
+DEFAULT_MODEL = "text-embedding-3-small"
 DEFAULT_DESCRIPTION = "Document segment embeddings for chunk retrieval"
 
 # Mapping config for document segments

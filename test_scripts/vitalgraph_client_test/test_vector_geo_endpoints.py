@@ -109,16 +109,16 @@ class VectorGeoEndpointTester:
     # Vector Mappings
     # ------------------------------------------------------------------
 
-    async def test_vector_mappings(self):
-        print("\n── Vector Mappings ──")
+    async def test_search_mappings(self):
+        print("\n── Search Mappings ──")
 
         # List
         try:
-            resp = await self.client.vector_mappings.list_mappings(space_id=self.space_id)
+            resp = await self.client.search_mappings.list_mappings(space_id=self.space_id)
             mappings = resp.get("mappings", [])
-            self._record("List Vector Mappings", True, details=f"count={len(mappings)}")
+            self._record("List Search Mappings", True, details=f"count={len(mappings)}")
         except Exception as e:
-            self._record("List Vector Mappings", False, error=str(e))
+            self._record("List Search Mappings", False, error=str(e))
 
     # ------------------------------------------------------------------
     # Geo Config
@@ -184,7 +184,7 @@ async def test_vector_geo_endpoints() -> bool:
 
         print("\n3. Running endpoint tests...")
         await tester.test_vector_indexes()
-        await tester.test_vector_mappings()
+        await tester.test_search_mappings()
         await tester.test_geo_config()
         await tester.test_geo_points()
 

@@ -31,7 +31,6 @@ describe('VitalGraphClient', () => {
       expect(client.metrics).toBeDefined();
       expect(client.admin).toBeDefined();
       expect(client.processes).toBeDefined();
-      expect(client.vectorMappings).toBeDefined();
       expect(client.vectorIndexes).toBeDefined();
       expect(client.geoConfig).toBeDefined();
       expect(client.geoPoints).toBeDefined();

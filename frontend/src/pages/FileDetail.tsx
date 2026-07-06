@@ -153,7 +153,7 @@ const FileDetail: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="file-detail-page">
       {/* Breadcrumb Navigation */}
       <NavigationBreadcrumb 
         spaceId={spaceId} 

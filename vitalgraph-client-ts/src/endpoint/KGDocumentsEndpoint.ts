@@ -20,7 +20,7 @@ export class KGDocumentsEndpoint extends BaseEndpoint {
 
   async get(spaceId: string, graphId: string, uri: string): Promise<KGDocumentResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
-    return this.request('GET', '/api/graphs/kgdocuments/kgdocument', {
+    return this.request('GET', '/api/graphs/kgdocuments', {
       params: { space_id: spaceId, graph_id: graphId, uri },
     });
   }

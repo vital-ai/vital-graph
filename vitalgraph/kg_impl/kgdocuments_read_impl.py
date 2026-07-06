@@ -234,3 +234,113 @@ class KGDocumentsReadProcessor:
         except Exception as e:
             self.logger.error(f"Failed to list segments for {parent_uri}: {e}")
             raise
+
+    async def get_document_graph(
+        self,
+        backend,
+        space_id: str,
+        graph_id: str,
+        document_uri: str,
+    ) -> List[GraphObject]:
+        """
+        Get the full document graph for a KGDocument URI.
+
+        Returns the original document, parent copy (segmentation_parent),
+        all segment KGDocuments, and the connecting Edge_hasKGDocumentSegment
+        edges.
+
+        Handles both cases:
+        - document_uri is the original → retrieves original + parent + segments + edges
+        - document_uri is a parent copy → retrieves parent + segments + edges
+
+        Args:
+            backend: Backend adapter instance
+            space_id: Space identifier
+            graph_id: Graph identifier (complete URI)
+            document_uri: URI of the original or parent document
+
+        Returns:
+            List[GraphObject]: All objects in the document tree
+        """
+        try:
+            self.logger.debug(f"Getting document graph for: {document_uri}")
+            self._ensure_retriever(backend)
+
+            # SPARQL: find the original doc, parent copy, all segments, and all edges
+            sparql = f"""
+                PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+                PREFIX vital: <http://vital.ai/ontology/vital-core#>
+
+                SELECT DISTINCT ?obj WHERE {{
+                    GRAPH <{graph_id}> {{
+                        {{
+                            # The document itself
+                            BIND(<{document_uri}> AS ?obj)
+                        }} UNION {{
+                            # Edges from the document
+                            ?obj vital:hasEdgeSource <{document_uri}> .
+                            ?obj vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                        }} UNION {{
+                            # Direct children (parent copies or segments)
+                            ?edge vital:hasEdgeSource <{document_uri}> .
+                            ?edge vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                            ?edge vital:hasEdgeDestination ?obj .
+                        }} UNION {{
+                            # Two-hop: original → parent_copy → segments
+                            ?e1 vital:hasEdgeSource <{document_uri}> .
+                            ?e1 vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                            ?e1 vital:hasEdgeDestination ?parent_copy .
+                            ?parent_copy haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+                            ?e2 vital:hasEdgeSource ?parent_copy .
+                            ?e2 vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                            ?e2 vital:hasEdgeDestination ?obj .
+                        }} UNION {{
+                            # Two-hop edges (parent_copy → segment edges)
+                            ?e1 vital:hasEdgeSource <{document_uri}> .
+                            ?e1 vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                            ?e1 vital:hasEdgeDestination ?parent_copy .
+                            ?parent_copy haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+                            ?obj vital:hasEdgeSource ?parent_copy .
+                            ?obj vital:vitaltype haley:Edge_hasKGDocumentSegment .
+                        }}
+                    }}
+                }}
+            """
+            results = await backend.execute_sparql_query(space_id, sparql)
+            bindings = results.get("results", {}).get("bindings", [])
+
+            obj_uris = [b["obj"]["value"] for b in bindings if "obj" in b]
+
+            if not obj_uris:
+                self.logger.debug(f"No document graph found for {document_uri}")
+                return []
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_uris = []
+            for uri in obj_uris:
+                if uri not in seen:
+                    seen.add(uri)
+                    unique_uris.append(uri)
+
+            # Fetch full triples for all URIs
+            grouped_triples = await self.retriever.get_objects_by_uris(
+                space_id, graph_id, unique_uris, include_materialized_edges=False
+            )
+
+            all_triples = []
+            for uri_triples in grouped_triples.values():
+                all_triples.extend(uri_triples)
+
+            if not all_triples:
+                return []
+
+            graph_objects = await asyncio.to_thread(GraphObject.from_triples_list, all_triples)
+            self.logger.debug(
+                f"Document graph for {document_uri}: {len(graph_objects)} objects"
+            )
+            return graph_objects
+
+        except Exception as e:
+            self.logger.error(f"Failed to get document graph for {document_uri}: {e}")
+            raise

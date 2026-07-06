@@ -274,7 +274,7 @@ const SpaceDetail: React.FC = () => {
   }
 
   return (
-    <div>
+    <div data-testid="space-detail-page">
       {/* Banner Message Area */}
       <div className="mb-4 min-h-[60px]">
         {bannerMessage && (

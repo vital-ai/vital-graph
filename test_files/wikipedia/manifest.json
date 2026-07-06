@@ -1,0 +1,40 @@
+{
+  "description": "Wikipedia articles converted to markdown for segmentation testing",
+  "articles": [
+    {
+      "title": "Artificial_intelligence",
+      "filename": "artificial_intelligence.md",
+      "word_count": 17890,
+      "heading_count": 68,
+      "char_count": 120782
+    },
+    {
+      "title": "Solar_System",
+      "filename": "solar_system.md",
+      "word_count": 10220,
+      "heading_count": 32,
+      "char_count": 62708
+    },
+    {
+      "title": "History_of_New_York_City",
+      "filename": "history_of_new_york_city.md",
+      "word_count": 8129,
+      "heading_count": 19,
+      "char_count": 51197
+    },
+    {
+      "title": "Coffee",
+      "filename": "coffee.md",
+      "word_count": 9431,
+      "heading_count": 41,
+      "char_count": 58769
+    },
+    {
+      "title": "Python_(programming_language)",
+      "filename": "python_programming_language.md",
+      "word_count": 6799,
+      "heading_count": 29,
+      "char_count": 44124
+    }
+  ]
+}

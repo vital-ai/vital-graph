@@ -1,5 +1,14 @@
 # VitalGraph Formal Testing Plan
 
+> **Document structure**: This is the main index document. Detailed per-tier
+> plans are split into separate files:
+>
+> - [Tier 1 — Unit Tests](testing_plan_tier1.md)
+> - [Tier 2 — SPARQL Conformance](testing_plan_tier2.md)
+> - [Tier 3 — Integration Tests](testing_plan_tier3.md)
+> - [Tier 4 — API / E2E Tests](testing_plan_tier4.md)
+> - [Tier 5 — Performance Tests](testing_plan_tier5.md)
+
 ## Goal
 
 Transform VitalGraph into a professionally tested, high-confidence database system
@@ -44,7 +53,7 @@ Testing focuses on the **unique value VitalGraph adds**:
 
 ### Key gaps
 
-- **No pytest infrastructure** — no `conftest.py`, no fixtures, no markers.
+- ~~**No pytest infrastructure** — no `conftest.py`, no fixtures, no markers.~~ ✅ DONE (326 tests, `tests/conftest.py`, fixtures, markers)
 - **No CI functional tests** — packaging checks only.
 - **DAWG tests use custom runner** — not integrated with pytest/CI.
 - **Integration tests require live server** — no containerized test harness.
@@ -176,207 +185,17 @@ pytest tests/performance/ -m performance --benchmark-json=results.json
 
 ---
 
-## Tier Details
+## Tier Summary
 
-### Tier 1 — Unit Tests (no DB)
+| Tier | Purpose | Tests | Status | Details |
+|------|---------|-------|--------|---------|
+| 1 | Unit tests (no DB) — IR, optimizer passes, expressions, types | 1018 | ✅ Complete | [testing_plan_tier1.md](testing_plan_tier1.md) |
+| 2 | SPARQL conformance (DAWG + pyoxigraph) | 245 | ✅ 91.2% pass | [testing_plan_tier2.md](testing_plan_tier2.md) |
+| 3 | Integration (needs PG) — roundtrip, CRUD, concurrency | 66 | ✅ 60 pass, 6 xfail | [testing_plan_tier3.md](testing_plan_tier3.md) |
+| 4 | API / E2E (needs server) — all REST endpoints | 237 | ✅ All pass | [testing_plan_tier4.md](testing_plan_tier4.md) |
+| 5 | Performance benchmarks | 0 | ❌ Not started | [testing_plan_tier5.md](testing_plan_tier5.md) |
 
-**Purpose**: Verify internal pipeline components in isolation — data structures,
-individual optimizer passes, scoping rules, type generation. Fast feedback on
-every PR.
-
-**Why not snapshot-test generated SQL**: The full pipeline has many interacting
-optimizations (BGP reorder, filter pushdown, union pruning, text_needed_vars,
-edge/frame MV rewrites). Alias numbering, JOIN order, and which term JOINs
-survive all shift as optimizations evolve. Snapshot-testing raw SQL produces
-constant false failures and brittle tests. Translation *correctness* (does the
-SQL produce the right results?) belongs in Tier 2 conformance tests where we
-run against PostgreSQL and compare results to DAWG/ARQ expected output.
-
-**What to test at this tier**:
-
-1. **IR structure after `collect()`** — assert on `PlanV2` node types,
-   children, variable sets, and modifier chains. The IR is a stable,
-   inspectable tree that doesn't change with SQL-level optimizations.
-
-2. **Individual optimizer passes in isolation** — each pass has a narrow,
-   deterministic contract:
-   - `reorder_bgp`: given this IR, BGP triples are reordered by selectivity
-   - `filter_pushdown`: given this IR, FILTER nodes move inside the BGP
-   - `prune_union`: given this IR, dead UNION branches are removed
-   - `rewrite_edge_table` / `rewrite_frame_entity_table`: given this IR,
-     multi-JOIN patterns are collapsed to MV lookups
-   - Input IR → output IR, fully deterministic per-pass.
-
-3. **Variable scoping (`var_scope.py`)** — given a SPARQL algebra tree,
-   assert which variables are visible, projected, and in-scope at each node.
-   No SQL involved.
-
-4. **Type generation (`sql_type_generation.py`)** — given a TypeRegistry
-   state, assert correct XSD cast expressions, numeric promotion, typed
-   lane selection, companion columns. Pure logic, no SQL execution.
-
-5. **Expression generation (`emit_expressions.py`)** — individual SPARQL
-   functions/operators → SQL fragment. These are small, deterministic
-   translations at the single-expression level (e.g., `CONTAINS(?x, "foo")`
-   → `LIKE '%foo%'`, `xsd:integer(?x)` → `CAST(TRUNC(...) AS INTEGER)`).
-   Tested by feeding a single expression AST node into the expression
-   emitter, not by running the full pipeline.
-
-6. **Data format utilities** — JSON-LD ↔ GraphObject conversion, response
-   model validation. Pure Python, no DB.
-
-**What Tier 1 does NOT test**: The full emit pipeline's SQL text — neither
-exact strings nor structural properties (JOIN count, DISTINCT presence, etc.).
-These are all subject to change as optimizer passes evolve.
-
-**Pipeline-level assertions that ARE stable** (can be Tier 1 with a SQL
-parser, or lightweight Tier 2 with PG):
-
-1. **Valid SQL** — every SPARQL query in the test corpus must produce
-   syntactically valid SQL. Verify cheaply via `pglast.parse_sql()` (no DB
-   needed, pure Python) or via `EXPLAIN` against PG (parses + plans without
-   executing). If the pipeline emits unparseable SQL, that's always a bug
-   regardless of optimizer state.
-
-2. **Result stability** — for a fixed dataset, the same SPARQL query must
-   always produce the same result set (modulo row order for unordered
-   queries). This doesn't require DAWG expected output — just run the query
-   twice (or after an optimizer change) and assert the results match. This
-   catches optimizer regressions without coupling tests to any specific SQL
-   shape.
-
-**Coverage targets**:
-- `var_scope.py` — variable visibility across OPTIONAL, UNION, subquery
-- `sql_type_generation.py` — XSD casts, companion columns, typed lanes
-- `collect.py` / `ir.py` — IR construction from SPARQL algebra
-- Each optimizer pass (`filter_pushdown`, `reorder_bgp`, `prune_union`,
-  `rewrite_edge_table`, `rewrite_frame_entity_table`)
-- `emit_expressions.py` — per-function/operator unit tests
-- Response models and data format utilities
-
-**Estimated count**: ~150–200 test cases.
-
-### Tier 2 — SPARQL Conformance (DAWG + Jena ARQ)
-
-**Purpose**: Prove correctness against the W3C SPARQL 1.1 test suite and
-Apache Jena's ARQ test suite.
-
-**Approach**:
-- Wrap the existing DAWG runner as a pytest parameterized test.
-  Each DAWG test case becomes a `pytest.mark.parametrize` entry.
-- Compare VitalGraph results against expected `.srx` / `.ttl` files.
-- Use pyoxigraph as a reference oracle for any result ambiguity.
-- Track **expected failures** with `pytest.mark.xfail` so the suite
-  is green even while we iterate on unsupported features.
-
-**Current baseline** (v87 report):
-- P0 categories: 104 pass / 18 fail / 25 skip / 9 error = 79.4%
-- Target: **95%+ pass rate** on P0, all failures documented as xfail.
-
-**DAWG categories to cover**:
-
-| Category | Current | Target |
-|----------|---------|--------|
-| bind | 7/10 | 10/10 |
-| aggregates | 32/32* | maintain |
-| functions | partial | 90%+ |
-| negation | partial | 95%+ |
-| exists | partial | 95%+ |
-| grouping | partial | 95%+ |
-| construct | partial | 90%+ |
-| property-path | not started | 80%+ |
-| subquery | partial | 90%+ |
-| update (add/delete/insert/etc.) | partial | 85%+ |
-
-*Aggregates 32/32 non-skipped as of last session.
-
-**Jena ARQ categories**: Ask, Construct, Describe, Optional, Union, Negation,
-GroupBy, SubQuery, Paths, Basic, Bound, Distinct, Sort, Select, SelectExpr, Assign.
-
-### Tier 3 — Integration Tests (needs PG)
-
-**Purpose**: Verify end-to-end behavior through the real `SparqlSQLDbImpl`
-against a real PostgreSQL instance.
-
-**Approach**:
-- Use a **dedicated test database** (e.g., `vitalgraph_test`) created/destroyed
-  per session.
-- Each test module creates a temporary space, loads data, runs operations,
-  validates results, and drops the space.
-- Fixtures manage the asyncpg pool lifecycle.
-
-**Key test areas**:
-
-1. **Quad round-trip**: Insert triples via SPARQL UPDATE, retrieve via SELECT,
-   verify exact match (URI, literal value, datatype, language tag, graph).
-
-2. **Datatype fidelity**: All XSD types (string, integer, double, boolean,
-   dateTime, etc.) survive round-trip. Edge cases: empty string, very large
-   integers, NaN, INF, Unicode (emoji, CJK, RTL).
-
-3. **Graph operations**: CREATE GRAPH, INSERT DATA into named graph,
-   CLEAR GRAPH, DROP GRAPH. Verify isolation between graphs.
-
-4. **KG CRUD**: Full lifecycle for entities, frames, slots, types, relations.
-   Verify VitalSigns JSON-LD ↔ triple round-trip.
-
-5. **Concurrency**: Multiple concurrent writers to the same space.
-   Verify no deadlocks, no lost updates, correct connection pool behavior
-   under asyncio.gather load.
-
-6. **Schema lifecycle**: Create space, drop space, recreate with same name.
-   Verify clean state, no orphaned indexes or tables.
-
-**Estimated count**: ~100–150 test cases.
-
-### Tier 4 — API / End-to-End Tests (needs running server)
-
-**Purpose**: Verify the REST API contracts (request/response shapes, status
-codes, pagination, error handling) via end-to-end tests against a live service.
-
-**Key distinction**: These are **not pytest tests**. They are end-to-end test
-scripts that run against a live VitalGraph server and exercise the system
-through the Python and/or TypeScript client libraries. They consolidate and
-improve the existing test runners and cases currently scattered across
-`vitalgraph_client_test/`, `vitalgraph_mock_client_test/`, `test_client_api/`,
-and `vitalgraph_service_tests/`. The goal is a unified, improved set of
-end-to-end scenarios built on the proven patterns that already exist.
-
-**Approach**:
-- Requires a running VitalGraph server (local, Docker, or CI service).
-- Exercises the system via the VitalGraph client(s) (Python `VitalGraphClient`,
-  TypeScript client, or raw HTTP).
-- Validates end-to-end behavior including auth, serialization, and round-trip
-  data integrity.
-- Test authentication, authorization, error responses.
-
-**Coverage**:
-- Every endpoint in `vitalgraph/endpoint/` gets at least:
-  - Happy path (200/201)
-  - Not found (404)
-  - Bad request (400/422)
-  - Auth required (401)
-- Pagination correctness (total_count, offset, page_size).
-- Large payload handling.
-
-**Estimated count**: ~80–120 test cases.
-
-### Tier 5 — Performance Tests (benchmarks)
-
-**Purpose**: Detect performance regressions. Not gating — run nightly or on
-demand.
-
-**Approach**:
-- Use `pytest-benchmark` for microbenchmarks.
-- Maintain a baseline JSON file with known-good p50/p95/p99 values.
-- Alert (but don't fail) on >20% regression.
-
-**Key benchmarks**:
-- SPARQL→SQL generation latency (no DB): p50 < 5ms
-- Simple SELECT execution (10 results): p50 < 50ms
-- Complex multi-join query (WordNet): p50 < 200ms
-- Bulk insert throughput: > 10k quads/sec
-- Entity list with graph retrieval: p50 < 200ms
+**Grand total: 1566 tests.**
 
 ---
 
@@ -441,24 +260,48 @@ process irrelevant files.
 
 ### Test directory consolidation
 
-Current state: 11 test-related top-level directories. Target: 1 (`tests/`).
+> **⚠️ Update (2026-06-28):** Many of the directories listed below have already
+> been **moved** (not reviewed or ported) into `test_scripts/` as subdirectories
+> during prior cleanup passes. The scripts were relocated as-is and still need
+> to be reviewed, triaged, and ported to the formal `tests/` structure.
+> The moves may have **broken hardcoded paths** in those scripts (e.g.,
+> `sys.path.insert`, relative file references, config file paths). Any triage
+> of `test_scripts/` should include checking and fixing import paths.
+>
+> Directories already consolidated into `test_scripts/`:
+> - `test_scripts_misc/` → `test_scripts/misc/`
+> - `test_script_kg_impl/` → `test_scripts/kg_impl/`
+> - `test_sparql/` → `test_scripts/sparql/`
+> - `test_client_api/` → `test_scripts/client_api/`
+> - `vitalgraph_client_test/` → `test_scripts/vitalgraph_client/`
+> - `vitalgraph_mock_client_test/` → `test_scripts/mock_client/`
+> - `vitalgraph_service_tests/` → `test_scripts/service/`
+> - `vitalsigns_test_scripts/` → `test_scripts/vitalsigns/`
+> - `scripts/query_entity_graph_leftovers.py` → `test_scripts/` (root)
+>
+> Directories already deleted:
+> - `test_sparql_sql_endpoints/` (was empty)
+> - `test_vs/` (was single file)
+> - `localTestFiles/`
+>
+> `test_scripts/` now contains **~793 files** across these subdirectories.
+> The formal `tests/` directory has not been created yet.
+
+Original plan (updated with current locations):
 
 | Current location | Action |
 |-----------------|--------|
-| `test_scripts/` (~130 scripts) | **Triage**: port valuable ones to `tests/integration/` or `tests/conformance/`, delete the rest. `test_scripts/archive/` (~90 scripts) can be deleted outright. |
-| `test_scripts_misc/` (~40 scripts) | **Triage**: port or delete. |
-| `test_script_kg_impl/` | **Port** orchestrator-based KG tests to `tests/integration/kg/`. |
-| `test_sparql/` | **Move** fixtures/utils into `tests/conformance/`. |
-| `test_sparql_sql_endpoints/` | Empty `__init__.py` only. **Delete**. |
-| `test_vs/` | Single file. **Port** to `tests/unit/` or delete. |
-| `test_client_api/` | **Port** to `tests/api/`. |
+| `test_scripts/` (root, ~130 scripts) | **Triage**: port valuable ones to `tests/integration/` or `tests/conformance/`, delete the rest. `test_scripts/archive/` (~90 scripts) can be deleted outright. |
+| `test_scripts/misc/` (was `test_scripts_misc/`, ~40 scripts) | **Triage**: port or delete. |
+| `test_scripts/kg_impl/` (was `test_script_kg_impl/`) | **Port** orchestrator-based KG tests to `tests/integration/kg/`. |
+| `test_scripts/sparql/` (was `test_sparql/`) | **Move** fixtures/utils into `tests/conformance/`. |
+| `test_scripts/client_api/` (was `test_client_api/`) | **Port** to `tests/api/`. |
+| `test_scripts/vitalgraph_client/` (was `vitalgraph_client_test/`, ~70 scripts) | **Port** valuable scripts to `tests/api/` and `tests/integration/`. |
+| `test_scripts/mock_client/` (was `vitalgraph_mock_client_test/`, ~30 scripts) | **Port** to `tests/integration/mock/`. |
+| `test_scripts/service/` (was `vitalgraph_service_tests/`) | **Port** to `tests/integration/service/`. |
+| `test_scripts/vitalsigns/` (was `vitalsigns_test_scripts/`) | **Port** to `tests/unit/vitalsigns/` or delete. |
 | `test_files/` (~40 PDFs) | Test fixtures. **Move** to `tests/fixtures/files/` or .gitignore if too large. |
 | `test_files_download/` | **Delete** or .gitignore. |
-| `localTestFiles/` | **Delete** or .gitignore. |
-| `vitalgraph_client_test/` (~70 scripts) | **Port** valuable scripts to `tests/api/` and `tests/integration/`. |
-| `vitalgraph_mock_client_test/` (~30 scripts) | **Port** to `tests/integration/mock/`. |
-| `vitalgraph_service_tests/` | **Port** to `tests/integration/service/`. |
-| `vitalsigns_test_scripts/` | **Port** to `tests/unit/vitalsigns/` or delete. |
 
 ### Other root-level cleanup
 
@@ -523,6 +366,14 @@ This reduces the top-level from **~60 entries** to **~15–20**.
 ---
 
 ## Migration Strategy
+
+> **Approach note:** Build the new `tests/` structure first, drawing from and
+> referencing existing scripts in `test_scripts/` as needed. New tests may copy
+> patterns, queries, or data from existing scripts but should be written as
+> proper pytest tests from the start. **Do not delete or reorganize
+> `test_scripts/` until the new `tests/` suite is implemented and working.**
+> Once the formal test suite covers the same ground, we can triage
+> `test_scripts/` — archiving or deleting scripts that are now redundant.
 
 ### Phase 0 — Project Cleanup (Week 1)
 
@@ -711,28 +562,41 @@ and the REST API layer.
 
 ## Success Criteria
 
-| Metric | Target |
-|--------|--------|
-| Unit test count | ≥ 150 |
-| Unit test line coverage on `sparql_sql/` | ≥ 80% |
-| DAWG P0 pass rate | ≥ 95% |
-| Jena ARQ pass rate | ≥ 85% |
-| Integration test count | ≥ 100 |
-| API test count | ≥ 80 |
-| CI run time (Tier 1–3) | < 15 min |
-| Zero flaky tests in CI | 100% deterministic |
-| Performance regression detection | ≤ 20% threshold |
+| Metric | Target | Current |
+|--------|--------|---------|
+| Unit test count | ≥ 150 | ✅ 1018 |
+| Unit test line coverage on `sparql_sql/` | ≥ 80% | 44% overall; emit handlers avg 92% |
+| DAWG P0 pass rate | ≥ 95% | 91.2% (pyoxigraph baseline) |
+| Jena ARQ pass rate | ≥ 85% | — |
+| Integration test count | ≥ 100 | 66 (60 pass, 6 xfail) |
+| API test count | ≥ 80 | ✅ 213 |
+| CI run time (Tier 1–3) | < 15 min | ✅ 0.94s (Tier 1+2) |
+| Zero flaky tests in CI | 100% deterministic | ✅ (Tier 1) |
+| Performance regression detection | ≤ 20% threshold | — |
+
+---
+
+## Implementation Progress
+
+> **Moved to per-tier files.** See the individual tier documents for detailed
+> implementation progress, test file listings, and discovered bugs.
 
 ---
 
 ## Open Questions for Discussion
 
-1. **Jena sidecar dependency**: The V2 pipeline uses a Java sidecar for
+1. ~~**Jena sidecar dependency**: The V2 pipeline uses a Java sidecar for
    SPARQL parsing. Should CI start the sidecar in a container, or should
-   we add a pure-Python SPARQL parser fallback for unit tests?
+   we add a pure-Python SPARQL parser fallback for unit tests?~~
+   **RESOLVED**: Generate-once approach — sidecar JSON fixtures are captured
+   once and committed; tests reconstruct PlanV2 trees via pure Python.
+   Sidecar is only needed to regenerate fixtures.
 
-2. **Test database provisioning**: Ephemeral per-run (Docker service) vs.
-   persistent dev database with per-test space isolation?
+2. ~~**Test database provisioning**: Ephemeral per-run (Docker service) vs.
+   persistent dev database with per-test space isolation?~~
+   **RESOLVED**: Per-test space isolation using `inttest_` prefixed ephemeral
+   spaces against the dev database. Tests auto-skip without PG. CI can use
+   Docker service container.
 
 3. **DAWG test ownership**: Keep the custom runner as the source of truth
    and wrap it in pytest, or fully port each test to native pytest?

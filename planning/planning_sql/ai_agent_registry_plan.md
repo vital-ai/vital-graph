@@ -534,9 +534,9 @@ The shared `agent_registry_schema.py` defines the canonical DDL. Each backend's 
 
 ## 11. Open Questions
 
-1. **Agent versioning history**: Should we keep a history of agent versions (like a changelog), or is the single `version` field sufficient?
-2. **Multi-tenancy**: The entity registry is global. Should agents also be global, or should there be an optional `tenant_id` / `organization_id` scope?
-3. **WebSocket sub-protocol**: Should we capture WebSocket sub-protocol information (e.g., `graphql-ws`, custom binary)?  Or is `protocol_format_uri` sufficient?
+1. **Agent versioning history**: ✅ RESOLVED — Enrich the changelog with before/after JSONB snapshots so configuration changes can be reviewed and rolled back. See Phase 7.
+2. **Multi-tenancy**: ✅ RESOLVED — Global by design, same as the entity registry. No `tenant_id` / `organization_id` needed.
+3. **WebSocket sub-protocol / protocol config**: ✅ RESOLVED — The JSONB fields (`auth_service_config`, `metadata`, and per-endpoint config) are intended to capture protocol-specific configuration, schemas, and connection details for each supported protocol (AIMP, OpenAI Chat, A2A, MCP, etc.). The registry's purpose is to store enough detail about *how* to communicate with an agent to enable protocol-aware agent selection and routing. See Phase 9 for the research and implementation plan.
 
 ---
 
@@ -628,9 +628,9 @@ The shared `agent_registry_schema.py` defines the canonical DDL. Each backend's 
   - Standalone runner (same pattern as `test_sparql_sql_kgentities.py`)
   - No space/graph needed — agent registry uses global admin tables
 
-### Phase 5: Remaining Work (pending)
-- Add agent registry tables to fuseki_postgresql backend
-- Create shared `agent_registry_schema.py` with canonical DDL
+### Phase 5: Remaining Work (partially done)
+- ~~Add agent registry tables to fuseki_postgresql backend~~ — **deferred** (backend not in use)
+- ✅ Created shared `agent_registry_schema.py` with canonical DDL (done)
 
 ### Phase 6: Agent Functions (done)
 - ✅ Added `agent_function` table to PostgreSQL via migration script (`migrate_agents.py`)
@@ -643,3 +643,93 @@ The shared `agent_registry_schema.py` defines the canonical DDL. Each backend's 
 - ✅ Added 7 function CRUD tests (13–19) to `case_agent_registry_crud.py`
 - ✅ Updated migration script with `agent_function` DDL, indexes (5), and `agent_function_view`
 - ✅ Updated `sparql_sql_db_impl.py` admin table count: 9 → 10
+
+### Phase 7: Changelog Before/After Snapshots ✅ DONE
+
+Enriched `agent_change_log.change_detail` with before/after JSONB snapshots so that configuration changes can be reviewed and rolled back.
+
+- ✅ `update_agent()` captures before-snapshot via `SELECT *` before applying `UPDATE`, builds `{fields, before, after}` dict via `_build_snapshot()` helper
+- ✅ `update_function()` same pattern for `parameters` and `output_schema` fields
+- ✅ Added `rollback_agent(agent_id, log_id)` method to `AgentRegistryImpl` — reads `before` from changelog, re-applies values, logs rollback with its own snapshot
+- ✅ Added `PUT /api/agents/agent/rollback?agent_id=...&log_id=...` REST endpoint
+- ✅ Added `rollback_agent()` client method to `AgentRegistryClientEndpoint`
+- ✅ Added `rollback <agent_id> <log_id>` CLI command (REPL + argparse)
+- ✅ Added test cases: `TestAgentRegistryRollback` with snapshot capture, rollback, and invalid-log-id tests
+
+### Phase 8: Agent Discovery & Vector/FTS Wiring ✅ DONE
+
+**8a. General Agent Discovery Endpoint** ✅ DONE
+- ✅ Added `discover_agents()` method to `AgentRegistryImpl` — multi-filter query by capability, type, protocol, protocol_config key, and status
+- ✅ Returns full agent records with attached endpoints and functions for routing decisions
+- ✅ Added `GET /api/agents/agent/discover` REST endpoint with all filter params
+- ✅ Added `discover_agents()` client method to `AgentRegistryClientEndpoint`
+- ✅ Added `discover-agents` CLI command with `--capability`, `--type`, `--protocol`, `--status` flags
+
+**8b. Vector/FTS Populator Wiring** ✅ DONE
+- ✅ Added `set_vector_populator()`, `_sync_vectors()`, `_delete_vectors()` to `AgentRegistryImpl`
+- ✅ Hooked `_sync_vectors()` into `create_agent`, `update_agent`, `create_function`, `update_function`, `delete_function`
+- ✅ Hooked `_delete_vectors()` into `delete_agent`
+- ✅ Initialized `AgentRegistryVectorPopulator` in `vitalgraphapp_impl.py` startup, attached via `set_vector_populator()` (graceful fallback if vectorization unavailable)
+- ✅ Added `vector_search()` and `fts_search()` methods to `AgentRegistryImpl`
+- ✅ Added `GET /api/agents/agent/search/vector` and `GET /api/agents/agent/search/fts` REST endpoints
+- ✅ Added `vector_search()` and `fts_search()` client methods
+
+### Phase 9: Protocol Config Research & Structured Metadata ✅ DONE
+
+The registry's JSONB fields (`metadata`, `auth_service_config`, per-endpoint config) are meant to capture enough protocol-specific detail to enable callers to **select and connect to** the right agent. This phase researches what needs to be captured for each protocol and ensures the registry can serve as a protocol-aware agent directory.
+
+**9a. Research: Current Leading Agent Communication Protocols** ✅ DONE
+
+Full research document: `planning/planning_sql/agent_protocol_research.md`
+
+**Key findings:**
+- Industry converging on **two complementary standards**: MCP (agent-to-tool) + A2A (agent-to-agent)
+- Framework SDKs (LangChain, CrewAI, AutoGen, OpenAI Agents SDK) are orchestration layers, not wire protocols — no dedicated protocol config needed
+- AGNTCY ACP spec is archived; community converged on A2A + MCP
+- A2A Agent Card is the most comprehensive discovery artifact — our schema can reconstruct it
+- MCP tool definitions and OpenAI function calling both use JSON Schema 2020-12
+
+**Recommended schema changes (from research):**
+1. Add `protocol_config JSONB DEFAULT '{}'` to `agent` — protocol-specific structured config (separate from general `metadata`)
+2. Add `transport_config JSONB DEFAULT '{}'` to `agent_endpoint` — rich transport details (MCP transport, A2A protocol bindings, WebSocket sub-protocol)
+3. Add `output_schema JSONB DEFAULT '{}'` to `agent_function` — aligns with MCP/OpenAI output schemas
+4. Expand `AgentProtocol` constants: add `OPENAI_RESPONSES`, `REST`
+5. Standardize `agent_function.parameters` as JSON Schema 2020-12 format (convention)
+
+**9b. Define Protocol Config Schemas** ✅ DONE
+
+See `planning/planning_sql/agent_protocol_research.md` §2 — recommended `metadata` / `protocol_config` JSONB structures defined for AIMP, MCP, A2A, and OpenAI Chat.
+
+**9c. Evaluate Schema Changes** ✅ DONE
+
+See `planning/planning_sql/agent_protocol_research.md` §3–4. All questions resolved:
+- Yes: add dedicated `protocol_config JSONB` column to `agent`
+- Yes: add `transport_config JSONB` to `agent_endpoint`
+- Yes: add `output_schema JSONB` to `agent_function`, standardize `parameters` as JSON Schema 2020-12
+- Yes: add `OPENAI_RESPONSES` and `REST` protocol URIs; no framework-specific URIs
+
+**9d. Implementation** ✅ DONE
+1. ✅ Migration: `ALTER TABLE agent ADD COLUMN protocol_config JSONB DEFAULT '{}'`
+2. ✅ Migration: `ALTER TABLE agent_endpoint ADD COLUMN transport_config JSONB DEFAULT '{}'`
+3. ✅ Migration: `ALTER TABLE agent_function ADD COLUMN output_schema JSONB DEFAULT '{}'`
+4. ✅ Updated `agent_registry_schema.py` DDL with new columns + GIN indexes
+5. ✅ Updated `migrate_agents.py` with ALTER statements + idempotency checks
+6. ✅ Updated Pydantic models: added `protocol_config`, `transport_config`, `output_schema` fields
+7. ✅ Updated `AgentRegistryImpl` CRUD to read/write new columns (create, update, helpers)
+8. ✅ Added `OPENAI_RESPONSES` and `REST` to `AgentProtocol` constants
+9. ✅ Updated REST endpoint, client endpoint, and CLI with new fields
+10. ✅ Added `TestAgentRegistryNewFields` test class for round-trip verification
+
+**9e. E2E Test & Frontend Fixes** ✅ DONE (Jul 2026)
+
+1. ✅ `sparql_sql_schema.py` DDL synced: added `protocol_config` to `agent`, `transport_config` to `agent_endpoint`, added `agent_function` table — fixes `VG_AUTO_INIT` in Docker test env
+2. ✅ `AgentRegistry.tsx` — fixed interface to use `agent_name`, `agent_type_key`, `agent_type_label` from API response
+3. ✅ `AgentRegistryDetail.tsx` — same field fixes + fixed response extraction (`data.agents?.[0]`)
+4. ✅ `App.tsx` — split `/space/:spaceId/indexes/:indexType/:indexName` into separate `/indexes/vector/` and `/indexes/fts/` routes so FtsIndexDetail renders correctly
+5. ✅ Playwright tests: fixed strict mode violations, graph card navigation, URL mismatches, `data-testid` corrections, space dropdown selection
+6. ✅ All 124 E2E tests passing deterministically
+
+**Remaining** (future work):
+- Add optional validation helpers for well-known protocol configs
+- Investigate why seeded search mapping (`e2e_fts_idx`) doesn't appear in Index Mappings list despite 201 creation response (possible app-level listing bug)
+- ✅ Updated general discovery endpoint with `protocol_config_contains` JSONB containment filter (REST param, client, CLI `--protocol-config`)

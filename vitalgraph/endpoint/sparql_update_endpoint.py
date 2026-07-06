@@ -108,6 +108,11 @@ class SPARQLUpdateEndpoint:
             update_time = time.time() - start_time
             
             if success:
+                # Nudge the backfill task — SPARQL updates may insert
+                # quads that bypass inline server-property stamping.
+                from vitalgraph.tasks.backfill_server_properties_task import nudge_backfill
+                nudge_backfill()
+
                 return SPARQLUpdateResponse(
                     success=True,
                     message="Update executed successfully",

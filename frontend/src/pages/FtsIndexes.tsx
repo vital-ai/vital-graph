@@ -156,7 +156,7 @@ const FtsIndexes: React.FC = () => {
   const formatDate = formatDateShort;
 
   return (
-    <div>
+    <div data-testid="fts-indexes-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem>FTS Indexes</BreadcrumbItem>

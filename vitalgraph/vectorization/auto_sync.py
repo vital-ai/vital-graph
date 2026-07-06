@@ -41,6 +41,10 @@ def _generate_term_uuid(term_text: str, term_type: str = 'U') -> uuid.UUID:
 # Core sync logic (runs inside a background task)
 # -----------------------------------------------------------------------
 
+# Max concurrent embedding calls (limits CPU pressure for ONNX inference)
+_VECTOR_CONCURRENCY = 8
+
+
 async def _sync_vectors_for_subjects(
     conn,
     space_id: str,
@@ -48,16 +52,27 @@ async def _sync_vectors_for_subjects(
     context_uuid: uuid.UUID,
     operation: str,
 ) -> None:
-    """Re-vectorize or delete vectors for a list of subject UUIDs."""
+    """Re-vectorize or delete vectors for a list of subject UUIDs.
+
+    For upserts with multiple subjects, uses a three-phase approach:
+      1. Batch-fetch all literal properties (single DB query)
+      2. Concurrently embed texts (bounded by _VECTOR_CONCURRENCY)
+      3. Sequentially upsert embeddings on the single connection
+    """
     from vitalgraph.vectorization.vector_populator import (
-        update_subject_vector,
         delete_subject_vectors,
+        UPSERT_VECTOR_SQL,
     )
+    from vitalgraph.vectorization.search_text_builder import (
+        build_search_text,
+        fetch_literal_properties_batch,
+    )
+    from vitalgraph.vectorization.registry import get_provider
 
     # Discover all vector indexes for this space
     try:
         rows = await conn.fetch(
-            f"SELECT index_name FROM {space_id}_vector_index"
+            f"SELECT index_name, provider, provider_config FROM {space_id}_vector_index"
         )
     except Exception:
         # Table may not exist on spaces without vector indexes
@@ -66,18 +81,94 @@ async def _sync_vectors_for_subjects(
     if not rows:
         return
 
-    index_names = [r["index_name"] for r in rows]
+    # For deletes, run sequentially (fast DB-only operations)
+    if operation == "delete":
+        for subj_uuid in subject_uuids:
+            for row in rows:
+                try:
+                    await delete_subject_vectors(
+                        conn, space_id, row["index_name"], subj_uuid, context_uuid)
+                except Exception as e:
+                    logger.warning(
+                        "auto_sync vector delete %s/%s/%s failed: %s",
+                        space_id, row["index_name"], subj_uuid, e,
+                    )
+        return
 
-    for subj_uuid in subject_uuids:
-        for idx_name in index_names:
+    # ── Upsert path: batch fetch → concurrent embed → sequential upsert ──
+
+    # Phase 1: Batch-fetch literal properties for all subjects (1 DB query)
+    props_by_subject = await fetch_literal_properties_batch(
+        conn, space_id, subject_uuids, context_uuid,
+    )
+
+    # Process each index
+    for row in rows:
+        idx_name = row["index_name"]
+        provider = get_provider(
+            row["provider"], row["provider_config"] or {},
+            cache_key=f"{space_id}:{idx_name}",
+        )
+        vec_table = f"{space_id}_vec_{idx_name}"
+        upsert_sql = UPSERT_VECTOR_SQL.format(vec_table=vec_table)
+
+        # Phase 2: Build search texts and identify subjects to embed
+        to_embed: List[tuple] = []  # (subj_uuid, search_text)
+        to_delete: List[uuid.UUID] = []
+
+        for subj_uuid in subject_uuids:
+            props = props_by_subject.get(subj_uuid)
+            if not props:
+                to_delete.append(subj_uuid)
+                continue
+            text = build_search_text(props, None)
+            if not text.strip():
+                to_delete.append(subj_uuid)
+                continue
+            to_embed.append((subj_uuid, text))
+
+        # Delete subjects with no embeddable text
+        for subj_uuid in to_delete:
             try:
-                if operation == "delete":
-                    await delete_subject_vectors(conn, space_id, idx_name, subj_uuid, context_uuid)
-                else:
-                    await update_subject_vector(conn, space_id, idx_name, subj_uuid, context_uuid)
+                await delete_subject_vectors(conn, space_id, idx_name, subj_uuid, context_uuid)
             except Exception as e:
                 logger.warning(
-                    "auto_sync vector %s/%s/%s failed: %s",
+                    "auto_sync vector delete %s/%s/%s failed: %s",
+                    space_id, idx_name, subj_uuid, e,
+                )
+
+        if not to_embed:
+            continue
+
+        # Phase 3: Concurrent embedding with bounded parallelism
+        sem = asyncio.Semaphore(_VECTOR_CONCURRENCY)
+        embeddings: List[Optional[List[float]]] = [None] * len(to_embed)
+
+        async def _embed(idx: int, text: str):
+            async with sem:
+                try:
+                    embeddings[idx] = await provider.vectorize_text(text)
+                except Exception as e:
+                    logger.warning(
+                        "auto_sync embed %s/%s/%s failed: %s",
+                        space_id, idx_name, to_embed[idx][0], e,
+                    )
+
+        await asyncio.gather(*[
+            _embed(i, text) for i, (_, text) in enumerate(to_embed)
+        ])
+
+        # Phase 4: Sequential upsert on the single connection
+        for i, (subj_uuid, _) in enumerate(to_embed):
+            emb = embeddings[i]
+            if emb is None:
+                continue
+            try:
+                vec_str = "[" + ",".join(str(v) for v in emb) + "]"
+                await conn.execute(upsert_sql, subj_uuid, context_uuid, vec_str)
+            except Exception as e:
+                logger.warning(
+                    "auto_sync vector upsert %s/%s/%s failed: %s",
                     space_id, idx_name, subj_uuid, e,
                 )
 
@@ -230,19 +321,17 @@ async def _run_sync(
 
     try:
         async with pool.acquire() as conn:
-            # Vector sync
+            # Vector sync (uses concurrent embedding internally)
             await _sync_vectors_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
             )
-            # Geo sync
+            # Geo, fuzzy, FTS share the same connection — must be sequential
             await _sync_geo_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
             )
-            # Fuzzy sync
             await _sync_fuzzy_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
             )
-            # FTS sync
             await _sync_fts_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
             )

@@ -127,7 +127,9 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
     if not isinstance(expr, ExprFunction) or not is_vg_vector_function(expr):
         return None
 
-    # Resolve the entity variable's UUID column from the child context
+    # Resolve the entity variable's UUID column from the child context.
+    # Since child_sql is already emitted, the TypeRegistry should have it.
+    # If _resolve_uuid_col returns a deferred placeholder, resolve it now.
     from .vg_functions import extract_vector_args, _resolve_uuid_col
     vargs = extract_vector_args(expr)
     if vargs is None:
@@ -135,6 +137,14 @@ def _try_vector_driving_extend(plan: PlanV2, ctx: EmitContext, child_sql: str) -
     child_uuid_col = _resolve_uuid_col(vargs.entity_var, ctx)
     if child_uuid_col is None:
         return None
+    # Resolve any deferred placeholder immediately (child is already emitted)
+    for deferred_var, placeholder in ctx.pop_deferred_uuids():
+        info = ctx.types.get(deferred_var)
+        if info and info.uuid_col:
+            child_uuid_col = child_uuid_col.replace(placeholder, info.uuid_col)
+        else:
+            logger.warning("Cannot resolve deferred UUID ?%s in vector driving path", deferred_var)
+            return None
 
     threshold = plan.hints.get('vg_threshold')
     driving = vector_top_k_driving_sql(
@@ -205,6 +215,19 @@ def emit_extend(plan: PlanV2, ctx: EmitContext) -> str:
         sql_expr = "NULL"
 
     ctx.vg_hints = saved_hints
+
+    # Resolve deferred UUID placeholders now that child types are populated
+    for deferred_var, placeholder in ctx.pop_deferred_uuids():
+        info = ctx.types.get(deferred_var)
+        if info and info.uuid_col:
+            sql_expr = sql_expr.replace(placeholder, info.uuid_col)
+            logger.debug("Resolved deferred UUID ?%s → %s", deferred_var, info.uuid_col)
+        else:
+            logger.error(
+                "Cannot resolve deferred UUID for ?%s after child emit — "
+                "variable not bound by any triple pattern in scope",
+                deferred_var,
+            )
 
     # Infer type for companion columns
     typed = infer_expr_type(plan.extend_expr, ctx.types)

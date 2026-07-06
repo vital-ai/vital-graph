@@ -742,3 +742,85 @@ class KGDocumentSegmentsResponse(VitalGraphResponse):
     def is_success(self) -> bool:
         """Check if operation was successful."""
         return not self.error_code
+
+
+# ============================================================================
+# KGDocument Segmentation Operation Response Classes
+# ============================================================================
+
+class SegmentDocumentClientResponse(VitalGraphResponse):
+    """Response for document segmentation trigger operations."""
+    success: bool = Field(False, description="Whether segmentation succeeded or was enqueued")
+    document_uri: Optional[str] = Field(None, description="URI of segmented document")
+    parent_copy_uri: Optional[str] = Field(None, description="URI of parent copy")
+    method_uri: Optional[str] = Field(None, description="Segmentation method used")
+    segment_count: int = Field(0, description="Number of segments created")
+    segment_uris: List[str] = Field(default_factory=list, description="URIs of created segments")
+    job_id: Optional[int] = Field(None, description="Background job ID (when async)")
+    async_mode: bool = Field(False, description="True if enqueued for background processing")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.success and not self.error_code
+
+
+class SegmentationStatusClientResponse(VitalGraphResponse):
+    """Response for segmentation status queries."""
+    pending: int = Field(0, description="Number of pending jobs")
+    in_progress: int = Field(0, description="Number of in-progress jobs")
+    completed: int = Field(0, description="Number of completed jobs")
+    failed: int = Field(0, description="Number of failed jobs")
+    cancelled: int = Field(0, description="Number of cancelled jobs")
+    jobs: List[Dict[str, Any]] = Field(default_factory=list, description="List of job status entries")
+    worker_status: Optional[Dict[str, Any]] = Field(None, description="Segmentation worker health status")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return not self.error_code
+
+
+class SegmentationConfigClientResponse(VitalGraphResponse):
+    """Response for single segmentation config operations (create/update)."""
+    config_id: Optional[int] = Field(None, description="Config ID")
+    document_type_uri: Optional[str] = Field(None, description="Document type URI")
+    segment_method_uri: Optional[str] = Field(None, description="Segmentation method URI")
+    max_segment_tokens: Optional[int] = Field(None, description="Max tokens per segment")
+    min_segment_tokens: Optional[int] = Field(None, description="Min tokens per segment")
+    overlap_tokens: Optional[int] = Field(None, description="Token overlap between segments")
+    enabled: Optional[bool] = Field(None, description="Whether config is enabled")
+    auto_vectorize: Optional[bool] = Field(None, description="Whether to auto-vectorize segments")
+    created_time: Optional[str] = Field(None, description="Creation timestamp")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.config_id is not None and not self.error_code
+
+
+class SegmentationConfigListClientResponse(VitalGraphResponse):
+    """Response for listing segmentation configs."""
+    configs: List[Dict[str, Any]] = Field(default_factory=list, description="List of segmentation configs")
+    total_count: int = Field(0, description="Total number of configs")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return not self.error_code
+    
+    @property
+    def count(self) -> int:
+        """Get count of configs."""
+        return len(self.configs)
+
+
+class SegmentationConfigDeleteClientResponse(VitalGraphResponse):
+    """Response for segmentation config deletion."""
+    deleted: bool = Field(False, description="Whether config was deleted")
+    config_id: Optional[int] = Field(None, description="ID of deleted config")
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if operation was successful."""
+        return self.deleted and not self.error_code

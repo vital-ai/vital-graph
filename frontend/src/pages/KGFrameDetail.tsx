@@ -31,7 +31,7 @@ const KGFrameDetail: React.FC = () => {
     objectTypeName: 'KG Frame',
     objectTypeColor: 'indigo',
     crudOps: vgClient.kgframes,
-    listRoute: '/kg-frames',
+    listRoute: '/objects/kgframes',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGFrame',
     paramName: 'frameId',
     uriFieldName: 'Frame URI',
@@ -133,7 +133,7 @@ const KGFrameDetail: React.FC = () => {
 
   // Render with shared component + slot summary
   return (
-    <div>
+    <div data-testid="kgframe-detail-page">
       <ObjectDetailRenderer {...hookData} config={config} />
 
       {/* Slot Summary Table */}

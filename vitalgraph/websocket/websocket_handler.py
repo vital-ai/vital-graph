@@ -389,8 +389,10 @@ async def websocket_endpoint(websocket: WebSocket, connection_manager: Connectio
                             "type": "error",
                             "message": "Error processing message"
                         }))
+                    else:
+                        break  # Connection lost, exit message loop
                 except Exception:
-                    pass  # Connection already closed
+                    break  # Connection already closed, exit message loop
             
     except WebSocketDisconnect as e:
         logger.info(f"WebSocket disconnected for user: {username or 'unknown'} from {client_host}:{client_port} - code: {e.code}")

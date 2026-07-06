@@ -12,7 +12,7 @@ from typing import List
 class MarkdownSegmentConfig:
     """Configuration for markdown heading-based document segmentation."""
 
-    max_segment_tokens: int = 512
+    max_segment_tokens: int = 1024
     min_segment_tokens: int = 50
     overlap_tokens: int = 0
     heading_levels: List[int] = field(default_factory=lambda: [1, 2, 3])
@@ -26,7 +26,7 @@ class MarkdownSegmentConfig:
 class PlainSplitConfig:
     """Configuration for plain recursive character-based document segmentation."""
 
-    max_segment_tokens: int = 512
+    max_segment_tokens: int = 1024
     min_segment_tokens: int = 50
     overlap_tokens: int = 0
     segment_method_uri: str = "urn:segmethod:plain_recursive_split"

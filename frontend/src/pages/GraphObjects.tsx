@@ -129,7 +129,7 @@ const GraphObjects: React.FC = () => {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="graph-objects-page">
       {/* Page Title */}
       <div className="flex items-center gap-2 mb-2">
         <ObjectIcon className="w-6 h-6 text-blue-600" />

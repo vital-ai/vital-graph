@@ -3,10 +3,10 @@ import { validateRequired } from '../utils/params.js';
 import type { TripleListResponse, TripleOperationResponse } from '../response/types.js';
 
 export class TriplesEndpoint extends BaseEndpoint {
-  async list(spaceId: string, graphId: string, subjectUri?: string, pageSize = 100, offset = 0): Promise<TripleListResponse> {
+  async list(spaceId: string, graphId: string, subjectUri?: string, pageSize = 100, offset = 0, objectFilter?: string): Promise<TripleListResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('GET', '/api/graphs/triples', {
-      params: { space_id: spaceId, graph_id: graphId, subject_uri: subjectUri, page_size: pageSize, offset },
+      params: { space_id: spaceId, graph_id: graphId, subject: subjectUri, page_size: pageSize, offset, object_filter: objectFilter },
     });
   }
 

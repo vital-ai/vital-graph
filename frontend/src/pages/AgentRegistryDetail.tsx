@@ -17,8 +17,9 @@ import TimeAgo from '../components/TimeAgo';
 interface AgentData {
   agent_id: string;
   agent_uri: string;
-  name: string;
-  agent_type: string;
+  agent_name: string;
+  agent_type_key: string;
+  agent_type_label: string;
   description: string | null;
   status: string;
   version: string | null;
@@ -92,12 +93,12 @@ const AgentRegistryDetail: React.FC = () => {
     try {
       setLoading(true);
       const data = await apiService.getAgent(agentId);
-      const a = data.agent || data;
+      const a = data.agents?.[0] || data.agent || data;
       setAgent(a);
       setForm({
-        name: a.name || '',
+        name: a.agent_name || '',
         agent_uri: a.agent_uri || '',
-        agent_type: a.agent_type || '',
+        agent_type: a.agent_type_label || a.agent_type_key || '',
         description: a.description || '',
         version: a.version || '',
         status: a.status || 'active',
@@ -133,11 +134,19 @@ const AgentRegistryDetail: React.FC = () => {
     try {
       setSaving(true);
       setError(null);
+      const payload = {
+        agent_name: form.name,
+        agent_uri: form.agent_uri,
+        agent_type_key: form.agent_type,
+        description: form.description || undefined,
+        version: form.version || undefined,
+        status: form.status,
+      };
       if (isNew) {
-        await apiService.createAgent(form);
+        await apiService.createAgent(payload);
         navigate('/agent-registry');
       } else {
-        await apiService.updateAgent(agentId!, form);
+        await apiService.updateAgent(agentId!, payload);
         await fetchAgent();
         setIsEditing(false);
       }
@@ -192,11 +201,11 @@ const AgentRegistryDetail: React.FC = () => {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="agent-registry-detail-page">
       <Breadcrumb>
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem href="/agent-registry" icon={HiChip}>Agent Registry</BreadcrumbItem>
-        <BreadcrumbItem>{isNew ? 'New Agent' : agent?.name || agentId}</BreadcrumbItem>
+        <BreadcrumbItem>{isNew ? 'New Agent' : agent?.agent_name || agentId}</BreadcrumbItem>
       </Breadcrumb>
 
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
@@ -205,11 +214,11 @@ const AgentRegistryDetail: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {isNew ? 'Register Agent' : agent?.name}
+            {isNew ? 'Register Agent' : agent?.agent_name}
           </h1>
           {!isNew && agent && (
             <div className="flex items-center gap-2 mt-1">
-              <Badge color="cyan" size="sm">{agent.agent_type}</Badge>
+              <Badge color="cyan" size="sm">{agent.agent_type_label || agent.agent_type_key}</Badge>
               {statusBadge(agent.status)}
               {agent.version && <Badge color="gray" size="sm">v{agent.version}</Badge>}
             </div>
@@ -274,9 +283,9 @@ const AgentRegistryDetail: React.FC = () => {
           </div>
         ) : agent && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div><p className="text-sm font-medium text-gray-500">Name</p><p className="text-sm text-gray-900 dark:text-white">{agent.name}</p></div>
+            <div><p className="text-sm font-medium text-gray-500">Name</p><p className="text-sm text-gray-900 dark:text-white">{agent.agent_name}</p></div>
             <div><p className="text-sm font-medium text-gray-500">URI</p><p className="text-xs text-gray-900 dark:text-white font-mono">{agent.agent_uri}</p></div>
-            <div><p className="text-sm font-medium text-gray-500">Type</p><p className="text-sm text-gray-900 dark:text-white">{agent.agent_type}</p></div>
+            <div><p className="text-sm font-medium text-gray-500">Type</p><p className="text-sm text-gray-900 dark:text-white">{agent.agent_type_label || agent.agent_type_key}</p></div>
             <div><p className="text-sm font-medium text-gray-500">Version</p><p className="text-sm text-gray-900 dark:text-white">{agent.version || '—'}</p></div>
             <div className="sm:col-span-2"><p className="text-sm font-medium text-gray-500">Description</p><p className="text-sm text-gray-900 dark:text-white">{agent.description || '—'}</p></div>
           </div>
@@ -378,7 +387,7 @@ const AgentRegistryDetail: React.FC = () => {
         onConfirm={handleDelete}
         onCancel={() => setShowDelete(false)}
         title="Delete Agent"
-        description={<>Permanently delete agent <strong>{agent?.name}</strong>?</>}
+        description={<>Permanently delete agent <strong>{agent?.agent_name}</strong>?</>}
         confirmLabel="Delete"
         variant="danger"
       />

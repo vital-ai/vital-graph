@@ -46,7 +46,16 @@ class TestEntityVectorSearchWorkflow:
     @pytest_asyncio.fixture(scope="class", loop_scope="session")
     async def workflow_env(self, vg_client, test_space, test_graph):
         """Set up vector index + mapping + entity, teardown after."""
-        # Create vector index
+        # Create search mapping first (defines what to vectorize)
+        mapping = await vg_client.search_mappings.create_mapping(
+            space_id=test_space,
+            index_name=VECTOR_INDEX,
+            mapping_type="kgentity",
+            enabled=True,
+            source_type="properties",
+        )
+
+        # Create vector index (defines embedding target)
         idx = await vg_client.vector_indexes.create_index(
             space_id=test_space,
             index_name=VECTOR_INDEX,
@@ -56,13 +65,12 @@ class TestEntityVectorSearchWorkflow:
             description="Integration test vector index",
         )
 
-        # Create mapping for kgentity with properties source
-        mapping = await vg_client.vector_mappings.create_mapping(
+        # Attach index to mapping via junction table
+        await vg_client.search_mappings.add_index(
             space_id=test_space,
+            mapping_id=mapping.mapping_id,
+            index_type="vector",
             index_name=VECTOR_INDEX,
-            mapping_type="kgentity",
-            enabled=True,
-            source_type="properties",
         )
 
         # Create a unique entity with searchable text
@@ -88,7 +96,7 @@ class TestEntityVectorSearchWorkflow:
         await vg_client.kgentities.delete_kgentity(
             space_id=test_space, graph_id=test_graph, uri=str(entity.URI)
         )
-        await vg_client.vector_mappings.delete_mapping(
+        await vg_client.search_mappings.delete_mapping(
             space_id=test_space, mapping_id=mapping.mapping_id
         )
         await vg_client.vector_indexes.delete_index(

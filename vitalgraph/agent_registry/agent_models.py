@@ -21,10 +21,12 @@ class AgentProtocol:
     """Well-known protocol format URIs."""
     AIMP = "urn:vital-ai:protocol:aimp:1.0"
     OPENAI_CHAT = "urn:vital-ai:protocol:openai-chat:1.0"
+    OPENAI_RESPONSES = "urn:vital-ai:protocol:openai-responses:1.0"
     A2A = "urn:vital-ai:protocol:a2a:1.0"
     MCP = "urn:vital-ai:protocol:mcp:1.0"
+    REST = "urn:vital-ai:protocol:rest:1.0"
 
-    ALL = [AIMP, OPENAI_CHAT, A2A, MCP]
+    ALL = [AIMP, OPENAI_CHAT, OPENAI_RESPONSES, A2A, MCP, REST]
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,7 @@ class AgentCreate(BaseModel):
     auth_service_config: Dict[str, Any] = Field(default_factory=dict)
     capabilities: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    protocol_config: Dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
 
 
@@ -93,6 +96,7 @@ class AgentUpdate(BaseModel):
     auth_service_config: Optional[Dict[str, Any]] = None
     capabilities: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
+    protocol_config: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
 
 
@@ -111,6 +115,7 @@ class AgentResponse(BaseModel):
     auth_service_config: Dict[str, Any] = Field(default_factory=dict)
     capabilities: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    protocol_config: Dict[str, Any] = Field(default_factory=dict)
     endpoints: List["AgentEndpointResponse"] = Field(default_factory=list)
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
@@ -133,12 +138,14 @@ class AgentEndpointCreate(BaseModel):
     endpoint_uri: str
     endpoint_url: str
     protocol: str = "websocket"
+    transport_config: Dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
 
 
 class AgentEndpointUpdate(BaseModel):
     endpoint_url: Optional[str] = None
     protocol: Optional[str] = None
+    transport_config: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     notes: Optional[str] = None
 
@@ -150,6 +157,7 @@ class AgentEndpointResponse(BaseModel):
     endpoint_url: str
     protocol: str
     status: str
+    transport_config: Dict[str, Any] = Field(default_factory=dict)
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
     notes: Optional[str] = None
@@ -164,6 +172,7 @@ class AgentFunctionCreate(BaseModel):
     function_name: str
     description: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
+    output_schema: Dict[str, Any] = Field(default_factory=dict)
     notes: Optional[str] = None
 
 
@@ -172,6 +181,7 @@ class AgentFunctionUpdate(BaseModel):
     function_name: Optional[str] = None
     description: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
+    output_schema: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     notes: Optional[str] = None
 
@@ -183,6 +193,7 @@ class AgentFunctionResponse(BaseModel):
     function_name: str
     description: Optional[str] = None
     parameters: Dict[str, Any] = Field(default_factory=dict)
+    output_schema: Dict[str, Any] = Field(default_factory=dict)
     status: str = "active"
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None

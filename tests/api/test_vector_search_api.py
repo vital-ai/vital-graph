@@ -35,8 +35,17 @@ PROP_URI_2 = "http://schema.org/description"
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def vector_env(vg_client, test_space, test_graph):
-    """Create a vector index + mapping for the module, teardown after."""
-    # Create index
+    """Create search mappings + vector indexes for the module, teardown after."""
+    # Create mapping first (defines what to vectorize)
+    mapping = await vg_client.search_mappings.create_mapping(
+        space_id=test_space,
+        index_name=INDEX_NAME,
+        mapping_type="kgentity",
+        enabled=True,
+        source_type="properties",
+    )
+
+    # Create vector index
     idx = await vg_client.vector_indexes.create_index(
         space_id=test_space,
         index_name=INDEX_NAME,
@@ -46,13 +55,23 @@ async def vector_env(vg_client, test_space, test_graph):
         description="Test vector index",
     )
 
-    # Create mapping
-    mapping = await vg_client.vector_mappings.create_mapping(
+    # Attach index to mapping
+    await vg_client.search_mappings.add_index(
         space_id=test_space,
+        mapping_id=mapping.mapping_id,
+        index_type="vector",
         index_name=INDEX_NAME,
+    )
+
+    # Create second mapping with different options
+    mapping2 = await vg_client.search_mappings.create_mapping(
+        space_id=test_space,
+        index_name=INDEX_NAME_L2,
         mapping_type="kgentity",
         enabled=True,
         source_type="properties",
+        include_pred_name=True,
+        separator=" | ",
     )
 
     # Create a second index with L2 distance metric
@@ -65,15 +84,12 @@ async def vector_env(vg_client, test_space, test_graph):
         description="L2 distance vector index",
     )
 
-    # Create mapping with different options: properties source_type + include_pred_name
-    mapping2 = await vg_client.vector_mappings.create_mapping(
+    # Attach L2 index to second mapping
+    await vg_client.search_mappings.add_index(
         space_id=test_space,
+        mapping_id=mapping2.mapping_id,
+        index_type="vector",
         index_name=INDEX_NAME_L2,
-        mapping_type="kgentity",
-        enabled=True,
-        source_type="properties",
-        include_pred_name=True,
-        separator=" | ",
     )
 
     yield {
@@ -88,7 +104,7 @@ async def vector_env(vg_client, test_space, test_graph):
     # Teardown
     for mid in [mapping.mapping_id, mapping2.mapping_id]:
         try:
-            await vg_client.vector_mappings.delete_mapping(test_space, mid)
+            await vg_client.search_mappings.delete_mapping(test_space, mid)
         except Exception:
             pass
     for iname in [INDEX_NAME, INDEX_NAME_L2]:
@@ -117,7 +133,7 @@ class TestVectorSearch:
 
     async def test_mapping_in_list(self, vg_client, vector_env):
         """Verify the vector mapping exists via list (get single returns 500 — see issue)."""
-        resp = await vg_client.vector_mappings.list_mappings(
+        resp = await vg_client.search_mappings.list_mappings(
             vector_env["space_id"], index_name=INDEX_NAME
         )
         match = [m for m in resp.mappings if m.mapping_id == vector_env["mapping"].mapping_id]
@@ -127,13 +143,13 @@ class TestVectorSearch:
 
     async def test_list_mappings(self, vg_client, vector_env):
         """Mapping appears in list."""
-        resp = await vg_client.vector_mappings.list_mappings(vector_env["space_id"])
+        resp = await vg_client.search_mappings.list_mappings(vector_env["space_id"])
         ids = [m.mapping_id for m in resp.mappings]
         assert vector_env["mapping"].mapping_id in ids
 
     async def test_add_property_to_mapping(self, vg_client, vector_env):
         """Add a property to the mapping."""
-        prop = await vg_client.vector_mappings.add_property(
+        prop = await vg_client.search_mappings.add_property(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             property_uri=PROP_URI,
@@ -240,7 +256,7 @@ class TestVectorSearch:
 
     async def test_mapping2_options(self, vg_client, vector_env):
         """Verify second mapping was created with custom options."""
-        resp = await vg_client.vector_mappings.list_mappings(
+        resp = await vg_client.search_mappings.list_mappings(
             vector_env["space_id"], index_name=INDEX_NAME_L2
         )
         match = [m for m in resp.mappings if m.mapping_id == vector_env["mapping2"].mapping_id]
@@ -251,7 +267,7 @@ class TestVectorSearch:
 
     async def test_add_second_property(self, vg_client, vector_env):
         """Add a second property to the mapping."""
-        prop = await vg_client.vector_mappings.add_property(
+        prop = await vg_client.search_mappings.add_property(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             property_uri=PROP_URI_2,
@@ -263,7 +279,7 @@ class TestVectorSearch:
 
     async def test_update_mapping(self, vg_client, vector_env):
         """Update the mapping separator."""
-        updated = await vg_client.vector_mappings.update_mapping(
+        updated = await vg_client.search_mappings.update_mapping(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             separator=" | ",
@@ -272,13 +288,13 @@ class TestVectorSearch:
 
     async def test_disable_enable_mapping(self, vg_client, vector_env):
         """Disable then re-enable a mapping."""
-        disabled = await vg_client.vector_mappings.update_mapping(
+        disabled = await vg_client.search_mappings.update_mapping(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             enabled=False,
         )
         assert disabled.enabled is False
-        enabled = await vg_client.vector_mappings.update_mapping(
+        enabled = await vg_client.search_mappings.update_mapping(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             enabled=True,
@@ -290,7 +306,7 @@ class TestVectorSearch:
         prop_id = vector_env.get("property_id")
         if prop_id is None:
             pytest.skip("property_id not set (test_add_property may have failed)")
-        resp = await vg_client.vector_mappings.remove_property(
+        resp = await vg_client.search_mappings.remove_property(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             property_id=prop_id,
@@ -302,7 +318,7 @@ class TestVectorSearch:
         prop_id = vector_env.get("property_id_2")
         if prop_id is None:
             pytest.skip("property_id_2 not set")
-        resp = await vg_client.vector_mappings.remove_property(
+        resp = await vg_client.search_mappings.remove_property(
             space_id=vector_env["space_id"],
             mapping_id=vector_env["mapping"].mapping_id,
             property_id=prop_id,

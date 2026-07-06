@@ -161,11 +161,11 @@ const KGFrames: React.FC = () => {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="kgframes-page">
       {/* Page Title */}
       <div className="flex items-center gap-2 mb-2">
         <HiViewBoards className="w-6 h-6 text-blue-600" />
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Frames</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="kgframes-title">KG Frames</h1>
       </div>
 
       {/* Space / Graph selectors */}
@@ -316,7 +316,7 @@ const KGFrames: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {frames.map((frame) => (
-                  <tr key={frame.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                  <tr key={frame.uri} data-testid="frame-row" className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                     <td className="px-4 py-2.5">
                       <div className="max-w-xs">
                         <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{frame.name}</p>

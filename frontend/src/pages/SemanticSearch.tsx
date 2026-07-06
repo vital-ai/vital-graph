@@ -429,14 +429,14 @@ const SemanticSearch: React.FC = () => {
   const needsText = searchMode !== 'geo';
 
   return (
-    <div>
+    <div data-testid="semantic-search-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem>Semantic Search</BreadcrumbItem>
       </Breadcrumb>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Semantic Search</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="semantic-search-title">Semantic Search</h1>
         <Badge color="info">SPARQL Index Testing</Badge>
       </div>
 

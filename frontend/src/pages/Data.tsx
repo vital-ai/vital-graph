@@ -19,7 +19,7 @@ const Data: React.FC = () => {
   }, [location.pathname]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="data-page">
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-2">
           <DataIcon className="w-6 h-6 text-blue-600" />

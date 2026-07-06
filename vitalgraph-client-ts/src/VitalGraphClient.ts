@@ -21,7 +21,6 @@ import { ExportEndpoint } from './endpoint/ExportEndpoint.js';
 import { MetricsEndpoint } from './endpoint/MetricsEndpoint.js';
 import { AdminEndpoint } from './endpoint/AdminEndpoint.js';
 import { ProcessEndpoint } from './endpoint/ProcessEndpoint.js';
-import { VectorMappingsEndpoint } from './endpoint/VectorMappingsEndpoint.js';
 import { FuzzyMappingsEndpoint } from './endpoint/FuzzyMappingsEndpoint.js';
 import { VectorIndexesEndpoint } from './endpoint/VectorIndexesEndpoint.js';
 import { SearchMappingsEndpoint } from './endpoint/SearchMappingsEndpoint.js';
@@ -63,7 +62,6 @@ export class VitalGraphClient {
   readonly metrics: MetricsEndpoint;
   readonly admin: AdminEndpoint;
   readonly processes: ProcessEndpoint;
-  readonly vectorMappings: VectorMappingsEndpoint;
   readonly fuzzyMappings: FuzzyMappingsEndpoint;
   readonly vectorIndexes: VectorIndexesEndpoint;
   readonly searchMappings: SearchMappingsEndpoint;
@@ -96,7 +94,6 @@ export class VitalGraphClient {
     this.metrics = new MetricsEndpoint(this);
     this.admin = new AdminEndpoint(this);
     this.processes = new ProcessEndpoint(this);
-    this.vectorMappings = new VectorMappingsEndpoint(this);
     this.fuzzyMappings = new FuzzyMappingsEndpoint(this);
     this.vectorIndexes = new VectorIndexesEndpoint(this);
     this.searchMappings = new SearchMappingsEndpoint(this);

@@ -13,8 +13,9 @@ import TimeAgo from '../components/TimeAgo';
 interface Agent {
   agent_id: string;
   agent_uri: string;
-  name: string;
-  agent_type: string;
+  agent_name: string;
+  agent_type_key: string;
+  agent_type_label: string;
   description: string | null;
   status: string;
   version: string | null;
@@ -69,7 +70,7 @@ const AgentRegistry: React.FC = () => {
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="agent-registry-page">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -133,11 +134,11 @@ const AgentRegistry: React.FC = () => {
                 {agents.map((agent) => (
                   <TableRow key={agent.agent_id} className="cursor-pointer" onClick={() => navigate(`/agent-registry/${agent.agent_id}`)}>
                     <TableCell className="font-medium text-gray-900 dark:text-white">
-                      {agent.name}
+                      {agent.agent_name}
                       <div className="text-xs text-gray-400 font-mono truncate max-w-[180px]">{agent.agent_uri}</div>
                     </TableCell>
                     <TableCell>
-                      <Badge color="cyan" size="xs">{agent.agent_type}</Badge>
+                      <Badge color="cyan" size="xs">{agent.agent_type_label || agent.agent_type_key}</Badge>
                     </TableCell>
                     <TableCell>{statusBadge(agent.status)}</TableCell>
                     <TableCell className="text-xs text-gray-500 font-mono">{agent.version || '—'}</TableCell>

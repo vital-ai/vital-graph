@@ -168,10 +168,57 @@ This workaround should be removed once the hash index fix is deployed.
 
 ---
 
-## 6. Related
+## 6. Implementation Status — COMPLETE (2026-07-04)
+
+All items implemented and verified (31 tests pass, Wikipedia e2e green).
+
+### 6.1 Schema change (§3.1)
+
+`sparql_sql_schema.py` line 661: btree `(term_text, term_type)` replaced
+with `USING hash (term_text)`.  New spaces get the hash index automatically.
+
+### 6.2 Silent failure fix
+
+`kg_backend_utils.py`: `store_objects` now checks if `add_rdf_quads_batch_bulk`
+returns 0 inserted quads and reports `success=False` with an error message
+instead of silently returning success.
+
+### 6.3 Migration script (§3.3)
+
+Standalone script at `apps/migrate_term_index_to_hash.py`.  Discovers all
+VitalGraph spaces in PostgreSQL and migrates their `idx_{space_id}_term_tt`
+from btree to hash.  Separate from the main application — no startup
+migration logic in `SparqlSQLSchema` or `SpaceManager`.
+
+### 6.4 Additional fixes discovered during e2e testing
+
+| Fix | File | Description |
+|-----|------|-------------|
+| Parent document query | `kg_query_builder.py` | Two-hop UNION for `parent_document_uri` filter (original → parent_copy → segment) |
+| `get_vectors` pagination | `vector_indexes_endpoint.py` | True `total_count` via COUNT(*) + `page_size`/`offset` params |
+| FTS text search | `kg_query_builder.py` | `search_text` + `fts_index_name` → `vg:textSearch` (GIN BM25); CONTAINS fallback when no FTS index |
+| Redundant reindex removed | `test_wikipedia_document_e2e.py` | Worker vectorizes inline; no explicit reindex needed |
+| FTS index in test fixture | `test_wikipedia_document_e2e.py` | Creates FTS index + attaches to mapping for `test_query_with_text_search` |
+
+### 6.5 Test results
+
+```
+tests/api/test_wikipedia_document_e2e.py — 31 passed, 1 skipped (83s)
+```
+
+- Segmentation: 150 segments across 3 Wikipedia articles
+- Vectorization: inline (ready in ~2s after segmentation completes)
+- FTS: BM25 search for "neural network" finds AI article segments
+- Parent document query: correctly traverses two-hop edges
+
+---
+
+## 7. Related
 
 - `planning_visualization/framenet_testing_plan.md` §2.3 — Documents the
   issue and truncation workaround in the FrameNet context
 - `vitalgraph/db/sparql_sql/sparql_sql_schema.py` — Index definitions
 - `vitalgraph/endpoint/impl/data_import_impl.py` — Import engine that
   triggers the error
+- `issues/016_document_search_text_headline_only.md` — FTS issue doc
+- `apps/migrate_term_index_to_hash.py` — Standalone migration script

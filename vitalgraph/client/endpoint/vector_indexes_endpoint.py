@@ -13,6 +13,7 @@ from ...model.vector_indexes_model import (
     VectorIndexOut, VectorIndexListResponse,
     CreateVectorIndexRequest, ReindexRequest, ReindexResponse,
     VectorUpsertRequest, VectorUpsertResponse, VectorGetResponse,
+    ReindexJobListResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,34 @@ class VectorIndexesClientEndpoint(BaseEndpoint):
         return await self._make_typed_request(
             "POST", f"{self._base_url()}/reindex", ReindexResponse,
             json=request.model_dump(exclude_none=True), params=params,
+        )
+
+    async def get_reindex_status(
+        self,
+        space_id: str,
+        job_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+    ) -> ReindexJobListResponse:
+        """Get status of background reindex tasks.
+
+        Args:
+            space_id: Space ID
+            job_id: Optional specific job ID to look up
+            index_name: Optional filter by index name
+
+        Returns:
+            ReindexJobListResponse with list of job statuses
+        """
+        self._check_connection()
+        validate_required_params(space_id=space_id)
+        params = build_query_params(space_id=space_id)
+        if job_id:
+            params["job_id"] = job_id
+        if index_name:
+            params["index_name"] = index_name
+        return await self._make_typed_request(
+            "GET", f"{self._base_url()}/reindex/status",
+            ReindexJobListResponse, params=params,
         )
 
     async def upsert_vectors(

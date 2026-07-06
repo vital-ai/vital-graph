@@ -183,6 +183,7 @@ class SparqlSQLSchema:
                 auth_service_config JSONB DEFAULT '{}',
                 capabilities JSONB DEFAULT '[]',
                 metadata JSONB DEFAULT '{}',
+                protocol_config JSONB DEFAULT '{}',
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 created_by VARCHAR(255),
@@ -197,10 +198,26 @@ class SparqlSQLSchema:
                 endpoint_url VARCHAR(1000) NOT NULL,
                 protocol VARCHAR(20) NOT NULL DEFAULT 'websocket',
                 status VARCHAR(20) NOT NULL DEFAULT 'active',
+                transport_config JSONB DEFAULT '{}',
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 notes TEXT,
                 UNIQUE (agent_id, endpoint_uri)
+            )
+        '''),
+        ("agent_function", '''
+            CREATE TABLE IF NOT EXISTS agent_function (
+                function_id SERIAL PRIMARY KEY,
+                agent_id VARCHAR(50) NOT NULL REFERENCES agent(agent_id) ON DELETE CASCADE,
+                function_uri VARCHAR(500) NOT NULL,
+                function_name VARCHAR(255) NOT NULL,
+                description TEXT,
+                parameters JSONB DEFAULT '{}',
+                output_schema JSONB DEFAULT '{}',
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT
             )
         '''),
         ("agent_change_log", '''
@@ -515,16 +532,20 @@ class SparqlSQLSchema:
         ''')
 
         # 11. Geo side-table (PostGIS geography for spatial queries)
+        #     Uses serial PK to allow multiple rows per subject_uuid
+        #     (entity with N geo slots → N entity-keyed rows + N slot-keyed rows)
         stmts.append(f'''
             CREATE TABLE IF NOT EXISTS {t['geo']} (
+                geo_id          SERIAL PRIMARY KEY,
                 subject_uuid    UUID NOT NULL,
+                source_slot_uuid UUID,
                 predicate_uuid  UUID,
                 location        geography(Point, 4326) NOT NULL,
                 latitude        DOUBLE PRECISION NOT NULL,
                 longitude       DOUBLE PRECISION NOT NULL,
                 context_uuid    UUID NOT NULL,
                 updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (subject_uuid, context_uuid)
+                UNIQUE (subject_uuid, source_slot_uuid, context_uuid)
             )
         ''')
 
@@ -637,7 +658,7 @@ class SparqlSQLSchema:
         t = self.get_table_names(space_id)
         return [
             # Term table indexes
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {t['term']} (term_text, term_type)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_tt ON {t['term']} USING hash (term_text)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_type ON {t['term']} (term_type)",
             # GIN trigram index for REGEX/CONTAINS/LIKE text filters (requires pg_trgm)
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_term_trgm ON {t['term']} USING gin (term_text gin_trgm_ops)",
@@ -669,6 +690,7 @@ class SparqlSQLSchema:
             # Geo table indexes
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_gist ON {t['geo']} USING gist (location)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_subj ON {t['geo']} (subject_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_slot ON {t['geo']} (source_slot_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_geo_ctx ON {t['geo']} (context_uuid)",
 
             # Fuzzy band table indexes

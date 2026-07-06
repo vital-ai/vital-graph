@@ -182,7 +182,7 @@ const Triples: React.FC = () => {
   const hasSelection = selectedSpace && selectedGraph;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="triples-page">
       <NavigationBreadcrumb
         spaceId={spaceId}
         graphId={graphId}

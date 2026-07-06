@@ -37,7 +37,7 @@ const DataExportDetail: React.FC = () => {
   const navigate = useNavigate();
   const { exportId } = useParams<{ exportId: string }>();
   const [searchParams] = useSearchParams();
-  const isNew = exportId === 'new';
+  const isNew = !exportId || exportId === 'new';
 
   const [job, setJob] = useState<ImportExportJob | null>(null);
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
@@ -151,15 +151,23 @@ const DataExportDetail: React.FC = () => {
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!job) return;
     const url = importExportService.getExportDownloadUrl(job.job_id);
+    const token = localStorage.getItem('access_token');
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) return;
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
+    link.href = blobUrl;
     link.download = job.file_name || 'export';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
   };
 
   const handleDelete = async () => {
@@ -181,7 +189,7 @@ const DataExportDetail: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="data-export-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-4">
         <BreadcrumbItem href="/" icon={HiHome}>

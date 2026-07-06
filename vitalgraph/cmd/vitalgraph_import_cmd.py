@@ -201,6 +201,13 @@ async def _run(args: argparse.Namespace) -> int:
             elapsed = result.get("elapsed_seconds", 0)
             print(f"✅ Import complete: {quads:,} quads in {elapsed:.1f}s",
                   file=sys.stderr)
+            # Nudge the backfill task (if running) so it stamps
+            # server-managed properties on newly imported entities.
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute("NOTIFY vitalgraph_backfill_nudge")
+            except Exception:
+                pass  # best-effort; backfill safety-net poll will catch up
             return 0
         else:
             print(f"❌ Import failed: {result.get('error', 'Unknown error')}",

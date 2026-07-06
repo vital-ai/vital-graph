@@ -110,6 +110,7 @@ export class ApiService {
       options.subject,
       options.page_size ?? 100,
       options.offset ?? 0,
+      options.object_filter,
     ) as any;
   }
 
@@ -284,8 +285,8 @@ export class ApiService {
     ) as any;
   }
 
-  async getFile(spaceId: string, _graphId: string, fileUri: string): Promise<QuadResponse> {
-    return vgClient.files.get(spaceId, fileUri) as any;
+  async getFile(spaceId: string, graphId: string, fileUri: string): Promise<QuadResponse> {
+    return vgClient.files.get(spaceId, fileUri, graphId) as any;
   }
 
   async uploadFile(spaceId: string, graphId: string, fileUri: string, file: File, metadata?: Record<string, string>): Promise<any> {
@@ -297,8 +298,8 @@ export class ApiService {
     return new Blob([buffer]);
   }
 
-  async deleteFile(spaceId: string, _graphId: string, fileUri: string): Promise<any> {
-    return vgClient.files.delete(spaceId, fileUri);
+  async deleteFile(spaceId: string, graphId: string, fileUri: string): Promise<any> {
+    return vgClient.files.delete(spaceId, fileUri, graphId);
   }
 
   // ─── Users ────────────────────────────────────────────────────────

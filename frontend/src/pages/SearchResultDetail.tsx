@@ -130,7 +130,7 @@ const SearchResultDetail: React.FC = () => {
   }
 
   return (
-    <div>
+    <div data-testid="search-result-detail-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem href="/semantic-search" icon={HiSearch}>Semantic Search</BreadcrumbItem>

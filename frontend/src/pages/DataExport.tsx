@@ -80,14 +80,22 @@ const DataExportPage: React.FC = () => {
     }
   };
 
-  const handleDownload = (job: ImportExportJob) => {
+  const handleDownload = async (job: ImportExportJob) => {
     const url = importExportService.getExportDownloadUrl(job.job_id);
+    const token = localStorage.getItem('access_token');
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) return;
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
+    link.href = blobUrl;
     link.download = job.file_name || 'export';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
   };
 
   const handleDeleteExport = async (jobId: string) => {
@@ -109,7 +117,7 @@ const DataExportPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="data-export-page">
       <div className="mb-6">
         <div className="flex items-center gap-2 mb-2">
           <DataIcon className="w-6 h-6 text-blue-600" />

@@ -31,6 +31,7 @@ from ..model.kgdocuments_model import (
     SegmentationConfigListResponse,
     SegmentationJobStatusResponse,
     SegmentationStatusSummaryResponse,
+    SegmentationWorkerStatus,
 )
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
@@ -48,9 +49,10 @@ logger = logging.getLogger(__name__)
 class KGDocumentsEndpoint:
     """KGDocument CRUD and segmentation management endpoint."""
 
-    def __init__(self, space_manager, auth_dependency):
+    def __init__(self, space_manager, auth_dependency, segmentation_worker=None):
         self.space_manager = space_manager
         self.auth_dependency = auth_dependency
+        self._segmentation_worker = segmentation_worker
         self.logger = logging.getLogger(f"{__name__}.KGDocumentsEndpoint")
         self.router = APIRouter()
 
@@ -103,7 +105,7 @@ class KGDocumentsEndpoint:
         ):
             require_space_read(current_user, space_id)
             if uri:
-                return await self._get_by_uri(space_id, graph_id, uri)
+                return await self._get_by_uri(space_id, graph_id, uri, include_segments=include_segments)
             return await self._list(
                 space_id, graph_id, page_size, offset,
                 search=search, include_segments=include_segments,
@@ -278,6 +280,18 @@ class KGDocumentsEndpoint:
     # Segmentation status handler
     # ------------------------------------------------------------------
 
+    def _get_worker_status(self) -> Optional[SegmentationWorkerStatus]:
+        """Get worker health info if the worker is available."""
+        worker = self._segmentation_worker
+        if worker is None:
+            return None
+        try:
+            health = worker.get_health()
+            return SegmentationWorkerStatus(**health)
+        except Exception as e:
+            self.logger.warning(f"Could not get worker health: {e}")
+            return SegmentationWorkerStatus(running=False)
+
     async def _handle_segmentation_status(
         self, space_id: str, document_uri: Optional[str],
         status_filter: Optional[str], limit: int, offset: int,
@@ -285,16 +299,18 @@ class KGDocumentsEndpoint:
         """Handle segmentation status query."""
         from vitalgraph.document.segmentation_job_manager import SegmentationJobManager
 
+        worker_status = self._get_worker_status()
+
         manager, pool, conn = await self._get_job_manager(space_id)
         if not manager:
-            return SegmentationStatusSummaryResponse()
+            return SegmentationStatusSummaryResponse(worker_status=worker_status)
 
         try:
             # If querying for a specific document, return its latest job
             if document_uri:
                 job = await manager.get_job_status(document_uri)
                 if not job:
-                    return SegmentationStatusSummaryResponse()
+                    return SegmentationStatusSummaryResponse(worker_status=worker_status)
                 job_resp = SegmentationJobStatusResponse(
                     job_id=job.job_id,
                     document_uri=job.document_uri,
@@ -309,6 +325,7 @@ class KGDocumentsEndpoint:
                 return SegmentationStatusSummaryResponse(
                     **{job.status: 1},
                     jobs=[job_resp],
+                    worker_status=worker_status,
                 )
 
             # Space-level summary
@@ -335,6 +352,7 @@ class KGDocumentsEndpoint:
                 failed=summary.get("failed", 0),
                 cancelled=summary.get("cancelled", 0),
                 jobs=job_responses,
+                worker_status=worker_status,
             )
         finally:
             if pool and conn:
@@ -939,10 +957,35 @@ class KGDocumentsEndpoint:
 
     _HAS_SEGMENT_TYPE_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"
 
-    async def _get_by_uri(self, space_id: str, graph_id: str, uri: str) -> QuadResultsResponse:
-        """Get a single KGDocument by URI."""
+    async def _get_by_uri(
+        self, space_id: str, graph_id: str, uri: str,
+        include_segments: bool = False,
+    ) -> QuadResultsResponse:
+        """Get a single KGDocument by URI.
+
+        When include_segments=True, returns the full document graph:
+        original, parent copy, all segment KGDocuments, and connecting edges.
+        """
         try:
             backend_adapter, _ = await self._get_backend(space_id)
+
+            if include_segments:
+                graph_objects = await self.read_processor.get_document_graph(
+                    backend_adapter, space_id, graph_id, uri
+                )
+                if not graph_objects:
+                    return QuadResultsResponse(
+                        message=f"KGDocument '{uri}' not found",
+                        total_count=0,
+                        results=[],
+                    )
+                quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
+                return QuadResultsResponse(
+                    message=f"Document graph for '{uri}' ({len(graph_objects)} objects)",
+                    total_count=len(graph_objects),
+                    results=quads,
+                )
+
             graph_object = await self.read_processor.get_kgdocument_by_uri(
                 backend_adapter, space_id, graph_id, uri
             )
@@ -1228,7 +1271,7 @@ class KGDocumentsEndpoint:
 # Factory
 # ---------------------------------------------------------------------------
 
-def create_kgdocuments_router(space_manager, auth_dependency) -> APIRouter:
+def create_kgdocuments_router(space_manager, auth_dependency, segmentation_worker=None) -> APIRouter:
     """Factory function to create the KGDocuments router."""
-    endpoint = KGDocumentsEndpoint(space_manager, auth_dependency)
+    endpoint = KGDocumentsEndpoint(space_manager, auth_dependency, segmentation_worker=segmentation_worker)
     return endpoint.router

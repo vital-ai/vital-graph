@@ -54,7 +54,7 @@ const Login: React.FC = () => {
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4">
+    <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4" data-testid="login-page">
       <Card className="w-full max-w-md">
         <div className="flex justify-center mb-4">
           <img 
@@ -78,7 +78,7 @@ const Login: React.FC = () => {
           </Alert>
         )}
         
-        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit} data-testid="login-form">
           <FormField label="Username" htmlFor="username" error={fieldErrors.username} required>
             <TextInput
               id="username"
@@ -115,6 +115,7 @@ const Login: React.FC = () => {
           <Button 
             type="submit" 
             disabled={isLoading}
+            data-testid="login-submit"
           >
             {isLoading ? 'Signing in...' : 'Sign in'}
           </Button>

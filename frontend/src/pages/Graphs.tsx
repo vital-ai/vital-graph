@@ -103,7 +103,7 @@ const Graphs: React.FC = () => {
   const totalTriples = graphs.reduce((sum, g) => sum + (g.triple_count || 0), 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="graphs-page">
       {/* Breadcrumb */}
       {spaceId && (
         <Breadcrumb>
@@ -119,7 +119,7 @@ const Graphs: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <GraphIcon className="w-6 h-6 text-purple-600" />
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Graphs</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="graphs-title">Graphs</h1>
           </div>
           {selectedSpace && !loading && (
             <p className="text-gray-500 dark:text-gray-400 mt-1">
@@ -201,13 +201,14 @@ const Graphs: React.FC = () => {
 
       {/* Graph cards */}
       {selectedSpace && !loading && filteredGraphs.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-testid="graphs-grid">
           {filteredGraphs.map((graph) => {
             const name = extractGraphName(graph.graph_uri);
             const isDeleting = deleting === graph.graph_uri;
             return (
               <div
                 key={graph.graph_uri}
+                data-testid={`graph-card-${graph.graph_uri}`}
                 className={`rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 transition-all ${
                   isDeleting ? 'opacity-50' : 'hover:shadow-md hover:border-purple-300 dark:hover:border-purple-600'
                 }`}

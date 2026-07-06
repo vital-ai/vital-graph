@@ -220,7 +220,7 @@ The segmentation architecture uses three tiers to preserve the original document
 **Rationale:**
 - `vg:vectorSimilarity` SPARQL queries require subjects to exist in the quad store for JOIN binding
 - The ontology defines `KGDocument` and `Edge_hasKGDocumentSegment` as first-class graph objects — use them as designed
-- Standard JSON-LD retrieval works without custom plumbing (segment + edge + parent in one fetch)
+- Standard graph object retrieval works without custom plumbing (segment + edge + parent in one fetch)
 - The existing vector populator indexes subjects that already exist in the quad store — no pipeline changes needed
 - Segments are filtered from general document listings via `kGDocumentType = urn:kgdoctype:document_segment`
 - Enables future attachment of frames, relations, or annotations to individual segments
@@ -546,7 +546,7 @@ When a vector similarity search matches a segment, the system can reconstruct th
 
 1. **Matched segment** → retrieve as KGDocument object (with all properties)
 2. **Parent lookup** → follow `Edge_hasKGDocumentSegment` backward to find parent
-3. **Response format** → return in standard JSON-LD KG graph object format:
+3. **Response format** → return in standard KG graph object format:
    - The matched segment KGDocument
    - The `Edge_hasKGDocumentSegment` linking it to parent
    - Optionally the parent KGDocument (for context)
@@ -627,6 +627,895 @@ ORDER BY DESC(?hybridScore)
 LIMIT 20
 ```
 
+### 6.4 KGQuery Endpoint Integration — `query_type="document"`
+
+**Current gap**: The `query_connections` endpoint (`/api/graphs/kgqueries`) only supports
+`query_type="entity"`, which generates SPARQL with `vitaltype` filters targeting
+KGEntity subclasses. KGDocument segments have `vitaltype = KGDocument` — a direct
+KGNode subclass, **not** a KGEntity subclass. This means `query_connections` with
+`VectorSearchCriteria` returns empty results for document segments.
+
+**Workaround**: Use the raw SPARQL endpoint with `vg:vectorSimilarity` (see §6.1).
+
+#### 6.4.1 Design: Separate `_build_document_where_clause`
+
+Add a dedicated `_build_document_where_clause` method to `KGQueryCriteriaBuilder`
+rather than parameterizing the existing entity method. This keeps document-specific
+concerns (segment filtering, document type property, parent traversal) cleanly
+separated from entity query logic.
+
+**Class clause** (replaces the KGEntity UNION):
+
+```python
+class_clause = "?entity vital-core:vitaltype haley:KGDocument ."
+```
+
+**Document type filter** (analogous to `hasKGEntityType`):
+
+```sparql
+?entity haley:hasKGDocumentType <{document_type_uri}> .
+```
+
+**Segment scoping** (controlled by `search_scope` enum):
+
+```sparql
+-- search_scope="segments":
+?entity haley:hasKGDocumentSegmentIndex ?_seg_idx .
+FILTER(?_seg_idx > 0)
+
+-- search_scope="summaries":
+?entity haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+
+-- search_scope="originals":
+FILTER NOT EXISTS { ?entity haley:hasKGDocumentSegmentTypeURI ?_st . }
+```
+
+When `search_scope` is `None` or `"all"` (default), no scope filter is applied —
+the query returns all document tiers. Use `"segments"` for chunk-level RAG,
+`"summaries"` for document-level similarity, `"originals"` for unprocessed docs.
+
+**Reused infrastructure** — the document WHERE clause feeds into the same
+`build_entity_query_sparql` / `build_entity_count_query_sparql` query assembly
+(SELECT, GRAPH wrapper, ORDER BY, LIMIT/OFFSET). All existing capabilities work
+unchanged:
+- `vector_criteria` → `BIND(vg:vectorSimilarity(?entity, ...) AS ?vg_score)`
+- `multi_vector_criteria` → `BIND(vg:multiVectorSimilarity(...))`
+- `geo_criteria` → `BIND(vg:geoDistance(...))`
+- `sort_criteria` → frame/slot/property sort bindings
+- `entity_property_filters` → direct property filters (works for document properties too)
+- `frame_criteria` → frame/slot filtering (if documents have frames attached)
+- Pagination, count queries, `count_only` short-circuit
+
+#### 6.4.2 Model Changes
+
+**`kgqueries_model.py`**:
+- Allow `query_type = "document"` in `KGQueryCriteria` description/validation
+- Add `document_criteria: Optional[DocumentSearchCriteria]` to `KGQueryCriteria`
+  (analogous to `source_entity_criteria: EntityQueryCriteria`)
+- Add `document_uris: Optional[List[str]]` to `KGQueryResponse`
+- Add `DocumentQueryResponse` typed response wrapper (like `KGEntityQueryResponse`)
+
+**`kgentities_model.py`** — Add `DocumentSearchCriteria` Pydantic model:
+
+```python
+class DocumentSearchCriteria(BaseModel):
+    """Criteria for document queries — document-specific fields that map to
+    SPARQL triple patterns in _build_document_where_clause.
+
+    Sits alongside VectorSearchCriteria/GeoSearchCriteria on KGQueryCriteria.
+    vector_criteria, multi_vector_criteria, geo_criteria, sort_criteria,
+    entity_property_filters, and frame_criteria remain on KGQueryCriteria
+    (shared with entity queries).
+    """
+
+    # ── Document type filtering ──
+    document_type_uri: Optional[str] = Field(
+        None,
+        description="Filter by hasKGDocumentType URI (e.g. urn:kgdoctype:technical_article). "
+                    "Generates: ?entity haley:hasKGDocumentType <uri> ."
+    )
+
+    # ── Segment scoping ──
+    search_scope: Optional[Literal["all", "segments", "originals", "summaries"]] = Field(
+        None,
+        description="Controls which tier of documents to search. "
+                    "'segments' → segmentIndex > 0 (chunk-level results). "
+                    "'summaries' → segmentTypeURI = segmentation_parent (parent copies with summary text). "
+                    "'originals' → no segmentTypeURI at all (unprocessed docs). "
+                    "'all' / None → no scope filter."
+    )
+
+    # ── Segmentation method/type filtering ──
+    segment_method_uri: Optional[str] = Field(
+        None,
+        description="Filter by segmentation method URI (e.g. urn:segmethod:markdown_heading_split). "
+                    "Generates: ?entity haley:hasKGDocumentSegmentMethodURI <uri> ."
+    )
+    segment_type_uri: Optional[str] = Field(
+        None,
+        description="Filter by segment type URI (e.g. urn:segtype:markdown_section). "
+                    "Generates: ?entity haley:hasKGDocumentSegmentTypeURI <uri> ."
+    )
+
+    # ── Parent scoping ──
+    parent_document_uri: Optional[str] = Field(
+        None,
+        description="Filter to segments of a specific parent document (via Edge_hasKGDocumentSegment). "
+                    "Generates: ?_seg_edge vital-core:hasEdgeSource <uri> . "
+                    "?_seg_edge vital-core:hasEdgeDestination ?entity ."
+    )
+
+    # ── Content type filtering ──
+    content_type: Optional[str] = Field(
+        None,
+        description="Filter by hasKGContentType (MIME type). "
+                    "Generates: ?entity haley:hasKGContentType \"mime_type\" ."
+    )
+
+    # ── Token length range ──
+    min_token_length: Optional[int] = Field(
+        None, ge=0,
+        description="Minimum segment token length. "
+                    "Generates: ?entity haley:hasKGDocumentSegmentTokenLength ?_tlen . FILTER(?_tlen >= N)"
+    )
+    max_token_length: Optional[int] = Field(
+        None, ge=1,
+        description="Maximum segment token length. "
+                    "Generates: FILTER(?_tlen <= N)  (reuses ?_tlen from min_token_length or adds binding)"
+    )
+
+    # ── Text search ──
+    search_text: Optional[str] = Field(
+        None,
+        description="Full-text search on headline/content. "
+                    "Generates: ?entity haley:hasKGDocumentHeadline ?_hl . "
+                    "FILTER(CONTAINS(LCASE(?_hl), LCASE(\"text\")))"
+    )
+
+    # ── Segmentation-aware response enrichment ──
+    include_parent_context: bool = Field(
+        False,
+        description="When True (and searching segments), follow Edge_hasKGDocumentSegment "
+                    "backwards to include the parent document URI and headline in the response. "
+                    "Generates an additional OPTIONAL block in the SPARQL query."
+    )
+    include_original_uri: bool = Field(
+        False,
+        description="When True (and include_parent_context=True), also follow the "
+                    "parent→original edge to return the original document URI. "
+                    "Generates a second OPTIONAL hop."
+    )
+    exclude_managed_segments: bool = Field(
+        True,
+        description="When True (default), exclude managed segment types from results "
+                    "(segmentation_parent, markdown_section, text_chunk) — same as "
+                    "GET /api/kgdocuments default behavior. Set False to include all."
+    )
+
+    # ── Inline content projection ──
+    include_segment_text: bool = Field(
+        False,
+        description="When True, project segment text directly in the SPARQL query "
+                    "(hasKGDocumentContent, hasKGDocumentHeadline) so the response "
+                    "contains chunk content without a second fetch. Populates "
+                    "DocumentResult.segment_text and .segment_headline."
+    )
+
+    # ── Grouping ──
+    group_by_document: bool = Field(
+        False,
+        description="When True, collapse segment results by parent document. "
+                    "Returns one DocumentResult per parent, keeping the segment with "
+                    "the highest vector score. Requires include_parent_context=True. "
+                    "Generates SPARQL GROUP BY ?_parent_doc with MAX(?vg_score) "
+                    "and SAMPLE(?entity) aggregation. "
+                    "Note: when combined with include_segment_text, the text returned "
+                    "is from the SAMPLE'd segment (not guaranteed to be the best-scoring one)."
+    )
+
+    # ── Validators ──
+    @model_validator(mode='after')
+    def _validate_dependencies(self) -> 'DocumentSearchCriteria':
+        if self.include_original_uri and not self.include_parent_context:
+            raise ValueError(
+                "include_original_uri requires include_parent_context=True "
+                "(original is resolved via parent → original edge traversal)")
+        if self.group_by_document and not self.include_parent_context:
+            raise ValueError(
+                "group_by_document requires include_parent_context=True "
+                "(grouping key is ?_parent_doc from parent context OPTIONAL)")
+        return self
+```
+
+**Relationship to existing infrastructure**: The `list_segments` method in
+`kgdocuments_read_impl.py` already implements a two-hop SPARQL traversal
+(original → parent_copy → segments via `Edge_hasKGDocumentSegment`). The
+`parent_document_uri` field in `DocumentSearchCriteria` uses the same edge
+pattern but in the reverse direction (given a parent, find its segments). The
+`include_parent_context` enrichment performs the inverse traversal (given a
+segment, find its parent and optionally the original):
+
+```sparql
+# include_parent_context OPTIONAL block:
+OPTIONAL {
+    ?_parent_edge vital-core:hasEdgeSource ?_parent_doc .
+    ?_parent_edge vital-core:hasEdgeDestination ?entity .
+    ?_parent_doc haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+    ?_parent_doc vital-core:hasName ?_parent_name .
+}
+
+# include_original_uri OPTIONAL block (chained):
+OPTIONAL {
+    ?_orig_edge vital-core:hasEdgeSource ?_original_doc .
+    ?_orig_edge vital-core:hasEdgeDestination ?_parent_doc .
+    FILTER NOT EXISTS {
+        ?_original_doc haley:hasKGDocumentSegmentTypeURI ?_ot .
+    }
+}
+```
+
+**JSON example** — search for markdown segments of a specific parent, ranked by vector similarity:
+
+```json
+{
+  "criteria": {
+    "query_type": "document",
+    "document_criteria": {
+      "search_scope": "segments",
+      "segment_method_uri": "urn:segmethod:markdown_heading_split",
+      "parent_document_uri": "urn:doc:abc123"
+    },
+    "vector_criteria": {
+      "search_text": "solar panel efficiency",
+      "index_name": "document_segments",
+      "top_k": 10
+    }
+  },
+  "page_size": 10,
+  "offset": 0
+}
+```
+
+#### 6.4.3 Query Builder Changes
+
+**`kg_query_builder.py`** — Add `DocumentQueryCriteria` dataclass and methods to
+`KGQueryCriteriaBuilder`:
+
+```python
+@dataclass
+class DocumentQueryCriteria:
+    """Builder-side criteria for document queries (mirrors DocumentSearchCriteria)."""
+    # Document-specific filtering
+    document_type_uri: Optional[str] = None
+    search_scope: Optional[str] = None  # "all", "segments", "originals", "summaries"
+    segment_method_uri: Optional[str] = None
+    segment_type_uri: Optional[str] = None
+    parent_document_uri: Optional[str] = None
+    content_type: Optional[str] = None
+    min_token_length: Optional[int] = None
+    max_token_length: Optional[int] = None
+    search_text: Optional[str] = None
+    # Segmentation-aware response enrichment
+    include_parent_context: bool = False
+    include_original_uri: bool = False
+    exclude_managed_segments: bool = True
+    # Inline content projection
+    include_segment_text: bool = False
+    # Grouping
+    group_by_document: bool = False
+    # Shared criteria (passed through from KGQueryCriteria)
+    document_uris: Optional[List[str]] = None
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = None
+    frame_criteria: Optional[List[FrameCriteria]] = None
+    sort_criteria: Optional[List[SortCriteria]] = None
+    vector_criteria: Optional[VectorCriteria] = None
+    multi_vector_criteria: Optional[MultiVectorCriteria] = None
+    geo_criteria: Optional[GeoCriteria] = None
+```
+
+**`_build_document_where_clause`** — Each `DocumentSearchCriteria` field maps to
+a specific SPARQL pattern:
+
+```python
+def _build_document_where_clause(self, criteria: DocumentQueryCriteria) -> str:
+    """Build WHERE clause for document queries.
+
+    Uses vitaltype = KGDocument instead of KGEntity subclass UNION.
+    Each DocumentSearchCriteria field generates a specific SPARQL pattern.
+    """
+    class_clause = "?entity vital-core:vitaltype haley:KGDocument ."
+    filter_clauses = []
+
+    # Document type: hasKGDocumentType
+    if criteria.document_type_uri:
+        filter_clauses.append(
+            f"?entity haley:hasKGDocumentType <{criteria.document_type_uri}> .")
+
+    # Resolve search_scope
+    scope = criteria.search_scope
+
+    if scope == "segments":
+        # Chunk-level segments only (segmentIndex > 0)
+        filter_clauses.append(
+            "?entity haley:hasKGDocumentSegmentIndex ?_seg_idx .")
+        filter_clauses.append("FILTER(?_seg_idx > 0)")
+    elif scope == "summaries":
+        # Parent copies (the segmentation_parent tier)
+        filter_clauses.append(
+            '?entity haley:hasKGDocumentSegmentTypeURI '
+            '<urn:segtype:segmentation_parent> .')
+    elif scope == "originals":
+        # Unprocessed originals (no segmentTypeURI at all)
+        filter_clauses.append(
+            "FILTER NOT EXISTS { ?entity haley:hasKGDocumentSegmentTypeURI ?_st . }")
+    # scope == "all" or None → no scope filter
+
+    # Segmentation method filter
+    if criteria.segment_method_uri:
+        filter_clauses.append(
+            f"?entity haley:hasKGDocumentSegmentMethodURI <{criteria.segment_method_uri}> .")
+
+    # Segment type filter
+    if criteria.segment_type_uri:
+        filter_clauses.append(
+            f"?entity haley:hasKGDocumentSegmentTypeURI <{criteria.segment_type_uri}> .")
+
+    # Parent document filter (segments of a specific parent)
+    if criteria.parent_document_uri:
+        filter_clauses.append(
+            "?_seg_edge vital-core:vitaltype haley:Edge_hasKGDocumentSegment .")
+        filter_clauses.append(
+            f"?_seg_edge vital-core:hasEdgeSource <{criteria.parent_document_uri}> .")
+        filter_clauses.append(
+            "?_seg_edge vital-core:hasEdgeDestination ?entity .")
+
+    # Content type
+    if criteria.content_type:
+        filter_clauses.append(
+            f'?entity haley:hasKGContentType "{criteria.content_type}" .')
+
+    # Token length range
+    if criteria.min_token_length is not None or criteria.max_token_length is not None:
+        filter_clauses.append(
+            "?entity haley:hasKGDocumentSegmentTokenLength ?_tlen .")
+        if criteria.min_token_length is not None:
+            filter_clauses.append(f"FILTER(?_tlen >= {criteria.min_token_length})")
+        if criteria.max_token_length is not None:
+            filter_clauses.append(f"FILTER(?_tlen <= {criteria.max_token_length})")
+
+    # Headline text search
+    if criteria.search_text:
+        filter_clauses.append("?entity haley:hasKGDocumentHeadline ?_hl .")
+        filter_clauses.append(
+            f'FILTER(CONTAINS(LCASE(STR(?_hl)), LCASE("{criteria.search_text}")))')
+
+    # URI filter
+    if criteria.document_uris:
+        uri_list = " ".join([f"<{uri}>" for uri in criteria.document_uris])
+        filter_clauses.append(f"VALUES ?entity {{ {uri_list} }}")
+
+    # Exclude managed segment types (segmentation_parent, markdown_section, text_chunk)
+    # Same behavior as GET /api/kgdocuments default (see _MANAGED_SEGMENT_TYPES
+    # in kgdocuments_read_impl.py)
+    if criteria.exclude_managed_segments:
+        filter_clauses.append(
+            'FILTER NOT EXISTS { '
+            '?entity haley:hasKGDocumentSegmentTypeURI ?_mst . '
+            'FILTER(?_mst IN ('
+            '<urn:segtype:segmentation_parent>, '
+            '<urn:segtype:markdown_section>, '
+            '<urn:segtype:text_chunk>'
+            ')) }')
+
+    # Reuse entity_property_filters (same logic as entity path)
+    if criteria.entity_property_filters:
+        # ... same as _build_entity_where_clause property filter loop
+        ...
+
+    # Reuse frame_criteria (same logic as entity path)
+    if criteria.frame_criteria:
+        # ... same as _build_entity_where_clause frame/slot loop
+        ...
+
+    where_clauses = [class_clause] + filter_clauses
+
+    # Inline segment text projection (avoids N+1 fetches for RAG)
+    if criteria.include_segment_text:
+        where_clauses.append(
+            '?entity haley:hasKGDocumentContent ?_seg_content .')
+        where_clauses.append(
+            'OPTIONAL { ?entity haley:hasKGDocumentHeadline ?_seg_headline . }')
+
+    # Segmentation-aware OPTIONAL projections (added after main WHERE body)
+    # These add ?_parent_doc, ?_parent_name, ?_original_doc to SELECT
+    # Uses same Edge_hasKGDocumentSegment traversal as list_segments in
+    # kgdocuments_read_impl.py but in reverse (segment → parent → original)
+    if criteria.include_parent_context:
+        where_clauses.append(
+            'OPTIONAL { '
+            '?_parent_edge vital-core:hasEdgeSource ?_parent_doc . '
+            '?_parent_edge vital-core:hasEdgeDestination ?entity . '
+            '?_parent_doc haley:hasKGDocumentSegmentTypeURI '
+            '<urn:segtype:segmentation_parent> . '
+            '?_parent_doc vital-core:hasName ?_parent_name . }')
+        if criteria.include_original_uri:
+            where_clauses.append(
+                'OPTIONAL { '
+                '?_orig_edge vital-core:hasEdgeSource ?_original_doc . '
+                '?_orig_edge vital-core:hasEdgeDestination ?_parent_doc . '
+                'FILTER NOT EXISTS { '
+                '?_original_doc haley:hasKGDocumentSegmentTypeURI ?_ot . '
+                '} }')
+
+    return " ".join(where_clauses)
+```
+
+**Query assembly methods** — same signature pattern as entity queries:
+
+```python
+def build_document_query_sparql(self, criteria: DocumentQueryCriteria,
+                                 graph_id: str, page_size: int,
+                                 offset: int) -> str:
+    """Build paginated SPARQL query for document search.
+
+    When group_by_document=True, generates a GROUP BY query that collapses
+    results by parent document, keeping the best-scoring segment per parent.
+    """
+    where_clause = self._build_document_where_clause(criteria)
+
+    if criteria.group_by_document:
+        # Grouped query: one row per parent document, best segment per parent
+        return self._build_document_grouped_query(criteria, where_clause,
+                                                  graph_id, page_size, offset)
+    # Same query assembly as build_entity_query_sparql:
+    # sort bindings, vector/geo clauses, SELECT, GRAPH, ORDER BY, LIMIT
+    ...
+
+def _build_document_grouped_query(self, criteria: DocumentQueryCriteria,
+                                    where_clause: str, graph_id: str,
+                                    page_size: int, offset: int) -> str:
+    """Build SPARQL with GROUP BY ?_parent_doc for document-level dedup.
+
+    Generated SPARQL shape:
+      SELECT ?_parent_doc (SAMPLE(?entity) AS ?_best_seg)
+             (MAX(?vg_score) AS ?_max_score)
+             (SAMPLE(?_parent_name) AS ?_parent_name)
+             (SAMPLE(?_original_doc) AS ?_original_doc)
+      WHERE {
+        GRAPH <graph_id> {
+          <where_clause>    # includes parent context OPTIONAL blocks
+          BIND(vg:vectorSimilarity(?entity, ...) AS ?vg_score)
+          FILTER(?vg_score > min_score)
+        }
+      }
+      GROUP BY ?_parent_doc
+      ORDER BY DESC(?_max_score)
+      LIMIT page_size OFFSET offset
+
+    Notes:
+    - SAMPLE(?entity) picks an arbitrary segment per group; in practice
+      the segment with MAX(?vg_score) is not guaranteed to be the one
+      returned by SAMPLE. If exact best-segment is needed, use a subquery:
+
+        SELECT ?_parent_doc ?entity ?vg_score WHERE {
+          { SELECT ?_parent_doc (MAX(?vg_score) AS ?_max_score)
+            WHERE { ... } GROUP BY ?_parent_doc }
+          ... re-join to get the segment with ?vg_score = ?_max_score
+        }
+
+      For v1, SAMPLE is acceptable since the primary use case is
+      document-level ranking, not identifying the exact best chunk.
+    """
+    ...
+
+def build_document_count_query_sparql(self, criteria: DocumentQueryCriteria,
+                                       graph_id: str) -> str:
+    """Build COUNT query for document search.
+
+    When group_by_document=True, counts distinct parent documents
+    rather than individual segments.
+    """
+    where_clause = self._build_document_where_clause(criteria)
+    if criteria.group_by_document:
+        # COUNT(DISTINCT ?_parent_doc)
+        ...
+    else:
+        # COUNT(?entity)
+        ...
+```
+
+**Exact-best-segment variant** (future enhancement): If the caller needs the exact
+highest-scoring segment per parent (not just any segment), use a correlated subquery:
+
+```sparql
+SELECT ?_parent_doc ?entity ?vg_score ?_parent_name ?_original_doc
+WHERE {
+  {
+    SELECT ?_parent_doc (MAX(?_inner_score) AS ?_max_score)
+    WHERE {
+      GRAPH <graph_id> {
+        ?entity vital-core:vitaltype haley:KGDocument .
+        ?entity haley:hasKGDocumentSegmentIndex ?_seg_idx . FILTER(?_seg_idx > 0)
+        BIND(vg:vectorSimilarity(?entity, "query text", "document_segments") AS ?_inner_score)
+        FILTER(?_inner_score > 0.3)
+        ?_parent_edge vital-core:hasEdgeSource ?_parent_doc .
+        ?_parent_edge vital-core:hasEdgeDestination ?entity .
+        ?_parent_doc haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .
+      }
+    }
+    GROUP BY ?_parent_doc
+  }
+  GRAPH <graph_id> {
+    ?entity vital-core:vitaltype haley:KGDocument .
+    BIND(vg:vectorSimilarity(?entity, "query text", "document_segments") AS ?vg_score)
+    FILTER(?vg_score = ?_max_score)
+    ?_parent_edge2 vital-core:hasEdgeSource ?_parent_doc .
+    ?_parent_edge2 vital-core:hasEdgeDestination ?entity .
+    ?_parent_doc vital-core:hasName ?_parent_name .
+    OPTIONAL {
+      ?_orig_edge vital-core:hasEdgeSource ?_original_doc .
+      ?_orig_edge vital-core:hasEdgeDestination ?_parent_doc .
+      FILTER NOT EXISTS { ?_original_doc haley:hasKGDocumentSegmentTypeURI ?_ot . }
+    }
+  }
+}
+ORDER BY DESC(?vg_score)
+LIMIT 10
+```
+
+This is deferred to a later phase; v1 uses SAMPLE which is sufficient for
+document-level ranking.
+
+**Refactoring opportunity**: Extract the shared query assembly logic (sort bindings,
+vector/geo clauses, SELECT wrapper, GRAPH wrapper, LIMIT/OFFSET) from
+`build_entity_query_sparql` into a private `_assemble_paginated_query` helper.
+Both `build_entity_query_sparql` and `build_document_query_sparql` call it with
+their respective WHERE clauses. Same for count queries.
+
+#### SPARQL ↔ Criteria Mapping Summary
+
+| `DocumentSearchCriteria` field | SPARQL pattern generated |
+|---|---|
+| `document_type_uri` | `?entity haley:hasKGDocumentType <uri> .` |
+| `search_scope="segments"` | `?entity haley:hasKGDocumentSegmentIndex ?_idx . FILTER(?_idx > 0)` |
+| `search_scope="summaries"` | `?entity haley:hasKGDocumentSegmentTypeURI <urn:segtype:segmentation_parent> .` |
+| `search_scope="originals"` | `FILTER NOT EXISTS { ?entity haley:hasKGDocumentSegmentTypeURI ?_st . }` |
+| `search_scope="all"` / `None` | *(no scope filter)* |
+| `segment_method_uri` | `?entity haley:hasKGDocumentSegmentMethodURI <uri> .` |
+| `segment_type_uri` | `?entity haley:hasKGDocumentSegmentTypeURI <uri> .` |
+| `parent_document_uri` | `?_seg_edge vitaltype Edge_hasKGDocumentSegment . ?_seg_edge hasEdgeSource <uri> . ?_seg_edge hasEdgeDestination ?entity .` |
+| `content_type` | `?entity haley:hasKGContentType "mime" .` |
+| `min_token_length` / `max_token_length` | `?entity haley:hasKGDocumentSegmentTokenLength ?_tlen . FILTER(?_tlen >= N) FILTER(?_tlen <= M)` |
+| `search_text` | `?entity haley:hasKGDocumentHeadline ?_hl . FILTER(CONTAINS(LCASE(?_hl), ...))` |
+| `exclude_managed_segments=True` | `FILTER NOT EXISTS { ?entity haley:hasKGDocumentSegmentTypeURI ?_mst . FILTER(?_mst IN (...managed types...)) }` |
+| `include_parent_context=True` | `OPTIONAL { ?_parent_edge hasEdgeSource ?_parent_doc . ?_parent_edge hasEdgeDestination ?entity . ... }` |
+| `include_original_uri=True` | `OPTIONAL { ?_orig_edge hasEdgeSource ?_original_doc . ?_orig_edge hasEdgeDestination ?_parent_doc . ... }` |
+| `include_segment_text=True` | `?entity haley:hasKGDocumentContent ?_seg_content . OPTIONAL { ?entity haley:hasKGDocumentHeadline ?_seg_headline . }` |
+| `group_by_document=True` | `GROUP BY ?_parent_doc` + `MAX(?vg_score)` + `SAMPLE(?entity)` |
+| `vector_criteria` *(shared)* | `BIND(vg:vectorSimilarity(?entity, "text", "index") AS ?vg_score)` |
+| `geo_criteria` *(shared)* | `BIND(vg:geoDistance(?entity, lat, lon) AS ?vg_distance)` |
+
+#### 6.4.4 Endpoint Changes
+
+**`kgquery_endpoint.py`**:
+
+```python
+# In _query_connections validation:
+if query_type not in ["relation", "frame", "entity", "frame_query", "document"]:
+    raise HTTPException(status_code=400, ...)
+
+# New dispatch:
+elif query_type == "document":
+    return await self._execute_document_query(backend, space_id, graph_id, query_request)
+```
+
+`_execute_document_query` follows the same pattern as `_execute_entity_query`:
+1. Convert `criteria.document_criteria` (Pydantic `DocumentSearchCriteria`) →
+   builder `DocumentQueryCriteria` dataclass
+2. Merge shared fields from `KGQueryCriteria` (`vector_criteria`, `geo_criteria`,
+   `multi_vector_criteria`, `sort_criteria`, `entity_property_filters`,
+   `frame_criteria`) into the builder dataclass
+3. Call `build_document_query_sparql` + `build_document_count_query_sparql`
+   - When `group_by_document=True`, the builder generates a GROUP BY query;
+     the endpoint extracts `?_parent_doc`, `?_best_seg`, `?_max_score`,
+     `?_parent_name`, `?_original_doc` from SPARQL bindings
+4. Execute SPARQL, build response:
+   - **Default path** (no grouping, no enrichment): extract `?entity` URIs →
+     `document_uris=[...]`
+   - **Enriched path** (`include_parent_context=True`): extract all projected
+     variables → build `DocumentResult` list with `score`, `parent_document_uri`,
+     `parent_document_name`, `original_document_uri` → `document_results=[...]`
+   - **Grouped path** (`group_by_document=True`): extract grouped bindings →
+     build `DocumentResult` per parent with `document_uri=?_best_seg`,
+     `score=?_max_score`, parent/original context → `document_results=[...]`
+5. Return `KGQueryResponse(query_type="document", document_uris=[...],
+   document_results=[...] if enriched/grouped)`
+
+#### 6.4.5 Client Changes
+
+**`kgqueries_endpoint.py`** — Add `query_documents()` convenience method:
+
+```python
+async def query_documents(
+    self,
+    space_id: str,
+    graph_id: str,
+    # Document-specific criteria (all map to SPARQL patterns)
+    document_type_uri: Optional[str] = None,
+    search_scope: Optional[Literal["all", "segments", "originals", "summaries"]] = None,
+    segment_method_uri: Optional[str] = None,
+    segment_type_uri: Optional[str] = None,
+    parent_document_uri: Optional[str] = None,
+    content_type: Optional[str] = None,
+    min_token_length: Optional[int] = None,
+    max_token_length: Optional[int] = None,
+    search_text: Optional[str] = None,
+    document_uris: Optional[List[str]] = None,
+    # Segmentation-aware response enrichment
+    include_parent_context: bool = False,
+    include_original_uri: bool = False,
+    exclude_managed_segments: bool = True,
+    include_segment_text: bool = False,
+    group_by_document: bool = False,
+    # Shared criteria (same as entity queries)
+    vector_criteria: Optional[VectorSearchCriteria] = None,
+    multi_vector_criteria: Optional[MultiVectorSearchCriteria] = None,
+    geo_criteria: Optional[GeoSearchCriteria] = None,
+    sort_criteria: Optional[List[SortCriteria]] = None,
+    entity_property_filters: Optional[List[EntityPropertyFilter]] = None,
+    frame_criteria: Optional[List[FrameCriteria]] = None,
+    # Pagination
+    page_size: int = 10,
+    offset: int = 0,
+    count_only: bool = False,
+) -> DocumentQueryResponse:
+    """Query KGDocuments matching criteria. Returns document URIs.
+
+    Document-specific fields are packed into DocumentSearchCriteria;
+    shared fields (vector, geo, sort, etc.) go on KGQueryCriteria.
+    """
+    doc_criteria = DocumentSearchCriteria(
+        document_type_uri=document_type_uri,
+        search_scope=search_scope,
+        segment_method_uri=segment_method_uri,
+        segment_type_uri=segment_type_uri,
+        parent_document_uri=parent_document_uri,
+        content_type=content_type,
+        min_token_length=min_token_length,
+        max_token_length=max_token_length,
+        search_text=search_text,
+        include_parent_context=include_parent_context,
+        include_original_uri=include_original_uri,
+        exclude_managed_segments=exclude_managed_segments,
+        include_segment_text=include_segment_text,
+        group_by_document=group_by_document,
+    )
+    criteria = KGQueryCriteria(
+        query_type="document",
+        document_criteria=doc_criteria,
+        source_entity_uris=document_uris,
+        vector_criteria=vector_criteria,
+        multi_vector_criteria=multi_vector_criteria,
+        geo_criteria=geo_criteria,
+        sort_criteria=sort_criteria,
+        entity_property_filters=entity_property_filters,
+        frame_criteria=frame_criteria,
+    )
+    raw = await self.query_connections(
+        space_id=space_id, graph_id=graph_id,
+        criteria=criteria, page_size=page_size,
+        offset=offset, count_only=count_only,
+    )
+    return DocumentQueryResponse.from_raw(raw)
+```
+
+**`kgqueries_model.py`** — Add typed response:
+
+```python
+class DocumentResult(BaseModel):
+    """A single document result with optional parent/original context."""
+    document_uri: str = Field(..., description="Document or segment URI")
+    score: Optional[float] = Field(None, description="Vector similarity or hybrid score (when vector_criteria used)")
+    segment_text: Optional[str] = Field(None, description="Segment chunk text (when include_segment_text=True)")
+    segment_headline: Optional[str] = Field(None, description="Segment heading (when include_segment_text=True)")
+    parent_document_uri: Optional[str] = Field(None, description="Parent copy URI (when include_parent_context=True)")
+    parent_document_name: Optional[str] = Field(None, description="Parent copy name (when include_parent_context=True)")
+    original_document_uri: Optional[str] = Field(None, description="Original document URI (when include_original_uri=True)")
+
+
+class DocumentQueryResponse(BasePaginatedResponse):
+    """Typed response from query_documents() — Case 4 (document as top-most object)."""
+    document_uris: List[str] = Field(default_factory=list, description="Flat list of document/segment URIs")
+    document_results: Optional[List[DocumentResult]] = Field(
+        None, description="Enriched results with parent context (populated when include_parent_context=True)")
+
+    @classmethod
+    def from_raw(cls, raw: 'KGQueryResponse') -> 'DocumentQueryResponse':
+        return cls(
+            document_uris=raw.document_uris or [],
+            document_results=raw.document_results,
+            total_count=raw.total_count,
+            page_size=raw.page_size,
+            offset=raw.offset,
+        )
+```
+
+#### 6.4.6 Example Usage
+
+```python
+# Search document segments by vector similarity
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    search_scope="segments",
+    vector_criteria=VectorSearchCriteria(
+        search_text="solar panel efficiency",
+        index_name="document_segments",
+        top_k=10,
+    ),
+)
+# resp.document_uris → [segment URIs ranked by similarity]
+
+# Search all documents (originals + segments) by type
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    document_type_uri="urn:kgdoctype:technical_article",
+    page_size=20,
+)
+
+# Find segments of a specific parent, filtered by method
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    parent_document_uri="urn:doc:abc123",
+    segment_method_uri="urn:segmethod:markdown_heading_split",
+    min_token_length=100,
+    max_token_length=600,
+)
+
+# Count original documents only (exclude parents and segments)
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    search_scope="originals",
+    count_only=True,
+)
+# resp.total_count → number of original documents
+
+# RAG-ready: vector search with inline segment text (single round-trip)
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    search_scope="segments",
+    include_segment_text=True,
+    include_parent_context=True,
+    include_original_uri=True,
+    vector_criteria=VectorSearchCriteria(
+        search_text="transformer architecture attention mechanism",
+        index_name="document_segments",
+        top_k=5,
+    ),
+)
+# resp.document_results → [
+#   DocumentResult(
+#     document_uri="urn:doc:abc_parent_markdown_heading_split_seg_3",
+#     score=0.82,
+#     segment_text="The transformer architecture uses self-attention...",
+#     segment_headline="3. Self-Attention Mechanism",
+#     parent_document_uri="urn:doc:abc_parent_markdown_heading_split",
+#     parent_document_name="My Paper [Segments: markdown_heading_split]",
+#     original_document_uri="urn:doc:abc",
+#   ), ...  (ranked by similarity, text included inline)
+# ]
+
+# Grouped search: one result per document, best segment per doc (RAG dedup)
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    search_scope="segments",
+    include_parent_context=True,
+    include_original_uri=True,
+    group_by_document=True,
+    vector_criteria=VectorSearchCriteria(
+        search_text="transformer architecture attention mechanism",
+        index_name="document_segments",
+        top_k=20,  # over-fetch then collapse by parent
+    ),
+)
+# resp.document_results → [
+#   DocumentResult(
+#     document_uri="urn:doc:abc_parent_..._seg_3",  # SAMPLE best segment
+#     score=0.82,  # MAX score across all segments of this parent
+#     parent_document_uri="urn:doc:abc_parent_...",
+#     parent_document_name="My Paper",
+#     original_document_uri="urn:doc:abc",
+#   ),
+#   DocumentResult(
+#     document_uri="urn:doc:xyz_parent_..._seg_7",
+#     score=0.71,
+#     parent_document_uri="urn:doc:xyz_parent_...",
+#     parent_document_name="Other Paper",
+#     original_document_uri="urn:doc:xyz",
+#   ),
+# ]  # collapsed: one entry per parent doc, ranked by best segment score
+
+# Summary-level search (search parent copies by their summary text)
+resp = await vg_client.kgqueries.query_documents(
+    space_id=space_id,
+    graph_id=graph_id,
+    search_scope="summaries",
+    vector_criteria=VectorSearchCriteria(
+        search_text="machine learning survey paper",
+        index_name="document_segments",
+        top_k=5,
+    ),
+)
+# resp.document_uris → [parent copy URIs ranked by summary similarity]
+
+# JSON request equivalent of the first example:
+# POST /api/graphs/kgqueries?space_id=...&graph_id=...
+# {
+#   "criteria": {
+#     "query_type": "document",
+#     "document_criteria": {
+#       "search_scope": "segments"
+#     },
+#     "vector_criteria": {
+#       "search_text": "solar panel efficiency",
+#       "index_name": "document_segments",
+#       "top_k": 10
+#     }
+#   },
+#   "page_size": 10,
+#   "offset": 0
+# }
+```
+
+#### 6.4.7 Files Changed
+
+| File | Change |
+|---|---|
+| `vitalgraph/model/kgentities_model.py` | Add `DocumentSearchCriteria` Pydantic model |
+| `vitalgraph/model/kgqueries_model.py` | Add `"document"` to `query_type`, `document_criteria` to `KGQueryCriteria`, `document_uris` to response, `DocumentQueryResponse` |
+| `vitalgraph/sparql/kg_query_builder.py` | Add `DocumentQueryCriteria` dataclass, `_build_document_where_clause`, `build_document_query_sparql`, `build_document_count_query_sparql` |
+| `vitalgraph/endpoint/kgquery_endpoint.py` | Add `"document"` to validation, `_execute_document_query` method |
+| `vitalgraph/client/endpoint/kgqueries_endpoint.py` | Add `query_documents()` convenience method |
+| `vitalgraph-client-ts/src/endpoint/KGQueriesEndpoint.ts` | Add `queryDocuments()` method with `DocumentSearchCriteria` interface and `DocumentResult` / `DocumentQueryResponse` types |
+
+**Prerequisite**: Issue #015 (deferred UUID resolution) is fixed — `vg:vectorSimilarity`
+now works correctly regardless of BIND/triple ordering in generated SPARQL.
+
+#### 6.4.8 Design Notes
+
+1. **No legacy boolean aliases**: `segments_only` and `originals_only` are removed.
+   Use `search_scope` exclusively. This avoids ambiguous combinations and keeps
+   the API surface clean.
+
+2. **Pydantic validators enforce dependencies**:
+   - `include_original_uri=True` requires `include_parent_context=True`
+     (original is resolved via the parent → original edge hop)
+   - `group_by_document=True` requires `include_parent_context=True`
+     (GROUP BY key is `?_parent_doc` from the parent context OPTIONAL)
+
+3. **`group_by_document` + `include_segment_text`**: Allowed but the text
+   returned is from the SAMPLE’d segment, not guaranteed to be the
+   highest-scoring one. This is a documented caveat acceptable for v1.
+   The exact-best-segment variant (correlated subquery) is deferred.
+
+4. **`/api/kgdocuments/search` (\u00a77.3) removed**: Superseded by `query_type="document"`
+   on `/api/graphs/kgqueries` which provides richer criteria,
+   `include_segment_text` for inline RAG content, and `group_by_document`
+   for dedup. Full document tree retrieval is handled by
+   `GET /api/kgdocuments?include_segments=true` (new §7.3).
+   Note: this endpoint was plan-only (never implemented) — no tests,
+   client methods, or UI screens reference it, so no cleanup is needed.
+
+5. **TypeScript client**: `vitalgraph-client-ts` needs a matching
+   `queryDocuments()` method on `KGQueriesEndpoint.ts`, with a
+   `DocumentSearchCriteria` interface mirroring the Python Pydantic model
+   and `DocumentResult` / `DocumentQueryResponse` response types.
+
 ---
 
 ## 7. API Endpoints
@@ -642,7 +1531,6 @@ LIMIT 20
 | DELETE | `/api/spaces/{space}/graphs/{graph}/kgdocuments/{uri}` | Delete document |
 | GET | `/api/spaces/{space}/graphs/{graph}/kgdocuments/{uri}/segments` | List segments of a document |
 | POST | `/api/spaces/{space}/graphs/{graph}/kgdocuments/{uri}/segment` | Trigger segmentation |
-| POST | `/api/spaces/{space}/graphs/{graph}/kgdocuments/search` | Vector similarity search on documents |
 
 ### 7.2 Segmentation Endpoint
 
@@ -666,32 +1554,42 @@ Response:
 }
 ```
 
-### 7.3 Search Endpoint
+### 7.3 Document Tree Expansion (`include_segments`)
+
+The single-document GET supports an `include_segments` query parameter that
+returns the full segmented document tree in one call:
 
 ```
-POST /api/spaces/{space}/graphs/{graph}/kgdocuments/search
-Body:
-{
-    "query": "search text",
-    "index_name": "entity_default",
-    "min_score": 0.7,
-    "limit": 10,
-    "include_parent": true,         // include parent doc in response
-    "segments_only": true           // only return segments, not parent docs
-}
+GET /api/kgdocuments?space_id=...&graph_id=...&uri=<original_uri>&include_segments=true
+
 Response:
 {
     "results": [
-        {
-            "segment": { /* KGDocument JSON-LD */ },
-            "score": 0.89,
-            "parent": { /* Parent KGDocument JSON-LD */ },
-            "edge": { /* Edge_hasKGDocumentSegment JSON-LD */ }
-        }
+        { /* Original KGDocument object */ },
+        { /* Parent copy KGDocument (segmentation_parent) */ },
+        { /* Edge_hasKGDocumentSegment: original → parent */ },
+        { /* Segment 1 KGDocument */ },
+        { /* Edge_hasKGDocumentSegment: parent → segment 1 */ },
+        { /* Segment 2 KGDocument */ },
+        { /* Edge_hasKGDocumentSegment: parent → segment 2 */ },
+        ...
     ],
-    "total_count": 42
+    "total_count": 27
 }
 ```
+
+**Implementation**: When `include_segments=True`:
+1. Fetch the original document triples
+2. Run the existing `list_segments` SPARQL traversal (original → parent → segments)
+3. Fetch full triples for parent copy + all segments + all edges
+4. Return all objects in a single flat `results` list
+
+This reuses `KGDocumentsReadProcessor.list_segments()` and
+`GraphObjectRetriever.get_objects_by_uris()` — no new SPARQL needed.
+
+**Search use case**: Document search is handled by `query_type="document"` on
+`/api/graphs/kgqueries` (§6.4). The `include_segment_text` flag provides
+inline chunk content for RAG without a separate search endpoint.
 
 ---
 
@@ -800,6 +1698,10 @@ Response:
 | Phase 17 | NOTIFY/LISTEN optimization for instant worker wake | — |
 | Phase 18 | Content hash comparison — skip re-segmentation when content unchanged | — |
 | Phase 19 | Vector index bootstrap — auto-create `document_segments` HNSW on space init | — |
+| Phase 20 | KGQuery `query_type="document"` — separate `_build_document_where_clause` + endpoint + client (§6.4) | ✅ Done |
+| Phase 21 | Default vector provider → OpenAI `text-embedding-3-small` (1536d); segment budget → 1024 tokens; Wikipedia test docs + segmentation sanity script | ✅ Done |
+| Phase 22 | Client typed response models for segmentation (segment trigger, status, config CRUD); `max_segment_tokens` default 512→1024 across all layers (server models, client endpoint, Pydantic request/response) | ✅ Done |
+| Phase 23 | E2e segmentation test verified (9/9 pass). Fixed: `setdefault("error_code", 0)` for server responses missing envelope; idempotent index setup (delete-before-create); dimension assertion accepts 384 or 1536. Test uses inline climate article (3 paragraphs: ocean/coral, solar/wind, carbon capture), not Wikipedia docs. | ✅ Done |
 
 ### Future Items
 

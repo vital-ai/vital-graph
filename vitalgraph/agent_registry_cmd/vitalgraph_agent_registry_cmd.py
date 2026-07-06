@@ -534,6 +534,45 @@ class AgentRegistryCLI:
         _print_table(rows, ['agent_id', 'agent_name', 'agent_uri', 'function_name'], self.output_format)
         return True
 
+    def cmd_discover_agents(self, args: list[str]) -> bool:
+        """Discover agents: discover-agents [--capability C] [--type T] [--protocol P] [--protocol-config JSON] [--status S]"""
+        if not self._require_connected():
+            return True
+        capability = self._extract_flag(args, '--capability')
+        type_key = self._extract_flag(args, '--type')
+        protocol = self._extract_flag(args, '--protocol')
+        pc_contains_str = self._extract_flag(args, '--protocol-config')
+        agent_status = self._extract_flag(args, '--status') or 'active'
+        pc_contains = None
+        if pc_contains_str:
+            import json
+            try:
+                pc_contains = json.loads(pc_contains_str)
+            except json.JSONDecodeError:
+                print("Error: --protocol-config must be valid JSON")
+                return True
+        results = _run_async(self.registry.discover_agents(
+            capability=capability,
+            type_key=type_key,
+            protocol_format_uri=protocol,
+            protocol_config_contains=pc_contains,
+            status=agent_status,
+        ))
+        rows = []
+        for a in results:
+            fn_count = len(a.get('functions', []))
+            ep_count = len(a.get('endpoints', []))
+            rows.append({
+                'agent_id': a['agent_id'],
+                'agent_name': a.get('agent_name', ''),
+                'type': a.get('agent_type_key', ''),
+                'protocol': a.get('protocol_format_uri', ''),
+                'endpoints': ep_count,
+                'functions': fn_count,
+            })
+        _print_table(rows, ['agent_id', 'agent_name', 'type', 'protocol', 'endpoints', 'functions'], self.output_format)
+        return True
+
     # ------------------------------------------------------------------
     # Change log
     # ------------------------------------------------------------------
@@ -558,6 +597,35 @@ class AgentRegistryCLI:
                 'comment': (e.get('comment') or '')[:40],
             })
         _print_table(rows, ['log_id', 'change_type', 'changed_by', 'created_time', 'comment'], self.output_format)
+        return True
+
+    # ------------------------------------------------------------------
+    # Rollback
+    # ------------------------------------------------------------------
+
+    def cmd_rollback(self, args: list[str]) -> bool:
+        """Rollback agent to a previous state: rollback <agent_id> <log_id>"""
+        if not self._require_connected():
+            return True
+        if len(args) < 2:
+            print("Usage: rollback <agent_id> <log_id>")
+            return True
+        agent_id = args[0]
+        try:
+            log_id = int(args[1])
+        except ValueError:
+            print("Error: log_id must be an integer")
+            return True
+        try:
+            agent = _run_async(self.registry.rollback_agent(agent_id, log_id))
+            if agent is None:
+                print(f"Agent not found: {agent_id}")
+            else:
+                print(f"✅ Rolled back agent {agent_id} to log_id={log_id}")
+                print(f"   Name: {agent.get('agent_name')}")
+                print(f"   Status: {agent.get('status')}")
+        except ValueError as e:
+            print(f"Error: {e}")
         return True
 
     # ------------------------------------------------------------------
@@ -676,8 +744,10 @@ class AgentRegistryCLI:
             'update-function':   self.cmd_update_function,
             'delete-function':   self.cmd_delete_function,
             'discover':          self.cmd_discover,
+            'discover-agents':   self.cmd_discover_agents,
             # Info
             'changelog':         self.cmd_changelog,
+            'rollback':          self.cmd_rollback,
             'stats':             self.cmd_stats,
             # Schema
             'migrate':           lambda a: self.cmd_migrate(a, dry_run=('--dry-run' in a)),
@@ -736,9 +806,11 @@ Functions:
   update-function <id> [--name N] [--description D] [--status S]
   delete-function <id>                 Soft-delete function
   discover <function_uri>              Find agents providing a function
+  discover-agents [--capability C] [--type T] [--protocol P] [--status S]
 
 Info:
   changelog <agent_id> [--limit N]     Change history
+  rollback <agent_id> <log_id>         Rollback agent to a previous state
   stats                                Registry statistics
 
 Schema:
@@ -908,11 +980,26 @@ Schema:
             elif command == 'discover':
                 self.cmd_discover([args.function_uri])
 
+            elif command == 'discover-agents':
+                cmd_args = []
+                if args.capability:
+                    cmd_args.extend(['--capability', args.capability])
+                if args.type:
+                    cmd_args.extend(['--type', args.type])
+                if args.protocol:
+                    cmd_args.extend(['--protocol', args.protocol])
+                if args.status:
+                    cmd_args.extend(['--status', args.status])
+                self.cmd_discover_agents(cmd_args)
+
             elif command == 'changelog':
                 cmd_args = [args.agent_id]
                 if args.limit:
                     cmd_args.extend(['--limit', str(args.limit)])
                 self.cmd_changelog(cmd_args)
+
+            elif command == 'rollback':
+                self.cmd_rollback([args.agent_id, str(args.log_id)])
 
             elif command == 'stats':
                 self.cmd_stats([])
@@ -967,9 +1054,9 @@ Examples:
             "list-endpoints", "create-endpoint", "update-endpoint", "delete-endpoint",
             # Functions
             "list-functions", "create-function", "update-function", "delete-function",
-            "discover",
+            "discover", "discover-agents",
             # Info
-            "changelog", "stats",
+            "changelog", "rollback", "stats",
             # Schema
             "migrate", "schema-status",
         ],
@@ -993,10 +1080,16 @@ Examples:
     parser.add_argument("--search", type=str, help="Search query")
     parser.add_argument("--limit", type=int, help="Result limit")
 
+    # Discovery
+    parser.add_argument("--capability", type=str, help="Capability filter for discover-agents")
+
     # Endpoint/function IDs
     parser.add_argument("--endpoint-id", type=int, help="Endpoint ID")
     parser.add_argument("--function-id", type=int, help="Function ID")
     parser.add_argument("--function-uri", type=str, help="Function URI for discover")
+
+    # Rollback
+    parser.add_argument("--log-id", type=int, help="Change log entry ID for rollback")
 
     # Flags
     parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompts")

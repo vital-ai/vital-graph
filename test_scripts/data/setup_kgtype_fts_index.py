@@ -67,7 +67,7 @@ async def setup_fts_index():
         # ── Step 2: Create vector mapping for KGTypes ───────────────────
         logger.info("Step 2: Creating vector mapping for kgtype...")
         try:
-            mapping_result = await client.vector_mappings.create_mapping(
+            mapping_result = await client.search_mappings.create_mapping(
                 space_id=SPACE_ID,
                 mapping_type="kgtype",
                 type_uri=None,  # class-level: all KGType instances

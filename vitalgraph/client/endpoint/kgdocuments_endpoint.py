@@ -24,6 +24,11 @@ from ..response.client_response import (
     KGDocumentUpdateResponse,
     KGDocumentDeleteResponse,
     KGDocumentSegmentsResponse,
+    SegmentDocumentClientResponse,
+    SegmentationStatusClientResponse,
+    SegmentationConfigClientResponse,
+    SegmentationConfigListClientResponse,
+    SegmentationConfigDeleteClientResponse,
 )
 from ..response.response_builder import build_success_response, build_error_response
 
@@ -245,7 +250,15 @@ class KGDocumentsEndpoint(BaseEndpoint):
             )
             response_data = response.json()
 
+            server_success = response_data.get('success', False)
             created_count = response_data.get('total_count', 0)
+            if not server_success:
+                return build_error_response(
+                    KGDocumentCreateResponse,
+                    error_code=response.status_code,
+                    error_message=response_data.get('message', 'Server reported failure'),
+                    status_code=response.status_code,
+                )
             return build_success_response(
                 KGDocumentCreateResponse,
                 status_code=200,
@@ -446,7 +459,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         document_uri: str,
         segment_method_uri: Optional[str] = None,
         max_segment_tokens: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> SegmentDocumentClientResponse:
         """
         Trigger segmentation for a KGDocument.
 
@@ -458,7 +471,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             max_segment_tokens: Optional max tokens per segment override
 
         Returns:
-            Dict with segmentation results
+            SegmentDocumentClientResponse with segmentation results
         """
         self._check_connection()
         validate_required_params(
@@ -477,7 +490,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request(
                 'POST', url, params=params, json=body
             )
-            return response.json()
+            data = response.json()
+            data.setdefault("error_code", 0)
+            data.setdefault("status_code", response.status_code)
+            return SegmentDocumentClientResponse(**data)
 
         except VitalGraphClientError:
             raise
@@ -496,7 +512,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         status: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> SegmentationStatusClientResponse:
         """
         Get segmentation job status for a space or specific document.
 
@@ -508,7 +524,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             offset: Pagination offset
 
         Returns:
-            Dict with summary counts and job list
+            SegmentationStatusClientResponse with summary counts and job list
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
@@ -522,7 +538,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 params["status"] = status
 
             response = await self._make_authenticated_request('GET', url, params=params)
-            return response.json()
+            data = response.json()
+            data.setdefault("error_code", 0)
+            data.setdefault("status_code", response.status_code)
+            return SegmentationStatusClientResponse(**data)
 
         except VitalGraphClientError:
             raise
@@ -538,7 +557,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         self,
         space_id: str,
         enabled_only: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> SegmentationConfigListClientResponse:
         """
         List segmentation configs for a space.
 
@@ -547,7 +566,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             enabled_only: If True, return only enabled configs
 
         Returns:
-            Dict with configs list and total_count
+            SegmentationConfigListClientResponse with configs list and total_count
         """
         self._check_connection()
         validate_required_params(space_id=space_id)
@@ -559,7 +578,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 params["enabled_only"] = True
 
             response = await self._make_authenticated_request('GET', url, params=params)
-            return response.json()
+            data = response.json()
+            data.setdefault("error_code", 0)
+            data.setdefault("status_code", response.status_code)
+            return SegmentationConfigListClientResponse(**data)
 
         except VitalGraphClientError:
             raise
@@ -572,12 +594,12 @@ class KGDocumentsEndpoint(BaseEndpoint):
         space_id: str,
         document_type_uri: str,
         segment_method_uri: str,
-        max_segment_tokens: int = 512,
+        max_segment_tokens: int = 1024,
         min_segment_tokens: int = 50,
         overlap_tokens: int = 0,
         enabled: bool = True,
         auto_vectorize: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> SegmentationConfigClientResponse:
         """
         Create a segmentation config.
 
@@ -585,14 +607,14 @@ class KGDocumentsEndpoint(BaseEndpoint):
             space_id: Space identifier
             document_type_uri: KGDocumentType URI to match
             segment_method_uri: Segmentation method URI to apply
-            max_segment_tokens: Maximum tokens per segment
+            max_segment_tokens: Maximum tokens per segment (default 1024 for OpenAI)
             min_segment_tokens: Minimum tokens per segment
             overlap_tokens: Token overlap between segments
             enabled: Enable the config immediately
             auto_vectorize: Auto-vectorize segments after creation
 
         Returns:
-            Dict with created config details
+            SegmentationConfigClientResponse with created config details
         """
         self._check_connection()
         validate_required_params(
@@ -617,7 +639,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request(
                 'POST', url, params=params, json=body
             )
-            return response.json()
+            data = response.json()
+            data.setdefault("error_code", 0)
+            data.setdefault("status_code", response.status_code)
+            return SegmentationConfigClientResponse(**data)
 
         except VitalGraphClientError:
             raise
@@ -631,12 +656,12 @@ class KGDocumentsEndpoint(BaseEndpoint):
         config_id: int,
         document_type_uri: str,
         segment_method_uri: str,
-        max_segment_tokens: int = 512,
+        max_segment_tokens: int = 1024,
         min_segment_tokens: int = 50,
         overlap_tokens: int = 0,
         enabled: bool = True,
         auto_vectorize: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> SegmentationConfigClientResponse:
         """
         Update an existing segmentation config.
 
@@ -645,14 +670,14 @@ class KGDocumentsEndpoint(BaseEndpoint):
             config_id: Config ID to update
             document_type_uri: KGDocumentType URI to match
             segment_method_uri: Segmentation method URI to apply
-            max_segment_tokens: Maximum tokens per segment
+            max_segment_tokens: Maximum tokens per segment (default 1024 for OpenAI)
             min_segment_tokens: Minimum tokens per segment
             overlap_tokens: Token overlap between segments
             enabled: Enable/disable the config
             auto_vectorize: Auto-vectorize segments after creation
 
         Returns:
-            Dict with updated config details
+            SegmentationConfigClientResponse with updated config details
         """
         self._check_connection()
         validate_required_params(space_id=space_id, config_id=config_id)
@@ -673,7 +698,10 @@ class KGDocumentsEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request(
                 'PUT', url, params=params, json=body
             )
-            return response.json()
+            data = response.json()
+            data.setdefault("error_code", 0)
+            data.setdefault("status_code", response.status_code)
+            return SegmentationConfigClientResponse(**data)
 
         except VitalGraphClientError:
             raise
@@ -685,7 +713,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         self,
         space_id: str,
         config_id: int,
-    ) -> Dict[str, Any]:
+    ) -> SegmentationConfigDeleteClientResponse:
         """
         Delete a segmentation config.
 
@@ -694,7 +722,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             config_id: Config ID to delete
 
         Returns:
-            Dict with deletion confirmation
+            SegmentationConfigDeleteClientResponse with deletion confirmation
         """
         self._check_connection()
         validate_required_params(space_id=space_id, config_id=config_id)
@@ -704,7 +732,14 @@ class KGDocumentsEndpoint(BaseEndpoint):
             params = build_query_params(space_id=space_id, config_id=config_id)
 
             response = await self._make_authenticated_request('DELETE', url, params=params)
-            return response.json()
+            data = response.json()
+            return SegmentationConfigDeleteClientResponse(
+                deleted=data.get("deleted", True),
+                config_id=config_id,
+                error_code=0,
+                status_code=response.status_code,
+                message=data.get("message", "Segmentation config deleted"),
+            )
 
         except VitalGraphClientError:
             raise
@@ -719,21 +754,21 @@ class KGDocumentsEndpoint(BaseEndpoint):
     async def setup_document_segments_index(
         self,
         space_id: str,
-        dimensions: int = 384,
+        dimensions: int = 1536,
         distance_metric: str = "cosine",
-        provider: str = "vitalsigns",
-        model_name: Optional[str] = "paraphrase-multilingual-MiniLM-L12-v2",
+        provider: str = "openai",
+        model_name: Optional[str] = "text-embedding-3-small",
         description: Optional[str] = "Document segment embeddings for chunk retrieval",
     ):
         """
         Create the ``document_segments`` vector index for a space.
 
         Convenience wrapper around ``client.vector_indexes.create_index()``.
-        Uses sensible defaults for document segmentation.
+        Uses sensible defaults for document segmentation (OpenAI).
 
         Args:
             space_id: Space identifier
-            dimensions: Embedding dimensions (default 384 for MiniLM)
+            dimensions: Embedding dimensions (default 1536 for text-embedding-3-small)
             distance_metric: cosine | l2 | inner_product
             provider: Vectorization provider name
             model_name: Embedding model name
@@ -760,7 +795,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
         Create a vector mapping that routes KGDocument segments to the
         ``document_segments`` index.
 
-        Convenience wrapper around ``client.vector_mappings.create_mapping()``.
+        Convenience wrapper around ``client.search_mappings.create_mapping()``.
 
         Args:
             space_id: Space identifier
@@ -768,7 +803,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             enabled: Enable vectorization immediately
         """
         self._check_connection()
-        return await self.client.vector_mappings.create_mapping(
+        return await self.client.search_mappings.create_mapping(
             space_id=space_id,
             index_name="document_segments",
             mapping_type="kgdocument",

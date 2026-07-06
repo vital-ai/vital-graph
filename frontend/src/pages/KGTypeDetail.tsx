@@ -103,7 +103,7 @@ const KGTypeDetail: React.FC = () => {
     !hookData.isCreateMode;
 
   return (
-    <>
+    <div data-testid="kgtype-detail-page">
       <ObjectDetailRenderer {...hookData} config={config} />
 
       {showRelationships && (
@@ -124,7 +124,7 @@ const KGTypeDetail: React.FC = () => {
           />
         </div>
       )}
-    </>
+    </div>
   );
 };
 

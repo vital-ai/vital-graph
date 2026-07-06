@@ -42,6 +42,7 @@ const DataExportDetail = lazy(() => import('./pages/DataExportDetail'));
 const FuzzyMappingDetail = lazy(() => import('./pages/FuzzyMappingDetail'));
 const SearchMappingDetail = lazy(() => import('./pages/SearchMappingDetail'));
 const VectorIndexDetail = lazy(() => import('./pages/VectorIndexDetail'));
+const FtsIndexDetail = lazy(() => import('./pages/FtsIndexDetail'));
 const SemanticSearch = lazy(() => import('./pages/SemanticSearch'));
 const IndexMappings = lazy(() => import('./pages/IndexMappings'));
 const Indexes = lazy(() => import('./pages/Indexes'));
@@ -156,7 +157,8 @@ export default function App() {
               <Route path="/geo-shapes" element={<GeoShapes />} />
               <Route path="/space/:spaceId/index-mappings/:mappingId" element={<SearchMappingDetail />} />
               <Route path="/space/:spaceId/fuzzy-mappings/:mappingId" element={<FuzzyMappingDetail />} />
-              <Route path="/space/:spaceId/indexes/:indexType/:indexName" element={<VectorIndexDetail />} />
+              <Route path="/space/:spaceId/indexes/vector/:indexName" element={<VectorIndexDetail />} />
+              <Route path="/space/:spaceId/indexes/fts/:indexName" element={<FtsIndexDetail />} />
 
               {/* Detail routes */}
               <Route path="/space/:id" element={<SpaceDetail />} />

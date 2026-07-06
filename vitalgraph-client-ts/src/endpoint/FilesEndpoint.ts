@@ -23,10 +23,10 @@ export class FilesEndpoint extends BaseEndpoint {
     });
   }
 
-  async get(spaceId: string, fileUri: string): Promise<FileResponse> {
+  async get(spaceId: string, fileUri: string, graphId?: string): Promise<FileResponse> {
     validateRequired({ space_id: spaceId, file_uri: fileUri });
-    return this.request('GET', '/api/files/file', {
-      params: { space_id: spaceId, file_uri: fileUri },
+    return this.request('GET', '/api/files', {
+      params: { space_id: spaceId, uri: fileUri, graph_id: graphId },
     });
   }
 
@@ -46,10 +46,10 @@ export class FilesEndpoint extends BaseEndpoint {
     });
   }
 
-  async delete(spaceId: string, fileUri: string): Promise<FileDeleteResponse> {
+  async delete(spaceId: string, fileUri: string, graphId?: string): Promise<FileDeleteResponse> {
     validateRequired({ space_id: spaceId, file_uri: fileUri });
     return this.request('DELETE', '/api/files', {
-      params: { space_id: spaceId, file_uri: fileUri },
+      params: { space_id: spaceId, uri: fileUri, graph_id: graphId },
     });
   }
 
@@ -73,7 +73,7 @@ export class FilesEndpoint extends BaseEndpoint {
         formData.append(key, value);
       }
     }
-    return this.request('POST', '/api/files/upload', {
+    return this.request('POST', '/api/files/stream/upload', {
       params: { space_id: spaceId, graph_id: graphId, uri: fileUri, content_type: options?.contentType },
       body: formData,
     });
@@ -81,7 +81,7 @@ export class FilesEndpoint extends BaseEndpoint {
 
   async download(spaceId: string, fileUri: string, graphId?: string): Promise<ArrayBuffer> {
     validateRequired({ space_id: spaceId, file_uri: fileUri });
-    const response = await this.requestRaw('GET', '/api/files/download', {
+    const response = await this.requestRaw('GET', '/api/files/stream/download', {
       params: { space_id: spaceId, graph_id: graphId, uri: fileUri },
     });
     return response.arrayBuffer();

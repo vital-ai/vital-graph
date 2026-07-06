@@ -170,11 +170,11 @@ const KGRelations: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-testid="kgrelations-page">
       {/* Page Title */}
       <div className="flex items-center gap-2 mb-2">
         <HiLink className="w-6 h-6 text-blue-600" />
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">KG Relations</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="kgrelations-title">KG Relations</h1>
       </div>
 
       {/* Space / Graph selectors */}
@@ -298,7 +298,7 @@ const KGRelations: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {relations.map((rel) => (
-                <tr key={rel.uri} className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800">
+                <tr key={rel.uri} data-testid="relation-row" className="bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800">
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]" title={rel.name}>
                       {rel.name}

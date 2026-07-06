@@ -111,7 +111,7 @@ const ObjectsLayout: React.FC = () => {
   const activeTab = getActiveTab();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="objects-layout-page">
       {/* Breadcrumb Navigation */}
       <NavigationBreadcrumb 
         spaceId={spaceId} 

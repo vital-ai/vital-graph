@@ -206,21 +206,21 @@ architecture.
 | Scenario | Search Mode | Query | Expected Result | Status |
 |----------|-------------|-------|-----------------|--------|
 | Exact concept | Keyword / FTS | "commercial buying" | `Commerce_buy`, `Commerce_sell` | ✅ verified |
-| Semantic similarity | Vector | "hiring someone for a job" | `Employment_start`, `Hiring` | ⬜ pending |
-| Cross-domain similarity | Vector | "giving money to someone" | `Commerce_pay`, `Fining`, `Giving` | ⬜ pending |
-| Slot type discovery | Vector | "the person who performs the action" | Slot types: `Agent`, `Actor`, `Protagonist` | ⬜ pending |
-| Paraphrase matching | Vector | "physical movement from one place to another" | `Motion`, `Self_motion`, `Travel` | ⬜ pending |
-| Hybrid cooking/heat | Hybrid | "cooking food preparation heat" | `Apply_heat` | ⬜ pending |
-| Hybrid commerce | Hybrid | "commercial transaction buying selling goods" | `Commercial_transaction` | ⬜ pending |
+| Semantic similarity | Vector | "hiring someone for a job" | `Employment_start`, `Hiring` | ✅ verified |
+| Cross-domain similarity | Vector | "giving money to someone" | `Commerce_pay`, `Fining`, `Giving` | ✅ verified |
+| Slot type discovery | Vector | "the person who performs the action" | Slot types: `Agent`, `Actor`, `Protagonist` | ✅ verified |
+| Paraphrase matching | Vector | "physical movement from one place to another" | `Motion`, `Self_motion`, `Travel` | ✅ verified |
+| Hybrid cooking/heat | Hybrid | "cooking food preparation heat" | `Apply_heat` | ✅ verified |
+| Hybrid commerce | Hybrid | "commercial transaction buying selling goods" | `Commercial_transaction` | ✅ verified |
 
 ### 4.3 What This Validates
 
 - ✅ Full-text search: `tsvector` / `ts_rank_cd` ranking on description text
 - ✅ SPARQL integration: FTS constructs within SPARQL queries
-- ⬜ End-to-end pgvector integration: embedding generation → HNSW index → ANN query
-- ⬜ Combined search: vector similarity filtered by type class (e.g. only KGFrameType)
-- ⬜ SPARQL `vg:vectorSimilarity` returning semantically correct ranked results
-- ⬜ Hybrid search (`vg:hybridSearch`): combined vector + FTS scoring
+- ✅ End-to-end pgvector integration: embedding generation → HNSW index → ANN query
+- ✅ Combined search: vector similarity filtered by type class (e.g. only KGFrameType)
+- ✅ SPARQL `vg:vectorSimilarity` returning semantically correct ranked results
+- ✅ Hybrid search (`vg:hybridSearch`): combined vector + FTS scoring
 
 This is a real-world test with ~2,500 type objects, each with meaningful
 natural-language descriptions — large enough to validate index performance
@@ -228,34 +228,37 @@ and ranking quality, small enough for fast iteration.
 
 ### 4.4 Implementation Status
 
-The FTS pipeline is **fully operational** via the REST API.
-Vector search tests are defined in the test script but **not yet executed**:
+All search pipelines are **fully operational** via the REST API.
+The full test suite passes **24/24** (see `kg_types_search_plan.md` §7
+Phase F for details).
 
 1. **Index creation**: `POST /api/vector-indexes/` creates `kgtype_default`
    (384-dim, cosine, HNSW + GIN tsvector indexes, `tsv GENERATED ALWAYS AS`)
-2. **Mapping registration**: `POST /api/vector-mappings/` registers a
-   `kgtype` class-level mapping with `source_type=default` (uses
-   `hasKGraphDescription`)
+2. **Mapping registration**: `POST /api/search-mappings/` registers
+   `kgtype` class-level mappings with `source_type=properties`
 3. **Reindex**: `POST /api/vector-indexes/reindex` populates `search_text`
    from literal properties via `vector_populator.populate_index()` and
    generates embeddings via the configured provider
 
-The test (`test_scripts/sparql/test_kgtype_search_framenet.py`) is
-**self-provisioning** — it creates the index, mapping, and triggers reindex
-idempotently before running assertions. All test cases exercise the REST
-API endpoint (`GET /api/graphs/kgtypes/search`) via the Python client
-(`client.kgtypes.search_types()`), passing `search_mode` to select the
-backend path. This validates the full stack: REST → SPARQL generation →
+Setup is handled by `test_scripts/sparql/setup_kgtype_search_framenet.py`
+which creates the space, imports data, registers indexes/mappings, and
+polls until population completes.
+
+The test (`test_scripts/sparql/test_kgtype_search_framenet.py`) exercises
+the REST API endpoint (`GET /api/graphs/kgtypes/search`) via the Python
+client (`client.kgtypes.search_types()`), passing `search_mode` to select
+the backend path. This validates the full stack: REST → SPARQL generation →
 SQL/pgvector/tsvector execution → ranked response.
 
-**Keyword + FTS** (via REST search endpoint): 11/11 tests pass (verified).
-**Vector** (via REST search endpoint): 4 tests defined, ⬜ not yet executed.
-**Hybrid** (via REST search endpoint): 2 tests defined, ⬜ not yet executed.
-**Direct SPARQL** (raw queries via `/api/sparql`): 4 tests defined, ⬜ not yet executed.
+**Keyword + FTS** (via REST search endpoint): 11/11 tests pass ✅
+**Vector** (via REST search endpoint): 4/4 tests pass ✅
+**Hybrid** (via REST search endpoint): 2/2 tests pass ✅
+**Direct SPARQL** (raw queries via `/api/sparql`): 4/4 tests pass ✅
   - `FILTER(CONTAINS(...))` — keyword via SPARQL endpoint
   - `vg:textSearch` — FTS via SPARQL endpoint
   - `vg:vectorSimilarity` — vector ANN via SPARQL endpoint
   - `vg:hybridSearch` — hybrid via SPARQL endpoint
+**Auto-sync** (create → search within timeout): 3/3 tests pass ✅
 
 **Auto-sync integration**: The KGTypes endpoint (`kgtypes_endpoint.py`) now
 calls `schedule_sync()` after create, update, and delete operations — the
@@ -288,16 +291,16 @@ vector index and mapping exist for the space.
 | Nonsense query | keyword | 0 results (correct) |
 | Type filter: slot only | keyword | 87 results, all KGSlotType |
 
-**Test results — Vector** (⬜ pending execution):
+**Test results — Vector** (4/4 passing ✅):
 
-| Test | Mode | Expected |
-|------|------|----------|
-| Hiring/employment (semantic) | vector | Hiring in results |
-| Physical movement (paraphrase) | vector | Motion in results |
-| Giving money as payment | vector | Commerce_pay in results |
-| Person who performs action (slot) | vector | Agent in results |
-| Cooking preparation | hybrid | Apply_heat in results |
-| Commercial transaction | hybrid | Commercial_transaction in results |
+| Test | Mode | Result |
+|------|------|--------|
+| Hiring/employment (semantic) | vector | Hiring found ✅ |
+| Physical movement (paraphrase) | vector | Motion found ✅ |
+| Giving money as payment | vector | Repayment found ✅ |
+| Person who performs action (slot) | vector | Performer1 found ✅ |
+| Cooking preparation | hybrid | Cooking_creation found ✅ |
+| Commercial transaction | hybrid | Commercial_transaction found ✅ |
 
 ### 4.5 Reindex Scalability (TODO)
 

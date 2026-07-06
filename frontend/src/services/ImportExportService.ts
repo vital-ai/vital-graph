@@ -156,7 +156,7 @@ class ImportExportService {
   }
 
   getExportDownloadUrl(jobId: string): string {
-    return `${window.location.origin}/api/data/export/${jobId}/download`;
+    return `${window.location.origin}/api/data/export/download?job_id=${encodeURIComponent(jobId)}`;
   }
 }
 

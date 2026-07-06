@@ -266,7 +266,7 @@ const SearchMappingDetail: React.FC = () => {
   }
 
   return (
-    <div>
+    <div data-testid="search-mapping-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>

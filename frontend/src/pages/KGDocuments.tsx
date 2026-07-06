@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
-import { Alert, Badge, Button, Select, Spinner, TextInput, ToggleSwitch, Card } from 'flowbite-react';
-import { HiSearch, HiDocumentText, HiChevronRight, HiRefresh } from 'react-icons/hi';
+import { Alert, Badge, Button, FileInput, Modal, Select, Spinner, TextInput, ToggleSwitch, Card } from 'flowbite-react';
+import { HiSearch, HiDocumentText, HiChevronRight, HiRefresh, HiPlus, HiUpload } from 'react-icons/hi';
 import { type SpaceInfo } from '../types/api';
 import { type GraphInfo } from '../types/graphs';
 import NavigationBreadcrumb from '../components/NavigationBreadcrumb';
+import { vgClient } from '../services/ApiService';
 import {
   shortenUri,
   extractGraphName,
@@ -44,6 +45,14 @@ const KGDocuments: React.FC = () => {
   const [showSegments, setShowSegments] = useState(false);
   const [segStatusMap, setSegStatusMap] = useState<Record<string, { status: string; segment_count?: number }>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Upload modal state
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadHeadline, setUploadHeadline] = useState('');
+  const [uploadUrl, setUploadUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // Navigate to hierarchical URL
   useEffect(() => {
@@ -213,8 +222,43 @@ const KGDocuments: React.FC = () => {
     return uri.split(':').pop() || uri;
   };
 
+  const handleUploadDocument = async () => {
+    if (!uploadFile || !selectedSpace || !selectedGraph) return;
+    try {
+      setUploading(true);
+      setUploadError(null);
+
+      const text = await uploadFile.text();
+      const headline = uploadHeadline || uploadFile.name;
+      const docUri = `urn:kgdocument:${Date.now()}:${uploadFile.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+      const quads = [
+        { s: docUri, p: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type', o: 'http://vital.ai/ontology/haley-ai-kg#KGDocument', o_type: 'uri' },
+        { s: docUri, p: 'http://vital.ai/ontology/vital-core#hasName', o: headline, o_type: 'literal' },
+        { s: docUri, p: 'http://vital.ai/ontology/haley-ai-kg#hasKGDocumentHeadline', o: headline, o_type: 'literal' },
+        { s: docUri, p: 'http://vital.ai/ontology/haley-ai-kg#hasKGDocumentContent', o: text, o_type: 'literal' },
+      ];
+
+      if (uploadUrl) {
+        quads.push({ s: docUri, p: 'http://vital.ai/ontology/haley-ai-kg#hasKGDocumentURL', o: uploadUrl, o_type: 'literal' });
+      }
+
+      await vgClient.kgdocuments.create(selectedSpace, selectedGraph, { quads });
+
+      setShowUploadModal(false);
+      setUploadFile(null);
+      setUploadHeadline('');
+      setUploadUrl('');
+      fetchDocuments();
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
-    <div className="p-4 max-w-7xl mx-auto">
+    <div className="p-4 max-w-7xl mx-auto" data-testid="kgdocuments-page">
       <NavigationBreadcrumb
         spaceId={spaceId}
         graphId={graphId}
@@ -223,7 +267,7 @@ const KGDocuments: React.FC = () => {
       />
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2" data-testid="kgdocuments-title">
           <HiDocumentText className="h-7 w-7 text-blue-600 dark:text-blue-400" />
           KG Documents
         </h1>
@@ -231,6 +275,16 @@ const KGDocuments: React.FC = () => {
           <Button size="xs" color="light" onClick={fetchDocuments}>
             <HiRefresh className="h-4 w-4 mr-1" /> Refresh
           </Button>
+          {selectedSpace && selectedGraph && (
+            <>
+              <Button size="xs" color="blue" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/document/new?mode=create`)}>
+                <HiPlus className="h-4 w-4 mr-1" /> Add Document
+              </Button>
+              <Button size="xs" color="purple" onClick={() => setShowUploadModal(true)}>
+                <HiUpload className="h-4 w-4 mr-1" /> Upload Document
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -309,6 +363,7 @@ const KGDocuments: React.FC = () => {
           {filteredDocuments.map((doc) => (
             <Card
               key={doc.uri}
+              data-testid="document-card"
               className="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer transition-colors"
               onClick={() => {
                 const encodedUri = encodeURIComponent(doc.uri);
@@ -356,12 +411,59 @@ const KGDocuments: React.FC = () => {
                     </p>
                   )}
                 </div>
-                <HiChevronRight className="h-5 w-5 text-gray-400 flex-shrink-0 ml-2" />
+                <HiChevronRight className="h-5 w-5 text-gray-400 shrink-0 ml-2" />
               </div>
             </Card>
           ))}
         </div>
       )}
+
+      {/* Upload Document Modal */}
+      <Modal show={showUploadModal} onClose={() => setShowUploadModal(false)} size="lg">
+        <div className="p-6">
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">Upload Document</h3>
+          {uploadError && <Alert color="failure" className="mb-4">{uploadError}</Alert>}
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="upload-file" className="mb-1 block text-sm font-medium text-gray-900 dark:text-white">File (text, markdown, HTML)</label>
+              <FileInput
+                id="upload-file"
+                accept=".txt,.md,.html,.htm,.csv,.json"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setUploadFile(file);
+                  if (file && !uploadHeadline) setUploadHeadline(file.name);
+                }}
+              />
+              <p className="mt-1 text-xs text-gray-500">Text content will be extracted and stored as document content.</p>
+            </div>
+            <div>
+              <label htmlFor="upload-headline" className="mb-1 block text-sm font-medium text-gray-900 dark:text-white">Headline / Title</label>
+              <TextInput
+                id="upload-headline"
+                placeholder="Document title (defaults to filename)"
+                value={uploadHeadline}
+                onChange={(e) => setUploadHeadline(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="upload-url" className="mb-1 block text-sm font-medium text-gray-900 dark:text-white">Source URL (optional)</label>
+              <TextInput
+                id="upload-url"
+                placeholder="https://..."
+                value={uploadUrl}
+                onChange={(e) => setUploadUrl(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 mt-6">
+            <Button color="purple" onClick={handleUploadDocument} disabled={!uploadFile || uploading}>
+              {uploading ? <><Spinner size="sm" className="mr-2" /> Creating...</> : <><HiUpload className="mr-2 h-4 w-4" /> Create Document</>}
+            </Button>
+            <Button color="gray" onClick={() => setShowUploadModal(false)}>Cancel</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

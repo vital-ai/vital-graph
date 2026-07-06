@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from collections import OrderedDict
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -26,12 +29,16 @@ from ..model.vector_indexes_model import (
     CreateVectorIndexRequest, ReindexRequest, ReindexResponse,
     VectorEntry, VectorUpsertRequest, VectorUpsertResponse,
     VectorGetOut, VectorGetResponse,
+    ReindexJobStatus, ReindexJobListResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 VALID_DISTANCE_METRICS = {"cosine", "l2", "inner_product"}
 VALID_PROVIDERS = {"vitalsigns", "openai", "cohere"}
+
+# Maximum number of completed/failed reindex jobs to keep in memory per instance
+_MAX_REINDEX_HISTORY = 100
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +53,8 @@ class VectorIndexesEndpoint:
         self.auth_dependency = auth_dependency
         self.schema = SparqlSQLSchema()
         self.router = APIRouter()
+        # In-memory reindex job registry: job_id → ReindexJobStatus
+        self._reindex_jobs: OrderedDict[str, ReindexJobStatus] = OrderedDict()
         self._setup_routes()
 
     # ------------------------------------------------------------------
@@ -352,6 +361,7 @@ class VectorIndexesEndpoint:
     async def get_vectors(
         self, space_id: str, index_name: str, subject_uri: Optional[str],
         graph_uri: Optional[str], current_user: Dict,
+        page_size: int = 100, offset: int = 0,
     ):
         """Get stored vectors by subject URI and/or graph URI."""
         require_space_read(current_user, space_id)
@@ -392,17 +402,26 @@ class VectorIndexesEndpoint:
                 )
 
             where = " AND ".join(conditions)
+
+            # True total count (not capped by LIMIT)
+            count_row = await conn.fetchrow(
+                f"SELECT COUNT(*) AS cnt FROM {vec_table} v WHERE {where}",
+                *params,
+            )
+            true_total = count_row["cnt"] if count_row else 0
+
             rows = await conn.fetch(
-                f"""SELECT v.subject_uuid, v.context_uuid,
-                          v.embedding::text AS embedding_text,
-                          v.updated_time,
-                          s.term_text AS subject_text,
-                          c.term_text AS context_text
-                   FROM {vec_table} v
-                   LEFT JOIN {term_table} s ON s.term_uuid = v.subject_uuid
-                   LEFT JOIN {term_table} c ON c.term_uuid = v.context_uuid
-                   WHERE {where}
-                   LIMIT 100""",
+                f"SELECT v.subject_uuid, v.context_uuid, "
+                f"       v.embedding::text AS embedding_text, "
+                f"       v.updated_time, "
+                f"       s.term_text AS subject_text, "
+                f"       c.term_text AS context_text "
+                f"FROM {vec_table} v "
+                f"LEFT JOIN {term_table} s ON s.term_uuid = v.subject_uuid "
+                f"LEFT JOIN {term_table} c ON c.term_uuid = v.context_uuid "
+                f"WHERE {where} "
+                f"ORDER BY v.updated_time DESC "
+                f"LIMIT {page_size} OFFSET {offset}",
                 *params,
             )
 
@@ -418,7 +437,10 @@ class VectorIndexesEndpoint:
                     updated_time=str(row["updated_time"]) if row["updated_time"] else None,
                 ))
 
-            return VectorGetResponse(vectors=vectors, total_count=len(vectors))
+            return VectorGetResponse(
+                vectors=vectors, total_count=true_total,
+                page_size=page_size, offset=offset,
+            )
         finally:
             await self._release(conn)
 
@@ -447,22 +469,56 @@ class VectorIndexesEndpoint:
         ns = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
         context_uuid = uuid.uuid5(ns, f"{body.graph_uri}\x00U")
 
+        # Create tracked job
+        job_id = uuid.uuid4().hex[:16]
+        job_status = ReindexJobStatus(
+            job_id=job_id,
+            index_name=index_name,
+            space_id=space_id,
+            status="running",
+            started_at=str(datetime.utcnow()),
+        )
+        self._reindex_jobs[job_id] = job_status
+        # Evict oldest entries if history is too large
+        while len(self._reindex_jobs) > _MAX_REINDEX_HISTORY:
+            self._reindex_jobs.popitem(last=False)
+
         # Spawn background task
         asyncio.ensure_future(self._run_reindex(
-            space_id, index_name, context_uuid, body,
+            job_id, space_id, index_name, context_uuid, body,
             provider_name, provider_config,
         ))
 
         return ReindexResponse(
-            message="Reindex started",
+            message=f"Reindex started (job_id={job_id})",
             index_name=index_name,
+            job_id=job_id,
         )
 
+    async def get_reindex_status(
+        self, space_id: str, current_user: Dict,
+        job_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+    ) -> ReindexJobListResponse:
+        """Get status of reindex background tasks."""
+        require_space_read(current_user, space_id)
+        jobs = []
+        for jid, js in self._reindex_jobs.items():
+            if js.space_id != space_id:
+                continue
+            if job_id and jid != job_id:
+                continue
+            if index_name and js.index_name != index_name:
+                continue
+            jobs.append(js)
+        return ReindexJobListResponse(jobs=jobs, total_count=len(jobs))
+
     async def _run_reindex(
-        self, space_id: str, index_name: str, context_uuid,
+        self, job_id: str, space_id: str, index_name: str, context_uuid,
         body: ReindexRequest, provider_name: str, provider_config: Optional[Dict],
     ):
         """Background worker: populate the vector index."""
+        job_status = self._reindex_jobs.get(job_id)
         conn = await self._acquire()
         try:
             from ..vectorization.vector_populator import populate_index
@@ -484,8 +540,19 @@ class VectorIndexesEndpoint:
                 stats.subjects_processed, stats.embeddings_stored,
                 stats.elapsed_seconds,
             )
-        except Exception:
+            if job_status:
+                job_status.status = "completed"
+                job_status.subjects_processed = stats.subjects_processed
+                job_status.embeddings_stored = stats.embeddings_stored
+                job_status.subjects_skipped = stats.subjects_skipped
+                job_status.elapsed_seconds = stats.elapsed_seconds
+                job_status.completed_at = str(datetime.utcnow())
+        except Exception as e:
             logger.exception("Reindex failed: %s/%s", space_id, index_name)
+            if job_status:
+                job_status.status = "failed"
+                job_status.error_message = str(e)[:2000]
+                job_status.completed_at = str(datetime.utcnow())
         finally:
             await self._release(conn)
 
@@ -556,6 +623,21 @@ class VectorIndexesEndpoint:
         ):
             return await self.reindex(space_id, index_name, body, current_user)
 
+        @self.router.get(
+            "/vector-indexes/reindex/status",
+            response_model=ReindexJobListResponse,
+            tags=["Vector Indexes"],
+            summary="Reindex Job Status",
+            description="Get status of background reindex tasks. Filter by job_id or index_name.",
+        )
+        async def reindex_status_route(
+            space_id: str = Query(..., description="Space ID"),
+            job_id: Optional[str] = Query(None, description="Specific job ID to look up"),
+            index_name: Optional[str] = Query(None, description="Filter by index name"),
+            current_user: Dict = Depends(auth),
+        ):
+            return await self.get_reindex_status(space_id, current_user, job_id, index_name)
+
         @self.router.post(
             "/vector-indexes/vectors",
             response_model=VectorUpsertResponse,
@@ -583,9 +665,14 @@ class VectorIndexesEndpoint:
             index_name: str = Query(..., description="Index name"),
             subject_uri: Optional[str] = Query(None, description="Subject URI to look up"),
             graph_uri: Optional[str] = Query(None, description="Graph URI filter"),
+            page_size: int = Query(100, ge=1, le=1000, description="Page size"),
+            offset: int = Query(0, ge=0, description="Offset"),
             current_user: Dict = Depends(auth),
         ):
-            return await self.get_vectors(space_id, index_name, subject_uri, graph_uri, current_user)
+            return await self.get_vectors(
+                space_id, index_name, subject_uri, graph_uri, current_user,
+                page_size=page_size, offset=offset,
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -57,9 +57,9 @@ class GeoPopulationStats:
 # -----------------------------------------------------------------------
 
 GEO_UPSERT_SQL = """
-INSERT INTO {geo_table} (subject_uuid, predicate_uuid, location, latitude, longitude, context_uuid, updated_time)
-VALUES ($1, $2, ST_SetSRID(ST_GeomFromText($3), 4326)::geography, $4, $5, $6, CURRENT_TIMESTAMP)
-ON CONFLICT (subject_uuid, context_uuid)
+INSERT INTO {geo_table} (subject_uuid, source_slot_uuid, predicate_uuid, location, latitude, longitude, context_uuid, updated_time)
+VALUES ($1, $2, $3, ST_SetSRID(ST_GeomFromText($4), 4326)::geography, $5, $6, $7, CURRENT_TIMESTAMP)
+ON CONFLICT (subject_uuid, source_slot_uuid, context_uuid)
 DO UPDATE SET predicate_uuid = EXCLUDED.predicate_uuid,
               location       = EXCLUDED.location,
               latitude       = EXCLUDED.latitude,
@@ -69,6 +69,10 @@ DO UPDATE SET predicate_uuid = EXCLUDED.predicate_uuid,
 
 GEO_DELETE_SQL = """
 DELETE FROM {geo_table} WHERE subject_uuid = $1 AND context_uuid = $2
+"""
+
+GEO_DELETE_BY_SLOT_SQL = """
+DELETE FROM {geo_table} WHERE source_slot_uuid = $1 AND context_uuid = $2
 """
 
 # Fetch all geo-typed literal quads for a graph (datatype-driven detection)
@@ -157,6 +161,18 @@ async def resolve_geo_config(
         return None
 
 
+async def _resolve_entity_for_slot(conn, space_id: str, slot_uuid, context_uuid) -> Optional[Any]:
+    """Resolve the owning entity UUID for a slot UUID (for dual-entry geo).
+
+    Returns the entity UUID or None if resolution fails.
+    """
+    try:
+        from vitalgraph.vectorization.geo_slot_handler import resolve_entity_uuid_for_slot
+        return await resolve_entity_uuid_for_slot(conn, space_id, slot_uuid, context_uuid)
+    except Exception:
+        return None
+
+
 async def populate_geo(
     conn,
     space_id: str,
@@ -236,10 +252,12 @@ async def populate_geo(
         lat, lon, wkt = parsed
         seen_subjects.add(subj_uuid)
 
+        # Row 1: slot-keyed (subject_uuid=slot, source_slot_uuid=slot)
         try:
             await conn.execute(
                 upsert_sql,
                 subj_uuid,
+                subj_uuid,       # source_slot_uuid = self
                 r["predicate_uuid"],
                 wkt,
                 lat,
@@ -248,7 +266,25 @@ async def populate_geo(
             )
             stats.points_upserted += 1
         except Exception as e:
-            stats.errors.append(f"Upsert failed for {subj_uuid}: {e}")
+            stats.errors.append(f"Upsert (slot) failed for {subj_uuid}: {e}")
+            continue
+
+        # Row 2: entity-keyed (resolve slot → entity via frame_entity table)
+        entity_uuid = await _resolve_entity_for_slot(conn, space_id, subj_uuid, context_uuid)
+        if entity_uuid and entity_uuid != subj_uuid:
+            try:
+                await conn.execute(
+                    upsert_sql,
+                    entity_uuid,
+                    subj_uuid,       # source_slot_uuid = originating slot
+                    r["predicate_uuid"],
+                    wkt,
+                    lat,
+                    lon,
+                    context_uuid,
+                )
+            except Exception as e:
+                stats.errors.append(f"Upsert (entity) failed for {entity_uuid}: {e}")
 
     stats.elapsed_seconds = time.monotonic() - t0
     logger.info(
@@ -313,20 +349,34 @@ async def update_subject_geo(
     rows = await conn.fetch(sql, context_uuid, list(dtypes), subject_uuid)
 
     geo_table = f"{space_id}_geo"
+    upsert_sql = GEO_UPSERT_SQL.format(geo_table=geo_table)
     for r in rows:
         parsed = parse_geo_wkt(r["value_text"])
         if parsed is None:
             continue
         lat, lon, wkt = parsed
+        # Row 1: slot-keyed
         try:
             await conn.execute(
-                GEO_UPSERT_SQL.format(geo_table=geo_table),
-                subject_uuid, r["predicate_uuid"], wkt, lat, lon, context_uuid,
+                upsert_sql,
+                subject_uuid, subject_uuid, r["predicate_uuid"],
+                wkt, lat, lon, context_uuid,
             )
-            return True
         except Exception as e:
-            logger.error("update_subject_geo(%s) upsert failed: %s", space_id, e)
+            logger.error("update_subject_geo(%s) slot upsert failed: %s", space_id, e)
             return False
+        # Row 2: entity-keyed
+        entity_uuid = await _resolve_entity_for_slot(conn, space_id, subject_uuid, context_uuid)
+        if entity_uuid and entity_uuid != subject_uuid:
+            try:
+                await conn.execute(
+                    upsert_sql,
+                    entity_uuid, subject_uuid, r["predicate_uuid"],
+                    wkt, lat, lon, context_uuid,
+                )
+            except Exception as e:
+                logger.error("update_subject_geo(%s) entity upsert failed: %s", space_id, e)
+        return True
 
     # No geo-typed data found → remove if exists
     await delete_subject_geo(conn, space_id, subject_uuid, context_uuid)

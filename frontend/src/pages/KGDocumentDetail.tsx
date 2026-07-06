@@ -169,18 +169,30 @@ const KGDocumentDetail: React.FC = () => {
         PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
         PREFIX vital: <http://vital.ai/ontology/vital-core#>
 
-        SELECT ?seg ?name ?headline ?content ?segIndex ?segMethod ?segType ?tokenLen
+        SELECT DISTINCT ?seg ?name ?headline ?content ?segIndex ?segMethod ?segType ?tokenLen
         WHERE {
           GRAPH <${decodedGraphId}> {
-            <${documentUri}> haley:hasKGDocumentSegment ?edge .
-            ?edge haley:hasEdgeDestination ?seg .
+            {
+              # 1-hop: viewing a parent copy → direct children
+              ?e1 vital:hasEdgeSource <${documentUri}> .
+              ?e1 vital:hasEdgeDestination ?seg .
+            }
+            UNION
+            {
+              # 2-hop: viewing the original → parent → segments
+              ?ea vital:hasEdgeSource <${documentUri}> .
+              ?ea vital:hasEdgeDestination ?mid .
+              ?eb vital:hasEdgeSource ?mid .
+              ?eb vital:hasEdgeDestination ?seg .
+            }
             ?seg a haley:KGDocument .
+            ?seg haley:hasKGDocumentSegmentTypeURI ?segType .
+            FILTER(?segType != "urn:segtype:segmentation_parent")
             OPTIONAL { ?seg vital:hasName ?name }
             OPTIONAL { ?seg haley:hasKGDocumentHeadline ?headline }
             OPTIONAL { ?seg haley:hasKGDocumentContent ?content }
             OPTIONAL { ?seg haley:hasKGDocumentSegmentIndex ?segIndex }
             OPTIONAL { ?seg haley:hasKGDocumentSegmentMethodURI ?segMethod }
-            OPTIONAL { ?seg haley:hasKGDocumentSegmentTypeURI ?segType }
             OPTIONAL { ?seg haley:hasKGDocumentSegmentTokenLength ?tokenLen }
           }
         }
@@ -283,7 +295,7 @@ const KGDocumentDetail: React.FC = () => {
 
   // ---- Render ----
   return (
-    <>
+    <div data-testid="kgdocument-detail-page">
       {/* Standard properties section (breadcrumb, header, properties table) */}
       <ObjectDetailRenderer {...hookData} config={config} />
 
@@ -469,7 +481,7 @@ const KGDocumentDetail: React.FC = () => {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 };
 

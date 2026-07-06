@@ -1,0 +1,102 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main, develop, refactor]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Build & start the Docker test stack ─────────────────────────
+      - name: Start test stack
+        run: docker compose -f docker-compose.test.yml up -d --build
+        timeout-minutes: 10
+
+      - name: Wait for VitalGraph health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8002/health > /dev/null; then
+              echo "✅ Server is healthy"
+              exit 0
+            fi
+            echo "Waiting for server... ($i/60)"
+            sleep 2
+          done
+          echo "❌ Server did not become healthy"
+          docker compose -f docker-compose.test.yml logs vitalgraph | tail -50
+          exit 1
+
+      # ── Seed test data (requires Python + vitalgraph client) ────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-seed-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-seed-
+
+      - name: Install Python dependencies for seeding
+        run: pip install -e .
+
+      - name: Seed test data
+        run: python -m tests.shared.seed_ui_test_data --server-url http://localhost:8002
+
+      # ── Node.js + Playwright ────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      # ── Run tests ──────────────────────────────────────────────────
+      - name: Run E2E tests
+        working-directory: e2e
+        run: npx playwright test --reporter=list,html
+        env:
+          VG_TEST_URL: http://localhost:8002
+
+      # ── Artifacts & cleanup ─────────────────────────────────────────
+      - name: Upload Playwright HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      - name: Upload test results (screenshots & traces)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-test-results
+          path: e2e/test-results/
+          retention-days: 7
+
+      - name: Print server logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs vitalgraph | tail -100
+
+      - name: Tear down test stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

@@ -12,7 +12,7 @@ const KGEntityDetail: React.FC = () => {
     objectTypeName: 'KG Entity',
     objectTypeColor: 'green',
     crudOps: vgClient.kgentities,
-    listRoute: '/kg-entities',
+    listRoute: '/objects/kgentities',
     defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGEntity',
     paramName: 'entityId',
     uriFieldName: 'Entity URI',
@@ -65,7 +65,7 @@ const KGEntityDetail: React.FC = () => {
   const hookData = useObjectDetail(config, createDefaultObject, buildApiRequestData);
 
   return (
-    <>
+    <div data-testid="kgentity-detail-page">
       {/* Properties section (breadcrumb, header, properties table) */}
       <ObjectDetailRenderer {...hookData} config={config} />
 
@@ -86,7 +86,7 @@ const KGEntityDetail: React.FC = () => {
           <EntityGeoMiniMap spaceId={hookData.spaceId} entityUri={hookData.object.object_uri} />
         </div>
       )}
-    </>
+    </div>
   );
 };
 

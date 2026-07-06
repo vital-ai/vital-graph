@@ -328,10 +328,12 @@ const UserDetail: React.FC = () => {
         setTimeout(() => navigate(`/user/${created.id}`), 1000);
       } else {
         if (!user) return;
-        const updateData: Record<string, string> = {};
-        if (form.full_name !== (user.full_name || '')) updateData.full_name = form.full_name;
-        if (form.email !== (user.email || '')) updateData.email = form.email;
-        if (form.role !== (user.role || '')) updateData.role = form.role;
+        const updateData: Record<string, string> = {
+          username: user.username,
+          full_name: form.full_name,
+          email: form.email,
+          role: form.role,
+        };
         if (form.password.trim()) updateData.password = form.password;
 
         const updated = await apiService.updateUser(user.id, updateData);
@@ -399,7 +401,7 @@ const UserDetail: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="user-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>

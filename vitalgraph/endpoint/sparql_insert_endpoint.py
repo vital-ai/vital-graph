@@ -136,6 +136,11 @@ class SPARQLInsertEndpoint:
             insert_time = time.time() - start_time
             
             if success:
+                # Nudge the backfill task — INSERT DATA bypasses
+                # inline server-property stamping.
+                from vitalgraph.tasks.backfill_server_properties_task import nudge_backfill
+                nudge_backfill()
+
                 return SPARQLInsertResponse(
                     success=True,
                     message="Update executed successfully",

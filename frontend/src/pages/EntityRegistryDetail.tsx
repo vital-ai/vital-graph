@@ -218,7 +218,7 @@ const EntityRegistryDetail: React.FC = () => {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="entity-registry-detail-page">
       <Breadcrumb>
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem href="/entity-registry" icon={HiCollection}>Entity Registry</BreadcrumbItem>

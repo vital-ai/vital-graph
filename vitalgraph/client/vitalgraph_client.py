@@ -33,7 +33,6 @@ from .endpoint.agent_registry_endpoint import AgentRegistryClientEndpoint
 from .endpoint.process_endpoint import ProcessClientEndpoint
 from .endpoint.admin_endpoint import AdminClientEndpoint
 from .endpoint.api_keys_endpoint import ApiKeysClientEndpoint
-from .endpoint.vector_mappings_endpoint import VectorMappingsClientEndpoint
 from .endpoint.fuzzy_mappings_endpoint import FuzzyMappingsClientEndpoint
 from .endpoint.vector_indexes_endpoint import VectorIndexesClientEndpoint
 from .endpoint.search_mappings_endpoint import SearchMappingsClientEndpoint
@@ -171,7 +170,6 @@ class VitalGraphClient(VitalGraphClientInterface):
         self.processes = ProcessClientEndpoint(self)
         self.admin = AdminClientEndpoint(self)
         self.api_keys = ApiKeysClientEndpoint(self)
-        self.vector_mappings = VectorMappingsClientEndpoint(self)
         self.fuzzy_mappings = FuzzyMappingsClientEndpoint(self)
         self.vector_indexes = VectorIndexesClientEndpoint(self)
         self.search_mappings = SearchMappingsClientEndpoint(self)

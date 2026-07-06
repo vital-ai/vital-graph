@@ -159,14 +159,14 @@ class TestSegmentationConfigCrud:
             enabled=True,
             auto_vectorize=False,
         )
-        assert resp.get("config_id") is not None
-        assert resp["document_type_uri"] == DOC_TYPE
-        assert resp["segment_method_uri"] == SEG_METHOD
-        assert resp["max_segment_tokens"] == 256
+        assert resp.config_id is not None
+        assert resp.document_type_uri == DOC_TYPE
+        assert resp.segment_method_uri == SEG_METHOD
+        assert resp.max_segment_tokens == 256
 
         # Cleanup
         await vg_client.kgdocuments.delete_segmentation_config(
-            space_id=test_space, config_id=resp["config_id"]
+            space_id=test_space, config_id=resp.config_id
         )
 
     async def test_list_configs(self, vg_client, test_space):
@@ -176,13 +176,13 @@ class TestSegmentationConfigCrud:
             document_type_uri=DOC_TYPE,
             segment_method_uri=SEG_METHOD,
         )
-        config_id = created["config_id"]
+        config_id = created.config_id
 
         resp = await vg_client.kgdocuments.list_segmentation_configs(
             space_id=test_space
         )
-        assert resp.get("total_count", 0) >= 1
-        config_ids = [c["config_id"] for c in resp.get("configs", [])]
+        assert resp.total_count >= 1
+        config_ids = [c["config_id"] for c in resp.configs]
         assert config_id in config_ids
 
         # Cleanup
@@ -198,12 +198,12 @@ class TestSegmentationConfigCrud:
             segment_method_uri=SEG_METHOD,
             enabled=False,
         )
-        config_id = created["config_id"]
+        config_id = created.config_id
 
         resp = await vg_client.kgdocuments.list_segmentation_configs(
             space_id=test_space, enabled_only=True
         )
-        config_ids = [c["config_id"] for c in resp.get("configs", [])]
+        config_ids = [c["config_id"] for c in resp.configs]
         assert config_id not in config_ids
 
         # Cleanup
@@ -219,7 +219,7 @@ class TestSegmentationConfigCrud:
             segment_method_uri=SEG_METHOD,
             max_segment_tokens=512,
         )
-        config_id = created["config_id"]
+        config_id = created.config_id
 
         updated = await vg_client.kgdocuments.update_segmentation_config(
             space_id=test_space,
@@ -228,7 +228,7 @@ class TestSegmentationConfigCrud:
             segment_method_uri=SEG_METHOD,
             max_segment_tokens=1024,
         )
-        assert updated["max_segment_tokens"] == 1024
+        assert updated.max_segment_tokens == 1024
 
         # Cleanup
         await vg_client.kgdocuments.delete_segmentation_config(
@@ -242,7 +242,7 @@ class TestSegmentationConfigCrud:
             document_type_uri=DOC_TYPE,
             segment_method_uri=SEG_METHOD,
         )
-        config_id = created["config_id"]
+        config_id = created.config_id
 
         await vg_client.kgdocuments.delete_segmentation_config(
             space_id=test_space, config_id=config_id
@@ -251,7 +251,7 @@ class TestSegmentationConfigCrud:
         resp = await vg_client.kgdocuments.list_segmentation_configs(
             space_id=test_space
         )
-        config_ids = [c["config_id"] for c in resp.get("configs", [])]
+        config_ids = [c["config_id"] for c in resp.configs]
         assert config_id not in config_ids
 
 
@@ -268,10 +268,10 @@ class TestSegmentationTriggerAndStatus:
         resp = await vg_client.kgdocuments.get_segmentation_status(
             space_id=test_space
         )
-        assert isinstance(resp, dict)
-        # Should have numeric status fields or jobs list
-        has_valid_keys = any(k in resp for k in ("pending", "in_progress", "completed", "failed", "jobs"))
-        assert has_valid_keys, f"Unexpected status response: {resp}"
+        assert resp.is_success
+        # Should have numeric status fields
+        assert hasattr(resp, "pending")
+        assert hasattr(resp, "jobs")
 
     async def test_segmentation_status_with_filter(self, vg_client, test_space):
         """Get segmentation status filtered by a non-existent document — empty result."""
@@ -279,7 +279,7 @@ class TestSegmentationTriggerAndStatus:
             space_id=test_space,
             document_uri="http://example.org/nonexistent-doc"
         )
-        assert isinstance(resp, dict)
+        assert resp.is_success
 
     async def test_trigger_segment_returns_promptly(self, vg_client, test_space, test_graph):
         """Trigger segmentation — should return promptly (enqueued or queue-unavailable error)."""
@@ -293,6 +293,5 @@ class TestSegmentationTriggerAndStatus:
             graph_id=test_graph,
             document_uri=str(doc.URI),
         )
-        assert isinstance(resp, dict)
         # Either enqueued successfully or returned queue-unavailable error (both are valid)
-        assert "success" in resp or "message" in resp
+        assert hasattr(resp, "success")

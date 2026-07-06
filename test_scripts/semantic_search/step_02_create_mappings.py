@@ -168,24 +168,33 @@ async def main():
         )
         logger.info(f"  Vector index '{vi.index_name}' created (dim={vi.dimensions})")
 
-        # Vector mapping for kgentity
-        vm = await client.vector_mappings.create_mapping(
+        # Search mapping for kgentity
+        vm = await client.search_mappings.create_mapping(
             space_id=TEST_SPACE_ID,
             index_name=VECTOR_INDEX_NAME,
             mapping_type="kgentity",
             enabled=True,
             source_type="properties",
         )
-        logger.info(f"  Vector mapping id={vm.mapping_id} created (kgentity)")
+        logger.info(f"  Search mapping id={vm.mapping_id} created (kgentity)")
 
-        # Add properties to vector mapping
+        # Attach vector index to mapping
+        await client.search_mappings.add_index(
+            space_id=TEST_SPACE_ID,
+            mapping_id=vm.mapping_id,
+            index_type="vector",
+            index_name=VECTOR_INDEX_NAME,
+        )
+        logger.info(f"  Attached vector index '{VECTOR_INDEX_NAME}' to mapping")
+
+        # Add properties to mapping
         for uri in [PROP_NAME, PROP_DESCRIPTION, PROP_TEXT_SLOT]:
-            await client.vector_mappings.add_property(
+            await client.search_mappings.add_property(
                 space_id=TEST_SPACE_ID,
                 mapping_id=vm.mapping_id,
                 property_uri=uri,
             )
-        logger.info(f"  Added 3 properties to vector mapping")
+        logger.info(f"  Added 3 properties to mapping")
 
         # ---------------------------------------------------------------
         # 3. FTS index + search mapping + properties

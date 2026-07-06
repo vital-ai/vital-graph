@@ -726,6 +726,18 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
             self.logger.info("⏱️  BACKEND add_rdf_quads_batch_bulk: %.3fs (%d inserted)",
                              _t2 - _t1, inserted)
 
+            if inserted == 0 and len(quads) > 0:
+                self.logger.error(
+                    "store_objects: 0 quads inserted out of %d — "
+                    "likely a PostgreSQL index overflow or constraint error",
+                    len(quads),
+                )
+                return BackendOperationResult(
+                    success=False,
+                    message=f"Failed to insert quads: 0 of {len(quads)} stored",
+                    error=f"0 quads inserted (check server logs for index overflow errors)",
+                )
+
             # ANALYZE so the query planner has accurate statistics for the
             # freshly-loaded data.  Without this, complex multi-join queries
             # (e.g. KGQuery relation queries with frame/slot filters) choose

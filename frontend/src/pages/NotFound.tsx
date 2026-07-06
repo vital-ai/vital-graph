@@ -9,7 +9,7 @@ const NotFound: React.FC = () => {
   const location = useLocation();
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4" data-testid="not-found-page">
       <div className="text-8xl font-bold text-gray-200 dark:text-gray-700 mb-4">404</div>
       <h1 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
         Page Not Found

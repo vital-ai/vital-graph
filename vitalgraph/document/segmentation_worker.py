@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from vitalgraph.document.segmentation_job_manager import (
     SegmentationJobDTO,
@@ -54,10 +55,31 @@ class SegmentationWorker:
         self._wake_event = asyncio.Event()
         self._listen_conns: list = []  # dedicated LISTEN connections
 
+        # Health / diagnostic state (exposed via get_health())
+        self._started_at: Optional[str] = None
+        self._last_poll_at: Optional[str] = None
+        self._last_wake_reason: Optional[str] = None  # "notify" | "timeout" | "startup"
+        self._jobs_processed: int = 0
+        self._jobs_failed: int = 0
+        self._listen_status: Dict[str, str] = {}  # space_id → "connected" | error msg
+
     def stop(self) -> None:
         """Signal the worker to stop after the current poll cycle."""
         self._running = False
         self._wake_event.set()  # unblock wait_for immediately
+
+    def get_health(self) -> Dict[str, Any]:
+        """Return current worker health/status for diagnostics."""
+        return {
+            "running": self._running,
+            "started_at": self._started_at,
+            "last_poll_at": self._last_poll_at,
+            "last_wake_reason": self._last_wake_reason,
+            "jobs_processed": self._jobs_processed,
+            "jobs_failed": self._jobs_failed,
+            "listen_status": dict(self._listen_status),
+            "listen_channels_active": len(self._listen_conns),
+        }
 
     async def run(self) -> None:
         """
@@ -67,12 +89,15 @@ class SegmentationWorker:
         enqueued. Falls back to a safety-net poll interval.
         """
         self._running = True
+        self._started_at = datetime.now(timezone.utc).isoformat()
+        self._last_wake_reason = "startup"
         logger.info("Segmentation worker started")
 
         await self._setup_listeners()
 
         while self._running:
             try:
+                self._last_poll_at = datetime.now(timezone.utc).isoformat()
                 did_work = await self._poll_all_spaces()
                 interval = _BUSY_POLL_INTERVAL if did_work else _IDLE_POLL_INTERVAL
             except Exception as e:
@@ -83,8 +108,10 @@ class SegmentationWorker:
             self._wake_event.clear()
             try:
                 await asyncio.wait_for(self._wake_event.wait(), timeout=interval)
+                self._last_wake_reason = "notify"
                 logger.info("Worker woken by NOTIFY")
             except asyncio.TimeoutError:
+                self._last_wake_reason = "timeout"
                 logger.info("Worker safety-net poll (timeout=%.1fs)", interval)
 
         await self._teardown_listeners()
@@ -97,17 +124,33 @@ class SegmentationWorker:
     async def _setup_listeners(self) -> None:
         """Set up LISTEN on each active space's notification channel."""
         space_ids = self._get_active_space_ids()
+        if not space_ids:
+            logger.warning("No active spaces found — LISTEN not set up for any space")
+            return
+
+        logger.info("Setting up LISTEN for %d space(s): %s", len(space_ids), space_ids)
         for space_id in space_ids:
             try:
                 conn = await self._get_listen_connection(space_id)
                 if conn is None:
+                    msg = "LISTEN connection unavailable (no pool/DSN)"
+                    self._listen_status[space_id] = msg
+                    logger.warning(
+                        "LISTEN FAILED for space %s: %s — worker will use %.0fs safety-net polling",
+                        space_id, msg, _IDLE_POLL_INTERVAL,
+                    )
                     continue
                 channel = f"{space_id}_seg_jobs"
                 await conn.add_listener(channel, self._on_notify)
                 self._listen_conns.append((conn, channel))
-                logger.info("LISTEN on channel %s", channel)
+                self._listen_status[space_id] = "connected"
+                logger.info("✓ LISTEN active on channel %s (instant wake enabled)", channel)
             except Exception as e:
-                logger.warning("Could not set up LISTEN for %s: %s", space_id, e)
+                self._listen_status[space_id] = f"error: {e}"
+                logger.error(
+                    "LISTEN FAILED for space %s: %s — worker will use %.0fs safety-net polling",
+                    space_id, e, _IDLE_POLL_INTERVAL,
+                )
 
     async def _teardown_listeners(self) -> None:
         """Remove listeners and close dedicated connections."""
@@ -136,10 +179,12 @@ class SegmentationWorker:
         try:
             space_record = await self._space_manager.get_space_or_load(space_id)
             if not space_record:
+                logger.warning("LISTEN: space %s not found in space_manager", space_id)
                 return None
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
+                logger.warning("LISTEN: no db_space_impl for space %s", space_id)
                 return None
             pool = getattr(backend_impl, '_pool', None)
             if pool is None:
@@ -147,6 +192,7 @@ class SegmentationWorker:
                 if pool:
                     pool = getattr(pool, '_pool', None)
             if pool is None:
+                logger.warning("LISTEN: no connection pool found for space %s", space_id)
                 return None
             # asyncpg pool exposes the DSN; create a standalone connection
             import asyncpg
@@ -155,11 +201,12 @@ class SegmentationWorker:
                 dsn = pool._connect_kwargs
             if dsn and isinstance(dsn, dict):
                 conn = await asyncpg.connect(**dsn)
+                logger.info("LISTEN: dedicated connection created for space %s", space_id)
                 return conn
-            # Fallback: use pool.acquire (less ideal but functional)
+            logger.warning("LISTEN: could not extract DSN from pool for space %s", space_id)
             return None
         except Exception as e:
-            logger.warning("Could not create LISTEN connection for %s: %s", space_id, e)
+            logger.error("LISTEN: connection failed for space %s: %s", space_id, e, exc_info=True)
             return None
 
     async def _poll_all_spaces(self) -> bool:
@@ -251,25 +298,33 @@ class SegmentationWorker:
             )
             if lock_manager:
                 async with lock_manager.lock(job.document_uri):
-                    segment_count = await self._execute_segmentation(
+                    segment_count, vec_error = await self._execute_segmentation(
                         backend_impl, space_impl, space_id, job.graph_id,
                         job.document_uri, doc_properties, config,
                     )
             else:
-                segment_count = await self._execute_segmentation(
+                segment_count, vec_error = await self._execute_segmentation(
                     backend_impl, space_impl, space_id, job.graph_id,
                     job.document_uri, doc_properties, config,
                 )
 
+            if vec_error:
+                logger.warning(
+                    f"Job {job.job_id} segmentation OK ({segment_count} segments) "
+                    f"but vectorization failed: {vec_error}"
+                )
             await manager.complete(job.job_id, segment_count, content_hash=content_hash)
+            self._jobs_processed += 1
 
         except TimeoutError as te:
+            self._jobs_failed += 1
             logger.warning(f"Job {job.job_id} lock timeout: {te}")
             try:
                 await manager.fail(job.job_id, f"Lock timeout: {te}")
             except Exception as fail_err:
                 logger.error(f"Could not mark job {job.job_id} as failed: {fail_err}")
         except Exception as e:
+            self._jobs_failed += 1
             logger.error(f"Job {job.job_id} failed: {e}", exc_info=True)
             try:
                 await manager.fail(job.job_id, str(e)[:2000])
@@ -285,8 +340,8 @@ class SegmentationWorker:
         document_uri: str,
         doc_properties: dict,
         config,
-    ) -> int:
-        """Run the segmentation pipeline. Returns segment count."""
+    ) -> tuple:
+        """Run the segmentation pipeline. Returns (segment_count, vec_error_or_None)."""
         from vitalgraph.document import KGDocumentSegmentationProcessor
 
         tokenizer = self._get_tokenizer()
@@ -309,14 +364,16 @@ class SegmentationWorker:
             backend_impl, space_id, graph_id, output,
         )
 
-        # Schedule vectorization if auto_sync available
-        self._schedule_vectorization(space_impl, space_id, graph_id, output)
+        # Schedule vectorization and await completion
+        vec_error = await self._schedule_vectorization(
+            space_impl, space_id, graph_id, output,
+        )
 
         logger.info(
             f"Segmented {document_uri}: {output.segment_count} segments "
             f"(method={output.method_uri})"
         )
-        return output.segment_count
+        return output.segment_count, vec_error
 
     # ------------------------------------------------------------------
     # Helpers (largely mirrored from KGDocumentsEndpoint)
@@ -390,9 +447,24 @@ class SegmentationWorker:
                     }}
                 }}
             """
+            logger.info(
+                "Fetching doc properties: space=%s graph=%s uri=%s backend=%s",
+                space_id, graph_id, document_uri, type(backend_impl).__name__,
+            )
             result = await backend_impl.execute_sparql_query(space_id, sparql)
             bindings = result.get('results', {}).get('bindings', [])
             if not bindings:
+                generated_sql = result.get('sql', '<not available>')
+                logger.warning(
+                    "No SPARQL bindings for doc %s in graph %s (space %s). "
+                    "Result keys: %s, success=%s, error=%s\n"
+                    "Generated SQL:\n%s",
+                    document_uri, graph_id, space_id,
+                    list(result.keys()),
+                    result.get('success', result.get('ok', '?')),
+                    result.get('error', 'none'),
+                    generated_sql,
+                )
                 return None
 
             # Convert to property dict
@@ -612,27 +684,45 @@ class SegmentationWorker:
         if props.get("kGGraphURI"):
             obj.kGGraphURI = props["kGGraphURI"]
 
-    def _schedule_vectorization(
+    async def _schedule_vectorization(
         self, space_impl, space_id: str, graph_id: str, output,
-    ) -> None:
-        """Schedule vectorization for the segmentation output."""
+    ) -> Optional[str]:
+        """Schedule vectorization for the segmentation output.
+
+        Returns None on success, or an error message string on failure.
+        """
         try:
             backend_impl = getattr(space_impl, 'backend', None)
             db_impl = getattr(backend_impl, 'db_impl', None) if backend_impl else None
             if not db_impl:
-                return
+                msg = "No db_impl available for vectorization"
+                logger.warning(msg)
+                return msg
 
             from vitalgraph.vectorization.auto_sync import schedule_sync
             uris = [output.parent_copy_properties["URI"]]
             for seg in output.segment_properties_list:
                 uris.append(seg["URI"])
-            schedule_sync(
+            task = schedule_sync(
                 db_impl=db_impl,
                 space_id=space_id,
                 subject_uris=uris,
                 graph_uri=graph_id,
                 operation="upsert",
             )
-            logger.info(f"Triggered vectorization for {len(uris)} subjects")
+            if task is not None:
+                # Await the vectorization task to catch errors
+                try:
+                    await task
+                    logger.info(f"Vectorization completed for {len(uris)} subjects")
+                except Exception as vec_err:
+                    msg = f"Vectorization task failed: {vec_err}"
+                    logger.error(msg, exc_info=True)
+                    return msg
+            else:
+                logger.info(f"Vectorization skipped for {len(uris)} subjects (no task created)")
+            return None
         except Exception as e:
-            logger.warning(f"Could not trigger vectorization: {e}")
+            msg = f"Could not trigger vectorization: {e}"
+            logger.error(msg, exc_info=True)
+            return msg

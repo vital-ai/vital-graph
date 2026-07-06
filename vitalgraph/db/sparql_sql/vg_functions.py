@@ -556,11 +556,20 @@ def extract_multi_vector_args(expr: ExprFunction) -> Optional[MultiVectorArgs]:
 def _resolve_uuid_col(entity_var: str, ctx) -> Optional[str]:
     """Resolve the UUID column for a SPARQL variable from the TypeRegistry.
 
-    Returns the uuid_col string (e.g. 'v0__uuid') or None if not found.
+    Returns the uuid_col string (e.g. 'v0__uuid') or a deferred placeholder
+    token if the variable isn't registered yet (child pattern not yet emitted).
+    Returns None only if deferred resolution is not available on the context.
     """
     info = ctx.types.get(entity_var)
     if info and info.uuid_col:
         return info.uuid_col
+    # Attempt deferred resolution: emit a placeholder that will be resolved
+    # after the child pattern is emitted and populates the TypeRegistry.
+    if hasattr(ctx, 'add_deferred_uuid'):
+        placeholder = f"__VG_UUID_{entity_var}__"
+        ctx.add_deferred_uuid(entity_var, placeholder)
+        logger.debug("Deferred UUID resolution for ?%s → %s", entity_var, placeholder)
+        return placeholder
     logger.warning("Cannot resolve UUID column for ?%s", entity_var)
     return None
 
@@ -934,13 +943,13 @@ def geo_distance_sql(expr: ExprFunction, ctx) -> Optional[str]:
     geo_table = f"{ctx.space_id}_geo"
 
     # ST_Distance with geography type returns meters
+    # Use MIN to return closest distance when subject has multiple geo rows
     ctx_clause = _context_clause(ctx)
     sql = (
-        f"(SELECT ST_Distance(location, "
-        f"ST_MakePoint({gargs.longitude}, {gargs.latitude})::geography) "
+        f"(SELECT MIN(ST_Distance(location, "
+        f"ST_MakePoint({gargs.longitude}, {gargs.latitude})::geography)) "
         f"FROM {geo_table} "
-        f"WHERE subject_uuid = {uuid_col}{ctx_clause} "
-        f"LIMIT 1)"
+        f"WHERE subject_uuid = {uuid_col}{ctx_clause})"
     )
 
     return sql

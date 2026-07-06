@@ -187,10 +187,10 @@ const Home: React.FC = () => {
   }, [loadStats]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="home-page">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="home-title">
           Dashboard
         </h1>
         <p className="text-gray-500 dark:text-gray-400 mt-1">
@@ -213,7 +213,7 @@ const Home: React.FC = () => {
       )}
 
       {/* Stats Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="stats-row">
         <StatCard
           icon={<HiViewBoards className="w-6 h-6 text-blue-600" />}
           label="Spaces"
@@ -271,6 +271,7 @@ const Home: React.FC = () => {
                     key={s.space}
                     to={`/space/${s.space}`}
                     className="flex items-center justify-between py-3 px-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
+                    data-testid={`space-link-${s.space}`}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <HiViewBoards className="w-5 h-5 text-blue-500 flex-shrink-0" />

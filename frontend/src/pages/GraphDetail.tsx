@@ -23,7 +23,7 @@ interface BannerMessage {
 const GraphDetail: React.FC = () => {
   const { spaceId, graphId } = useParams<{ spaceId: string; graphId: string }>();
   const navigate = useNavigate();
-  const isCreating = graphId === 'new';
+  const isCreating = graphId === 'new' || !graphId;
   const graphUri = graphId ? decodeURIComponent(graphId) : '';
 
   const [graph, setGraph] = useState<GraphInfo | null>(null);
@@ -149,7 +149,7 @@ const GraphDetail: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-testid="graph-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb>
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>

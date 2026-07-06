@@ -26,13 +26,13 @@ class TestVectorMappingsCrud:
 
     async def test_list_vector_mappings_empty(self, vg_client, test_space):
         """List vector mappings — returns valid structure."""
-        resp = await vg_client.vector_mappings.list_mappings(space_id=test_space)
+        resp = await vg_client.search_mappings.list_mappings(space_id=test_space)
         assert resp.mappings is not None
         assert isinstance(resp.mappings, list)
 
     async def test_create_vector_mapping(self, vg_client, test_space):
         """Create a vector mapping and verify returned fields."""
-        m = await vg_client.vector_mappings.create_mapping(
+        m = await vg_client.search_mappings.create_mapping(
             space_id=test_space,
             index_name=INDEX_NAME,
             mapping_type="kgentity",
@@ -48,7 +48,7 @@ class TestVectorMappingsCrud:
         """Get the created mapping by ID."""
         mid = getattr(TestVectorMappingsCrud, "_mapping_id", None)
         assert mid is not None, "create test must run first"
-        m = await vg_client.vector_mappings.get_mapping(
+        m = await vg_client.search_mappings.get_mapping(
             space_id=test_space, mapping_id=mid
         )
         assert m.mapping_id == mid
@@ -57,7 +57,7 @@ class TestVectorMappingsCrud:
     async def test_update_vector_mapping(self, vg_client, test_space):
         """Update enabled flag."""
         mid = TestVectorMappingsCrud._mapping_id
-        m = await vg_client.vector_mappings.update_mapping(
+        m = await vg_client.search_mappings.update_mapping(
             space_id=test_space, mapping_id=mid, enabled=False
         )
         assert m.enabled is False
@@ -65,10 +65,10 @@ class TestVectorMappingsCrud:
     async def test_delete_vector_mapping(self, vg_client, test_space):
         """Delete the mapping."""
         mid = TestVectorMappingsCrud._mapping_id
-        resp = await vg_client.vector_mappings.delete_mapping(
+        resp = await vg_client.search_mappings.delete_mapping(
             space_id=test_space, mapping_id=mid
         )
-        assert resp.get("message") or resp.get("success") or "deleted" in str(resp).lower()
+        assert resp.deleted or resp.message
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ class TestVectorMappingProperties:
 
     async def test_add_property(self, vg_client, test_space):
         """Create mapping then add a property."""
-        m = await vg_client.vector_mappings.create_mapping(
+        m = await vg_client.search_mappings.create_mapping(
             space_id=test_space,
             index_name=INDEX_NAME,
             mapping_type="kgentity",
@@ -196,7 +196,7 @@ class TestVectorMappingProperties:
         )
         TestVectorMappingProperties._mapping_id = m.mapping_id
 
-        prop = await vg_client.vector_mappings.add_property(
+        prop = await vg_client.search_mappings.add_property(
             space_id=test_space,
             mapping_id=m.mapping_id,
             property_uri=PROP_URI,
@@ -211,7 +211,7 @@ class TestVectorMappingProperties:
     async def test_get_mapping_shows_property(self, vg_client, test_space):
         """Get mapping verifies property is attached."""
         mid = TestVectorMappingProperties._mapping_id
-        m = await vg_client.vector_mappings.get_mapping(
+        m = await vg_client.search_mappings.get_mapping(
             space_id=test_space, mapping_id=mid
         )
         assert len(m.properties) >= 1
@@ -222,20 +222,20 @@ class TestVectorMappingProperties:
         """Remove the property, verify it's gone."""
         mid = TestVectorMappingProperties._mapping_id
         pid = TestVectorMappingProperties._property_id
-        resp = await vg_client.vector_mappings.remove_property(
+        resp = await vg_client.search_mappings.remove_property(
             space_id=test_space, mapping_id=mid, property_id=pid
         )
-        assert resp.get("message") or resp.get("deleted") or "removed" in str(resp).lower()
+        assert resp.deleted or resp.message
 
         # Verify property removed
-        m = await vg_client.vector_mappings.get_mapping(
+        m = await vg_client.search_mappings.get_mapping(
             space_id=test_space, mapping_id=mid
         )
         uris = [p.property_uri for p in m.properties]
         assert PROP_URI not in uris
 
         # Cleanup
-        await vg_client.vector_mappings.delete_mapping(
+        await vg_client.search_mappings.delete_mapping(
             space_id=test_space, mapping_id=mid
         )
 

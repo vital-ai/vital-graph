@@ -35,7 +35,8 @@ export class KGRelationsEndpoint extends BaseEndpoint {
   ): Promise<DeleteResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
     return this.request('DELETE', '/api/graphs/kgrelations', {
-      params: { space_id: spaceId, graph_id: graphId, uri },
+      params: { space_id: spaceId, graph_id: graphId },
+      json: { relation_uris: [uri] },
     });
   }
 

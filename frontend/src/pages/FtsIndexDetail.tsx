@@ -132,7 +132,7 @@ const FtsIndexDetail: React.FC = () => {
   }
 
   return (
-    <div>
+    <div data-testid="fts-index-detail-page">
       {/* Breadcrumb */}
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>

@@ -259,7 +259,7 @@ const Indexes: React.FC = () => {
   };
 
   return (
-    <div>
+    <div data-testid="indexes-page">
       <Breadcrumb className="mb-6">
         <BreadcrumbItem href="/" icon={HiHome}>Home</BreadcrumbItem>
         <BreadcrumbItem>Indexes</BreadcrumbItem>

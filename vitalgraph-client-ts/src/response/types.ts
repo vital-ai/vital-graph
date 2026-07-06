@@ -595,15 +595,6 @@ export interface SlowQueriesResponse extends VitalGraphResponse {
 // Vector / Geo Responses
 // ============================================================================
 
-export interface VectorMappingResponse extends VitalGraphResponse {
-  mapping?: Record<string, unknown>;
-}
-
-export interface VectorMappingsListResponse extends VitalGraphResponse {
-  mappings: Record<string, unknown>[];
-  total: number;
-}
-
 export interface VectorIndexResponse extends VitalGraphResponse {
   index?: Record<string, unknown>;
 }

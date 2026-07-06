@@ -19,7 +19,7 @@ class SegmentDocumentRequest(BaseModel):
         None,
         description="Segmentation method URI. If None, auto-detects based on content."
     )
-    max_segment_tokens: int = Field(512, description="Maximum tokens per segment")
+    max_segment_tokens: int = Field(1024, description="Maximum tokens per segment")
     min_segment_tokens: int = Field(50, description="Minimum tokens per segment")
     overlap_tokens: int = Field(0, description="Token overlap between segments")
 
@@ -47,7 +47,7 @@ class SegmentationConfigRequest(BaseModel):
 
     document_type_uri: str = Field(..., description="KGDocumentType URI to match")
     segment_method_uri: str = Field(..., description="Segmentation method URI to apply")
-    max_segment_tokens: int = Field(512)
+    max_segment_tokens: int = Field(1024)
     min_segment_tokens: int = Field(50)
     overlap_tokens: int = Field(0)
     enabled: bool = Field(True)
@@ -60,7 +60,7 @@ class SegmentationConfigResponse(BaseModel):
     config_id: int
     document_type_uri: str
     segment_method_uri: str
-    max_segment_tokens: int = 512
+    max_segment_tokens: int = 1024
     min_segment_tokens: int = 50
     overlap_tokens: int = 0
     enabled: bool = True
@@ -122,6 +122,19 @@ class SegmentationJobStatusResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class SegmentationWorkerStatus(BaseModel):
+    """Health status of the background segmentation worker."""
+
+    running: bool = False
+    started_at: Optional[str] = None
+    last_poll_at: Optional[str] = None
+    last_wake_reason: Optional[str] = None
+    jobs_processed: int = 0
+    jobs_failed: int = 0
+    listen_status: Dict[str, str] = Field(default_factory=dict)
+    listen_channels_active: int = 0
+
+
 class SegmentationStatusSummaryResponse(BaseModel):
     """Aggregate segmentation status summary for a space."""
 
@@ -131,3 +144,4 @@ class SegmentationStatusSummaryResponse(BaseModel):
     failed: int = 0
     cancelled: int = 0
     jobs: List[SegmentationJobStatusResponse] = Field(default_factory=list)
+    worker_status: Optional[SegmentationWorkerStatus] = None

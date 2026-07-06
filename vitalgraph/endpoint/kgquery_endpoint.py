@@ -21,7 +21,8 @@ from ..model.kgqueries_model import (
     RelationConnection,
     FrameConnection,
     EntitySlotRef,
-    FrameQueryResult
+    FrameQueryResult,
+    DocumentResult,
 )
 from ..cache.entity_graph_cache import _entity_graph_cache
 from ..cache.count_cache import _count_cache
@@ -111,10 +112,10 @@ class KGQueriesEndpoint:
                 pass
             
             # Validate query type
-            if query_type not in ["relation", "frame", "entity", "frame_query"]:
+            if query_type not in ["relation", "frame", "entity", "frame_query", "document"]:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', or 'frame_query'"
+                    detail=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', 'frame_query', or 'document'"
                 )
             
             # Guard against runaway pagination — reject absurd offsets
@@ -144,6 +145,8 @@ class KGQueriesEndpoint:
                 return await self._execute_entity_query(backend, space_id, graph_id, query_request)
             elif query_type == "frame_query":
                 return await self._execute_frame_query_case(backend, space_id, graph_id, query_request)
+            elif query_type == "document":
+                return await self._execute_document_query(backend, space_id, graph_id, query_request)
             else:  # query_type == "frame"
                 return await self._execute_frame_query(backend, space_id, graph_id, query_request)
                 
@@ -417,6 +420,7 @@ class KGQueriesEndpoint:
                     radius_m=pydantic_gc.radius_m,
                     sort_by_distance=pydantic_gc.sort_by_distance,
                     top_k=pydantic_gc.top_k,
+                    geo_target=getattr(pydantic_gc, 'geo_target', None),
                 )
             
             entity_criteria = BuilderEntityQueryCriteria(
@@ -1039,6 +1043,274 @@ class KGQueriesEndpoint:
                 _entity_graph_cache.put(space_id, _effective_graph, uri, quads)
         
         return result
+    
+    async def _execute_document_query(self, backend, space_id: str, graph_id: str, query_request: KGQueryRequest) -> KGQueryResponse:
+        """Execute document query — return matching document/segment URIs with optional enrichment."""
+        try:
+            from ..sparql.kg_query_builder import (
+                DocumentQueryCriteria as BuilderDocumentQueryCriteria,
+                VectorCriteria as BuilderVectorCriteria,
+                MultiVectorCriteria as BuilderMultiVectorCriteria,
+                MultiVectorCriteriaInput as BuilderMultiVectorInput,
+                GeoCriteria as BuilderGeoCriteria,
+                SortCriteria as BuilderSortCriteria,
+                FrameCriteria as BuilderFrameCriteria,
+                SlotCriteria as BuilderSlotCriteria,
+                EntityPropertyFilter as BuilderEntityPropertyFilter,
+            )
+            
+            criteria = query_request.criteria
+            doc_criteria = criteria.document_criteria
+            
+            # Convert frame criteria if provided
+            def convert_frame_criteria(frame_crit):
+                builder_slots = None
+                if frame_crit.slot_criteria:
+                    builder_slots = [
+                        BuilderSlotCriteria(
+                            slot_type=s.slot_type,
+                            slot_class_uri=s.slot_class_uri,
+                            value=s.value,
+                            comparator=s.comparator or ("eq" if s.value else None)
+                        ) for s in frame_crit.slot_criteria
+                    ]
+                builder_nested = None
+                if frame_crit.frame_criteria:
+                    builder_nested = [convert_frame_criteria(fc) for fc in frame_crit.frame_criteria]
+                return BuilderFrameCriteria(
+                    frame_type=frame_crit.frame_type,
+                    negate=getattr(frame_crit, 'negate', False),
+                    slot_criteria=builder_slots,
+                    frame_criteria=builder_nested
+                )
+            
+            builder_frame_criteria = None
+            if criteria.frame_criteria:
+                builder_frame_criteria = [convert_frame_criteria(fc) for fc in criteria.frame_criteria]
+            
+            # Convert sort criteria
+            builder_sort_criteria = None
+            if criteria.sort_criteria:
+                builder_sort_criteria = [
+                    BuilderSortCriteria(
+                        sort_type=sc.sort_type,
+                        slot_type=sc.slot_type,
+                        slot_class_uri=sc.slot_class_uri,
+                        frame_path=sc.frame_path or [],
+                        property_uri=sc.property_uri,
+                        sort_order=sc.sort_order,
+                        priority=sc.priority
+                    ) for sc in criteria.sort_criteria
+                ]
+            
+            # Convert entity property filters
+            builder_entity_property_filters = None
+            if criteria.entity_property_filters:
+                builder_entity_property_filters = [
+                    BuilderEntityPropertyFilter(
+                        property_uri=epf.property_uri,
+                        operator=epf.operator,
+                        value=epf.value
+                    ) for epf in criteria.entity_property_filters
+                ]
+            
+            # Convert vector/geo criteria
+            builder_vector_criteria = None
+            builder_multi_vector_criteria = None
+            builder_geo_criteria = None
+            
+            if criteria.vector_criteria:
+                builder_vector_criteria = BuilderVectorCriteria(
+                    search_text=criteria.vector_criteria.search_text,
+                    vector=criteria.vector_criteria.vector,
+                    index_name=criteria.vector_criteria.index_name,
+                    top_k=criteria.vector_criteria.top_k,
+                    min_score=criteria.vector_criteria.min_score,
+                )
+            if criteria.multi_vector_criteria:
+                builder_multi_vector_criteria = BuilderMultiVectorCriteria(
+                    vectors=[
+                        BuilderMultiVectorInput(
+                            search_text=v.search_text,
+                            vector=v.vector,
+                            index_name=v.index_name,
+                            weight=v.weight,
+                        ) for v in criteria.multi_vector_criteria.vectors
+                    ],
+                    top_k=criteria.multi_vector_criteria.top_k,
+                    min_score=criteria.multi_vector_criteria.min_score,
+                    fusion_strategy=getattr(criteria.multi_vector_criteria, 'fusion_strategy', 'weighted_sum'),
+                    oversample_factor=getattr(criteria.multi_vector_criteria, 'oversample_factor', 5),
+                )
+            if criteria.geo_criteria:
+                builder_geo_criteria = BuilderGeoCriteria(
+                    latitude=criteria.geo_criteria.latitude,
+                    longitude=criteria.geo_criteria.longitude,
+                    radius_m=criteria.geo_criteria.radius_m,
+                    sort_by_distance=criteria.geo_criteria.sort_by_distance,
+                    top_k=criteria.geo_criteria.top_k,
+                    geo_target=getattr(criteria.geo_criteria, 'geo_target', None),
+                )
+            
+            # Build the DocumentQueryCriteria dataclass
+            builder_doc_criteria = BuilderDocumentQueryCriteria(
+                document_type_uri=doc_criteria.document_type_uri if doc_criteria else None,
+                search_scope=doc_criteria.search_scope if doc_criteria else None,
+                segment_method_uri=doc_criteria.segment_method_uri if doc_criteria else None,
+                segment_type_uri=doc_criteria.segment_type_uri if doc_criteria else None,
+                parent_document_uri=doc_criteria.parent_document_uri if doc_criteria else None,
+                content_type=doc_criteria.content_type if doc_criteria else None,
+                min_token_length=doc_criteria.min_token_length if doc_criteria else None,
+                max_token_length=doc_criteria.max_token_length if doc_criteria else None,
+                search_text=doc_criteria.search_text if doc_criteria else None,
+                fts_index_name=doc_criteria.fts_index_name if doc_criteria else None,
+                include_parent_context=doc_criteria.include_parent_context if doc_criteria else False,
+                include_original_uri=doc_criteria.include_original_uri if doc_criteria else False,
+                exclude_managed_segments=doc_criteria.exclude_managed_segments if doc_criteria else True,
+                include_segment_text=doc_criteria.include_segment_text if doc_criteria else False,
+                group_by_document=doc_criteria.group_by_document if doc_criteria else False,
+                document_uris=criteria.source_entity_uris,
+                entity_property_filters=builder_entity_property_filters,
+                frame_criteria=builder_frame_criteria,
+                sort_criteria=builder_sort_criteria,
+                vector_criteria=builder_vector_criteria,
+                multi_vector_criteria=builder_multi_vector_criteria,
+                geo_criteria=builder_geo_criteria,
+            )
+            
+            # Build multi-vector config for SQL generation
+            _mv_config = None
+            if builder_multi_vector_criteria:
+                _mv_config = {
+                    'fusion_strategy': builder_multi_vector_criteria.fusion_strategy,
+                    'oversample_factor': builder_multi_vector_criteria.oversample_factor,
+                }
+            
+            # Build paginated query + count query
+            sparql_query = self.query_builder.build_document_query_sparql(
+                builder_doc_criteria, graph_id,
+                query_request.page_size, query_request.offset
+            )
+            count_query = self.query_builder.build_document_count_query_sparql(
+                builder_doc_criteria, graph_id
+            )
+            
+            self.logger.info(f"Generated document SPARQL query:\n{sparql_query}")
+            
+            # count_only short-circuit
+            t0 = _time.monotonic()
+            if query_request.count_only:
+                _qh = _count_cache.query_hash(count_query)
+                _cached = _count_cache.get(space_id, graph_id, _qh)
+                if _cached is not None:
+                    total_count = _cached
+                else:
+                    count_results = await backend.execute_sparql_query(space_id, count_query)
+                    total_count = self._extract_total_count(count_results)
+                    _count_cache.put(space_id, graph_id, _qh, total_count)
+                self.logger.info(f"Document count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
+                return KGQueryResponse(
+                    query_type="document",
+                    document_uris=[],
+                    total_count=total_count,
+                    page_size=0,
+                    offset=0,
+                )
+            
+            # Count-first short-circuit for offset > 0
+            if query_request.offset > 0:
+                count_results = await backend.execute_sparql_query(space_id, count_query)
+                total_count = self._extract_total_count(count_results)
+                if query_request.offset >= total_count:
+                    t_query = _time.monotonic()
+                    self.logger.info(
+                        f"Document query short-circuit: offset {query_request.offset} >= total {total_count}, "
+                        f"{(t_query - t0)*1000:.0f}ms (count only)")
+                    return KGQueryResponse(
+                        query_type="document",
+                        document_uris=[],
+                        total_count=total_count,
+                        page_size=query_request.page_size,
+                        offset=query_request.offset
+                    )
+                results = await backend.execute_sparql_query(
+                    space_id, sparql_query, multi_vector_config=_mv_config)
+            else:
+                results, count_results = await asyncio.gather(
+                    backend.execute_sparql_query(
+                        space_id, sparql_query, multi_vector_config=_mv_config),
+                    backend.execute_sparql_query(space_id, count_query),
+                )
+                total_count = self._extract_total_count(count_results)
+            t_query = _time.monotonic()
+            
+            # Extract results based on query mode
+            document_uris = []
+            document_results = None
+            is_grouped = builder_doc_criteria.group_by_document
+            is_enriched = builder_doc_criteria.include_parent_context or builder_doc_criteria.include_segment_text
+            
+            if results and results.get("results") and results["results"].get("bindings"):
+                bindings = results["results"]["bindings"]
+                
+                if is_grouped:
+                    # Grouped path: extract aggregated bindings
+                    document_results = []
+                    for b in bindings:
+                        seg_uri = b.get('_best_seg', {}).get('value', '')
+                        if seg_uri:
+                            document_uris.append(seg_uri)
+                        dr = DocumentResult(
+                            document_uri=seg_uri,
+                            score=float(b['_max_score']['value']) if '_max_score' in b and b['_max_score'].get('value') else None,
+                            parent_document_uri=b.get('_parent_doc', {}).get('value') or None,
+                            parent_document_name=b.get('_parent_name_agg', {}).get('value') or None,
+                            original_document_uri=b.get('_original_doc_agg', {}).get('value') or None,
+                            segment_text=b.get('_seg_content_agg', {}).get('value') or None,
+                            segment_headline=b.get('_seg_headline_agg', {}).get('value') or None,
+                        )
+                        document_results.append(dr)
+                elif is_enriched:
+                    # Enriched path: extract projected variables
+                    document_results = []
+                    for b in bindings:
+                        uri = b.get('entity', {}).get('value', '')
+                        if uri:
+                            document_uris.append(uri)
+                        dr = DocumentResult(
+                            document_uri=uri,
+                            score=float(b['vg_score']['value']) if 'vg_score' in b and b['vg_score'].get('value') else None,
+                            parent_document_uri=b.get('_parent_doc', {}).get('value') or None,
+                            parent_document_name=b.get('_parent_name', {}).get('value') or None,
+                            original_document_uri=b.get('_original_doc', {}).get('value') or None,
+                            segment_text=b.get('_seg_content', {}).get('value') or None,
+                            segment_headline=b.get('_seg_headline', {}).get('value') or None,
+                        )
+                        document_results.append(dr)
+                else:
+                    # Default path: just extract entity URIs
+                    for b in bindings:
+                        uri = b.get('entity', {}).get('value', '')
+                        if uri:
+                            document_uris.append(uri)
+            
+            self.logger.info(f"Document query: {len(document_uris)} results (total={total_count}), {(t_query - t0)*1000:.0f}ms")
+            
+            return KGQueryResponse(
+                query_type="document",
+                document_uris=document_uris,
+                document_results=document_results,
+                total_count=total_count,
+                page_size=query_request.page_size,
+                offset=query_request.offset
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error executing document query: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to execute document query: {str(e)}"
+            )
     
     def _build_entity_slot_refs_query(self, frame_uris: List[str], graph_id: str) -> str:
         """Build SPARQL to fetch entity slot refs for a list of frames."""

@@ -226,7 +226,7 @@ async def process_geo_slot(
     Returns:
         True if geo point was successfully upserted/deleted.
     """
-    from vitalgraph.vectorization.geo_populator import GEO_UPSERT_SQL, GEO_DELETE_SQL
+    from vitalgraph.vectorization.geo_populator import GEO_UPSERT_SQL, GEO_DELETE_BY_SLOT_SQL
 
     geo_table = f"{space_id}_geo"
 
@@ -237,10 +237,11 @@ async def process_geo_slot(
         return False
 
     if operation == "delete":
+        # Delete both slot-keyed and entity-keyed rows for this slot
         try:
             await conn.execute(
-                GEO_DELETE_SQL.format(geo_table=geo_table),
-                entity_uuid, context_uuid,
+                GEO_DELETE_BY_SLOT_SQL.format(geo_table=geo_table),
+                slot_uuid, context_uuid,
             )
             return True
         except Exception as e:
@@ -254,11 +255,11 @@ async def process_geo_slot(
     row = await conn.fetchrow(sql, slot_uuid, context_uuid, GEO_SLOT_VALUE_PRED)
 
     if not row:
-        # No value → remove geo point if exists
+        # No value → remove geo points for this slot
         try:
             await conn.execute(
-                GEO_DELETE_SQL.format(geo_table=geo_table),
-                entity_uuid, context_uuid,
+                GEO_DELETE_BY_SLOT_SQL.format(geo_table=geo_table),
+                slot_uuid, context_uuid,
             )
         except Exception:
             pass
@@ -274,25 +275,43 @@ async def process_geo_slot(
         return False
 
     lat, lon, wkt = parsed
+    upsert_sql = GEO_UPSERT_SQL.format(geo_table=geo_table)
 
-    # Upsert into geo table (keyed on entity_uuid + context_uuid)
+    # Row 1: slot-keyed (subject_uuid=slot, source_slot_uuid=slot)
     try:
         await conn.execute(
-            GEO_UPSERT_SQL.format(geo_table=geo_table),
+            upsert_sql,
+            slot_uuid,
+            slot_uuid,   # source_slot_uuid = self
+            None,        # predicate_uuid (not applicable for slot-based geo)
+            wkt,
+            lat,
+            lon,
+            context_uuid,
+        )
+    except Exception as e:
+        logger.error("process_geo_slot slot upsert failed for %s: %s", slot_uuid, e)
+        return False
+
+    # Row 2: entity-keyed (subject_uuid=entity, source_slot_uuid=slot)
+    try:
+        await conn.execute(
+            upsert_sql,
             entity_uuid,
-            None,  # predicate_uuid (not applicable for slot-based geo)
+            slot_uuid,   # source_slot_uuid = originating slot
+            None,        # predicate_uuid
             wkt,
             lat,
             lon,
             context_uuid,
         )
         logger.debug(
-            "process_geo_slot: upserted entity %s → (%s, %s)",
-            entity_uuid, lat, lon,
+            "process_geo_slot: upserted slot %s + entity %s → (%s, %s)",
+            slot_uuid, entity_uuid, lat, lon,
         )
         return True
     except Exception as e:
-        logger.error("process_geo_slot upsert failed for entity %s: %s", entity_uuid, e)
+        logger.error("process_geo_slot entity upsert failed for %s: %s", entity_uuid, e)
         return False
 
 
