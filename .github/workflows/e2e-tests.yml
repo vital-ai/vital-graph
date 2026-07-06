@@ -50,8 +50,17 @@ jobs:
       - name: Install Python dependencies for seeding
         run: pip install -e ".[client]"
 
+      - name: Create VITAL_HOME config
+        run: |
+          mkdir -p /tmp/vitalhome/vital-config/vitalsigns
+          cat > /tmp/vitalhome/vital-config/vitalsigns/vitalsigns_config.yaml << 'EOF'
+          vitalservice: []
+          EOF
+
       - name: Seed test data
         run: python -m tests.shared.seed_ui_test_data --server-url http://localhost:8002
+        env:
+          VITAL_HOME: /tmp/vitalhome
 
       # ── Node.js + Playwright ────────────────────────────────────────
       - name: Set up Node.js
