@@ -46,9 +46,9 @@ test.describe('Indexes CRUD — FTS', () => {
     await page.goto('/indexes');
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
-    // Select space
+    // Select space and wait for any triggered fetch to settle
     await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForTimeout(1_000);
+    await page.waitForLoadState('networkidle');
 
     // Click Create Index
     await page.locator('button', { hasText: 'Create Index' }).click();
@@ -77,6 +77,7 @@ test.describe('Indexes CRUD — FTS', () => {
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
     await page.locator('#space').selectOption(SPACE_ID);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('table').getByText(FTS_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -85,6 +86,7 @@ test.describe('Indexes CRUD — FTS', () => {
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
     await page.locator('#space').selectOption(SPACE_ID);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('table').getByText(FTS_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
 
     // Find the row and click delete
@@ -112,7 +114,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
     await page.locator('#space').selectOption(SPACE_ID);
-    await page.waitForTimeout(1_000);
+    await page.waitForLoadState('networkidle');
 
     // Click Create Index
     await page.locator('button', { hasText: 'Create Index' }).click();
@@ -144,6 +146,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
     await page.locator('#space').selectOption(SPACE_ID);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
   });
 
@@ -152,6 +155,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await expect(page.locator('[data-testid="indexes-page"]')).toBeVisible({ timeout: 10_000 });
 
     await page.locator('#space').selectOption(SPACE_ID);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).toBeVisible({ timeout: 10_000 });
 
     // Find the row and click delete
