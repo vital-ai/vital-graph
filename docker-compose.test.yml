@@ -1,0 +1,105 @@
+# docker-compose.test.yml
+#
+# Ephemeral test stack for UI (Playwright) and API (pytest) testing.
+#
+# Key differences from docker-compose.yml:
+#   - Distinct project name (vg-test) to avoid image/network collisions
+#     with the dev stack (vital-graph)
+#   - PostgreSQL included (dev compose relies on host-local PG)
+#   - No persistent volumes — every `up` starts from a clean database
+#   - Non-default ports (8002, 5433, 7071) — runs alongside dev stack
+#   - VG_AUTO_INIT=true triggers admin table initialization on startup
+#   - Bootstrap admin credentials set via AUTH_ROOT_USERNAME/PASSWORD
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d --build --wait
+#   python -m tests.shared.seed_ui_test_data
+#   cd e2e && npx playwright test
+#   docker compose -f docker-compose.test.yml down
+
+name: vg-test
+
+services:
+  postgres:
+    build:
+      context: ./docker/test-pg
+      dockerfile: Dockerfile
+    container_name: vitalgraph-test-pg
+    environment:
+      POSTGRES_DB: sparql_sql_graph
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "5433:5432"
+    # No volumes — starts empty every time
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - vitalgraph_test
+
+  vitalgraph:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vitalgraph-test-app
+    ports:
+      - "8002:8001"
+    environment:
+      - APP_MODE=production
+      - PORT=8001
+      - HOST=0.0.0.0
+      - WORKERS=1
+      # Config env vars (unprefixed — no VITALGRAPH_ENVIRONMENT needed)
+      - BACKEND_TYPE=sparql_sql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=sparql_sql_graph
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=testpass
+      - SIDECAR_URL=http://sparql-compiler:7070
+      # Auth
+      - SECRET_KEY=test-secret-key
+      - JWT_SECRET_KEY=test-jwt-secret
+      - AUTH_ROOT_USERNAME=admin
+      - AUTH_ROOT_PASSWORD=admin
+      # Auto-init admin tables on startup (test environments only)
+      - VG_AUTO_INIT=true
+      # Storage
+      - STORAGE_ENDPOINT=http://minio:9000
+      - STORAGE_ACCESS_KEY=minioadmin
+      - STORAGE_SECRET_KEY=minioadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vitalgraph_test
+
+  sparql-compiler:
+    build:
+      context: ./vitalgraph-jena-sidecar
+      dockerfile: Dockerfile
+    container_name: vitalgraph-test-sidecar
+    ports:
+      - "7071:7070"
+    environment:
+      - PORT=7070
+    networks:
+      - vitalgraph_test
+
+  minio:
+    image: minio/minio:latest
+    container_name: vitalgraph-test-minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    # No volumes — ephemeral storage
+    networks:
+      - vitalgraph_test
+
+networks:
+  vitalgraph_test:
+    driver: bridge

@@ -269,6 +269,7 @@ archive/frontend-old/
 **/*.yaml
 **/*.yml
 !docker-compose.yml
+!docker-compose.test.yml
 !.github/**/*.yml
 !.github/**/*.yaml
 
