@@ -261,7 +261,14 @@ class SegmentationWorker:
         job: SegmentationJobDTO,
         manager: SegmentationJobManager,
     ) -> None:
-        """Process a single segmentation job."""
+        """Process a single segmentation job.
+
+        Flow:
+          1. Segment document (CPU + DB)
+          2. Mark job as 'vectorizing' (segments are stored and searchable)
+          3. Fire vectorization as a background task (non-blocking)
+          4. Background task transitions job to 'completed' when done
+        """
         logger.info(f"Processing job {job.job_id}: {job.document_uri} (attempt {job.attempt_count})")
 
         try:
@@ -298,23 +305,28 @@ class SegmentationWorker:
             )
             if lock_manager:
                 async with lock_manager.lock(job.document_uri):
-                    segment_count, vec_error = await self._execute_segmentation(
+                    segment_count, output = await self._execute_segmentation(
                         backend_impl, space_impl, space_id, job.graph_id,
                         job.document_uri, doc_properties, config,
                     )
             else:
-                segment_count, vec_error = await self._execute_segmentation(
+                segment_count, output = await self._execute_segmentation(
                     backend_impl, space_impl, space_id, job.graph_id,
                     job.document_uri, doc_properties, config,
                 )
 
-            if vec_error:
-                logger.warning(
-                    f"Job {job.job_id} segmentation OK ({segment_count} segments) "
-                    f"but vectorization failed: {vec_error}"
-                )
-            await manager.complete(job.job_id, segment_count, content_hash=content_hash)
+            # Mark as 'vectorizing' — segments are stored and immediately
+            # searchable via FTS/CONTAINS.  Worker is now free to pick up
+            # the next job while vectorization runs in the background.
+            await manager.mark_vectorizing(
+                job.job_id, segment_count, content_hash=content_hash,
+            )
             self._jobs_processed += 1
+
+            # Fire vectorization as a non-blocking background task
+            self._fire_vectorization_background(
+                space_impl, space_id, job.graph_id, output, job.job_id,
+            )
 
         except TimeoutError as te:
             self._jobs_failed += 1
@@ -341,7 +353,10 @@ class SegmentationWorker:
         doc_properties: dict,
         config,
     ) -> tuple:
-        """Run the segmentation pipeline. Returns (segment_count, vec_error_or_None)."""
+        """Run the segmentation pipeline. Returns (segment_count, output).
+
+        Does NOT trigger vectorization — caller is responsible for that.
+        """
         from vitalgraph.document import KGDocumentSegmentationProcessor
 
         tokenizer = self._get_tokenizer()
@@ -364,16 +379,11 @@ class SegmentationWorker:
             backend_impl, space_id, graph_id, output,
         )
 
-        # Schedule vectorization and await completion
-        vec_error = await self._schedule_vectorization(
-            space_impl, space_id, graph_id, output,
-        )
-
         logger.info(
             f"Segmented {document_uri}: {output.segment_count} segments "
             f"(method={output.method_uri})"
         )
-        return output.segment_count, vec_error
+        return output.segment_count, output
 
     # ------------------------------------------------------------------
     # Helpers (largely mirrored from KGDocumentsEndpoint)
@@ -684,45 +694,76 @@ class SegmentationWorker:
         if props.get("kGGraphURI"):
             obj.kGGraphURI = props["kGGraphURI"]
 
-    async def _schedule_vectorization(
-        self, space_impl, space_id: str, graph_id: str, output,
-    ) -> Optional[str]:
-        """Schedule vectorization for the segmentation output.
+    def _fire_vectorization_background(
+        self, space_impl, space_id: str, graph_id: str, output, job_id: int,
+    ) -> None:
+        """Fire vectorization as a non-blocking background task.
 
-        Returns None on success, or an error message string on failure.
+        When complete, transitions the job from 'vectorizing' to 'completed'.
+        On failure, still marks 'completed' (vectorization is non-fatal —
+        segments are already stored and searchable via FTS/CONTAINS).
         """
-        try:
-            backend_impl = getattr(space_impl, 'backend', None)
-            db_impl = getattr(backend_impl, 'db_impl', None) if backend_impl else None
-            if not db_impl:
-                msg = "No db_impl available for vectorization"
-                logger.warning(msg)
-                return msg
+        import asyncio
 
-            from vitalgraph.vectorization.auto_sync import schedule_sync
-            uris = [output.parent_copy_properties["URI"]]
-            for seg in output.segment_properties_list:
-                uris.append(seg["URI"])
-            task = schedule_sync(
-                db_impl=db_impl,
-                space_id=space_id,
-                subject_uris=uris,
-                graph_uri=graph_id,
-                operation="upsert",
-            )
-            if task is not None:
-                # Await the vectorization task to catch errors
-                try:
+        async def _do_vectorize():
+            try:
+                backend_impl = getattr(space_impl, 'backend', None)
+                db_impl = getattr(backend_impl, 'db_impl', None) if backend_impl else None
+                if not db_impl:
+                    logger.warning(
+                        "Job %d: no db_impl for vectorization, marking completed", job_id)
+                    await self._complete_vectorization(space_id, job_id, error=None)
+                    return
+
+                from vitalgraph.vectorization.auto_sync import schedule_sync
+                uris = [output.parent_copy_properties["URI"]]
+                for seg in output.segment_properties_list:
+                    uris.append(seg["URI"])
+
+                task = schedule_sync(
+                    db_impl=db_impl,
+                    space_id=space_id,
+                    subject_uris=uris,
+                    graph_uri=graph_id,
+                    operation="upsert",
+                )
+                if task is not None:
                     await task
-                    logger.info(f"Vectorization completed for {len(uris)} subjects")
-                except Exception as vec_err:
-                    msg = f"Vectorization task failed: {vec_err}"
-                    logger.error(msg, exc_info=True)
-                    return msg
-            else:
-                logger.info(f"Vectorization skipped for {len(uris)} subjects (no task created)")
-            return None
+                    logger.info(f"Job {job_id}: vectorization completed for {len(uris)} subjects")
+
+                await self._complete_vectorization(space_id, job_id, error=None)
+            except Exception as e:
+                error_msg = f"Vectorization task failed: {e}"
+                logger.error(f"Job {job_id}: {error_msg}", exc_info=True)
+                await self._complete_vectorization(space_id, job_id, error=error_msg)
+
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(
+                _do_vectorize(), name=f"vectorize_job:{job_id}",
+            )
+            # Swallow unhandled exceptions so they don't crash the worker
+            task.add_done_callback(lambda t: (
+                logger.error("vectorize_job:%d unhandled: %s", job_id, t.exception())
+                if t.exception() else None
+            ))
         except Exception as e:
-            msg = f"Could not trigger vectorization: {e}"
-            logger.error(msg, exc_info=True)
-            return msg
+            logger.error(f"Job {job_id}: could not fire vectorization task: {e}")
+
+    async def _complete_vectorization(
+        self, space_id: str, job_id: int, *, error: Optional[str],
+    ) -> None:
+        """Transition a job from 'vectorizing' to 'completed' (with or without error)."""
+        pool = await self._get_pool(space_id)
+        if not pool:
+            logger.error("Job %d: no pool to update vectorization status", job_id)
+            return
+        try:
+            async with pool.acquire() as conn:
+                manager = SegmentationJobManager(conn, space_id)
+                if error:
+                    await manager.vectorization_failed(job_id, error)
+                else:
+                    await manager.vectorization_complete(job_id)
+        except Exception as e:
+            logger.error(f"Job {job_id}: failed to update status after vectorization: {e}")

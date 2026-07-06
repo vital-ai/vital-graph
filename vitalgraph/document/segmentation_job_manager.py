@@ -31,7 +31,7 @@ class SegmentationJobDTO:
     space_id: str
     graph_id: str
     document_uri: str
-    status: str  # pending | in_progress | completed | failed
+    status: str  # pending | in_progress | vectorizing | completed | failed
     attempt_count: int = 0
     segment_count: Optional[int] = None
     segment_method_uri: Optional[str] = None
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS {table_name} (
 
 CREATE_INDEXES_SQL = [
     """CREATE INDEX IF NOT EXISTS {table_name}_status_idx
-       ON {table_name} (status, created_at) WHERE status IN ('pending', 'failed');""",
+       ON {table_name} (status, created_at) WHERE status IN ('pending', 'failed', 'vectorizing');""",
     """CREATE INDEX IF NOT EXISTS {table_name}_document_idx
        ON {table_name} (document_uri, created_at DESC);""",
     """CREATE INDEX IF NOT EXISTS {table_name}_space_idx
@@ -275,6 +275,52 @@ class SegmentationJobManager:
             """
             await self.conn.execute(sql, job_id, segment_count)
         logger.info(f"Completed job {job_id}: {segment_count} segments")
+
+    async def mark_vectorizing(
+        self, job_id: int, segment_count: int,
+        *, content_hash: Optional[str] = None,
+    ) -> None:
+        """Mark a job as 'vectorizing' — segmentation done, embeddings in progress."""
+        if content_hash:
+            sql = f"""
+                UPDATE {self._table}
+                SET status = 'vectorizing', segment_count = $2,
+                    content_hash = $3, updated_at = NOW()
+                WHERE job_id = $1
+            """
+            await self.conn.execute(sql, job_id, segment_count, content_hash)
+        else:
+            sql = f"""
+                UPDATE {self._table}
+                SET status = 'vectorizing', segment_count = $2, updated_at = NOW()
+                WHERE job_id = $1
+            """
+            await self.conn.execute(sql, job_id, segment_count)
+        logger.info(f"Job {job_id} → vectorizing ({segment_count} segments)")
+
+    async def vectorization_complete(self, job_id: int) -> None:
+        """Transition a 'vectorizing' job to 'completed'."""
+        sql = f"""
+            UPDATE {self._table}
+            SET status = 'completed', updated_at = NOW()
+            WHERE job_id = $1 AND status = 'vectorizing'
+        """
+        await self.conn.execute(sql, job_id)
+        logger.info(f"Job {job_id} → completed (vectorization done)")
+
+    async def vectorization_failed(self, job_id: int, error_message: str) -> None:
+        """Record vectorization failure but keep 'vectorizing' → 'completed' (non-fatal).
+
+        Vectorization failures are logged but don't fail the job since
+        segments are already stored and searchable via FTS/CONTAINS.
+        """
+        sql = f"""
+            UPDATE {self._table}
+            SET status = 'completed', error_message = $2, updated_at = NOW()
+            WHERE job_id = $1
+        """
+        await self.conn.execute(sql, job_id, error_message[:2000])
+        logger.warning(f"Job {job_id} → completed (vectorization failed: {error_message[:200]})")
 
     async def fail(self, job_id: int, error_message: str) -> None:
         """Mark a job as failed."""

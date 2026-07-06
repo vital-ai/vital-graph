@@ -172,9 +172,9 @@ const KGDocuments: React.FC = () => {
     if (documents.length > 0) fetchSegStatuses();
   }, [documents, fetchSegStatuses]);
 
-  // Auto-poll while any job is pending/in_progress
+  // Auto-poll while any job is pending/in_progress/vectorizing
   useEffect(() => {
-    const hasActive = Object.values(segStatusMap).some(s => s.status === 'pending' || s.status === 'in_progress');
+    const hasActive = Object.values(segStatusMap).some(s => s.status === 'pending' || s.status === 'in_progress' || s.status === 'vectorizing');
     if (hasActive) {
       pollRef.current = setInterval(fetchSegStatuses, 4000);
     } else if (pollRef.current) {
@@ -388,6 +388,7 @@ const KGDocuments: React.FC = () => {
                       <Badge
                         color={
                           segStatusMap[doc.uri].status === 'completed' ? 'success'
+                          : segStatusMap[doc.uri].status === 'vectorizing' ? 'success'
                           : segStatusMap[doc.uri].status === 'failed' ? 'failure'
                           : segStatusMap[doc.uri].status === 'in_progress' ? 'info'
                           : segStatusMap[doc.uri].status === 'pending' ? 'warning'
@@ -395,7 +396,12 @@ const KGDocuments: React.FC = () => {
                         }
                         size="xs"
                       >
-                        {segStatusMap[doc.uri].status === 'in_progress' ? 'Segmenting...' : `Seg: ${segStatusMap[doc.uri].status}`}
+                        {segStatusMap[doc.uri].status === 'pending' ? '⏳ Pending'
+                          : segStatusMap[doc.uri].status === 'in_progress' ? '🔄 Segmenting…'
+                          : segStatusMap[doc.uri].status === 'vectorizing' ? '✅🔄 Vectorizing…'
+                          : segStatusMap[doc.uri].status === 'completed' ? '✅ Ready'
+                          : segStatusMap[doc.uri].status === 'failed' ? '❌ Failed'
+                          : segStatusMap[doc.uri].status}
                       </Badge>
                     )}
                   </div>

@@ -1,5 +1,7 @@
 import { test, expect, request } from '@playwright/test';
 import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID, SEEDED_DOCUMENT } from '../seed-constants';
+import * as path from 'path';
+import * as fs from 'fs';
 
 /**
  * KG Documents CRUD — UI lifecycle tests.
@@ -15,26 +17,11 @@ const ENCODED_GRAPH = encodeURIComponent(GRAPH_ID);
 const TEST_DOC_HEADLINE = `E2E Upload Doc ${Date.now()}`;
 const BASE_URL = process.env.VG_TEST_URL || 'http://localhost:8002';
 
-// Markdown content with headings for heading-based segmentation.
-// Must stay under ~2.7KB to avoid the B-tree term index limit.
-// Uses Wikipedia-style content with multiple headings.
+// Use the actual Wikipedia coffee article (~59KB, many headings) so segmentation
+// takes long enough to observe all status transitions in the UI.
 const MARKDOWN_DOC_HEADLINE = `E2E Markdown Doc ${Date.now()}`;
-const MARKDOWN_CONTENT = `# Coffee
-
-**Coffee** is a beverage brewed from roasted ground coffee beans. Darkly colored and bitter, coffee has a stimulating effect on humans due to its caffeine content. Coffee production begins when the seeds from coffee cherries are separated to produce unroasted green coffee beans. The beans are roasted and then ground into fine particles.
-
-## Etymology
-
-The word coffee entered the English language in 1582 via the Dutch koffie, borrowed from the Ottoman Turkish kahve, borrowed from the Arabic qahwah. Medieval Arabic lexicons traditionally held that the etymology meant wine, given its distinctly dark color. The word most likely meant the dark one, referring to the brew or the bean.
-
-## History
-
-The earliest possible references to the coffee bean appear in al-Razi's 10th-century al-Hawi. By the late 15th century, coffee drinking was well established among Sufi communities in Yemen. Coffee was used by Sufi circles to stay awake for their religious rituals. By the 16th century, coffee had reached the rest of the Middle East and North Africa.
-
-## Cultivation
-
-The two most commonly grown coffee bean types are C. arabica and C. robusta. Coffee plants are cultivated in over 70 countries, primarily in the equatorial regions of the Americas, Southeast Asia, the Indian subcontinent, and Africa. Brazil was the leading grower in 2023, producing 31% of the world total.
-`;
+const WIKI_FILE = path.resolve(__dirname, '../../test_files/wikipedia/coffee.md');
+const MARKDOWN_CONTENT = fs.readFileSync(WIKI_FILE, 'utf-8');
 
 async function getAuthHeaders() {
   const ctx = await request.newContext({ baseURL: BASE_URL });
@@ -205,6 +192,96 @@ test.describe('KG Documents — Segmentation & Search', () => {
     if (markdownDocUri) await deleteDocument(markdownDocUri);
   });
 
+  // ─── Upload FIRST (before creating search mappings to prevent auto-seg) ───
+  test('upload markdown document for segmentation', async ({ page }) => {
+    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
+    await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="document-card"]').first()).toBeVisible({ timeout: 10_000 });
+
+    // Click Upload Document button
+    await page.locator('button', { hasText: 'Upload Document' }).click();
+    await expect(page.getByText('Upload Document').last()).toBeVisible({ timeout: 5_000 });
+
+    // Fill headline
+    await page.fill('#upload-headline', MARKDOWN_DOC_HEADLINE);
+
+    // Attach markdown file
+    const buffer = Buffer.from(MARKDOWN_CONTENT);
+    await page.locator('#upload-file').setInputFiles({
+      name: 'coffee_wikipedia.md',
+      mimeType: 'text/markdown',
+      buffer,
+    });
+
+    // Create
+    await page.locator('button', { hasText: 'Create Document' }).click();
+    await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
+  });
+
+  // ─── Segmentation lifecycle test (manual trigger, no auto-seg) ────────────
+  test('trigger segmentation and verify status transitions', async ({ page }) => {
+    test.setTimeout(90_000); // segmentation + vectorization can take up to ~60s
+
+    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
+    await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
+
+    // Navigate to detail
+    await page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE }).click();
+    await expect(page.locator('[data-testid="kgdocument-detail-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // No segmentation status should exist yet
+    await expect(page.getByText('No segmentation jobs found')).toBeVisible({ timeout: 5_000 });
+
+    // Click Segment button to start the lifecycle
+    await page.locator('button', { hasText: 'Segment' }).click();
+
+    // ─── Stage 1: pending or in_progress ───────────────────────────────
+    // The job should appear as pending/segmenting. With small docs, this
+    // stage may be very brief — also accept vectorizing if it transitions
+    // before the first UI poll catches it.
+    // Use exact badge text (with emoji) to avoid matching document content.
+    await expect(
+      page.getByText('⏳ Pending', { exact: true })
+        .or(page.getByText('🔄 Segmenting…', { exact: true }))
+        .or(page.getByText('✅🔄 Segmented — vectorizing…', { exact: true }))
+    ).toBeVisible({ timeout: 15_000 });
+
+    // ─── Stage 2: vectorizing ──────────────────────────────────────────
+    // After segmentation finishes, segments are stored and the job
+    // transitions to "vectorizing". Badge: "✅🔄 Segmented — vectorizing…"
+    // This confirms segments are available before vectorization completes.
+    await expect(
+      page.getByText('✅🔄 Segmented — vectorizing…', { exact: true })
+        .or(page.getByText('✅ Ready', { exact: true }))
+    ).toBeVisible({ timeout: 60_000 });
+
+    // Segments should be loaded in the UI (auto-refresh on vectorizing/completed).
+    // The Wikipedia coffee article has 41 headings → many segments.
+    await expect(page.getByText(/[1-9]\d+ segments/)).toBeVisible({ timeout: 15_000 });
+
+    // Verify actual segment entries are rendered (type label + heading from article)
+    await expect(page.locator('text=Markdown Section').first()).toBeVisible({ timeout: 10_000 });
+
+    // ─── Stage 3: completed ────────────────────────────────────────────
+    // Vectorization finishes → badge shows "✅ Ready"
+    await expect(page.getByText('✅ Ready', { exact: true })).toBeVisible({ timeout: 30_000 });
+
+    // "Segmented — vectorizing…" should no longer be visible (transitioned away)
+    await expect(page.getByText('✅🔄 Segmented — vectorizing…', { exact: true })).not.toBeVisible({ timeout: 5_000 });
+  });
+
+  test('list page shows "Ready" badge after segmentation completes', async ({ page }) => {
+    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
+    await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
+
+    // After the lifecycle completes (previous test), the list page should
+    // show "✅ Ready" on the document card (status == completed)
+    const card = page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE });
+    await expect(card.getByText('✅ Ready', { exact: true })).toBeVisible({ timeout: 15_000 });
+  });
+
+  // ─── NOW create vector index + mapping (segments already exist) ───────────
   test('create ONNX vector index and search mapping', async () => {
     const { ctx, headers } = await getAuthHeaders();
     const jsonHeaders = { ...headers, 'Content-Type': 'application/json' };
@@ -264,57 +341,6 @@ test.describe('KG Documents — Segmentation & Search', () => {
     }
 
     await ctx.dispose();
-  });
-
-  test('upload markdown document for segmentation', async ({ page }) => {
-    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
-    await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('[data-testid="document-card"]').first()).toBeVisible({ timeout: 10_000 });
-
-    // Click Upload Document button
-    await page.locator('button', { hasText: 'Upload Document' }).click();
-    await expect(page.getByText('Upload Document').last()).toBeVisible({ timeout: 5_000 });
-
-    // Fill headline
-    await page.fill('#upload-headline', MARKDOWN_DOC_HEADLINE);
-
-    // Attach markdown file
-    const buffer = Buffer.from(MARKDOWN_CONTENT);
-    await page.locator('#upload-file').setInputFiles({
-      name: 'coffee_wikipedia.md',
-      mimeType: 'text/markdown',
-      buffer,
-    });
-
-    // Create
-    await page.locator('button', { hasText: 'Create Document' }).click();
-    await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
-  });
-
-  test('trigger segmentation and poll until completed', async ({ page }) => {
-    test.setTimeout(90_000); // segmentation + vectorization can take up to ~60s
-
-    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
-    await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
-
-    // Navigate to detail
-    await page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE }).click();
-    await expect(page.locator('[data-testid="kgdocument-detail-page"]')).toBeVisible({ timeout: 10_000 });
-
-    // Click Segment button
-    await page.locator('button', { hasText: 'Segment' }).click();
-
-    // Poll: wait for the "Completed" badge to appear (segmentation + vectorization)
-    await expect(page.getByText('Completed')).toBeVisible({ timeout: 60_000 });
-
-    // Segments should auto-load after completion. Wait for segment count text.
-    // The heading-based split of 4 sections (# + 3x##) should produce multiple segments.
-    // Look for the segment count indicator "N segment(s)" showing at least 2.
-    await expect(page.getByText(/[2-9] segments|[1-9]\d+ segments/)).toBeVisible({ timeout: 15_000 });
-
-    // Verify actual segment entries are rendered in the Segments section
-    // (validates the SPARQL edge-traversal query that populates the list)
-    await expect(page.locator('text=Markdown Section').first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('semantic search returns the segmented document', async ({ page }) => {

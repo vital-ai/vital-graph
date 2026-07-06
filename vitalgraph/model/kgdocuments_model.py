@@ -113,7 +113,7 @@ class SegmentationJobStatusResponse(BaseModel):
 
     job_id: int
     document_uri: str
-    status: str  # pending | in_progress | completed | failed | cancelled
+    status: str  # pending | in_progress | vectorizing | completed | failed | cancelled
     attempt_count: int = 0
     segment_count: Optional[int] = None
     segment_method_uri: Optional[str] = None
@@ -140,6 +140,7 @@ class SegmentationStatusSummaryResponse(BaseModel):
 
     pending: int = 0
     in_progress: int = 0
+    vectorizing: int = 0
     completed: int = 0
     failed: int = 0
     cancelled: int = 0

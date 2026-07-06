@@ -769,6 +769,7 @@ class SegmentationStatusClientResponse(VitalGraphResponse):
     """Response for segmentation status queries."""
     pending: int = Field(0, description="Number of pending jobs")
     in_progress: int = Field(0, description="Number of in-progress jobs")
+    vectorizing: int = Field(0, description="Number of jobs with segmentation done, vectorization in progress")
     completed: int = Field(0, description="Number of completed jobs")
     failed: int = Field(0, description="Number of failed jobs")
     cancelled: int = Field(0, description="Number of cancelled jobs")

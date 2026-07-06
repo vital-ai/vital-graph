@@ -62,19 +62,23 @@ function methodLabel(uri: string) {
 
 interface SegmentationStatus {
   job_id: number;
-  status: string;  // pending | in_progress | completed | failed | cancelled
+  status: string;  // pending | in_progress | vectorizing | completed | failed | cancelled
   attempt_count: number;
   segment_count: number | null;
+  segment_method_uri: string | null;
   error_message: string | null;
   updated_at: string | null;
 }
 
-function segStatusBadge(status: string) {
+function segStatusBadge(status: string, errorMessage?: string | null) {
   switch (status) {
-    case 'pending':     return <Badge color="warning" size="xs">Pending</Badge>;
-    case 'in_progress': return <Badge color="info" size="xs">In Progress</Badge>;
-    case 'completed':   return <Badge color="success" size="xs">Completed</Badge>;
-    case 'failed':      return <Badge color="failure" size="xs">Failed</Badge>;
+    case 'pending':     return <Badge color="warning" size="xs">⏳ Pending</Badge>;
+    case 'in_progress': return <Badge color="info" size="xs">🔄 Segmenting…</Badge>;
+    case 'vectorizing': return <Badge color="success" size="xs">✅🔄 Segmented — vectorizing…</Badge>;
+    case 'completed':
+      if (errorMessage) return <Badge color="warning" size="xs">⚠️ Ready (vector search unavailable)</Badge>;
+      return <Badge color="success" size="xs">✅ Ready</Badge>;
+    case 'failed':      return <Badge color="failure" size="xs">❌ Failed</Badge>;
     case 'cancelled':   return <Badge color="gray" size="xs">Cancelled</Badge>;
     default:            return <Badge color="gray" size="xs">{status}</Badge>;
   }
@@ -251,8 +255,8 @@ const KGDocumentDetail: React.FC = () => {
   }, [hookData.object, isSegment, fetchSegStatus]);
 
   useEffect(() => {
-    // Poll every 3s while pending or in_progress
-    if (segStatus && (segStatus.status === 'pending' || segStatus.status === 'in_progress')) {
+    // Poll every 3s while pending, in_progress, or vectorizing
+    if (segStatus && (segStatus.status === 'pending' || segStatus.status === 'in_progress' || segStatus.status === 'vectorizing')) {
       pollRef.current = setInterval(fetchSegStatus, 3000);
     } else if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -263,9 +267,9 @@ const KGDocumentDetail: React.FC = () => {
     };
   }, [segStatus, fetchSegStatus]);
 
-  // When segmentation completes, refresh segments list
+  // When segmentation completes (or enters vectorizing — segments available), refresh segments list
   useEffect(() => {
-    if (segStatus?.status === 'completed') {
+    if (segStatus?.status === 'completed' || segStatus?.status === 'vectorizing') {
       fetchSegments();
     }
   }, [segStatus?.status, fetchSegments]);
@@ -343,7 +347,7 @@ const KGDocumentDetail: React.FC = () => {
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-lg font-bold text-gray-900 dark:text-white">Segmentation</h2>
                 <div className="flex items-center gap-2">
-                  {segStatus && segStatusBadge(segStatus.status)}
+                  {segStatus && segStatusBadge(segStatus.status, segStatus.error_message)}
                   {(!segStatus || segStatus.status === 'completed' || segStatus.status === 'failed' || segStatus.status === 'cancelled') && (
                     <Button
                       size="xs"

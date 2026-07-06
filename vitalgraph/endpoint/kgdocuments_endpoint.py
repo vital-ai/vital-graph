@@ -348,6 +348,7 @@ class KGDocumentsEndpoint:
             return SegmentationStatusSummaryResponse(
                 pending=summary.get("pending", 0),
                 in_progress=summary.get("in_progress", 0),
+                vectorizing=summary.get("vectorizing", 0),
                 completed=summary.get("completed", 0),
                 failed=summary.get("failed", 0),
                 cancelled=summary.get("cancelled", 0),

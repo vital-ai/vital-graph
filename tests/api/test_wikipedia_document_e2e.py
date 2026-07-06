@@ -376,6 +376,102 @@ class TestWikipediaVectorization:
         for v in wiki_env["vectors"].vectors[:10]:
             assert len(v.embedding) == dim, "Inconsistent embedding dimensions"
 
+    async def test_job_status_completed(self, vg_client, wiki_env):
+        """All jobs should reach 'completed' status after vectorization.
+
+        This verifies the non-blocking vectorization lifecycle:
+        pending → in_progress → vectorizing → completed.
+        If vectors aren't ready, that means the background vectorization
+        task failed to complete — which is the failure this test catches.
+        """
+        assert wiki_env["vectors_ready"], (
+            "Vectors not ready — background vectorization task did not complete"
+        )
+
+        status_resp = await vg_client.kgdocuments.get_segmentation_status(
+            space_id=wiki_env["space_id"],
+        )
+        # All jobs should have reached 'completed'
+        for job in status_resp.jobs:
+            assert job["status"] == "completed", (
+                f"Job {job.get('job_id')} ({job.get('document_uri')}) has status "
+                f"'{job['status']}', expected 'completed'"
+            )
+        # Summary counters should reflect completion
+        assert status_resp.vectorizing == 0, (
+            f"Expected 0 vectorizing jobs, got {status_resp.vectorizing}"
+        )
+        assert status_resp.completed >= len(wiki_env["doc_uris"]), (
+            f"Expected >= {len(wiki_env['doc_uris'])} completed jobs, "
+            f"got {status_resp.completed}"
+        )
+
+    async def test_status_response_schema(self, vg_client, wiki_env):
+        """Validate the full segmentation status response structure.
+
+        The API should return:
+        - Space-level summary counters: pending, in_progress, vectorizing, completed, failed
+        - Per-job details: job_id, document_uri, status, segment_count,
+          segment_method_uri, error_message, created_at, updated_at
+        """
+        status_resp = await vg_client.kgdocuments.get_segmentation_status(
+            space_id=wiki_env["space_id"],
+        )
+
+        # Space-level summary counters must all be present
+        for counter in ("pending", "in_progress", "vectorizing", "completed", "failed"):
+            value = getattr(status_resp, counter, None)
+            assert value is not None, f"Missing summary counter: {counter}"
+            assert isinstance(value, int), f"Counter '{counter}' should be int, got {type(value)}"
+            assert value >= 0, f"Counter '{counter}' should be >= 0, got {value}"
+
+        # Total across counters should equal number of jobs
+        total_counters = (
+            status_resp.pending + status_resp.in_progress +
+            status_resp.vectorizing + status_resp.completed + status_resp.failed
+        )
+        assert total_counters == len(status_resp.jobs), (
+            f"Summary counters total ({total_counters}) != job count ({len(status_resp.jobs)})"
+        )
+
+    async def test_job_fields_complete(self, vg_client, wiki_env):
+        """Each job record should contain all expected fields."""
+        status_resp = await vg_client.kgdocuments.get_segmentation_status(
+            space_id=wiki_env["space_id"],
+        )
+        assert len(status_resp.jobs) > 0, "No jobs returned"
+
+        required_fields = {
+            "job_id", "document_uri", "status", "segment_count",
+            "segment_method_uri", "error_message", "created_at", "updated_at",
+        }
+        for job in status_resp.jobs:
+            missing = required_fields - set(job.keys())
+            assert not missing, (
+                f"Job {job.get('job_id')} missing fields: {missing}"
+            )
+
+    async def test_completed_jobs_have_segments(self, vg_client, wiki_env):
+        """Completed jobs must report a positive segment_count and method URI."""
+        assert wiki_env["vectors_ready"]
+
+        status_resp = await vg_client.kgdocuments.get_segmentation_status(
+            space_id=wiki_env["space_id"],
+        )
+        for job in status_resp.jobs:
+            if job["status"] != "completed":
+                continue
+            assert job["segment_count"] is not None and job["segment_count"] > 0, (
+                f"Completed job {job['job_id']} has no segment_count"
+            )
+            assert job["segment_method_uri"] is not None, (
+                f"Completed job {job['job_id']} has no segment_method_uri"
+            )
+            # Completed without error means vectorization succeeded
+            assert job["error_message"] is None, (
+                f"Completed job {job['job_id']} has unexpected error: {job['error_message']}"
+            )
+
 
 # ===========================================================================
 # Test: KGDocuments Retrieval

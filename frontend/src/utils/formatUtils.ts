@@ -65,8 +65,8 @@ export const formatRelativeTime = (dateString: string | undefined | null): strin
 /** Map a job status string to a Flowbite badge color */
 export const getJobStatusColor = (status: string): string => {
   switch (status) {
-    case 'completed': return 'success';
-    case 'running': case 'processing': return 'info';
+    case 'completed': case 'vectorizing': return 'success';
+    case 'running': case 'processing': case 'in_progress': return 'info';
     case 'created': case 'pending': return 'warning';
     case 'failed': return 'failure';
     case 'cancelled': case 'canceled': return 'gray';
