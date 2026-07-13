@@ -51,9 +51,11 @@ const KGTypes: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [searchMode, setSearchMode] = useState<'client' | 'keyword' | 'fts' | 'vector' | 'hybrid'>('client');
+  const [searchMode, setSearchMode] = useState<'keyword' | 'fts' | 'vector' | 'hybrid'>('keyword');
   const [searchResults, setSearchResults] = useState<KGType[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchTotalCount, setSearchTotalCount] = useState(0);
+  const [committedSearch, setCommittedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
@@ -66,6 +68,7 @@ const KGTypes: React.FC = () => {
   // Fetch KG types — re-fetches when tab, space, page, or search changes
   const fetchKGTypes = useCallback(async () => {
     if (!selectedSpace) { setKGTypes([]); setTotalCount(0); return; }
+    if (committedSearch.trim()) return; // Skip list fetch when search is active
     try {
       setLoading(true);
       setError(null);
@@ -105,23 +108,26 @@ const KGTypes: React.FC = () => {
       setKGTypes([]);
       setTotalCount(0);
     } finally { setLoading(false); }
-  }, [selectedSpace, activeTabDef.type_uri, currentPage, itemsPerPage]);
+  }, [selectedSpace, activeTabDef.type_uri, currentPage, itemsPerPage, committedSearch]);
 
   useEffect(() => { fetchKGTypes(); }, [fetchKGTypes]);
 
-  // Server-side search
+  // Server-side search with pagination
   const executeSearch = useCallback(async () => {
-    if (!selectedSpace || !searchTerm.trim() || searchMode === 'client') {
+    if (!selectedSpace || !committedSearch.trim()) {
       setSearchResults(null);
+      setSearchTotalCount(0);
       return;
     }
     try {
       setSearching(true);
-      const resp = await apiService.searchKGTypes(selectedSpace, searchTerm, {
+      const resp = await apiService.searchKGTypes(selectedSpace, committedSearch, {
         search_mode: searchMode,
         type: activeTab !== 'all' ? activeTab : undefined,
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
       });
-      const results = (resp.results || []).map((r: Record<string, unknown>) => ({
+      const results = (resp.types || []).map((r: Record<string, unknown>) => ({
         uri: String(r.uri || ''),
         type_name: String(r.name || '') || shortenUri(String(r.uri || '')),
         type_uri: String(r.vitaltype || r.type_uri || ''),
@@ -129,42 +135,48 @@ const KGTypes: React.FC = () => {
         score: r.score as number | undefined,
       }));
       setSearchResults(results);
+      setSearchTotalCount(resp.total_count ?? results.length);
     } catch {
       setError('Search failed.');
       setSearchResults(null);
+      setSearchTotalCount(0);
     } finally { setSearching(false); }
-  }, [selectedSpace, searchTerm, searchMode, activeTab]);
+  }, [selectedSpace, committedSearch, searchMode, activeTab, itemsPerPage, currentPage]);
 
-  // Trigger server search on Enter key or mode change
-  useEffect(() => {
-    if (searchMode !== 'client' && searchTerm.trim()) {
-      const timer = setTimeout(executeSearch, 400);
-      return () => clearTimeout(timer);
-    } else {
-      setSearchResults(null);
-    }
-  }, [searchTerm, searchMode, executeSearch]);
+  // Auto-execute search when committedSearch or currentPage changes
+  useEffect(() => { executeSearch(); }, [executeSearch]);
 
-  // Client-side search filter (on top of server-side type_uri filter)
-  const clientFiltered = kgTypes.filter(t => {
-    if (!searchTerm || searchMode !== 'client') return true;
-    const q = searchTerm.toLowerCase();
-    return t.type_name.toLowerCase().includes(q) ||
-           t.uri.toLowerCase().includes(q) ||
-           t.type_uri.toLowerCase().includes(q) ||
-           t.description.toLowerCase().includes(q);
-  });
+  const handleSearch = useCallback(() => {
+    setCommittedSearch(searchTerm);
+    setCurrentPage(1);
+  }, [searchTerm]);
 
-  const filtered = searchResults ?? clientFiltered;
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSearch();
+  };
 
-  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
+  const handleClearSearch = () => {
+    setSearchTerm('');
+    setCommittedSearch('');
+    setSearchResults(null);
+    setSearchTotalCount(0);
+    setCurrentPage(1);
+  };
+
+  const isSearchActive = searchResults !== null;
+  const filtered = isSearchActive ? searchResults : kgTypes;
+
+  const displayTotalCount = isSearchActive ? searchTotalCount : totalCount;
+  const totalPages = Math.max(1, Math.ceil(displayTotalCount / itemsPerPage));
   const hasSelection = true;
 
   const handleTabChange = (tab: TabKey) => {
     setActiveTab(tab);
     setCurrentPage(1);
     setSearchTerm('');
+    setCommittedSearch('');
     setSearchResults(null);
+    setSearchTotalCount(0);
   };
 
   const handleDelete = async (t: KGType) => {
@@ -190,7 +202,7 @@ const KGTypes: React.FC = () => {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white" data-testid="kgtypes-title">KG Types</h1>
           </div>
           {hasSelection && !loading && (
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{totalCount} type{totalCount !== 1 ? 's' : ''}</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">{displayTotalCount} type{displayTotalCount !== 1 ? 's' : ''}</p>
           )}
         </div>
         {hasSelection && (
@@ -229,15 +241,25 @@ const KGTypes: React.FC = () => {
       {/* Search + mode + page size */}
       {hasSelection && (
         <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1">
-            <TextInput icon={HiSearch}
-              placeholder={searchMode === 'client' ? 'Filter types...' : `Search types (${searchMode})...`}
-              value={searchTerm}
-              onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} />
+          <div className="flex-1 flex gap-2">
+            <div className="flex-1">
+              <TextInput icon={HiSearch}
+                placeholder={`Search types (${searchMode})...`}
+                value={searchTerm}
+                onKeyDown={handleSearchKeyDown}
+                onChange={(e) => setSearchTerm(e.target.value)} />
+            </div>
+            <Button size="sm" color="blue" onClick={handleSearch} disabled={!searchTerm.trim() || searching}>
+              <HiSearch className="h-4 w-4" />
+            </Button>
+            {isSearchActive && (
+              <Button size="sm" color="light" onClick={handleClearSearch}>
+                Clear
+              </Button>
+            )}
           </div>
           <div className="w-36 shrink-0">
             <Select value={searchMode} onChange={(e) => { setSearchMode(e.target.value as typeof searchMode); setCurrentPage(1); }}>
-              <option value="client">Client filter</option>
               <option value="keyword">Keyword</option>
               <option value="fts">Full-text</option>
               <option value="vector">Vector</option>
@@ -266,7 +288,7 @@ const KGTypes: React.FC = () => {
       {/* Search result count */}
       {searchResults && !searching && (
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &quot;{searchTerm}&quot; ({searchMode})
+          {searchTotalCount} result{searchTotalCount !== 1 ? 's' : ''} for &quot;{committedSearch}&quot; ({searchMode})
         </p>
       )}
 

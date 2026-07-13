@@ -47,7 +47,7 @@ const KGEntities: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
   const [searchTerm, setSearchTerm] = useState('');
-  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [committedSearch, setCommittedSearch] = useState('');
   const [deletingEntity, setDeletingEntity] = useState<KGEntity | null>(null);
   const [sortBy, setSortBy] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -83,10 +83,9 @@ const KGEntities: React.FC = () => {
     }
   }, [selectedSpace, selectedGraph, navigate, spaceId]);
 
-  // Debounce search
-  useEffect(() => {
-    const timer = setTimeout(() => { setDebouncedSearch(searchTerm); setCurrentPage(1); }, 400);
-    return () => clearTimeout(timer);
+  const handleSearch = useCallback(() => {
+    setCommittedSearch(searchTerm);
+    setCurrentPage(1);
   }, [searchTerm]);
 
   const fetchEntities = useCallback(async () => {
@@ -97,7 +96,7 @@ const KGEntities: React.FC = () => {
       const data = await apiService.getEntities(selectedSpace, selectedGraph, {
         page_size: itemsPerPage,
         offset: (currentPage - 1) * itemsPerPage,
-        search: debouncedSearch || undefined,
+        search: committedSearch || undefined,
         entity_type_uri: entityTypeFilter || undefined,
         sort_by: sortBy || undefined,
         sort_order: sortBy ? sortOrder : undefined,
@@ -119,7 +118,7 @@ const KGEntities: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, entityTypeFilter, sortBy, sortOrder]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, committedSearch, entityTypeFilter, sortBy, sortOrder]);
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 
@@ -213,13 +212,16 @@ const KGEntities: React.FC = () => {
       {/* Search + filters */}
       {hasSelection && (
         <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1">
+          <div className="flex-1 flex gap-2">
             <TextInput
+              className="flex-1"
               icon={HiSearch}
               placeholder="Search entities..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
             />
+            <Button size="sm" color="blue" onClick={handleSearch}>Search</Button>
           </div>
           <div className="w-44 flex-shrink-0">
             <TextInput
@@ -271,9 +273,9 @@ const KGEntities: React.FC = () => {
       {hasSelection && !loading && entities.length === 0 && !error && (
         <div className="text-center py-16 text-gray-500 dark:text-gray-400">
           <HiCube className="w-16 h-16 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          {debouncedSearch ? (
+          {committedSearch ? (
             <>
-              <p className="text-lg font-medium">No results for &quot;{debouncedSearch}&quot;</p>
+              <p className="text-lg font-medium">No results for &quot;{committedSearch}&quot;</p>
               <p className="text-sm mt-1">Try a different search term</p>
             </>
           ) : (

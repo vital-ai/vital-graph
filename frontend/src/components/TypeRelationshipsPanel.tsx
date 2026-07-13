@@ -78,7 +78,7 @@ interface RelSectionProps {
 }
 
 const RelSection: React.FC<RelSectionProps> = ({
-  title, types, spaceId, emptyLabel, edgeTypeForAdd, onAdd, onDelete,
+  title, types, emptyLabel, edgeTypeForAdd, onAdd, onDelete,
 }) => {
   const navigate = useNavigate();
   const [showAdd, setShowAdd] = useState(false);
@@ -151,7 +151,7 @@ const RelSection: React.FC<RelSectionProps> = ({
               bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700
               text-gray-700 dark:text-gray-300 group">
               <button
-                onClick={() => navigate(`/space/${spaceId}/kg-types/${encodeURIComponent(t.uri)}?mode=view`)}
+                onClick={() => navigate(`/kg-types/${encodeURIComponent(t.uri)}?mode=view`)}
                 className="inline-flex items-center gap-1.5 hover:text-blue-500 transition-colors"
                 title={t.uri}
               >

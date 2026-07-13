@@ -1,20 +1,24 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { HiCube } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
 import { vgClient } from '../services/ApiService';
 import TypeRelationshipsPanel from '../components/TypeRelationshipsPanel';
 import TypeDocumentationPanel from '../components/TypeDocumentationPanel';
+import { VisualizeInGraphButton } from '../components/VisualizeInGraphButton';
 
 const VITALTYPE_PREDICATE = 'http://vital.ai/ontology/vital-core#vitaltype';
 
 const RELATIONSHIP_TYPES = new Set([
   'http://vital.ai/ontology/haley-ai-kg#KGFrameType',
+  'http://vital.ai/ontology/haley-ai-kg#KGSlotType',
   'http://vital.ai/ontology/haley-ai-kg#KGEntityType',
   'http://vital.ai/ontology/haley-ai-kg#KGRelationType',
 ]);
 
 const KGTypeDetail: React.FC = () => {
+  const navigate = useNavigate();
   // KG Types API no longer takes graphId — wrap to match CrudOps interface
   const kgTypesCrud = {
     get: (spaceId: string, _graphId: string, uri: string) =>
@@ -105,6 +109,14 @@ const KGTypeDetail: React.FC = () => {
   return (
     <div data-testid="kgtype-detail-page">
       <ObjectDetailRenderer {...hookData} config={config} />
+
+      {hookData.spaceId && hookData.object?.object_uri && !hookData.isCreateMode && (
+        <VisualizeInGraphButton
+          spaceId={hookData.spaceId || 'sp_kg_types'}
+          entityUri={hookData.object.object_uri}
+          navigate={navigate}
+        />
+      )}
 
       {showRelationships && (
         <div className="mt-6">

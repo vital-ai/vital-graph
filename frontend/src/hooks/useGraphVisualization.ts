@@ -1,34 +1,10 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import ApiService from '../services/ApiService';
+import type { DataGraph, ViewGraph, SearchResult } from './graphTypes';
+import { createEmptyDataGraph } from './graphTypes';
+import { buildViewGraph } from './buildViewGraph';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export interface GraphNode {
-  id: string;
-  label: string;
-  type?: string;
-  description?: string;
-  expanded?: boolean;
-}
-
-export interface GraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  label: string;
-}
-
-export interface GraphState {
-  nodes: Map<string, GraphNode>;
-  edges: Map<string, GraphEdge>;
-}
-
-export interface SearchResult {
-  uri: string;
-  name: string;
-}
+export type { SearchResult };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,13 +21,47 @@ const HALEY_KG_DESC = 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription
 const HALEY_SLOT_TYPE = 'http://vital.ai/ontology/haley-ai-kg#hasKGSlotType';
 const HALEY_SLOT_VALUE = 'http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue';
 const HALEY_ENTITY_TYPE_DESC = 'http://vital.ai/ontology/haley-ai-kg#hasKGEntityTypeDescription';
+const HALEY_KG_RELATION = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGRelation';
+const HALEY_REL_TYPE_DESC = 'http://vital.ai/ontology/haley-ai-kg#hasKGRelationTypeDescription';
+const HALEY_KG_SLOT = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot';
+const HALEY_ENTITY_KG_FRAME = 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame';
+const HALEY_DATETIME_SLOT_VALUE = 'http://vital.ai/ontology/haley-ai-kg#hasDateTimeSlotValue';
+const HALEY_FRAME_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasFrameGraphURI';
+const HALEY_KG_GRAPH_URI = 'http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI';
+
+const MAX_VISUALIZATION_ITEMS = 10000;
 
 // ---------------------------------------------------------------------------
 // SPARQL helpers
 // ---------------------------------------------------------------------------
 
-function buildSearchQuery(term: string): string {
+const SP_KG_TYPES = 'sp_kg_types';
+
+const KGTYPE_CLASSES = [
+  'http://vital.ai/ontology/haley-ai-kg#KGType',
+  'http://vital.ai/ontology/haley-ai-kg#KGEntityType',
+  'http://vital.ai/ontology/haley-ai-kg#KGFrameType',
+  'http://vital.ai/ontology/haley-ai-kg#KGRelationType',
+  'http://vital.ai/ontology/haley-ai-kg#KGSlotType',
+  'http://vital.ai/ontology/haley-ai-kg#KGSlotRoleType',
+  'http://vital.ai/ontology/haley-ai-kg#KGEntityProtoType',
+  'http://vital.ai/ontology/haley-ai-kg#KGFrameProtoType',
+  'http://vital.ai/ontology/haley-ai-kg#KGSlotProtoType',
+];
+
+function buildSearchQuery(term: string, spaceId: string): string {
   const escaped = term.replace(/"/g, '\\"');
+  if (spaceId === SP_KG_TYPES) {
+    const values = KGTYPE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `
+      SELECT ?entity ?name ?entityTypeDesc WHERE {
+        VALUES ?entityTypeDesc { ${values} }
+        ?entity <${RDF_TYPE}> ?entityTypeDesc .
+        ?entity <${VITAL_NAME}> ?name .
+        FILTER(REGEX(?name, "${escaped}", "i"))
+      } LIMIT 50
+    `;
+  }
   return `
     SELECT ?entity ?name WHERE {
       ?entity <${RDF_TYPE}> <${HALEY_KG_ENTITY}> .
@@ -61,46 +71,212 @@ function buildSearchQuery(term: string): string {
   `;
 }
 
-function buildExpandQuery(entityUri: string): string {
+const VITAL_TYPE = 'http://vital.ai/ontology/vital-core#vitaltype';
+
+const KGTYPE_EDGE_CLASSES = [
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasSubKGFrameType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasPartOfKGFrameType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityTypePartOfKGFrameType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasSubKGEntityType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasSubKGType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasSameAsKGType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGRelationType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasOutgoingKGRelationType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasIncomingKGRelationType',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGAnnotation',
+  'http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlotType',
+];
+
+function buildExpandQuery(entityUri: string, spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    const edgeValues = KGTYPE_EDGE_CLASSES.map(c => `<${c}>`).join(' ');
+    const typeValues = KGTYPE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `
+      SELECT ?srcEntity ?srcName ?srcType ?dstEntity ?dstName ?dstType ?frame ?relationType WHERE {
+        {
+          BIND(<${entityUri}> AS ?srcEntity)
+          ?frame <${VITAL_TYPE}> ?relationType .
+          ?frame <${VITAL_EDGE_SRC}> ?srcEntity .
+          ?frame <${VITAL_EDGE_DST}> ?dstEntity .
+          ?dstEntity <${VITAL_NAME}> ?dstName .
+          ?srcEntity <${VITAL_NAME}> ?srcName .
+          VALUES ?relationType { ${edgeValues} }
+          ?srcEntity <${RDF_TYPE}> ?srcType . VALUES ?srcType { ${typeValues} }
+          ?dstEntity <${RDF_TYPE}> ?dstType . VALUES ?dstType { ${typeValues} }
+        }
+        UNION
+        {
+          BIND(<${entityUri}> AS ?dstEntity)
+          ?frame <${VITAL_TYPE}> ?relationType .
+          ?frame <${VITAL_EDGE_SRC}> ?srcEntity .
+          ?frame <${VITAL_EDGE_DST}> ?dstEntity .
+          ?srcEntity <${VITAL_NAME}> ?srcName .
+          ?dstEntity <${VITAL_NAME}> ?dstName .
+          VALUES ?relationType { ${edgeValues} }
+          ?srcEntity <${RDF_TYPE}> ?srcType . VALUES ?srcType { ${typeValues} }
+          ?dstEntity <${RDF_TYPE}> ?dstType . VALUES ?dstType { ${typeValues} }
+        }
+      }
+    `;
+  }
   return `
     SELECT ?srcEntity ?srcName ?dstEntity ?dstName ?frame ?relationType WHERE {
       {
         BIND(<${entityUri}> AS ?srcEntity)
-        ?srcSlot <${HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
-        ?srcSlot <${HALEY_SLOT_VALUE}> ?srcEntity .
-        ?srcEdge <${VITAL_EDGE_SRC}> ?frame .
-        ?srcEdge <${VITAL_EDGE_DST}> ?srcSlot .
-
-        ?frame <${RDF_TYPE}> <${HALEY_KG_FRAME}> .
+        ?mySlot <${HALEY_SLOT_VALUE}> ?srcEntity .
+        ?mySlot <${HALEY_FRAME_GRAPH_URI}> ?frame .
         ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
-
-        ?dstSlot <${HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
-        ?dstSlot <${HALEY_SLOT_VALUE}> ?dstEntity .
-        ?dstEdge <${VITAL_EDGE_SRC}> ?frame .
-        ?dstEdge <${VITAL_EDGE_DST}> ?dstSlot .
-
+        ?otherSlot <${HALEY_FRAME_GRAPH_URI}> ?frame .
+        ?otherSlot <${HALEY_SLOT_VALUE}> ?dstEntity .
+        FILTER(?otherSlot != ?mySlot)
+        ?srcEntity <${VITAL_NAME}> ?srcName .
+        ?dstEntity <${VITAL_NAME}> ?dstName .
+      }
+      UNION
+      {
+        BIND(<${entityUri}> AS ?srcEntity)
+        ?frame <${HALEY_KG_GRAPH_URI}> ?srcEntity .
+        ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
+        ?slot <${HALEY_FRAME_GRAPH_URI}> ?frame .
+        ?slot <${HALEY_SLOT_VALUE}> ?dstEntity .
+        FILTER(?dstEntity != ?srcEntity)
+        ?srcEntity <${VITAL_NAME}> ?srcName .
+        ?dstEntity <${VITAL_NAME}> ?dstName .
+      }
+      UNION
+      {
+        BIND(<${entityUri}> AS ?srcEntity)
+        ?rel <${VITAL_EDGE_SRC}> ?srcEntity .
+        ?rel <${VITAL_EDGE_DST}> ?dstEntity .
+        ?rel <${HALEY_REL_TYPE_DESC}> ?relationType .
+        BIND(?rel AS ?frame)
         ?srcEntity <${VITAL_NAME}> ?srcName .
         ?dstEntity <${VITAL_NAME}> ?dstName .
       }
       UNION
       {
         BIND(<${entityUri}> AS ?dstEntity)
-        ?dstSlot <${HALEY_SLOT_TYPE}> <urn:hasDestinationEntity> .
-        ?dstSlot <${HALEY_SLOT_VALUE}> ?dstEntity .
-        ?dstEdge <${VITAL_EDGE_SRC}> ?frame .
-        ?dstEdge <${VITAL_EDGE_DST}> ?dstSlot .
-
-        ?frame <${RDF_TYPE}> <${HALEY_KG_FRAME}> .
-        ?frame <${HALEY_FRAME_TYPE_DESC}> ?relationType .
-
-        ?srcSlot <${HALEY_SLOT_TYPE}> <urn:hasSourceEntity> .
-        ?srcSlot <${HALEY_SLOT_VALUE}> ?srcEntity .
-        ?srcEdge <${VITAL_EDGE_SRC}> ?frame .
-        ?srcEdge <${VITAL_EDGE_DST}> ?srcSlot .
-
+        ?rel <${VITAL_EDGE_DST}> ?dstEntity .
+        ?rel <${VITAL_EDGE_SRC}> ?srcEntity .
+        ?rel <${HALEY_REL_TYPE_DESC}> ?relationType .
+        BIND(?rel AS ?frame)
         ?srcEntity <${VITAL_NAME}> ?srcName .
         ?dstEntity <${VITAL_NAME}> ?dstName .
       }
+      UNION
+      {
+        BIND(<${entityUri}> AS ?srcEntity)
+        ?slot <${HALEY_FRAME_GRAPH_URI}> <${entityUri}> .
+        ?slot <${HALEY_SLOT_VALUE}> ?dstEntity .
+        ?slot <${HALEY_SLOT_TYPE}> ?relationType .
+        BIND(?slot AS ?frame)
+        <${entityUri}> <${VITAL_NAME}> ?srcName .
+        ?dstEntity <${VITAL_NAME}> ?dstName .
+      }
+    }
+  `;
+}
+
+function buildEntityCountQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    const values = KGTYPE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `SELECT (COUNT(?ent) AS ?cnt) WHERE { VALUES ?type { ${values} } ?ent <${RDF_TYPE}> ?type }`;
+  }
+  return `SELECT (COUNT(?ent) AS ?cnt) WHERE { ?ent <${RDF_TYPE}> <${HALEY_KG_ENTITY}> }`;
+}
+
+function buildFrameCountQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    return `SELECT (0 AS ?cnt) WHERE {}`;
+  }
+  return `SELECT (COUNT(?frame) AS ?cnt) WHERE { ?frame <${RDF_TYPE}> <${HALEY_KG_FRAME}> }`;
+}
+
+function buildRelationCountQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    const edgeValues = KGTYPE_EDGE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `SELECT (COUNT(?rel) AS ?cnt) WHERE { VALUES ?type { ${edgeValues} } ?rel <${VITAL_TYPE}> ?type }`;
+  }
+  return `SELECT (COUNT(?rel) AS ?cnt) WHERE { ?rel <${RDF_TYPE}> <${HALEY_KG_RELATION}> }`;
+}
+
+function buildAllEntitiesQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    const values = KGTYPE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `
+      SELECT ?entity ?name ?entityTypeDesc WHERE {
+        VALUES ?entityTypeDesc { ${values} }
+        ?entity <${RDF_TYPE}> ?entityTypeDesc .
+        ?entity <${VITAL_NAME}> ?name .
+      }
+    `;
+  }
+  return `
+    SELECT ?entity ?name ?entityTypeDesc WHERE {
+      ?entity <${RDF_TYPE}> <${HALEY_KG_ENTITY}> .
+      ?entity <${VITAL_NAME}> ?name .
+      OPTIONAL { ?entity <${HALEY_ENTITY_TYPE_DESC}> ?entityTypeDesc }
+    }
+  `;
+}
+
+function buildAllFramesQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    // KG Types space has no KGFrame objects; return empty result
+    return `SELECT ?frame ?frameTypeDesc ?slot ?slotType ?slotValue WHERE { FILTER(false) }`;
+  }
+  return `
+    SELECT ?frame ?frameTypeDesc ?slot ?slotType ?slotValue ?slotGraphUri WHERE {
+      ?frame <${RDF_TYPE}> <${HALEY_KG_FRAME}> .
+      OPTIONAL { ?frame <${HALEY_FRAME_TYPE_DESC}> ?frameTypeDesc }
+      ?slotEdge <${VITAL_EDGE_SRC}> ?frame .
+      ?slotEdge <${VITAL_EDGE_DST}> ?slot .
+      ?slotEdge <${RDF_TYPE}> <${HALEY_KG_SLOT}> .
+      ?slot <${HALEY_SLOT_TYPE}> ?slotType .
+      ?slot <${HALEY_SLOT_VALUE}> ?slotValue .
+      OPTIONAL { ?slot <${HALEY_KG_GRAPH_URI}> ?slotGraphUri }
+    }
+  `;
+}
+
+function buildAllRelationsQuery(spaceId: string): string {
+  if (spaceId === SP_KG_TYPES) {
+    const edgeValues = KGTYPE_EDGE_CLASSES.map(c => `<${c}>`).join(' ');
+    return `
+      SELECT ?edge ?src ?dst ?relTypeDesc WHERE {
+        VALUES ?edgeType { ${edgeValues} }
+        ?edge <${VITAL_TYPE}> ?edgeType .
+        ?edge <${VITAL_EDGE_SRC}> ?src .
+        ?edge <${VITAL_EDGE_DST}> ?dst .
+        BIND(?edgeType AS ?relTypeDesc)
+      }
+    `;
+  }
+  return `
+    SELECT ?edge ?src ?dst ?relTypeDesc WHERE {
+      ?edge <${RDF_TYPE}> <${HALEY_KG_RELATION}> .
+      ?edge <${VITAL_EDGE_SRC}> ?src .
+      ?edge <${VITAL_EDGE_DST}> ?dst .
+      OPTIONAL { ?edge <${HALEY_REL_TYPE_DESC}> ?relTypeDesc }
+    }
+  `;
+}
+
+/**
+ * Traverses entity graph: entity → Edge_hasEntityKGFrame → frame → Edge_hasKGSlot → slot
+ * to extract datetime slot values based on a specific slot type URI.
+ */
+function buildEventTimestampsQuery(slotTypeUri: string): string {
+  return `
+    SELECT ?entity ?timestamp WHERE {
+      ?frameEdge <${RDF_TYPE}> <${HALEY_ENTITY_KG_FRAME}> .
+      ?frameEdge <${VITAL_EDGE_SRC}> ?entity .
+      ?frameEdge <${VITAL_EDGE_DST}> ?frame .
+      ?slotEdge <${RDF_TYPE}> <${HALEY_KG_SLOT}> .
+      ?slotEdge <${VITAL_EDGE_SRC}> ?frame .
+      ?slotEdge <${VITAL_EDGE_DST}> ?slot .
+      ?slot <${HALEY_SLOT_TYPE}> <${slotTypeUri}> .
+      ?slot <${HALEY_DATETIME_SLOT_VALUE}> ?timestamp .
     }
   `;
 }
@@ -134,27 +310,61 @@ function parseResults(result: Record<string, unknown>): Record<string, string>[]
   return [];
 }
 
-function shortenRelType(rel: string): string {
-  if (rel.startsWith('Edge_Wordnet')) return rel.slice('Edge_Wordnet'.length);
-  if (rel.startsWith('Edge_')) return rel.slice('Edge_'.length);
-  return rel;
-}
-
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
 export function useGraphVisualization(spaceId: string) {
-  const [graph, setGraph] = useState<GraphState>({
-    nodes: new Map(),
-    edges: new Map(),
-  });
+  // -----------------------------------------------------------------------
+  // Internal state: DataGraph is the source of truth
+  // -----------------------------------------------------------------------
+  const [dataGraph, setDataGraph] = useState<DataGraph>(createEmptyDataGraph);
+  const [eventTimestamps, setEventTimestamps] = useState<Map<string, string>>(new Map());
   const [searching, setSearching] = useState(false);
   const [expanding, setExpanding] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const graphRef = useRef(graph);
-  graphRef.current = graph;
+
+  const viewGraph: ViewGraph = useMemo(() => buildViewGraph(dataGraph, spaceId), [dataGraph, spaceId]);
+
+  const viewGraphRef = useRef(viewGraph);
+  viewGraphRef.current = viewGraph;
+
+  // -----------------------------------------------------------------------
+  // Space size check (for Load All gating)
+  // -----------------------------------------------------------------------
+  const [spaceItemCount, setSpaceItemCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!spaceId) { setSpaceItemCount(null); return; }
+    let cancelled = false;
+    Promise.all([
+      ApiService.executeSparqlQuery(spaceId, buildEntityCountQuery(spaceId)),
+      ApiService.executeSparqlQuery(spaceId, buildFrameCountQuery(spaceId)),
+      ApiService.executeSparqlQuery(spaceId, buildRelationCountQuery(spaceId)),
+    ])
+      .then(([entResult, frameResult, relResult]) => {
+        if (cancelled) return;
+        const entRows = parseResults(entResult);
+        const frameRows = parseResults(frameResult);
+        const relRows = parseResults(relResult);
+        const entities = entRows.length > 0 ? parseInt(entRows[0].cnt || '0', 10) : 0;
+        const frames = frameRows.length > 0 ? parseInt(frameRows[0].cnt || '0', 10) : 0;
+        const relations = relRows.length > 0 ? parseInt(relRows[0].cnt || '0', 10) : 0;
+        const total = entities + frames + relations;
+        console.log('[LoadAll] Space count:', { entities, frames, relations, total });
+        setSpaceItemCount(total);
+      })
+      .catch((err) => { console.error('[LoadAll] Space count error:', err); if (!cancelled) setSpaceItemCount(null); });
+    return () => { cancelled = true; };
+  }, [spaceId]);
+
+  const canLoadFullSpace = spaceItemCount !== null && spaceItemCount <= MAX_VISUALIZATION_ITEMS;
+
+  // -----------------------------------------------------------------------
+  // Search
+  // -----------------------------------------------------------------------
 
   const searchEntities = useCallback(async (term: string) => {
     if (!term.trim()) {
@@ -164,183 +374,431 @@ export function useGraphVisualization(spaceId: string) {
     setSearching(true);
     setError(null);
     try {
-      const sparql = buildSearchQuery(term);
+      const sparql = buildSearchQuery(term, spaceId);
       const result = await ApiService.executeSparqlQuery(spaceId, sparql);
       const rows = parseResults(result);
-      setSearchResults(rows.map(r => ({ uri: r.entity, name: r.name })));
-    } catch (e: any) {
-      setError(e.message || 'Search failed');
+      setSearchResults(rows.map(r => ({ uri: r.entity, name: r.name, typeDescription: r.entityTypeDesc || undefined })));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Search failed';
+      setError(msg);
       setSearchResults([]);
     } finally {
       setSearching(false);
     }
   }, [spaceId]);
 
-  const addNode = useCallback((uri: string, name: string) => {
-    setGraph(prev => {
-      if (prev.nodes.has(uri)) return prev;
-      const next = {
-        nodes: new Map(prev.nodes),
-        edges: new Map(prev.edges),
-      };
-      next.nodes.set(uri, { id: uri, label: name });
+  // -----------------------------------------------------------------------
+  // Load full space: fetch all entities, frames, slots, edges
+  // -----------------------------------------------------------------------
+
+  const loadFullSpace = useCallback(async () => {
+    if (!spaceId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      console.log('[LoadAll] Starting for space:', spaceId);
+      const [entResult, frameResult, relResult, tsResult] = await Promise.all([
+        ApiService.executeSparqlQuery(spaceId, buildAllEntitiesQuery(spaceId)),
+        ApiService.executeSparqlQuery(spaceId, buildAllFramesQuery(spaceId)),
+        ApiService.executeSparqlQuery(spaceId, buildAllRelationsQuery(spaceId)),
+        ApiService.executeSparqlQuery(spaceId, buildEventTimestampsQuery('urn:slot_type:EventTimestampSlot')),
+      ]);
+      console.log('[LoadAll] Raw results:', { entResult, frameResult, relResult });
+
+      const entRows = parseResults(entResult);
+      const frameRows = parseResults(frameResult);
+      const relRows = parseResults(relResult);
+      console.log('[LoadAll] Parsed rows:', entRows.length, 'ent,', frameRows.length, 'frame,', relRows.length, 'rel');
+      if (entRows.length > 0) {
+        console.log('[LoadAll] First ent row keys:', Object.keys(entRows[0]));
+        console.log('[LoadAll] First 3 ent rows entityTypeDesc:', entRows.slice(0, 3).map(r => r.entityTypeDesc));
+      }
+
+      setDataGraph(() => {
+        const next = createEmptyDataGraph();
+
+        for (const row of entRows) {
+          next.entities.set(row.entity, {
+            uri: row.entity,
+            name: row.name || row.entity,
+            typeDescription: row.entityTypeDesc || undefined,
+            properties: {},
+            fetchedAt: new Date(),
+          });
+          next.fetchedExpansions.add(row.entity);
+        }
+
+        const frameSlots = new Map<string, { frameTypeDesc: string; slots: string[] }>();
+        for (const row of frameRows) {
+          const fUri = row.frame;
+          const slotUri = row.slot;
+          const slotType = row.slotType;
+          const slotValue = row.slotValue;
+
+          if (!frameSlots.has(fUri)) {
+            frameSlots.set(fUri, { frameTypeDesc: row.frameTypeDesc || '', slots: [] });
+          }
+          frameSlots.get(fUri)!.slots.push(slotUri);
+
+          if (!next.slots.has(slotUri)) {
+            const isEntity = next.entities.has(slotValue);
+            next.slots.set(slotUri, {
+              uri: slotUri,
+              slotType,
+              value: slotValue,
+              valueType: isEntity ? 'entity' : 'literal',
+              graphUri: row.slotGraphUri || undefined,
+            });
+          }
+        }
+
+        for (const [fUri, info] of frameSlots) {
+          const uniqueSlots = [...new Set(info.slots)];
+          next.frames.set(fUri, {
+            uri: fUri,
+            frameType: info.frameTypeDesc,
+            frameTypeDescription: info.frameTypeDesc,
+            slots: uniqueSlots,
+            fetchedAt: new Date(),
+          });
+        }
+
+        for (const row of relRows) {
+          next.edges.set(row.edge, {
+            uri: row.edge,
+            edgeType: row.relTypeDesc || 'Edge_hasKGRelation',
+            source: row.src,
+            destination: row.dst,
+            properties: {
+              relationTypeDescription: row.relTypeDesc || '',
+            },
+          });
+        }
+
+        return next;
+      });
+
+      // Parse event timestamps (entity graph traversal result)
+      const tsRows = parseResults(tsResult);
+      const tsMap = new Map<string, string>();
+      for (const row of tsRows) {
+        if (row.entity && row.timestamp) {
+          tsMap.set(row.entity, row.timestamp);
+        }
+      }
+      setEventTimestamps(tsMap);
+      console.log('[LoadAll] Event timestamps:', tsMap.size);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Load failed';
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [spaceId]);
+
+  // -----------------------------------------------------------------------
+  // Re-fetch event timestamps when dataGraph is restored but timestamps lost
+  // (e.g. navigating away and returning — session restores dataGraph but
+  // eventTimestamps is local hook state that resets to empty)
+  // -----------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!spaceId || dataGraph.entities.size === 0) return;
+    if (eventTimestamps.size > 0) return;
+    let cancelled = false;
+    ApiService.executeSparqlQuery(spaceId, buildEventTimestampsQuery('urn:slot_type:EventTimestampSlot'))
+      .then(tsResult => {
+        if (cancelled) return;
+        const tsRows = parseResults(tsResult);
+        const tsMap = new Map<string, string>();
+        for (const row of tsRows) {
+          if (row.entity && row.timestamp) {
+            tsMap.set(row.entity, row.timestamp);
+          }
+        }
+        if (tsMap.size > 0) {
+          setEventTimestamps(tsMap);
+          console.log('[Timeline] Re-fetched event timestamps:', tsMap.size);
+        }
+      })
+      .catch(() => { /* non-critical — timeline just won't show */ });
+    return () => { cancelled = true; };
+  }, [spaceId, dataGraph.entities.size, eventTimestamps.size]);
+
+  // -----------------------------------------------------------------------
+  // Add entity to DataGraph
+  // -----------------------------------------------------------------------
+
+  const addNode = useCallback((uri: string, name: string, typeDescription?: string) => {
+    setDataGraph(prev => {
+      if (prev.entities.has(uri)) return prev;
+      const next = cloneDataGraph(prev);
+      next.entities.set(uri, {
+        uri,
+        name,
+        typeDescription,
+        properties: {},
+        fetchedAt: new Date(),
+      });
       return next;
     });
   }, []);
+
+  // -----------------------------------------------------------------------
+  // Expand: fetch neighbors via SPARQL, populate DataGraph
+  // -----------------------------------------------------------------------
 
   const expandNode = useCallback(async (entityUri: string) => {
     setExpanding(true);
     setError(null);
     try {
-      const sparql = buildExpandQuery(entityUri);
+      const sparql = buildExpandQuery(entityUri, spaceId);
       const result = await ApiService.executeSparqlQuery(spaceId, sparql);
-      // eslint-disable-next-line no-console
       console.log('[GraphViz] expand result:', JSON.stringify(result).slice(0, 500));
       const rows = parseResults(result);
-      // eslint-disable-next-line no-console
       console.log('[GraphViz] expand parsed rows:', rows.length, rows.slice(0, 2));
 
-      setGraph(prev => {
-        const next = {
-          nodes: new Map(prev.nodes),
-          edges: new Map(prev.edges),
-        };
-        // Mark the expanded node
-        const existingNode = next.nodes.get(entityUri);
-        if (existingNode) {
-          next.nodes.set(entityUri, { ...existingNode, expanded: true });
-        }
+      setDataGraph(prev => {
+        const next = cloneDataGraph(prev);
+        next.fetchedExpansions.add(entityUri);
 
         for (const row of rows) {
           const src = row.srcEntity;
           const dst = row.dstEntity;
-          const frame = row.frame;
+          const frameUri = row.frame;
           const rel = row.relationType || '';
 
-          if (!next.nodes.has(src)) {
-            next.nodes.set(src, { id: src, label: row.srcName || src });
+          // Ensure both entities exist in cache (and update names if better data available)
+          if (!next.entities.has(src)) {
+            next.entities.set(src, {
+              uri: src,
+              name: row.srcName || src,
+              typeDescription: row.srcType || undefined,
+              properties: {},
+              fetchedAt: new Date(),
+            });
+          } else if (row.srcName) {
+            const existing = next.entities.get(src)!;
+            if (!existing.name || existing.name === src) {
+              next.entities.set(src, { ...existing, name: row.srcName });
+            }
+            if (row.srcType && !existing.typeDescription) {
+              next.entities.set(src, { ...next.entities.get(src)!, typeDescription: row.srcType });
+            }
           }
-          if (!next.nodes.has(dst)) {
-            next.nodes.set(dst, { id: dst, label: row.dstName || dst });
+          if (!next.entities.has(dst)) {
+            next.entities.set(dst, {
+              uri: dst,
+              name: row.dstName || dst,
+              typeDescription: row.dstType || undefined,
+              properties: {},
+              fetchedAt: new Date(),
+            });
+          } else if (row.dstName) {
+            const existing = next.entities.get(dst)!;
+            if (!existing.name || existing.name === dst) {
+              next.entities.set(dst, { ...existing, name: row.dstName });
+            }
+            if (row.dstType && !existing.typeDescription) {
+              next.entities.set(dst, { ...next.entities.get(dst)!, typeDescription: row.dstType });
+            }
           }
-          if (!next.edges.has(frame)) {
-            next.edges.set(frame, {
-              id: frame,
-              source: src,
-              target: dst,
-              label: shortenRelType(rel),
+
+          // Model the frame + 2 entity slots (binary pattern)
+          if (!next.frames.has(frameUri)) {
+            const srcSlotUri = `${frameUri}:slot:src`;
+            const dstSlotUri = `${frameUri}:slot:dst`;
+
+            next.frames.set(frameUri, {
+              uri: frameUri,
+              frameType: rel,
+              frameTypeDescription: rel,
+              slots: [srcSlotUri, dstSlotUri],
+              fetchedAt: new Date(),
+            });
+
+            next.slots.set(srcSlotUri, {
+              uri: srcSlotUri,
+              slotType: 'urn:hasSourceEntity',
+              value: src,
+              valueType: 'entity',
+            });
+            next.slots.set(dstSlotUri, {
+              uri: dstSlotUri,
+              slotType: 'urn:hasDestinationEntity',
+              value: dst,
+              valueType: 'entity',
             });
           }
         }
         return next;
       });
-    } catch (e: any) {
-      setError(e.message || 'Expand failed');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Expand failed';
+      setError(msg);
     } finally {
       setExpanding(false);
     }
   }, [spaceId]);
 
+  // -----------------------------------------------------------------------
+  // Collapse: remove expansion data for a node
+  // -----------------------------------------------------------------------
+
   const collapseNode = useCallback((entityUri: string) => {
-    setGraph(prev => {
-      const next = {
-        nodes: new Map(prev.nodes),
-        edges: new Map(prev.edges),
-      };
-      // Find edges connected to this node
-      const connectedEdges = [...next.edges.values()].filter(
-        e => e.source === entityUri || e.target === entityUri
-      );
-      // Find nodes that would be orphaned if we remove these edges
-      const connectedNodeIds = new Set<string>();
-      for (const e of connectedEdges) {
-        connectedNodeIds.add(e.source === entityUri ? e.target : e.source);
-      }
-      // Remove the edges
-      for (const e of connectedEdges) {
-        next.edges.delete(e.id);
-      }
-      // Remove orphaned nodes (nodes with no remaining edges)
-      for (const nodeId of connectedNodeIds) {
-        const hasEdge = [...next.edges.values()].some(
-          e => e.source === nodeId || e.target === nodeId
-        );
-        if (!hasEdge && nodeId !== entityUri) {
-          next.nodes.delete(nodeId);
+    setDataGraph(prev => {
+      const next = cloneDataGraph(prev);
+      next.fetchedExpansions.delete(entityUri);
+
+      // Find frames owned by / connected to this entity via slots
+      const framesToRemove = new Set<string>();
+      for (const [frameUri, frame] of next.frames) {
+        for (const slotUri of frame.slots) {
+          const slot = next.slots.get(slotUri);
+          if (slot && slot.value === entityUri) {
+            framesToRemove.add(frameUri);
+          }
         }
       }
-      // Mark as collapsed
-      const node = next.nodes.get(entityUri);
-      if (node) {
-        next.nodes.set(entityUri, { ...node, expanded: false });
+
+      // Remove those frames and their slots
+      for (const frameUri of framesToRemove) {
+        const frame = next.frames.get(frameUri);
+        if (frame) {
+          for (const slotUri of frame.slots) {
+            next.slots.delete(slotUri);
+          }
+          next.frames.delete(frameUri);
+        }
       }
+
+      // Remove orphaned entities (no remaining frame references)
+      const referencedEntities = new Set<string>();
+      for (const slot of next.slots.values()) {
+        if (slot.valueType === 'entity') {
+          referencedEntities.add(slot.value);
+        }
+      }
+      for (const edge of next.edges.values()) {
+        referencedEntities.add(edge.source);
+        referencedEntities.add(edge.destination);
+      }
+
+      for (const uri of [...next.entities.keys()]) {
+        if (uri !== entityUri && !referencedEntities.has(uri) && !next.fetchedExpansions.has(uri)) {
+          next.entities.delete(uri);
+        }
+      }
+
       return next;
     });
   }, []);
 
-  const getNodeDetail = useCallback(async (entityUri: string) => {
+  // -----------------------------------------------------------------------
+  // Detail fetch: enrich an entity with type/description
+  // -----------------------------------------------------------------------
+
+  const getNodeDetail = useCallback(async (entityUri: string): Promise<{ name?: string; typeDescription?: string; description?: string } | null> => {
     try {
       const sparql = buildDetailQuery(entityUri);
       const result = await ApiService.executeSparqlQuery(spaceId, sparql);
       const rows = parseResults(result);
       if (rows.length > 0) {
         const row = rows[0];
-        setGraph(prev => {
-          const next = {
-            nodes: new Map(prev.nodes),
-            edges: new Map(prev.edges),
-          };
-          const existing = next.nodes.get(entityUri);
-          if (existing) {
-            next.nodes.set(entityUri, {
-              ...existing,
-              type: row.entityTypeDesc,
-              description: row.description,
-            });
-          }
-          return next;
-        });
+        // Mutate entity in-place — no DataGraph clone needed for display metadata
+        const existing = dataGraph.entities.get(entityUri);
+        if (existing) {
+          if (row.name) existing.name = row.name;
+          if (row.entityTypeDesc) existing.typeDescription = row.entityTypeDesc;
+          if (row.description) existing.description = row.description;
+        }
+        return { name: row.name, typeDescription: row.entityTypeDesc, description: row.description };
       }
     } catch {
       // Detail fetch failure is non-critical
     }
-  }, [spaceId]);
+    return null;
+  }, [spaceId, dataGraph]);
+
+  // -----------------------------------------------------------------------
+  // Clear / remove
+  // -----------------------------------------------------------------------
 
   const clearGraph = useCallback(() => {
-    setGraph({ nodes: new Map(), edges: new Map() });
+    setDataGraph(createEmptyDataGraph());
+    setSearchResults([]);
+    setError(null);
+  }, []);
+
+  const restoreDataGraph = useCallback((dg: DataGraph) => {
+    setDataGraph(dg);
     setSearchResults([]);
     setError(null);
   }, []);
 
   const removeNode = useCallback((entityUri: string) => {
-    setGraph(prev => {
-      const next = {
-        nodes: new Map(prev.nodes),
-        edges: new Map(prev.edges),
-      };
-      next.nodes.delete(entityUri);
-      // Remove all connected edges
-      for (const [id, e] of next.edges) {
-        if (e.source === entityUri || e.target === entityUri) {
-          next.edges.delete(id);
+    setDataGraph(prev => {
+      const next = cloneDataGraph(prev);
+      next.entities.delete(entityUri);
+      next.fetchedExpansions.delete(entityUri);
+
+      // Remove frames that reference this entity via slots
+      for (const [frameUri, frame] of next.frames) {
+        for (const slotUri of frame.slots) {
+          const slot = next.slots.get(slotUri);
+          if (slot && slot.value === entityUri) {
+            // Remove entire frame and its slots
+            for (const s of frame.slots) next.slots.delete(s);
+            next.frames.delete(frameUri);
+            break;
+          }
         }
       }
+
+      // Remove direct relation edges involving this entity
+      for (const [edgeUri, edge] of next.edges) {
+        if (edge.source === entityUri || edge.destination === entityUri) {
+          next.edges.delete(edgeUri);
+        }
+      }
+
       return next;
     });
   }, []);
 
   return {
-    graph,
+    viewGraph,
+    dataGraph,
+    eventTimestamps,
     searching,
     expanding,
+    loading,
+    canLoadFullSpace,
     searchResults,
     error,
     searchEntities,
+    loadFullSpace,
     addNode,
     expandNode,
     collapseNode,
     getNodeDetail,
     clearGraph,
+    restoreDataGraph,
     removeNode,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DataGraph cloning helper (shallow clone of Maps/Sets for immutable updates)
+// ---------------------------------------------------------------------------
+
+function cloneDataGraph(dg: DataGraph): DataGraph {
+  return {
+    entities: new Map(dg.entities),
+    frames: new Map(dg.frames),
+    slots: new Map(dg.slots),
+    documents: new Map(dg.documents),
+    edges: new Map(dg.edges),
+    fetchedExpansions: new Set(dg.fetchedExpansions),
   };
 }

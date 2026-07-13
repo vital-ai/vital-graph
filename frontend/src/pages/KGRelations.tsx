@@ -7,7 +7,7 @@ import {
 } from 'flowbite-react';
 import { type SpaceInfo } from '../types/api';
 import { type GraphInfo } from '../types/graphs';
-import { HiTrash, HiArrowRight } from 'react-icons/hi2';
+import { HiTrash, HiArrowRight, HiEye } from 'react-icons/hi2';
 import { HiSearch, HiLink } from 'react-icons/hi';
 import {
   parseEntitiesFromQuads,
@@ -322,9 +322,14 @@ const KGRelations: React.FC = () => {
                     <Badge color="purple" size="sm">{shortenUri(rel.rdf_type)}</Badge>
                   </td>
                   <td className="px-4 py-3">
-                    <Button size="xs" color="failure" onClick={() => setDeletingRelation(rel)}>
-                      <HiTrash className="h-3.5 w-3.5" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Button size="xs" color="light" onClick={() => navigate(`/space/${selectedSpace}/graph/${encodeURIComponent(selectedGraph)}/relation/${encodeURIComponent(rel.uri)}`)}>
+                        <HiEye className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button size="xs" color="failure" onClick={() => setDeletingRelation(rel)}>
+                        <HiTrash className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

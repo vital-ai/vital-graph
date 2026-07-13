@@ -252,10 +252,12 @@ class KGTypesEndpoint:
             type: Optional[str] = Query(None, description="Type filter (e.g. frame, entity, slot, relation)"),
             search_mode: Optional[str] = Query("keyword", description="Search mode: keyword | fts | vector | hybrid"),
             alpha: Optional[float] = Query(None, description="Hybrid search alpha (0.0=pure BM25, 1.0=pure vector). Default 0.5"),
+            page_size: int = Query(25, ge=1, le=1000, description="Number of results per page"),
+            offset: int = Query(0, ge=0, description="Offset for pagination"),
             current_user: Dict = Depends(self.auth_dependency),
         ):
             require_space_read(current_user, space_id)
-            return await self._search_types(space_id, self._types_graph(space_id), q, type, search_mode or "keyword", current_user, alpha=alpha)
+            return await self._search_types(space_id, self._types_graph(space_id), q, type, search_mode or "keyword", current_user, alpha=alpha, page_size=page_size, offset=offset)
 
         # POST /api/graphs/kgtypes - Create new KG types
         @self.router.post(
@@ -989,7 +991,7 @@ class KGTypesEndpoint:
     async def _search_types(
         self, space_id: str, graph_id: str, query: str,
         type_filter: Optional[str], search_mode: str, current_user: Dict,
-        *, alpha: Optional[float] = None,
+        *, alpha: Optional[float] = None, page_size: int = 25, offset: int = 0,
     ) -> KGTypeSearchResponse:
         """Search types by keyword, FTS, vector, or hybrid.
 
@@ -1007,14 +1009,18 @@ class KGTypesEndpoint:
             result = await self.kgtypes_read_processor.search_types(
                 backend=backend_adapter, space_id=space_id, graph_id=graph_id,
                 query=query, type_filter=resolved_type, search_mode=search_mode,
+                limit=page_size, offset=offset,
                 alpha=alpha,
             )
 
             return KGTypeSearchResponse(
                 success=True,
-                message=f"Found {result['count']} types matching '{query}'",
+                message=f"Found {result['total_count']} types matching '{query}'",
                 types=result['types'],
                 count=result['count'],
+                total_count=result['total_count'],
+                page_size=page_size,
+                offset=offset,
                 search_mode=result['search_mode'],
                 query=result['query'],
             )

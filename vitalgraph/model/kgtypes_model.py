@@ -169,8 +169,11 @@ class KGTypeSearchResponse(BaseModel):
     success: bool = Field(True, description="Operation success status")
     message: str = Field("", description="Human-readable status message")
     types: List[Dict[str, Any]] = Field(default_factory=list, description="Matching types")
-    count: int = Field(0, description="Number of results")
-    search_mode: str = Field("keyword", description="Search mode used (keyword or vector)")
+    count: int = Field(0, description="Number of results on this page")
+    total_count: int = Field(0, description="Total matching results across all pages")
+    page_size: int = Field(25, description="Page size used")
+    offset: int = Field(0, description="Offset used")
+    search_mode: str = Field("keyword", description="Search mode used (keyword, fts, vector, hybrid)")
     query: str = Field("", description="Original search query")
 
 

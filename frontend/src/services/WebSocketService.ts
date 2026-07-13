@@ -42,7 +42,6 @@ export class WebSocketServiceImpl implements IWebSocketService {
   private token: string | null = null;
   url: string;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
   private reconnectDelay = 1000; // Start with 1 second
   private maxReconnectDelay = 30000; // Max 30 seconds
   private reconnectTimer: number | null = null;
@@ -521,11 +520,6 @@ export class WebSocketServiceImpl implements IWebSocketService {
    * Schedule reconnection with exponential backoff
    */
   private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
-      return;
-    }
-
     this.reconnectAttempts++;
     
     // Exponential backoff with jitter
@@ -541,7 +535,7 @@ export class WebSocketServiceImpl implements IWebSocketService {
 
     this.reconnectTimer = window.setTimeout(async () => {
       if (this.shouldReconnect && this.token && !this._manualReconnectInProgress) {
-        console.log(`🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+        console.log(`🔄 Reconnection attempt ${this.reconnectAttempts}`);
         const success = await this.connect(this.token);
         
         if (!success) {

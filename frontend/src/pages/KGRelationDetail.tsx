@@ -1,25 +1,24 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { HiUser } from 'react-icons/hi';
+import { HiLink } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
 import { useObjectDetail, ObjectDetailConfig, BaseRDFObject } from './AbsObjectDetail';
 import { vgClient } from '../services/ApiService';
-import EntityGeoMiniMap from '../components/EntityGeoMiniMap';
-import EntityGraphViewer from '../components/entity-graph/EntityGraphViewer';
 import { VisualizeInGraphButton } from '../components/VisualizeInGraphButton';
 
-const KGEntityDetail: React.FC = () => {
+const KGRelationDetail: React.FC = () => {
   const navigate = useNavigate();
-  // Configuration for KG Entities
+
+  // Configuration for KG Relations
   const config: ObjectDetailConfig = {
-    objectTypeName: 'KG Entity',
-    objectTypeColor: 'green',
-    crudOps: vgClient.kgentities,
-    listRoute: '/objects/kgentities',
-    defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#KGEntity',
-    paramName: 'entityId',
-    uriFieldName: 'Entity URI',
-    icon: HiUser
+    objectTypeName: 'KG Relation',
+    objectTypeColor: 'purple',
+    crudOps: vgClient.kgrelations,
+    listRoute: '/objects/kgrelations',
+    defaultRdfType: 'http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame',
+    paramName: 'relationId',
+    uriFieldName: 'Relation URI',
+    icon: HiLink
   };
 
   // Create default object for new instances
@@ -28,7 +27,7 @@ const KGEntityDetail: React.FC = () => {
     space_id: '',
     graph_id: 0,
     object_uri: '',
-    object_type: 'Node',
+    object_type: 'Edge',
     rdf_type: config.defaultRdfType,
     subject: '',
     predicate: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
@@ -44,9 +43,14 @@ const KGEntityDetail: React.FC = () => {
         object_type: 'uri'
       },
       {
-        predicate: 'http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription',
+        predicate: 'http://vital.ai/ontology/vital-core#hasEdgeSource',
         object: '',
-        object_type: 'literal'
+        object_type: 'uri'
+      },
+      {
+        predicate: 'http://vital.ai/ontology/vital-core#hasEdgeDestination',
+        object: '',
+        object_type: 'uri'
       }
     ]
   });
@@ -68,7 +72,7 @@ const KGEntityDetail: React.FC = () => {
   const hookData = useObjectDetail(config, createDefaultObject, buildApiRequestData);
 
   return (
-    <div data-testid="kgentity-detail-page">
+    <div data-testid="kgrelation-detail-page">
       {/* Properties section (breadcrumb, header, properties table) */}
       <ObjectDetailRenderer {...hookData} config={config} />
 
@@ -80,26 +84,8 @@ const KGEntityDetail: React.FC = () => {
           navigate={navigate}
         />
       )}
-
-      {/* Entity Graph section — shown below properties once entity is loaded */}
-      {hookData.spaceId && hookData.object?.object_uri && (
-        <div className="mt-6">
-          <EntityGraphViewer
-            spaceId={hookData.spaceId}
-            graphId={hookData.graphId || 'default'}
-            entityUri={hookData.object.object_uri}
-          />
-        </div>
-      )}
-
-      {/* Geo mini-map */}
-      {hookData.spaceId && hookData.object?.object_uri && (
-        <div className="mt-4">
-          <EntityGeoMiniMap spaceId={hookData.spaceId} entityUri={hookData.object.object_uri} />
-        </div>
-      )}
     </div>
   );
 };
 
-export default KGEntityDetail;
+export default KGRelationDetail;

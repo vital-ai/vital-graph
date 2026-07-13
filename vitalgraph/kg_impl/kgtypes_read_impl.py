@@ -145,6 +145,7 @@ class KGTypesReadProcessor:
         "http://vital.ai/ontology/haley-ai-kg#Edge_hasKGRelationType",
         "http://vital.ai/ontology/haley-ai-kg#Edge_hasOutgoingKGRelationType",
         "http://vital.ai/ontology/haley-ai-kg#Edge_hasIncomingKGRelationType",
+        "http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlotType",
     ]
 
     async def get_type_relationships(
@@ -565,6 +566,7 @@ SELECT ?p ?o WHERE {{
         query: str, type_filter: Optional[str] = None,
         search_mode: str = "keyword",
         limit: int = 100,
+        offset: int = 0,
         alpha: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
@@ -576,11 +578,11 @@ SELECT ?p ?o WHERE {{
 
         Falls back to SPARQL ``CONTAINS`` for ``keyword`` mode.
 
-        Returns dict with types, count, search_mode, query.
+        Returns dict with types, count, total_count, search_mode, query.
         """
         self.logger.debug(
-            "Searching types: query='%s', mode=%s, type=%s",
-            query, search_mode, type_filter,
+            "Searching types: query='%s', mode=%s, type=%s, limit=%d, offset=%d",
+            query, search_mode, type_filter, limit, offset,
         )
 
         if search_mode in ("fts", "vector", "hybrid"):
@@ -588,12 +590,14 @@ SELECT ?p ?o WHERE {{
                 backend, space_id, graph_id, query,
                 search_mode=search_mode,
                 type_filter=type_filter, limit=limit,
+                offset=offset,
                 alpha=alpha,
             )
 
         # Fallback: SPARQL CONTAINS keyword search
         return await self._search_types_keyword(
             backend, space_id, graph_id, query, type_filter=type_filter,
+            limit=limit, offset=offset,
         )
 
     # ── vg: function search (FTS / vector / hybrid) ────────────────
@@ -601,7 +605,7 @@ SELECT ?p ?o WHERE {{
     async def _search_types_vg(
         self, backend, space_id: str, graph_id: str, query: str,
         *, search_mode: str, type_filter: Optional[str] = None,
-        limit: int = 100, alpha: Optional[float] = None,
+        limit: int = 100, offset: int = 0, alpha: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Build a SPARQL query with vg: functions and execute it."""
         escaped_query = query.replace('\\', '\\\\').replace('"', '\\"')
@@ -633,20 +637,103 @@ SELECT ?p ?o WHERE {{
         else:
             bind_clause = ""
 
-        search_query = f"""\
-PREFIX vc: <http://vital.ai/ontology/vital-core#>
-PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
-
-SELECT ?s ?name ?vitaltype ?description ?score WHERE {{
+        where_clause = f"""\
   ?s vc:vitaltype ?vitaltype .
   {type_filter_clause}
   ?s vc:hasName ?name .
   OPTIONAL {{ ?s <http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription> ?description . }}
   {bind_clause}
-  FILTER(BOUND(?score))
+  FILTER(BOUND(?score))"""
+
+        # For vg: function modes, COUNT(*) doesn't accurately reflect
+        # what the function returns (e.g. vector similarity scores all
+        # items, and OFFSET may not work with internal top-k limits).
+        # Run the full query once, count results, and slice in Python.
+        search_query = f"""\
+PREFIX vc: <http://vital.ai/ontology/vital-core#>
+PREFIX vg: <http://vital.ai/ontology/vitalgraph#>
+
+SELECT ?s ?name ?vitaltype ?description ?score WHERE {{
+{where_clause}
 }}
 ORDER BY DESC(?score)
+"""
+
+        results = await backend.execute_sparql_query(space_id, search_query)
+        all_bindings = self._extract_bindings(results)
+        total_count = len(all_bindings)
+
+        # Results are already sorted by score DESC from SPARQL
+        # Paginate in Python
+        page_bindings = all_bindings[offset:offset + limit]
+
+        types = []
+        for b in page_bindings:
+            types.append({
+                'uri': b.get('s', {}).get('value', ''),
+                'name': b.get('name', {}).get('value', ''),
+                'vitaltype': b.get('vitaltype', {}).get('value', ''),
+                'description': b.get('description', {}).get('value', ''),
+                'score': float(b.get('score', {}).get('value', 0)),
+            })
+
+        return {
+            'types': types,
+            'count': len(types),
+            'total_count': total_count,
+            'search_mode': search_mode,
+            'query': query,
+        }
+
+    # ── SPARQL CONTAINS keyword search ─────────────────────────────
+
+    async def _search_types_keyword(
+        self, backend, space_id: str, graph_id: str, query: str,
+        *, type_filter: Optional[str] = None,
+        limit: int = 100, offset: int = 0,
+    ) -> Dict[str, Any]:
+        """SPARQL CONTAINS keyword fallback (no vector index required)."""
+        if type_filter:
+            type_filter_clause = f'?s vc:vitaltype <{type_filter}> .'
+        else:
+            type_values_list = " ".join(f"<{t}>" for t in self.ALL_KGTYPE_URIS)
+            type_filter_clause = f'VALUES ?vitaltype {{ {type_values_list} }}'
+
+        escaped_query = query.replace('\\', '\\\\').replace('"', '\\"')
+
+        where_clause = f"""\
+  ?s vc:vitaltype ?vitaltype .
+  {type_filter_clause}
+  ?s vc:hasName ?name .
+  OPTIONAL {{ ?s <http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription> ?description . }}
+  FILTER(
+    CONTAINS(LCASE(?name), LCASE("{escaped_query}"))
+    || CONTAINS(LCASE(COALESCE(?description, "")), LCASE("{escaped_query}"))
+  )
+  BIND(IF(CONTAINS(LCASE(?name), LCASE("{escaped_query}")), 2, 1) AS ?score)"""
+
+        # Count query
+        count_query = f"""\
+PREFIX vc: <http://vital.ai/ontology/vital-core#>
+
+SELECT (COUNT(*) AS ?cnt) WHERE {{
+{where_clause}
+}}
+"""
+        count_results = await backend.execute_sparql_query(space_id, count_query)
+        count_bindings = self._extract_bindings(count_results)
+        total_count = int(count_bindings[0].get('cnt', {}).get('value', 0)) if count_bindings else 0
+
+        # Data query with pagination — name matches first, then alphabetical
+        search_query = f"""\
+PREFIX vc: <http://vital.ai/ontology/vital-core#>
+
+SELECT ?s ?name ?vitaltype ?description ?score WHERE {{
+{where_clause}
+}}
+ORDER BY DESC(?score) ?name
 LIMIT {limit}
+OFFSET {offset}
 """
 
         results = await backend.execute_sparql_query(space_id, search_query)
@@ -665,57 +752,7 @@ LIMIT {limit}
         return {
             'types': types,
             'count': len(types),
-            'search_mode': search_mode,
-            'query': query,
-        }
-
-    # ── SPARQL CONTAINS keyword search ─────────────────────────────
-
-    async def _search_types_keyword(
-        self, backend, space_id: str, graph_id: str, query: str,
-        *, type_filter: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """SPARQL CONTAINS keyword fallback (no vector index required)."""
-        if type_filter:
-            type_filter_clause = f'?s vc:vitaltype <{type_filter}> .'
-        else:
-            type_values_list = " ".join(f"<{t}>" for t in self.ALL_KGTYPE_URIS)
-            type_filter_clause = f'VALUES ?vitaltype {{ {type_values_list} }}'
-
-        escaped_query = query.replace('\\', '\\\\').replace('"', '\\"')
-
-        search_query = f"""\
-PREFIX vc: <http://vital.ai/ontology/vital-core#>
-
-SELECT ?s ?name ?vitaltype ?description WHERE {{
-  ?s vc:vitaltype ?vitaltype .
-  {type_filter_clause}
-  ?s vc:hasName ?name .
-  OPTIONAL {{ ?s <http://vital.ai/ontology/haley-ai-kg#hasKGraphDescription> ?description . }}
-  FILTER(
-    CONTAINS(LCASE(?name), LCASE("{escaped_query}"))
-    || CONTAINS(LCASE(COALESCE(?description, "")), LCASE("{escaped_query}"))
-  )
-}}
-ORDER BY ?name
-LIMIT 100
-"""
-
-        results = await backend.execute_sparql_query(space_id, search_query)
-        bindings = self._extract_bindings(results)
-
-        types = []
-        for b in bindings:
-            types.append({
-                'uri': b.get('s', {}).get('value', ''),
-                'name': b.get('name', {}).get('value', ''),
-                'vitaltype': b.get('vitaltype', {}).get('value', ''),
-                'description': b.get('description', {}).get('value', ''),
-            })
-
-        return {
-            'types': types,
-            'count': len(types),
+            'total_count': total_count,
             'search_mode': 'keyword',
             'query': query,
         }

@@ -44,7 +44,7 @@ const EntityGeoMiniMap: React.FC<EntityGeoMiniMapProps> = ({ spaceId, entityUri 
     const fetchGeo = async () => {
       try {
         const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
-        const token = localStorage.getItem('auth_token');
+        const token = localStorage.getItem('access_token');
         const params = new URLSearchParams({ space_id: spaceId, subject_uri: entityUri, limit: '1' });
         const response = await fetch(`${baseUrl}/api/geo?${params}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},

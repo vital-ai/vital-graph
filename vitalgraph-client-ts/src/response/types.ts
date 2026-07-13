@@ -277,7 +277,10 @@ export interface KGTypeDocumentationDeleteResponse extends VitalGraphResponse {
 export interface KGTypeSearchResponse extends VitalGraphResponse {
   types: Record<string, unknown>[];
   count: number;
-  search_mode: 'keyword' | 'vector';
+  total_count: number;
+  page_size: number;
+  offset: number;
+  search_mode: 'keyword' | 'fts' | 'vector' | 'hybrid';
   query: string;
 }
 

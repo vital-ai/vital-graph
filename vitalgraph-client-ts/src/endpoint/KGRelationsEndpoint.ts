@@ -9,10 +9,15 @@ export class KGRelationsEndpoint extends BaseEndpoint {
     pageSize = 10,
     offset = 0,
     search?: string,
+    entitySourceUri?: string,
+    entityDestinationUri?: string,
   ): Promise<PaginatedGraphObjectResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('GET', '/api/graphs/kgrelations', {
-      params: { space_id: spaceId, graph_id: graphId, page_size: pageSize, offset, search },
+      params: {
+        space_id: spaceId, graph_id: graphId, page_size: pageSize, offset,
+        search, entity_source_uri: entitySourceUri, entity_destination_uri: entityDestinationUri,
+      },
     });
   }
 

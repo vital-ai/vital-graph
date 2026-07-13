@@ -180,12 +180,12 @@ export class ApiService {
     modified_after?: string;
     modified_before?: string;
   } = {}): Promise<QuadResponse> {
-    const { page_size, offset, search } = options;
-    // Note: filter opts (sort, frame_type, status, etc.) not yet supported by TS client
+    const { page_size, offset, search, sort_by, sort_order, form_type, frame_type_uri, status, exclude_status, created_after, created_before, modified_after, modified_before } = options;
     return vgClient.kgframes.list(
       spaceId, graphId,
       page_size ?? 10, offset ?? 0,
       search,
+      { sort_by, sort_order, form_type, frame_type_uri, status, exclude_status, created_after, created_before, modified_after, modified_before },
     ) as any;
   }
 
@@ -207,7 +207,14 @@ export class ApiService {
     return vgClient.kgrelations.list(
       spaceId, graphId,
       options.page_size ?? 10, options.offset ?? 0,
+      undefined,
+      options.entity_source_uri,
+      options.entity_destination_uri,
     ) as any;
+  }
+
+  async getRelation(spaceId: string, graphId: string, relationUri: string): Promise<QuadResponse> {
+    return vgClient.kgrelations.get(spaceId, graphId, relationUri) as any;
   }
 
   async deleteRelation(spaceId: string, graphId: string, relationUri: string): Promise<any> {
@@ -269,7 +276,8 @@ export class ApiService {
 
   async searchKGTypes(spaceId: string, query: string, options?: {
     type?: string; search_mode?: 'keyword' | 'fts' | 'vector' | 'hybrid'; alpha?: number;
-  }): Promise<any> {
+    page_size?: number; offset?: number;
+  }) {
     return this._kgtypes.search(spaceId, query, options);
   }
 

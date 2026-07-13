@@ -655,7 +655,7 @@ class KGTypesEndpoint(BaseEndpoint):
 
     # ── Search ─────────────────────────────────────────────────────
 
-    async def search_types(self, space_id: str, query: str, type: Optional[str] = None, search_mode: Optional[str] = None, alpha: Optional[float] = None) -> KGTypeSearchResponse:
+    async def search_types(self, space_id: str, query: str, type: Optional[str] = None, search_mode: Optional[str] = None, alpha: Optional[float] = None, page_size: int = 25, offset: int = 0) -> KGTypeSearchResponse:
         """
         Search KG types by keyword or vector similarity.
 
@@ -665,16 +665,18 @@ class KGTypesEndpoint(BaseEndpoint):
             type: Optional type filter (e.g. 'frame', 'entity', or full URI)
             search_mode: 'keyword' (default), 'fts', 'vector', or 'hybrid'
             alpha: Hybrid search alpha (0.0=pure BM25, 1.0=pure vector). Only used when search_mode='hybrid'.
+            page_size: Number of results per page (default 25)
+            offset: Offset for pagination (default 0)
 
         Returns:
-            KGTypeSearchResponse with types, count, search_mode, query
+            KGTypeSearchResponse with types, count, total_count, page_size, offset, search_mode, query
         """
         self._check_connection()
         validate_required_params(space_id=space_id, q=query)
 
         try:
             url = f"{self._get_server_url()}/api/graphs/kgtypes/search"
-            params = build_query_params(space_id=space_id, q=query, type=type, search_mode=search_mode, alpha=alpha)
+            params = build_query_params(space_id=space_id, q=query, type=type, search_mode=search_mode, alpha=alpha, page_size=page_size, offset=offset)
             response = await self._make_authenticated_request('GET', url, params=params)
             data = response.json()
             return build_success_response(
@@ -683,6 +685,9 @@ class KGTypesEndpoint(BaseEndpoint):
                 message=data.get('message', 'OK'),
                 types=data.get('types', []),
                 count=data.get('count', 0),
+                total_count=data.get('total_count', 0),
+                page_size=data.get('page_size', page_size),
+                offset=data.get('offset', offset),
                 search_mode=data.get('search_mode', 'keyword'),
                 query=data.get('query', query),
             )

@@ -29,6 +29,10 @@ const TYPE_ROUTE_MAP: Record<string, { label: string; pathSegment: string }> = {
   'http://vital.ai/ontology/haley-ai-kg#KGFrame': { label: 'KG Frame', pathSegment: 'frame' },
   'http://vital.ai/ontology/haley-ai-kg#KGDocument': { label: 'KG Document', pathSegment: 'document' },
   'http://vital.ai/ontology/haley-ai-kg#KGType': { label: 'KG Type', pathSegment: 'kg-types' },
+  'http://vital.ai/ontology/haley-ai-kg#KGFrameType': { label: 'KG Type', pathSegment: 'kg-types' },
+  'http://vital.ai/ontology/haley-ai-kg#KGSlotType': { label: 'KG Type', pathSegment: 'kg-types' },
+  'http://vital.ai/ontology/haley-ai-kg#KGEntityType': { label: 'KG Type', pathSegment: 'kg-types' },
+  'http://vital.ai/ontology/haley-ai-kg#KGRelationType': { label: 'KG Type', pathSegment: 'kg-types' },
 };
 
 // Check if a vitaltype is a KGSlot subclass (matches @vital-ai/vital-kg-model-ts isKGSlot pattern)
@@ -124,7 +128,12 @@ const SearchResultDetail: React.FC = () => {
   } else {
     const typeLink = rdfTypes.map((t) => TYPE_ROUTE_MAP[t]).find((entry) => entry != null) || null;
     if (typeLink && spaceId && graphId) {
-      typedDetailPath = `/space/${encodeURIComponent(spaceId)}/graph/${encodeURIComponent(decodedGraphId)}/${typeLink.pathSegment}/${encodeURIComponent(decodedUri)}`;
+      if (typeLink.pathSegment === 'kg-types') {
+        // KG Types use an absolute route, not relative to space/graph
+        typedDetailPath = `/kg-types/${encodeURIComponent(decodedUri)}?mode=view`;
+      } else {
+        typedDetailPath = `/space/${encodeURIComponent(spaceId)}/graph/${encodeURIComponent(decodedGraphId)}/${typeLink.pathSegment}/${encodeURIComponent(decodedUri)}`;
+      }
       typedDetailLabel = `View as ${typeLink.label}`;
     }
   }

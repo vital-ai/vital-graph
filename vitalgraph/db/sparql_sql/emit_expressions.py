@@ -431,10 +431,24 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
             return _require_literal(args[0], ctx, f"LOWER({a})")
 
     if fname == "contains" and len(args) == 2:
-        a, b = expr_to_sql(args[0], ctx), expr_to_sql(args[1], ctx)
+        # Detect CONTAINS(LCASE(x), LCASE(y)) → x ILIKE '%' || y || '%'
+        # This pattern leverages the GIN trigram index for fast substring search.
+        # We intentionally skip _require_literal here: the CASE WHEN type='L'
+        # wrapper prevents PostgreSQL from using the trigram index, causing
+        # 8+ second cold-start queries due to sequential scans.
+        # Non-literal terms (URIs/bnodes) won't match typical search strings.
+        arg0, arg1 = args[0], args[1]
+        if (isinstance(arg0, ExprFunction) and (arg0.name or "").lower() == "lcase"
+                and isinstance(arg1, ExprFunction) and (arg1.name or "").lower() == "lcase"
+                and arg0.args and arg1.args):
+            a = expr_to_sql(arg0.args[0], ctx)
+            b = expr_to_sql(arg1.args[0], ctx)
+            if a and b:
+                return f"({a} ILIKE '%%' || {b} || '%%')"
+        # Plain CONTAINS(x, y) → x LIKE '%' || y || '%' (case-sensitive, still uses trgm)
+        a, b = expr_to_sql(arg0, ctx), expr_to_sql(arg1, ctx)
         if a and b:
-            result = f"(POSITION({b} IN {a}) > 0)"
-            return _require_literal(args[0], ctx, result)
+            return f"({a} LIKE '%%' || {b} || '%%')"
 
     if fname == "strstarts" and len(args) == 2:
         a, b = expr_to_sql(args[0], ctx), expr_to_sql(args[1], ctx)

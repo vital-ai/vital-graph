@@ -39,10 +39,11 @@ export class KGFramesEndpoint extends BaseEndpoint {
     spaceId: string,
     graphId: string,
     uri: string,
+    includeFrameGraph = true,
   ): Promise<FrameGraphResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId, uri });
     return this.request('GET', '/api/graphs/kgframes', {
-      params: { space_id: spaceId, graph_id: graphId, uri },
+      params: { space_id: spaceId, graph_id: graphId, uri, include_frame_graph: includeFrameGraph },
     });
   }
 

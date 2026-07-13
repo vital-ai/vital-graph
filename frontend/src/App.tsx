@@ -33,6 +33,7 @@ const KGFrames = lazy(() => import('./pages/KGFrames'));
 const ObjectDetail = lazy(() => import('./pages/ObjectDetail'));
 const KGEntityDetail = lazy(() => import('./pages/KGEntityDetail'));
 const KGFrameDetail = lazy(() => import('./pages/KGFrameDetail'));
+const KGRelationDetail = lazy(() => import('./pages/KGRelationDetail'));
 const SearchResultDetail = lazy(() => import('./pages/SearchResultDetail'));
 const Triples = lazy(() => import('./pages/Triples'));
 const SPARQL = lazy(() => import('./pages/SPARQL'));
@@ -167,6 +168,7 @@ export default function App() {
               <Route path="/space/:spaceId/graph/:graphId/entity/:entityId" element={<KGEntityDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/search-result/:subjectUri" element={<SearchResultDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/frame/:frameId" element={<KGFrameDetail />} />
+              <Route path="/space/:spaceId/graph/:graphId/relation/:relationId" element={<KGRelationDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types/new" element={<KGTypeDetail />} />
               <Route path="/space/:spaceId/graph/:graphId/kg-types/:kgTypeId" element={<KGTypeDetail />} />
               <Route path="/space/:spaceId/kg-types/new" element={<KGTypeDetail />} />

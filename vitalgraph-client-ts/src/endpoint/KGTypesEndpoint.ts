@@ -131,13 +131,14 @@ export class KGTypesEndpoint extends BaseEndpoint {
 
   async search(
     spaceId: string, query: string,
-    options?: { type?: string; search_mode?: 'keyword' | 'fts' | 'vector' | 'hybrid'; alpha?: number },
+    options?: { type?: string; search_mode?: 'keyword' | 'fts' | 'vector' | 'hybrid'; alpha?: number; page_size?: number; offset?: number },
   ): Promise<KGTypeSearchResponse> {
     validateRequired({ space_id: spaceId, q: query });
     return this.request('GET', '/api/graphs/kgtypes/search', {
       params: {
         space_id: spaceId, q: query,
         type: options?.type, search_mode: options?.search_mode, alpha: options?.alpha,
+        page_size: options?.page_size, offset: options?.offset,
       },
     });
   }

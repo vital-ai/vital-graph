@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
+import { VisualizeInGraphButton } from '../components/VisualizeInGraphButton';
 import { Badge, Spinner } from 'flowbite-react';
 import { HiCollection } from 'react-icons/hi';
 import { ObjectDetailRenderer } from '../components/ObjectDetailRenderer';
@@ -21,6 +22,7 @@ interface SlotSummaryRow {
 }
 
 const KGFrameDetail: React.FC = () => {
+  const navigate = useNavigate();
   const params = useParams();
   const spaceId = params.spaceId || '';
   const graphId = params.graphId ? decodeURIComponent(params.graphId) : '';
@@ -135,6 +137,15 @@ const KGFrameDetail: React.FC = () => {
   return (
     <div data-testid="kgframe-detail-page">
       <ObjectDetailRenderer {...hookData} config={config} />
+
+      {/* Visualize in graph — session picker */}
+      {spaceId && frameId && !hookData.isCreateMode && (
+        <VisualizeInGraphButton
+          spaceId={spaceId}
+          entityUri={frameId}
+          navigate={navigate}
+        />
+      )}
 
       {/* Slot Summary Table */}
       {frameId && !hookData.isCreateMode && (
