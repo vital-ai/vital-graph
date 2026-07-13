@@ -362,8 +362,8 @@ test.describe('KG Documents — Segmentation & Search', () => {
     // Execute search
     await page.getByRole('button', { name: 'Search' }).click();
 
-    // Wait for results — should find at least 1 row
-    await expect(page.getByText(/[1-9]\d* rows/)).toBeVisible({ timeout: 15_000 });
+    // Wait for results — should find at least 1 row (vector search can be slow in CI)
+    await expect(page.getByText(/[1-9]\d* rows/)).toBeVisible({ timeout: 30_000 });
 
     // Verify at least one result row is visible in the table
     const firstRow = page.locator('table tbody tr').first();

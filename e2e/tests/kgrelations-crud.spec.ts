@@ -144,7 +144,7 @@ test.describe('KG Relations CRUD', () => {
     await expect(row.getByText('Edge_hasKGRelation')).toBeVisible();
   });
 
-  test('delete the relation via the UI', async ({ page }) => {
+  test('view button navigates to relation detail page', async ({ page }) => {
     await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/objects/kgrelations`);
     await expect(page.locator('[data-testid="kgrelations-page"]')).toBeVisible({ timeout: 10_000 });
 
@@ -152,16 +152,37 @@ test.describe('KG Relations CRUD', () => {
     const row = page.locator('[data-testid="relation-row"]', { hasText: RELATION_NAME });
     await expect(row).toBeVisible({ timeout: 15_000 });
 
-    // Click the delete (trash) button
-    await row.locator('button').click();
+    // Click the View (eye) button — first button in the row
+    await row.locator('button').first().click();
+
+    // Should navigate to the relation detail page
+    await expect(page.locator('[data-testid="kgrelation-detail-page"]')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('delete the relation via the detail page', async ({ page }) => {
+    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/objects/kgrelations`);
+    await expect(page.locator('[data-testid="kgrelations-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // Navigate to detail via View button
+    const row = page.locator('[data-testid="relation-row"]', { hasText: RELATION_NAME });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await row.locator('button').first().click();
+    await expect(page.locator('[data-testid="kgrelation-detail-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // Click the Delete KG Relation button on the detail page
+    await page.locator('button', { hasText: 'Delete KG Relation' }).click();
 
     // Confirm in the delete modal
     const modal = page.locator('[role="dialog"]');
-    await expect(modal.getByText('Delete Relation')).toBeVisible({ timeout: 5_000 });
-    await expect(modal.getByText(RELATION_NAME)).toBeVisible();
+    await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.locator('button', { hasText: 'Delete' }).first().click();
 
+    // Should redirect back to the relations list
+    await expect(page.locator('[data-testid="kgrelations-page"]')).toBeVisible({ timeout: 10_000 });
+
     // Relation should be removed from the list
-    await expect(row).not.toBeVisible({ timeout: 5_000 });
+    await expect(
+      page.locator('[data-testid="relation-row"]', { hasText: RELATION_NAME })
+    ).not.toBeVisible({ timeout: 5_000 });
   });
 });

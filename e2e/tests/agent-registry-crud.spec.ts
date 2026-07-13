@@ -119,8 +119,9 @@ test.describe('Agent Registry CRUD', () => {
 
     // Should redirect back to the registry list
     await expect(page).toHaveURL(/\/agent-registry$/, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="agent-registry-page"]')).toBeVisible({ timeout: 10_000 });
 
-    // Agent should no longer appear
-    await expect(page.getByText(CRUD_AGENT_NAME)).not.toBeVisible({ timeout: 5_000 });
+    // Agent should no longer appear in the table
+    await expect(page.locator('table').getByText(CRUD_AGENT_NAME)).not.toBeVisible({ timeout: 5_000 });
   });
 });
