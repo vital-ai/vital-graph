@@ -129,6 +129,7 @@ async def assert_plan(
     max_shared_buffers: Optional[int] = None,
     no_spill: bool = True,
     index_only: bool = False,
+    require_zero_heap_fetches: bool = True,
     max_actual_rows_bound: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Assert the plan's *shape and work* — the size-independent scaling gate.
@@ -138,7 +139,12 @@ async def assert_plan(
     - ``max_shared_buffers``: total buffers touched must be under this bound
       (proves O(page) rather than O(N) — the key check).
     - ``no_spill``: no sort/hash may spill to temp files.
-    - ``index_only``: the driving scan must be Index Only with 0 heap fetches.
+    - ``index_only``: the driving scan must be an Index Only Scan node.
+    - ``require_zero_heap_fetches``: also require 0 runtime heap fetches (proves the
+      index truly covers).  Heap fetches depend on the visibility map, which VACUUM
+      can only set for pages below the global xmin horizon — so in a shared test DB
+      with other open snapshots this is environment-sensitive.  Set False when only
+      the plan *shape* (Index Only Scan, no Seq Scan) is the invariant under test.
     - ``max_actual_rows_bound``: no operator may handle more than this many rows
       (e.g. a paged query must not materialize the whole table).
 
@@ -167,8 +173,9 @@ async def assert_plan(
     if index_only:
         assert has_node_type(plan, "Index Only Scan"), (
             f"expected an Index Only Scan; node types={node_types(plan)}")
-        hf = index_only_heap_fetches(plan)
-        assert hf == 0, f"Index Only Scan did {hf} heap fetches (not covering)"
+        if require_zero_heap_fetches:
+            hf = index_only_heap_fetches(plan)
+            assert hf == 0, f"Index Only Scan did {hf} heap fetches (not covering)"
 
     if max_actual_rows_bound is not None:
         got = max_actual_rows(plan)
