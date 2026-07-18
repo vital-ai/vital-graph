@@ -671,12 +671,18 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_sp ON {t['rdf_quad']} (subject_uuid, predicate_uuid)",
-            # Graph-scoped COVERING indexes (Tier 1 — billion_scale_strategy.md §5/§14).
-            # Most queries filter on context_uuid; INCLUDE the other UUIDs so
-            # graph-scoped predicate/subject lookups are index-only (no random
-            # heap reads into a huge heap). Highest-value read change at scale.
+            # Graph-scoped COVERING index (Tier 1 — billion_scale_strategy.md §5/§14).
+            # Serves graph-scoped predicate scans (WHERE context=? AND predicate=?)
+            # index-only — no heap. Measured ~3x fewer buffers vs the pre-existing
+            # predicate index on 100K rows (Index-Only 984 vs Index Scan 2938),
+            # and the page-count advantage grows cold/at scale (each page = a
+            # potential random heap read into a ~120GB heap at 1B).
+            #
+            # NOTE: a (context_uuid, subject_uuid) covering index was evaluated and
+            # dropped as redundant — the 5-column PK (subject, predicate, object,
+            # context, quad_uuid) already serves subject-scoped-within-graph
+            # lookups index-only (measured identical: 4 buffers, 0 heap fetches).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid) INCLUDE (subject_uuid, object_uuid)",
-            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_subj ON {t['rdf_quad']} (context_uuid, subject_uuid) INCLUDE (predicate_uuid, object_uuid)",
 
             # Stats: support the capped stats load (ORDER BY row_count LIMIT).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
