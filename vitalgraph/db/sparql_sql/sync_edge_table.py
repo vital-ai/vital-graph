@@ -97,21 +97,78 @@ async def sync_edge_table_before_delete(
     return deleted
 
 
+async def cleanup_orphan_edges_for_subjects(conn, space_id: str,
+                                            subjects: List[uuid.UUID]) -> int:
+    """Remove edge rows (among the given edge_uuids) whose defining quads are
+    gone — the delete-side counterpart of sync_edge_table_after_insert.
+
+    An edge row is valid only while BOTH its hasEdgeSource and hasEdgeDestination
+    quads exist. After a delete that removed one of them, the row is orphaned.
+    Scoped to `subjects` (the edge_uuids the caller touched) so it stays cheap,
+    and it only removes rows that are genuinely broken (so it's safe to pass any
+    touched subject, edge or not). Returns rows deleted.
+    """
+    if not subjects:
+        return 0
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+    result = await conn.execute(f"""
+        DELETE FROM {t_edge} e
+        WHERE e.edge_uuid = ANY($3)
+          AND (
+            NOT EXISTS (
+                SELECT 1 FROM {t_quad} s
+                WHERE s.subject_uuid = e.edge_uuid AND s.predicate_uuid = $1
+                  AND s.object_uuid = e.source_node_uuid
+                  AND s.context_uuid = e.context_uuid)
+            OR NOT EXISTS (
+                SELECT 1 FROM {t_quad} d
+                WHERE d.subject_uuid = e.edge_uuid AND d.predicate_uuid = $2
+                  AND d.object_uuid = e.dest_node_uuid
+                  AND d.context_uuid = e.context_uuid)
+          )
+    """, _EDGE_SRC_UUID, _EDGE_DST_UUID, subjects)
+    deleted = int(result.split()[-1]) if result else 0
+    if deleted:
+        logger.debug("cleanup_orphan_edges_for_subjects(%s): %d rows", space_id, deleted)
+    return deleted
+
+
 async def resync_edge_table(conn, space_id: str) -> int:
     """Rebuild {space}_edge from scratch by scanning rdf_quad.
 
     Truncates the edge table and repopulates it from hasEdgeSource +
     hasEdgeDestination quad pairs.  Runs ANALYZE afterwards.
     Returns the number of rows inserted.
+
+    A well-formed edge has exactly one hasEdgeSource and one hasEdgeDestination
+    per (edge_uuid, context).  Malformed edges with more than one of either
+    would make the src×dst product collide on the (edge_uuid, context_uuid)
+    primary key, so we de-duplicate with DISTINCT ON (keeping one arbitrary
+    pair per edge) and warn — otherwise the INSERT aborts and, because TRUNCATE
+    already ran, leaves the edge table empty.
     """
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
+
+    malformed = await conn.fetchval(f"""
+        SELECT count(*) FROM (
+            SELECT subject_uuid, context_uuid FROM {t_quad}
+            WHERE predicate_uuid = ANY($1)
+            GROUP BY subject_uuid, context_uuid, predicate_uuid
+            HAVING count(*) > 1
+        ) x
+    """, [_EDGE_SRC_UUID, _EDGE_DST_UUID])
+    if malformed:
+        logger.warning(
+            "resync_edge_table(%s): %d edges have >1 hasEdgeSource/hasEdgeDestination "
+            "(malformed) — keeping one arbitrary pair each", space_id, malformed)
 
     await conn.execute(f"TRUNCATE {t_edge}")
 
     result = await conn.execute(f"""
         INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid, context_uuid)
-        SELECT
+        SELECT DISTINCT ON (src.subject_uuid, src.context_uuid)
             src.subject_uuid,
             src.object_uuid,
             dst.object_uuid,
@@ -122,9 +179,66 @@ async def resync_edge_table(conn, space_id: str) -> int:
             AND dst.context_uuid = src.context_uuid
         WHERE src.predicate_uuid = $1
           AND dst.predicate_uuid = $2
+        ORDER BY src.subject_uuid, src.context_uuid
     """, _EDGE_SRC_UUID, _EDGE_DST_UUID)
 
     inserted = int(result.split()[-1]) if result else 0
     await conn.execute(f"ANALYZE {t_edge}")
     logger.info("resync_edge_table(%s): %d rows inserted", space_id, inserted)
     return inserted
+
+
+async def backfill_edge_table(conn, space_id: str) -> int:
+    """Add only the MISSING edges to {space}_edge — no TRUNCATE, no rebuild.
+
+    Unlike resync_edge_table (which TRUNCATEs and holds ACCESS EXCLUSIVE on the
+    edge table for the whole rebuild, blocking edge-rewrite queries), this is a
+    plain INSERT ... ON CONFLICT DO NOTHING: it takes only ROW EXCLUSIVE, which
+    does NOT conflict with concurrent readers, so edge-table queries keep
+    running while it backfills.  Deletes are kept in sync separately
+    (sync_edge_table_before_delete), so the table has no orphans to remove —
+    drift is always *missing* edges, which this adds.  Returns rows inserted.
+    """
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+
+    result = await conn.execute(f"""
+        INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid, context_uuid)
+        SELECT DISTINCT ON (src.subject_uuid, src.context_uuid)
+            src.subject_uuid,
+            src.object_uuid,
+            dst.object_uuid,
+            src.context_uuid
+        FROM {t_quad} src
+        JOIN {t_quad} dst
+            ON dst.subject_uuid = src.subject_uuid
+            AND dst.context_uuid = src.context_uuid
+        WHERE src.predicate_uuid = $1
+          AND dst.predicate_uuid = $2
+        ORDER BY src.subject_uuid, src.context_uuid
+        ON CONFLICT DO NOTHING
+    """, _EDGE_SRC_UUID, _EDGE_DST_UUID)
+
+    inserted = int(result.split()[-1]) if result else 0
+    if inserted:
+        # ANALYZE takes SHARE UPDATE EXCLUSIVE — does not block readers/writers.
+        await conn.execute(f"ANALYZE {t_edge}")
+    logger.info("backfill_edge_table(%s): %d rows inserted", space_id, inserted)
+    return inserted
+
+
+async def edge_table_drift(conn, space_id: str) -> tuple[int, int]:
+    """Return (edge_source_quads, edge_rows) — a cheap, fully-indexed drift signal.
+
+    edge_source_quads = number of hasEdgeSource quads (≈ number of edges).
+    edge_rows         = rows currently in {space}_edge.
+    A large positive (edge_source_quads - edge_rows) means the edge table has
+    drifted behind rdf_quad (edges inserted via a path that didn't sync it) and
+    should be resynced.  Both counts are single-column index scans.
+    """
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+    src_quads = await conn.fetchval(
+        f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1", _EDGE_SRC_UUID)
+    edge_rows = await conn.fetchval(f"SELECT count(*) FROM {t_edge}")
+    return int(src_quads or 0), int(edge_rows or 0)

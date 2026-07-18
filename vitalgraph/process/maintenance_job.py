@@ -32,6 +32,12 @@ ANALYZE_STALENESS_MINUTES = 10       # skip if analyzed within this many minutes
 VACUUM_DEAD_THRESHOLD = 10_000       # skip if fewer dead tuples
 VACUUM_STALENESS_MINUTES = 30        # skip if vacuumed within this many minutes
 
+# Edge-table integrity: resync {space}_edge when it has drifted behind rdf_quad
+# (edges inserted via a path that didn't sync it). Drift = hasEdgeSource quads
+# minus edge rows; resync when it exceeds both an absolute and a relative floor.
+EDGE_DRIFT_MIN_ABS = 1_000           # ignore drift below this many edges
+EDGE_DRIFT_MIN_PCT = 0.01            # ...and below this fraction of edges
+
 # Cleanup
 CLEANUP_RETENTION_DAYS = 30
 _SECONDS_PER_DAY = 86_400
@@ -116,6 +122,16 @@ class MaintenanceJob:
             vacuum_space = self._pick_worst_for_vacuum(stats)
             if vacuum_space:
                 summary["vacuum"] = await self._run_vacuum(vacuum_space)
+
+            # --- Edge-table integrity (backfill worst-drifted space) ---
+            edge_result = await self._run_edge_integrity(list(stats.keys()))
+            if edge_result:
+                summary["edge_integrity"] = edge_result
+
+            # --- Frame-entity integrity (derived from edge; backfill after) ---
+            fe_result = await self._run_frame_entity_integrity(list(stats.keys()))
+            if fe_result:
+                summary["frame_entity_integrity"] = fe_result
 
             # --- Vector index REINDEX ---
             vector_result = await self._run_vector_reindex(list(stats.keys()))
@@ -394,6 +410,113 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("VACUUM failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    async def _run_edge_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Resync the single worst-drifted {space}_edge table, if any.
+
+        The edge table is a denormalized mirror of the edge quads that several
+        write paths (SPARQL UPDATE, single/batch quad inserts historically) did
+        not keep in sync, so it can silently drift behind rdf_quad and make the
+        edge-table query rewrite under-count. Here we cheaply measure drift for
+        each space and backfill the worst one per cycle, so a stale table
+        self-heals in the background.
+
+        Uses backfill_edge_table (a plain INSERT ... ON CONFLICT DO NOTHING,
+        ROW EXCLUSIVE lock only) rather than the TRUNCATE-based
+        resync_edge_table, so concurrent edge-rewrite queries are NOT blocked
+        while it runs.  Backfill only *adds* missing edges — deletes stay in
+        sync via sync_edge_table_before_delete, so there are no orphans to prune.
+        """
+        from ..db.sparql_sql.sync_edge_table import edge_table_drift, backfill_edge_table
+
+        worst_space = None
+        worst_drift = 0
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    src_quads, edge_rows = await edge_table_drift(conn, space_id)
+            except Exception:
+                continue  # space has no edge table (e.g. non-KG) — skip
+            drift = src_quads - edge_rows
+            if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * src_quads)):
+                if drift > worst_drift:
+                    worst_drift, worst_space = drift, space_id
+
+        if not worst_space:
+            return None
+
+        process_id = None
+        if self._tracker:
+            process_id = await self._tracker.create_process(
+                "edge_backfill", process_subtype=worst_space,
+                instance_id=self._instance_id, status="running")
+            await self._tracker.mark_running(process_id, self._instance_id)
+        try:
+            # Non-blocking backfill (ROW EXCLUSIVE only) — edge-rewrite queries
+            # keep running while missing edges are added.
+            async with self._pool.acquire() as conn:
+                inserted = await backfill_edge_table(conn, worst_space)
+            result = {"space_id": worst_space, "drift": worst_drift, "edges_added": inserted}
+            if self._tracker and process_id:
+                await self._tracker.mark_completed(process_id, result_details=result)
+            logger.info("Edge integrity: backfilled %s (drift=%d → +%d edges)",
+                        worst_space, worst_drift, inserted)
+            return result
+        except Exception as e:
+            if self._tracker and process_id:
+                await self._tracker.mark_failed(process_id, str(e))
+            logger.error("Edge integrity backfill failed for %s: %s", worst_space, e)
+            return {"space_id": worst_space, "error": str(e)}
+
+    async def _run_frame_entity_integrity(self, space_ids: List[str]) -> Optional[Dict]:
+        """Backfill the single worst-drifted {space}_frame_entity table, if any.
+
+        Same shape as _run_edge_integrity: measure drift cheaply per space and
+        backfill the worst one per cycle with the non-blocking
+        `backfill_frame_entity_table` (ROW EXCLUSIVE, no TRUNCATE), so
+        frame-entity-rewrite queries are not blocked. No-op for spaces without
+        connector-frame data (drift 0). frame_entity is derived from the edge
+        table, so this runs after the edge integrity step.
+        """
+        from ..db.sparql_sql.sync_frame_entity_table import (
+            frame_entity_drift, backfill_frame_entity_table)
+
+        worst_space = None
+        worst_drift = 0
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    expected, actual = await frame_entity_drift(conn, space_id)
+            except Exception:
+                continue  # no frame_entity table (e.g. non-KG) — skip
+            drift = expected - actual
+            if drift > max(EDGE_DRIFT_MIN_ABS, int(EDGE_DRIFT_MIN_PCT * expected)):
+                if drift > worst_drift:
+                    worst_drift, worst_space = drift, space_id
+
+        if not worst_space:
+            return None
+
+        process_id = None
+        if self._tracker:
+            process_id = await self._tracker.create_process(
+                "frame_entity_backfill", process_subtype=worst_space,
+                instance_id=self._instance_id, status="running")
+            await self._tracker.mark_running(process_id, self._instance_id)
+        try:
+            async with self._pool.acquire() as conn:
+                inserted = await backfill_frame_entity_table(conn, worst_space)
+            result = {"space_id": worst_space, "drift": worst_drift, "rows_added": inserted}
+            if self._tracker and process_id:
+                await self._tracker.mark_completed(process_id, result_details=result)
+            logger.info("Frame-entity integrity: backfilled %s (drift=%d → +%d rows)",
+                        worst_space, worst_drift, inserted)
+            return result
+        except Exception as e:
+            if self._tracker and process_id:
+                await self._tracker.mark_failed(process_id, str(e))
+            logger.error("Frame-entity integrity backfill failed for %s: %s", worst_space, e)
+            return {"space_id": worst_space, "error": str(e)}
 
     async def _run_stats_rebuild(self, space_id: str) -> Dict:
         """Rebuild rdf_pred_stats and rdf_stats for a space."""

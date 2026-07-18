@@ -187,3 +187,67 @@ async def resync_frame_entity_table(conn, space_id: str) -> int:
     await conn.execute(f"ANALYZE {t_fe}")
     logger.info("resync_frame_entity_table(%s): %d rows inserted", space_id, inserted)
     return inserted
+
+
+async def backfill_frame_entity_table(conn, space_id: str) -> int:
+    """Add only the MISSING frame_entity rows — no TRUNCATE, no rebuild.
+
+    The non-blocking counterpart of resync_frame_entity_table (which TRUNCATEs
+    and holds ACCESS EXCLUSIVE): a plain INSERT ... ON CONFLICT DO NOTHING taking
+    only ROW EXCLUSIVE, so concurrent frame-entity-rewrite queries keep running.
+    Deletes stay in sync via sync_frame_entity_before_delete, so drift is always
+    *missing* rows, which this adds.  No-op (returns 0) when the connector-frame
+    URIs are absent from the space.  Returns rows inserted.
+    """
+    uuids = await _resolve_uuids(conn, space_id)
+    if not uuids:
+        return 0
+    st_uuid, sv_uuid, src_uuid, dst_uuid = uuids
+
+    t_fe = f"{space_id}_frame_entity"
+    t_edge = f"{space_id}_edge"
+    t_quad = f"{space_id}_rdf_quad"
+
+    result = await conn.execute(f"""
+        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
+        SELECT
+            emv.source_node_uuid AS frame_uuid,
+            (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] AS source_entity_uuid,
+            (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] AS dest_entity_uuid,
+            emv.context_uuid
+        FROM {t_edge} emv
+        JOIN {t_quad} st ON st.subject_uuid = emv.dest_node_uuid AND st.predicate_uuid = $1
+        JOIN {t_quad} sv ON sv.subject_uuid = emv.dest_node_uuid AND sv.predicate_uuid = $2
+        WHERE st.object_uuid IN ($3, $4)
+        GROUP BY emv.source_node_uuid, emv.context_uuid
+        HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
+           AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
+        ON CONFLICT DO NOTHING
+    """, st_uuid, sv_uuid, src_uuid, dst_uuid)
+
+    inserted = int(result.split()[-1]) if result else 0
+    if inserted:
+        await conn.execute(f"ANALYZE {t_fe}")
+    logger.info("backfill_frame_entity_table(%s): %d rows inserted", space_id, inserted)
+    return inserted
+
+
+async def frame_entity_drift(conn, space_id: str) -> tuple[int, int]:
+    """Return (expected_rows, actual_rows) — a cheap drift signal for frame_entity.
+
+    expected_rows = min(#source-entity slots, #dest-entity slots): an upper bound
+    on frames that have BOTH endpoints (so a frame with a source but no dest does
+    not register as drift).  actual_rows = current frame_entity rows.  All three
+    are single index/heap counts, and 0 for spaces without connector frames.
+    """
+    t_fe = f"{space_id}_frame_entity"
+    t_quad = f"{space_id}_rdf_quad"
+    src_slots = await conn.fetchval(
+        f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1 AND object_uuid = $2",
+        _ST_UUID, _SRC_UUID)
+    dst_slots = await conn.fetchval(
+        f"SELECT count(*) FROM {t_quad} WHERE predicate_uuid = $1 AND object_uuid = $2",
+        _ST_UUID, _DST_UUID)
+    fe_rows = await conn.fetchval(f"SELECT count(*) FROM {t_fe}")
+    expected = min(int(src_slots or 0), int(dst_slots or 0))
+    return expected, int(fe_rows or 0)
