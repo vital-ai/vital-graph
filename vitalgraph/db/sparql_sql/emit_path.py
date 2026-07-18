@@ -32,11 +32,22 @@ from .collect import _esc
 
 logger = logging.getLogger(__name__)
 
-# Depth fence for recursive property-path CTEs. Kept low: a depth-100 path over
-# a billion-row predicate can produce a work table of tens of billions of rows
-# and exhaust disk (100x_scalability_analysis.md §7). 5 covers realistic
-# hierarchies; raise per-query/space if a workload genuinely needs deeper paths.
-MAX_PATH_DEPTH = 5  # cycle prevention + runaway fence for recursive CTEs
+# Depth fence for recursive property-path CTEs.
+#
+# Must be high enough to NOT truncate legitimate deep-but-narrow traversals —
+# notably arbitrary-depth FRAME NESTING (`frame Edge_hasKGFrame* ...`), which is
+# an active correctness surface (frame_entity_integrity_plan.md §7). A cap that's
+# too low silently under-counts nested-frame relation queries.
+#
+# It is NOT the primary runaway fence: a high-fan-out predicate over a
+# billion-row table blows up in 2-3 steps regardless of this cap, while a low cap
+# only penalizes narrow deep paths. Runaway is fenced by statement_timeout +
+# temp_file_limit (Tier-0 config). This value is just a cycle/backstop.
+#
+# 32 comfortably covers realistic frame nesting (the deepest observed cases are a
+# handful of hops). Confirm the real max nesting depth (frame plan Q5) and, ideally,
+# make this per-query/space configurable rather than a fixed module constant.
+MAX_PATH_DEPTH = 32  # cycle prevention + backstop; NOT the runaway fence (timeout is)
 _cte_counter = 0
 
 def _next_cte_name(prefix: str) -> str:

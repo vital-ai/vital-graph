@@ -51,7 +51,10 @@ def test_invalidate_term_cache_scoped_and_full():
     assert len(_term_cache) == 0
 
 
-def test_property_path_depth_fenced():
-    # Low fence: a deep path over a billion-row predicate must not be allowed to
-    # explode the recursive-CTE work table.
-    assert MAX_PATH_DEPTH <= 5
+def test_property_path_depth_is_finite_and_nesting_safe():
+    # Two-sided: it must be a FINITE backstop (not unbounded recursion), but ALSO
+    # high enough not to truncate legitimate deep-but-narrow traversals like
+    # arbitrary-depth frame nesting (frame_entity_integrity_plan.md §7). A cap too
+    # low silently under-counts nested-frame relation queries; the real runaway
+    # fence is statement_timeout/temp_file_limit, not this value.
+    assert 16 <= MAX_PATH_DEPTH <= 128
