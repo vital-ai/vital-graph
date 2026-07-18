@@ -335,9 +335,12 @@ class TestStringFunctions:
         assert "LOWER" in sql
 
     def test_contains(self):
+        # CONTAINS emits a LIKE '%...%' pattern (not POSITION): LIKE is what lets
+        # the GIN trigram index on term_text serve substring search — POSITION /
+        # the type='L' CASE wrapper forced seq scans (the cold-start regression).
         ctx = _make_ctx({"x": "full"})
         sql = expr_to_sql(_func("contains", _var("x"), _lit("hello")), ctx)
-        assert "POSITION" in sql
+        assert "LIKE" in sql and "POSITION" not in sql
         _assert_valid_sql_fragment(sql)
 
     def test_strstarts(self):
