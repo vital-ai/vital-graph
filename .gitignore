@@ -308,3 +308,10 @@ generated_instances
 deploy/fuseki_deploy_test/docker/databases/
 *.dat
 
+
+# Local prod data exports for perf testing (never commit customer data)
+/local_test_data/
+
+# Generated Wikipedia test documents (regenerate via
+# test_scripts/data/fetch_wikipedia_test_docs.py)
+/test_files/wikipedia/
