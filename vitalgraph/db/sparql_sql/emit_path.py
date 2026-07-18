@@ -44,10 +44,9 @@ logger = logging.getLogger(__name__)
 # only penalizes narrow deep paths. Runaway is fenced by statement_timeout +
 # temp_file_limit (Tier-0 config). This value is just a cycle/backstop.
 #
-# 32 comfortably covers realistic frame nesting (the deepest observed cases are a
-# handful of hops). Confirm the real max nesting depth (frame plan Q5) and, ideally,
-# make this per-query/space configurable rather than a fixed module constant.
-MAX_PATH_DEPTH = 32  # cycle prevention + backstop; NOT the runaway fence (timeout is)
+# Kept at the original 100 so it never truncates real frame nesting. Ideally make
+# this per-query/space configurable rather than a fixed constant.
+MAX_PATH_DEPTH = 100  # cycle prevention + backstop; NOT the runaway fence (timeout is)
 _cte_counter = 0
 
 def _next_cte_name(prefix: str) -> str:
