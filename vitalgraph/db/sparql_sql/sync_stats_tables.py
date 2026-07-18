@@ -105,6 +105,16 @@ async def sync_stats_after_delete(
     )
     updated += len(po_counts)
 
+    # Prune (pred,obj) rows that just churned to empty. rdf_stats is the
+    # unbounded stats table; leaving row_count=0 rows behind lets it grow
+    # without bound under delete churn (they're re-created via the insert-path
+    # upsert if the pair reappears). Only touches pairs we just decremented.
+    await conn.executemany(
+        f"DELETE FROM {t_stats} "
+        f"WHERE predicate_uuid = $1 AND object_uuid = $2 AND row_count <= 0",
+        [(p, o) for (p, o) in po_counts.keys()],
+    )
+
     logger.debug("sync_stats_after_delete(%s): %d pred + %d po decrements",
                  space_id, len(pred_counts), len(po_counts))
     return updated

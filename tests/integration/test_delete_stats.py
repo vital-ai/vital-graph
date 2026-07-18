@@ -1,9 +1,10 @@
 """Integration: the fused DELETE ... RETURNING delete path keeps rdf_stats correct.
 
 delete_entity_graph_bulk now decrements stats from the rows it deletes (via
-DELETE ... RETURNING) instead of a separate read-before-delete scan (100x #10).
-Guard that the incremental stats after a delete match a full resync (ignoring
-the row_count=0 rows a resync prunes — a pre-existing cleanup gap, not this path).
+DELETE ... RETURNING) instead of a separate read-before-delete scan (100x #10),
+and sync_stats_after_delete prunes (pred,obj) rows that churn to empty. Guard
+that the incremental rdf_stats after a delete converge exactly on a full resync
+(no leftover row_count=0 rows).
 """
 
 from __future__ import annotations
@@ -58,11 +59,11 @@ async def test_fused_delete_keeps_stats_correct(space_impl, del_space):
     assert deleted == 6                          # s1+s2 × 3 quads
 
     async with space_impl.db_impl.connection_pool.acquire() as conn:
-        incr_nonzero = {k: v for k, v in (await _stats(conn, sid)).items() if v > 0}
+        incremental = await _stats(conn, sid)        # includes any leftover 0-rows
         await resync_stats_tables(conn, sid)
         resynced = await _stats(conn, sid)
 
     # After deleting s1/s2, only sX's two (pred,obj) pairs remain, each count 1.
-    assert incr_nonzero == resynced == {
-        k: 1 for k in resynced}, (incr_nonzero, resynced)
+    # The delete path prunes zeroed rows, so it converges exactly on a resync.
+    assert incremental == resynced == {k: 1 for k in resynced}, (incremental, resynced)
     assert len(resynced) == 2
