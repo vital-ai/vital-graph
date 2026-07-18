@@ -14,7 +14,13 @@
 #   ./scripts/run-perf-tests.sh                       # up --build → test → down
 #   ./scripts/run-perf-tests.sh --no-down             # leave stack up for debugging
 #   ./scripts/run-perf-tests.sh --skip-build          # faster reruns
+#   ./scripts/run-perf-tests.sh --persist             # reuse PG data volume across runs
+#   ./scripts/run-perf-tests.sh --reset-data          # wipe persisted volume, start clean
 #   ./scripts/run-perf-tests.sh -- -k growth -s       # pass args through to pytest
+#
+# --persist layers docker-compose.test.persist.yml (named volume 'vgtest_pgdata')
+# so a large loaded dataset (e.g. a prod pg_restore) survives down/up cycles.
+# Combine with --skip-build for fast rerun loops; --reset-data clears it.
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -32,8 +38,11 @@ export VG_TEST_PG_USER=postgres
 export VG_TEST_PG_PASSWORD=testpass
 export VG_TEST_SIDECAR_URL=http://localhost:7071
 
+PERSIST_FILE="$PROJECT_ROOT/docker-compose.test.persist.yml"
 TEAR_DOWN=true
 BUILD_FLAG="--build"
+PERSIST=false          # --persist: keep the PG data volume across runs
+RESET_DATA=false       # --reset-data: wipe the persisted volume before starting
 PYTEST_ARGS=()
 PASSTHROUGH=false
 for arg in "$@"; do
@@ -41,28 +50,45 @@ for arg in "$@"; do
   case "$arg" in
     --no-down)    TEAR_DOWN=false ;;
     --skip-build) BUILD_FLAG="" ;;
+    --persist)    PERSIST=true ;;
+    --reset-data) PERSIST=true; RESET_DATA=true ;;
     --)           PASSTHROUGH=true ;;
     *)            PYTEST_ARGS+=("$arg") ;;
   esac
 done
 
+# Compose file set — layer the persist override when --persist/--reset-data.
+# With a named volume the DB survives `down` (only `down -v` removes it), so a
+# large loaded dataset (e.g. a prod dump) is reused across a series of runs.
+COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if $PERSIST; then COMPOSE_FILES+=(-f "$PERSIST_FILE"); fi
+
 cleanup() {
   if $TEAR_DOWN; then
-    echo "🧹 Tearing down test stack..."
-    docker compose -f "$COMPOSE_FILE" down --remove-orphans 2>/dev/null || true
+    # Note: plain `down` (no -v) preserves the named volume under --persist.
+    echo "🧹 Tearing down test stack (data volume preserved if --persist)..."
+    docker compose "${COMPOSE_FILES[@]}" down --remove-orphans 2>/dev/null || true
   else
-    echo "ℹ️  Stack left running (--no-down): docker compose -f docker-compose.test.yml down"
+    echo "ℹ️  Stack left running (--no-down): docker compose ${COMPOSE_FILES[*]} down"
   fi
 }
 trap cleanup EXIT
 
+if $RESET_DATA; then
+  echo "🗑️  --reset-data: removing persisted PG volume for a clean slate..."
+  docker compose "${COMPOSE_FILES[@]}" down -v --remove-orphans 2>/dev/null || true
+fi
+if $PERSIST; then
+  echo "💾 Persistence ON — PG data volume 'vgtest_pgdata' is reused across runs."
+fi
+
 echo "🐳 Starting vg-test stack (PostgreSQL 18, sidecar)..."
-docker compose -f "$COMPOSE_FILE" up -d $BUILD_FLAG postgres sparql-compiler
+docker compose "${COMPOSE_FILES[@]}" up -d $BUILD_FLAG postgres sparql-compiler
 
 echo "⏳ Waiting for PostgreSQL on :$VG_TEST_PG_PORT ..."
 elapsed=0
 until docker exec vitalgraph-test-pg pg_isready -U postgres >/dev/null 2>&1; do
-  [ "$elapsed" -ge "$MAX_WAIT" ] && { echo "❌ PostgreSQL not ready in ${MAX_WAIT}s"; docker compose -f "$COMPOSE_FILE" logs postgres | tail -20; exit 1; }
+  [ "$elapsed" -ge "$MAX_WAIT" ] && { echo "❌ PostgreSQL not ready in ${MAX_WAIT}s"; docker compose "${COMPOSE_FILES[@]}" logs postgres | tail -20; exit 1; }
   sleep 2; elapsed=$((elapsed + 2))
 done
 echo "✅ PostgreSQL ready (${elapsed}s)"

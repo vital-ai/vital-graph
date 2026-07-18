@@ -83,6 +83,18 @@ AGENT_TYPE_LABEL = "E2E Bot"
 AGENT_NAME = "E2E Test Agent"
 AGENT_URI = "urn:e2e:agent:test_bot"
 
+# KG Frames
+FRAME_DEFS = {
+    "alice_profile": {
+        "uri": "urn:e2e:frame:alice_profile",
+        "name": "Alice Profile Frame",
+    },
+    "bob_profile": {
+        "uri": "urn:e2e:frame:bob_profile",
+        "name": "Bob Profile Frame",
+    },
+}
+
 # FTS / Vector indexes & mappings
 FTS_INDEX_NAME = "e2e_fts_idx"
 VECTOR_INDEX_NAME = "e2e_vec_idx"
@@ -116,6 +128,7 @@ async def seed(server_url: str = "http://localhost:8002") -> None:
         await _seed_space(client)
         await _seed_graph(client)
         await _seed_entities(client)
+        await _seed_frames(client)
         await _seed_kgdocument(client)
         await _seed_entity_registry(client)
         await _seed_agent_registry(client)
@@ -182,6 +195,27 @@ async def _seed_entities(client) -> None:
             logger.warning("Entity '%s' creation response: %s", key, getattr(cr, "error_message", cr))
         else:
             logger.info("Created entity '%s' (%s)", key, defn["uri"])
+
+
+async def _seed_frames(client) -> None:
+    """Create the E2E test frames (skip if they already exist)."""
+    from ai_haley_kg_domain.model.KGFrame import KGFrame
+
+    for key, defn in FRAME_DEFS.items():
+        frame = KGFrame()
+        frame.URI = defn["uri"]
+        frame.name = defn["name"]
+
+        try:
+            cr = await client.kgframes.create_kgframes(
+                space_id=SPACE_ID, graph_id=GRAPH_ID, objects=[frame]
+            )
+            if hasattr(cr, "is_success") and not cr.is_success:
+                logger.warning("Frame '%s' creation response: %s", key, getattr(cr, "error_message", cr))
+            else:
+                logger.info("Created frame '%s' (%s)", key, defn["uri"])
+        except Exception as e:
+            logger.warning("Frame '%s' seed skipped: %s", key, e)
 
 
 async def _seed_kgdocument(client) -> None:
