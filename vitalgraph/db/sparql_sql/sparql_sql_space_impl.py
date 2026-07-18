@@ -855,12 +855,20 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
     async def add_rdf_quads_batch_bulk(self, space_id: str,
                                        quads: List[Tuple[Identifier, Identifier, Identifier, Identifier]],
-                                       connection=None) -> int:
-        """Batched insert: resolve all datatypes, bulk-insert terms, bulk-insert quads.
+                                       connection=None,
+                                       rebuild_indexes: Optional[bool] = None) -> int:
+        """Batched insert: resolve datatypes, then insert terms + quads.
 
-        All work happens inside a single transaction.  Uses ``executemany``
-        so asyncpg pipelines the parameter sets and PostgreSQL batches the
-        WAL writes — reducing ~13 k round-trips to 3.
+        All work happens inside a single transaction.  The term/quad insert
+        strategy is chosen from load context (see ``bulk_load``):
+
+        - ``rebuild_indexes=None`` (default, auto): a large batch (>=
+          ``REBUILD_MIN_QUADS``) into a currently-**empty** space drops the
+          secondary indexes, COPYs, and rebuilds them once (fast initial load);
+          otherwise executemany (incremental, index-live, never disrupts reads).
+        - ``rebuild_indexes=True``: force the drop→COPY→rebuild path (operator
+          maintenance-window load into a non-empty space — disrupts reads).
+        - ``rebuild_indexes=False``: force executemany.
         """
         if not quads:
             return 0
@@ -956,24 +964,39 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
                 _t2 = _time.monotonic()
 
-                # Bulk insert terms
+                # Insert terms + quads via the context-appropriate strategy.
+                from .bulk_load import (
+                    REBUILD_MIN_QUADS, insert_terms_quads_executemany,
+                    bulk_load_with_index_rebuild)
                 term_args = list(seen_terms.values())
-                await conn.executemany(
-                    f"INSERT INTO {t['term']} "
-                    f"(term_uuid, term_text, term_type, lang, datatype_id) "
-                    f"VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-                    term_args,
-                )
-                _t3 = _time.monotonic()
 
-                # Bulk insert quads
-                await conn.executemany(
-                    f"INSERT INTO {t['rdf_quad']} "
-                    f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
-                    f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-                    quad_rows,
-                )
-                _t4 = _time.monotonic()
+                use_rebuild = rebuild_indexes
+                quad_empty = term_empty = False
+                if use_rebuild is None:  # auto: only for a large load into an empty space
+                    if len(quad_rows) >= REBUILD_MIN_QUADS:
+                        quad_empty = not await conn.fetchval(
+                            f"SELECT EXISTS(SELECT 1 FROM {t['rdf_quad']} LIMIT 1)")
+                        use_rebuild = quad_empty
+                    else:
+                        use_rebuild = False
+
+                if use_rebuild:
+                    # Direct-COPY terms only when the term table is also empty
+                    # (else a recurring term_uuid would collide on its PK).
+                    term_empty = not await conn.fetchval(
+                        f"SELECT EXISTS(SELECT 1 FROM {t['term']} LIMIT 1)")
+                    await bulk_load_with_index_rebuild(
+                        conn, t, term_args, quad_rows,
+                        self.schema.drop_space_indexes_sql(space_id),
+                        self.schema.create_space_indexes_sql(space_id),
+                        terms_direct=term_empty)
+                    _strategy = "copy+rebuild"
+                else:
+                    await insert_terms_quads_executemany(
+                        conn, t, term_args, quad_rows)
+                    _strategy = "executemany"
+                _t3 = _time.monotonic()
+                _t4 = _t3  # term/quad insert is one fused strategy call
 
                 # Sync edge table with newly inserted subjects
                 from .sync_edge_table import sync_edge_table_after_insert
@@ -995,11 +1018,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
 
                 logger.info(
                     "⏱️  BULK insert: dt_resolve=%.3fs  classify=%.3fs  "
-                    "terms_insert=%.3fs (%d unique)  quads_insert=%.3fs (%d)  "
+                    "tq_insert=%.3fs [%s] (%d terms + %d quads)  "
                     "edge_sync=%.3fs (%d)  fe_sync=%.3fs (%d)  "
                     "stats_sync=%.3fs  total=%.3fs",
-                    _t1 - _t0, _t2 - _t1, _t3 - _t2, len(term_args),
-                    _t4 - _t3, len(quad_rows),
+                    _t1 - _t0, _t2 - _t1, _t3 - _t2, _strategy,
+                    len(term_args), len(quad_rows),
                     _t5 - _t4, edge_inserted,
                     _t5b - _t5, fe_inserted,
                     _t6 - _t5b, _t6 - _t0,
