@@ -106,6 +106,16 @@ def index_only_heap_fetches(plan: Dict[str, Any]) -> int:
                for n in _walk(_root(plan)) if n.get("Node Type") == "Index Only Scan")
 
 
+def estimated_rows(plan: Dict[str, Any]) -> int:
+    """Planner's estimated row count at the root node (Plan Rows)."""
+    return int(_root(plan).get("Plan Rows", 0))
+
+
+def actual_rows(plan: Dict[str, Any]) -> int:
+    """Executor's actual row count at the root node (needs ANALYZE)."""
+    return int(_root(plan).get("Actual Rows", 0))
+
+
 # ---------------------------------------------------------------------------
 # The assertion
 # ---------------------------------------------------------------------------

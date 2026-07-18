@@ -687,6 +687,24 @@ class SparqlSQLSchema:
             # Stats: support the capped stats load (ORDER BY row_count LIMIT).
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
 
+            # Planner statistics (Tier 0 — high_cardinality_slot_value_query_plan.md).
+            # predicate_uuid and object_uuid are strongly correlated for slot-value
+            # triples (a value only ever appears as the object of one predicate), but
+            # Postgres assumes independence and multiplies selectivities -> ~380x
+            # UNDER-estimate of the driving rows -> it seeds an 8-way join at that leaf
+            # and picks all nested loops -> 60s timeouts. Extended (mcv, ndistinct)
+            # stats at a raised target teach it the correlation -> correct estimate ->
+            # hash joins. Stats-only, non-destructive; takes effect on ANALYZE.
+            f"CREATE STATISTICS IF NOT EXISTS stat_{space_id}_quad_po (mcv, ndistinct) "
+            f"ON predicate_uuid, object_uuid FROM {t['rdf_quad']}",
+            f"ALTER STATISTICS stat_{space_id}_quad_po SET STATISTICS 1000",
+            # Per-column targets for the heavily-skewed UUID columns (mitigation §5).
+            f"ALTER TABLE {t['rdf_quad']} "
+            f"ALTER COLUMN predicate_uuid SET STATISTICS 1000, "
+            f"ALTER COLUMN subject_uuid SET STATISTICS 1000, "
+            f"ALTER COLUMN context_uuid SET STATISTICS 500, "
+            f"ALTER COLUMN object_uuid SET STATISTICS 500",
+
             # Datatype lookup index
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_datatype_uri ON {t['datatype']} (datatype_uri)",
 
