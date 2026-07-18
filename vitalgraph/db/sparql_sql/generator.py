@@ -112,7 +112,42 @@ def build_constants_cte(aliases: AliasGenerator, term_table: str) -> str:
 # trip when all requested constants are already known.
 # ---------------------------------------------------------------------------
 
-_term_cache: Dict[tuple, str] = {}   # (space_id, text, type) → uuid str
+from collections import OrderedDict as _OrderedDict
+
+_TERM_CACHE_MAX = 50_000
+
+
+class _LRUCache(_OrderedDict):
+    """OrderedDict with a max-entry cap (LRU eviction).
+
+    Prevents unbounded growth of the module-global term cache — at billion-scale
+    a scan-heavy workload could otherwise push it to tens of GB and OOM the
+    process (see 100x_scalability_analysis.md §5.1).
+    """
+
+    def __init__(self, maxsize: int):
+        super().__init__()
+        self._maxsize = maxsize
+
+    def __getitem__(self, key):
+        self.move_to_end(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        if key in self:
+            self.move_to_end(key)
+            return super().__getitem__(key)
+        return default
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
+_term_cache: _LRUCache = _LRUCache(_TERM_CACHE_MAX)   # (space_id, text, type) → uuid str
 
 
 def invalidate_term_cache(space_id: Optional[str] = None) -> None:
@@ -178,9 +213,15 @@ async def _load_quad_stats(
         pred_stats = {r["predicate_uuid"]: r["row_count"] for r in pred_rows}
 
         quad_rows = await db.execute_query(
+            # Cap the stats load: at 1B quads rdf_stats can have 50-200M rows;
+            # loading all of them transfers GBs and can take minutes. The join
+            # reorder heuristic only needs the most selective (lowest row_count)
+            # pairs, so take the top 10K by ascending row_count. Uses
+            # idx_{space}_rdf_stats_rc. (100x mitigation #4.)
             f"SELECT predicate_uuid::text, object_uuid::text, row_count "
             f"FROM {space_id}_rdf_stats "
-            f"WHERE row_count >= 2 AND row_count <= 200000",
+            f"WHERE row_count >= 2 AND row_count <= 200000 "
+            f"ORDER BY row_count ASC LIMIT 10000",
             conn_params=conn_params, conn=conn,
         )
         quad_stats = {

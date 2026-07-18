@@ -32,7 +32,11 @@ from .collect import _esc
 
 logger = logging.getLogger(__name__)
 
-MAX_PATH_DEPTH = 100  # cycle prevention for recursive CTEs
+# Depth fence for recursive property-path CTEs. Kept low: a depth-100 path over
+# a billion-row predicate can produce a work table of tens of billions of rows
+# and exhaust disk (100x_scalability_analysis.md §7). 5 covers realistic
+# hierarchies; raise per-query/space if a workload genuinely needs deeper paths.
+MAX_PATH_DEPTH = 5  # cycle prevention + runaway fence for recursive CTEs
 _cte_counter = 0
 
 def _next_cte_name(prefix: str) -> str:
