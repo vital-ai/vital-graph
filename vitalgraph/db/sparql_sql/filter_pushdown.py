@@ -24,7 +24,7 @@ from ..jena_sparql.jena_types import (
 )
 
 from .ir import PlanV2, KIND_BGP, KIND_FILTER, KIND_EXTEND
-from .collect import _esc
+from .collect import _esc, _like_escape
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +140,16 @@ def _try_text_filter(
 
     # Build the term table condition
     escaped = _esc(literal_value)
+    # For the LIKE-based operators the needle must also have its LIKE
+    # metacharacters (\ % _) escaped, else CONTAINS(?x, "50%") over-matches.
+    # Escaping keeps the GIN trigram index usable (pg_trgm honors '\').
+    like_esc = _esc(_like_escape(literal_value))
     if name == "contains":
-        term_cond = f"term_text LIKE '%{escaped}%'"
+        term_cond = f"term_text LIKE '%{like_esc}%'"
     elif name == "strstarts":
-        term_cond = f"term_text LIKE '{escaped}%'"
+        term_cond = f"term_text LIKE '{like_esc}%'"
     elif name == "strends":
-        term_cond = f"term_text LIKE '%{escaped}'"
+        term_cond = f"term_text LIKE '%{like_esc}'"
     elif name == "regex":
         raw_flags = ""
         if flags_arg and isinstance(flags_arg, ExprValue):

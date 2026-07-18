@@ -343,6 +343,15 @@ class TestStringFunctions:
         assert "LIKE" in sql and "POSITION" not in sql
         _assert_valid_sql_fragment(sql)
 
+    def test_contains_escapes_like_metachars(self):
+        # The needle is wrapped in REPLACE(...) so LIKE metacharacters (\ % _)
+        # in it are escaped at runtime — otherwise CONTAINS(?x, "50%") would
+        # over-match. Escaping keeps the GIN trigram index usable.
+        ctx = _make_ctx({"x": "full"})
+        sql = expr_to_sql(_func("contains", _var("x"), _lit("hello")), ctx)
+        assert "REPLACE" in sql and "'\\%'" in sql and "'\\_'" in sql
+        _assert_valid_sql_fragment(sql)
+
     def test_strstarts(self):
         ctx = _make_ctx({"x": "full"})
         sql = expr_to_sql(_func("strstarts", _var("x"), _lit("pre")), ctx)

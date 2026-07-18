@@ -86,6 +86,17 @@ class TestPushTextFilters:
         assert f"{SPACE}_term" in sql
         assert plan.filter_exprs is None  # consumed
 
+    def test_contains_pushdown_escapes_like_metachars(self):
+        # CONTAINS(?x, "50%_") must escape the LIKE metacharacters so they match
+        # literally (else '%' and '_' act as wildcards and over-match). Escaping
+        # keeps the GIN trigram index usable (pg_trgm honors '\').
+        bgp = _make_bgp_with_var("x")
+        plan = _make_filter(bgp, _contains_expr("x", "50%_"))
+        push_text_filters(plan, SPACE)
+
+        _, sql = bgp.tagged_constraints[0]
+        assert r"LIKE '%50\%\_%'" in sql, sql
+
     def test_strstarts_pushdown(self):
         bgp = _make_bgp_with_var("x")
         plan = _make_filter(bgp, _strstarts_expr("x", "prefix"))

@@ -58,6 +58,22 @@ def _esc(s: str) -> str:
     return s.replace("'", "''")
 
 
+def _like_escape(s: str) -> str:
+    """Escape LIKE metacharacters (\\ % _) in a needle so it matches literally
+    inside a ``LIKE '%'||needle||'%'`` pattern.
+
+    Without this, SPARQL CONTAINS(?x, "50%") would emit LIKE '%50%%' and the
+    literal % / _ act as wildcards (over-matching). Backslash is escaped first
+    (it's the default LIKE escape char), so the result is safe to embed in a
+    LIKE pattern with the default ESCAPE. pg_trgm honors the '\\' escape, so the
+    escaped characters become literal trigram content and the GIN trigram index
+    stays usable. Quote-escaping (_esc) is applied separately by the caller.
+    """
+    if s is None:
+        return ""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _const_subquery(term_text: str, term_type: str, aliases: AliasGenerator) -> str:
     """Register a constant term and return a placeholder token.
 

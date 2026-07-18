@@ -39,6 +39,22 @@ from .vg_functions import (
 
 logger = logging.getLogger(__name__)
 
+
+def _like_escape_sql(expr: str) -> str:
+    """Wrap a SQL string expression so LIKE metacharacters (\\ % _) are escaped
+    at runtime, making it safe as the needle of a ``LIKE '%'||needle||'%'``
+    pattern (the raw-string counterpart is collect._like_escape).
+
+    Without this, CONTAINS(?x, ?y) where ?y = "50%" would treat the % as a
+    wildcard.  A constant needle is folded by PostgreSQL (trigram index still
+    used); pg_trgm honors the '\\' LIKE-escape, so escaped % _ become literal
+    trigram content.  Backslash is replaced first.
+    """
+    e = f"REPLACE({expr}, '\\', '\\\\')"
+    e = f"REPLACE({e}, '%', '\\%')"
+    e = f"REPLACE({e}, '_', '\\_')"
+    return e
+
 # XSD namespace
 XSD = "http://www.w3.org/2001/XMLSchema#"
 
@@ -444,11 +460,11 @@ def _function_to_sql(expr: ExprFunction, ctx: EmitContext) -> Optional[str]:
             a = expr_to_sql(arg0.args[0], ctx)
             b = expr_to_sql(arg1.args[0], ctx)
             if a and b:
-                return f"({a} ILIKE '%%' || {b} || '%%')"
+                return f"({a} ILIKE '%%' || {_like_escape_sql(b)} || '%%')"
         # Plain CONTAINS(x, y) → x LIKE '%' || y || '%' (case-sensitive, still uses trgm)
         a, b = expr_to_sql(arg0, ctx), expr_to_sql(arg1, ctx)
         if a and b:
-            return f"({a} LIKE '%%' || {b} || '%%')"
+            return f"({a} LIKE '%%' || {_like_escape_sql(b)} || '%%')"
 
     if fname == "strstarts" and len(args) == 2:
         a, b = expr_to_sql(args[0], ctx), expr_to_sql(args[1], ctx)
