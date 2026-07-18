@@ -671,6 +671,15 @@ class SparqlSQLSchema:
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_po ON {t['rdf_quad']} (predicate_uuid, object_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ps ON {t['rdf_quad']} (predicate_uuid, subject_uuid)",
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_sp ON {t['rdf_quad']} (subject_uuid, predicate_uuid)",
+            # Graph-scoped COVERING indexes (Tier 1 — billion_scale_strategy.md §5/§14).
+            # Most queries filter on context_uuid; INCLUDE the other UUIDs so
+            # graph-scoped predicate/subject lookups are index-only (no random
+            # heap reads into a huge heap). Highest-value read change at scale.
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_pred ON {t['rdf_quad']} (context_uuid, predicate_uuid) INCLUDE (subject_uuid, object_uuid)",
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_quad_ctx_subj ON {t['rdf_quad']} (context_uuid, subject_uuid) INCLUDE (predicate_uuid, object_uuid)",
+
+            # Stats: support the capped stats load (ORDER BY row_count LIMIT).
+            f"CREATE INDEX IF NOT EXISTS idx_{space_id}_rdf_stats_rc ON {t['rdf_stats']} (row_count)",
 
             # Datatype lookup index
             f"CREATE INDEX IF NOT EXISTS idx_{space_id}_datatype_uri ON {t['datatype']} (datatype_uri)",

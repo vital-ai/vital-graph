@@ -99,8 +99,11 @@ async def load_scale_space(pool: asyncpg.Pool, space_id: str, n_entities: int,
             columns=["subject_uuid", "predicate_uuid", "object_uuid",
                      "context_uuid", "quad_uuid"])
 
-        await conn.execute(f"ANALYZE {t['term']}")
-        await conn.execute(f"ANALYZE {t['rdf_quad']}")
+        # VACUUM (ANALYZE): fresh stats + set the visibility map so index-only
+        # scans on the covering indexes don't do heap fetches (COPY leaves the
+        # heap all-not-visible until vacuumed). VACUUM can't run in a txn.
+        await conn.execute(f"VACUUM (ANALYZE) {t['term']}")
+        await conn.execute(f"VACUUM (ANALYZE) {t['rdf_quad']}")
         return len(quad_rows)
 
 
