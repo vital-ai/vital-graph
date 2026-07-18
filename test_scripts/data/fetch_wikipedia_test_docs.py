@@ -14,14 +14,17 @@ Usage:
 Articles can be customised by editing the ARTICLES list below.
 """
 
+import argparse
 import html
 import json
 import os
 import re
 import sys
 import textwrap
+import time
 import urllib.request
 import urllib.error
+import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -47,6 +50,41 @@ WIKI_API = "https://en.wikipedia.org/api/rest_v1/page/html/{title}"
 
 # Also fetch mobile-sections-remaining for cleaner section data
 WIKI_SECTIONS_API = "https://en.wikipedia.org/api/rest_v1/page/mobile-sections/{title}"
+
+# Action API for random articles (namespace 0 = main/articles)
+WIKI_RANDOM_API = (
+    "https://en.wikipedia.org/w/api.php?action=query&format=json"
+    "&list=random&rnnamespace=0&rnlimit={limit}"
+)
+
+
+def _slug(title: str) -> str:
+    """Filesystem-safe .md filename from an article title."""
+    s = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_").lower()
+    return (s or "article")[:80] + ".md"
+
+
+def fetch_random_titles(n: int) -> List[str]:
+    """Return n random main-namespace article titles (URL slug form)."""
+    titles: List[str] = []
+    seen = set()
+    while len(titles) < n:
+        limit = min(50, n - len(titles) + 5)  # over-request to cover dupes
+        url = WIKI_RANDOM_API.format(limit=limit)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "VitalGraph-TestDataFetcher/1.0 (test data generation)",
+        })
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for item in data.get("query", {}).get("random", []):
+            t = item["title"].replace(" ", "_")
+            if t not in seen:
+                seen.add(t)
+                titles.append(t)
+            if len(titles) >= n:
+                break
+        time.sleep(0.2)
+    return titles[:n]
 
 
 # ---------------------------------------------------------------------------
@@ -251,16 +289,24 @@ def html_to_markdown(html_content: str) -> str:
 # Wikipedia API helpers
 # ---------------------------------------------------------------------------
 
-def fetch_article_html(title: str) -> str:
-    """Fetch article HTML from Wikipedia REST API."""
-    url = WIKI_API.format(title=title)
+def fetch_article_html(title: str, max_retries: int = 5) -> str:
+    """Fetch article HTML from Wikipedia REST API, retrying on 429 with backoff."""
+    url = WIKI_API.format(title=urllib.parse.quote(title, safe=""))
     req = urllib.request.Request(url, headers={
-        "User-Agent": "VitalGraph-TestDataFetcher/1.0 (test data generation)",
+        "User-Agent": "VitalGraph-TestDataFetcher/1.0 (https://vital.ai; test data generation)",
         "Accept": "text/html; charset=utf-8; profile=\"https://www.mediawiki.org/wiki/Specs/HTML/2.1.0\"",
     })
-
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries - 1:
+                backoff = 2 ** attempt  # 1, 2, 4, 8, 16s
+                print(f"(429, backing off {backoff}s)", end=" ", flush=True)
+                time.sleep(backoff)
+                continue
+            raise
 
 
 def clean_markdown(md: str, title: str) -> str:
@@ -330,16 +376,25 @@ def fetch_and_convert(title: str, output_path: Path) -> dict:
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main(count: int, delay: float):
     print(f"Wikipedia Test Document Fetcher")
-    print(f"Output directory: {OUTPUT_DIR}\n")
+    print(f"Output directory: {OUTPUT_DIR}")
+    print(f"Target: {count} article(s)\n")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Curated articles first, then top up with random ones to reach `count`.
+    work: List[Tuple[str, str]] = list(ARTICLES)
+    if count > len(work):
+        print(f"  Fetching {count - len(work)} random article titles...")
+        for t in fetch_random_titles(count - len(work)):
+            work.append((t, _slug(t)))
+    work = work[:count]
 
     stats = []
     errors = []
 
-    for title, filename in ARTICLES:
+    for title, filename in work:
         output_path = OUTPUT_DIR / filename
         try:
             s = fetch_and_convert(title, output_path)
@@ -350,6 +405,8 @@ def main():
         except Exception as e:
             print(f"FAILED ({e})")
             errors.append((title, str(e)))
+        if delay:
+            time.sleep(delay)
 
     # Write manifest
     if stats:
@@ -375,4 +432,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Fetch Wikipedia articles as markdown for document/segmentation testing")
+    parser.add_argument("--count", type=int, default=len(ARTICLES),
+                        help=f"Number of articles to fetch (default: {len(ARTICLES)} curated; "
+                             f"more are filled with random articles)")
+    parser.add_argument("--delay", type=float, default=0.3,
+                        help="Seconds to sleep between fetches (be polite to Wikipedia)")
+    args = parser.parse_args()
+    main(args.count, args.delay)
