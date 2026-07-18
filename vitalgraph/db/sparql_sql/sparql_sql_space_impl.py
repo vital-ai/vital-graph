@@ -50,6 +50,32 @@ def _generate_term_uuid(
     return uuid.uuid5(_VITALGRAPH_NS, "\x00".join(parts))
 
 
+def _concrete_subjects_from_update_ops(ops) -> set:
+    """Return the set of concrete (URI) subject strings a SPARQL update touches.
+
+    Covers the literal quads of INSERT/DELETE DATA, DELETE WHERE, and the
+    (concrete parts of) INSERT/DELETE templates in MODIFY. Subjects that are
+    variables (bound by a WHERE clause) are skipped — they can't be enumerated
+    without executing, and are handled by the background edge self-heal.
+    Used to keep {space}_edge in sync after execute_sparql_update.
+    """
+    from ..jena_sparql.jena_types import (
+        URINode, UpdateDataInsert, UpdateDataDelete, UpdateModify, UpdateDeleteWhere,
+    )
+    subjects: set = set()
+    for op in ops or []:
+        if isinstance(op, (UpdateDataInsert, UpdateDataDelete, UpdateDeleteWhere)):
+            quads = getattr(op, 'quads', [])
+        elif isinstance(op, UpdateModify):
+            quads = list(getattr(op, 'delete_quads', [])) + list(getattr(op, 'insert_quads', []))
+        else:
+            continue
+        for q in quads:
+            if isinstance(q.subject, URINode):
+                subjects.add(q.subject.value)
+    return subjects
+
+
 class _SparqlSQLGraphsAdapter:
     """Lightweight adapter so endpoint code can call ``db_space_impl.graphs.list_graphs()``
     and ``db_space_impl.graphs.get_graph()`` exactly like the fuseki_postgresql backend."""
@@ -708,6 +734,14 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                     s_uuid, p_uuid, o_uuid, g_uuid,
                 )
+                # Keep {space}_edge in sync — this path bypasses the bulk sync,
+                # so edge quads inserted here would otherwise never reach the
+                # edge table (see edge_table_integrity_bug). Cheap + idempotent.
+                # frame_entity is derived from the edge table, so sync it after.
+                from .sync_edge_table import sync_edge_table_after_insert
+                await sync_edge_table_after_insert(conn, space_id, [s_uuid])
+                from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
+                await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
             return True
         except Exception as e:
             logger.error("add_rdf_quad(%s) failed: %s", space_id, e)
@@ -779,6 +813,8 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             t = self.schema.get_table_names(space_id)
             inserted = 0
 
+            subjects: set = set()
+
             async def _do(conn):
                 nonlocal inserted
                 for s, p, o, g in quads:
@@ -794,6 +830,17 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     )
                     if 'INSERT' in result:
                         inserted += 1
+                    subjects.add(s_uuid)
+                # Keep {space}_edge in sync — this path bypasses the bulk sync,
+                # so edge quads inserted here would otherwise never reach the
+                # edge table (see edge_table_integrity_bug). Idempotent
+                # (ON CONFLICT DO NOTHING), bounded by this batch's subjects.
+                # frame_entity is derived from the edge table, so sync it after.
+                if subjects:
+                    from .sync_edge_table import sync_edge_table_after_insert
+                    await sync_edge_table_after_insert(conn, space_id, list(subjects))
+                    from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
+                    await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
 
             if connection:
                 await _do(connection)
@@ -1050,18 +1097,23 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     edge_deleted = await sync_edge_table_before_delete(
                         conn, space_id, subject_uuids, context_uuid=g_uuid)
 
-                    # Step 2c: Sync stats — decrement before quads are deleted
-                    from .sync_stats_tables import sync_stats_for_deleted_subjects
-                    await sync_stats_for_deleted_subjects(
-                        conn, space_id, subject_uuids, context_uuid=g_uuid)
-
-                    # Step 3: Delete all quads for those subjects in one statement
-                    result = await conn.execute(
+                    # Step 3 (fused): DELETE ... RETURNING, then decrement stats
+                    # from the rows actually deleted — avoids the separate
+                    # read-before-delete scan of the same rows (100x mitigation #10;
+                    # halves delete-path I/O). Edge/frame_entity sync stayed BEFORE
+                    # the delete (they need the quads); only stats moves after.
+                    from .sync_stats_tables import sync_stats_after_delete
+                    deleted_rows = await conn.fetch(
                         f"DELETE FROM {t['rdf_quad']} "
-                        f"WHERE subject_uuid = ANY($1) AND context_uuid = $2",
+                        f"WHERE subject_uuid = ANY($1) AND context_uuid = $2 "
+                        f"RETURNING subject_uuid, predicate_uuid, object_uuid, context_uuid",
                         subject_uuids, g_uuid,
                     )
-                    deleted = int(result.split()[-1]) if result else 0
+                    deleted = len(deleted_rows)
+                    if deleted_rows:
+                        quad_rows = [(r['subject_uuid'], r['predicate_uuid'],
+                                      r['object_uuid'], r['context_uuid']) for r in deleted_rows]
+                        await sync_stats_after_delete(conn, space_id, quad_rows)
 
             _t1 = _time.monotonic()
             logger.info(
@@ -1436,6 +1488,35 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 sql = gen.sql
                 if sql:
                     await conn.execute(sql)
+
+                    # Keep {space}_edge in sync — this write path bypasses the
+                    # bulk sync. For every concrete subject the update touched:
+                    # add edges completed by inserts, and remove edges broken by
+                    # deletes. Subjects bound only by a WHERE clause (variables)
+                    # can't be enumerated here; those are covered by the
+                    # background edge self-heal (MaintenanceJob._run_edge_integrity).
+                    try:
+                        subj_uris = _concrete_subjects_from_update_ops(cr.update_ops)
+                        if subj_uris:
+                            from .sync_edge_table import (
+                                sync_edge_table_after_insert,
+                                cleanup_orphan_edges_for_subjects,
+                            )
+                            subj_uuids = [_generate_term_uuid(u, 'U') for u in subj_uris]
+                            await sync_edge_table_after_insert(conn, space_id, subj_uuids)
+                            await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
+                            # frame_entity is derived from the edge table — reconcile
+                            # the touched frames: drop then re-derive so a frame that
+                            # gained/lost an entity slot is corrected. WHERE-bound
+                            # subjects are covered by the background self-heal.
+                            from .sync_frame_entity_table import (
+                                sync_frame_entity_after_edge_insert,
+                                sync_frame_entity_before_delete,
+                            )
+                            await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
+                            await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
+                    except Exception as ee:
+                        logger.debug("edge sync after SPARQL UPDATE failed (non-critical): %s", ee)
 
             # Invalidate entity graph cache entries affected by this update
             try:
