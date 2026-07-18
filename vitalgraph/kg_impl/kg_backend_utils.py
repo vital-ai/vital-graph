@@ -24,6 +24,112 @@ from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
 from .kg_graph_retrieval_utils import GraphObjectRetriever
 
 
+# ---------------------------------------------------------------------------
+# Fast default-listing helpers (shared by KGEntities and the generic
+# list_objects path for KGRelations / KGTypes).
+#
+# These bypass the SPARQL pipeline for the *plain default* listing: order by
+# the internal ``subject_uuid`` (index-friendly) and resolve text only for the
+# page, avoiding the ``ORDER BY ?s`` full-URI resolution that dominates cold
+# renders on large spaces.  They key on whatever type predicate the caller's
+# SPARQL uses (``vitaltype`` for entities, ``rdf:type`` for the generic path)
+# with the exact same type-URI set, and use COUNT(DISTINCT)/SELECT DISTINCT so
+# the result equals the SPARQL ``COUNT(DISTINCT ?x)`` regardless of multi-typing.
+# ---------------------------------------------------------------------------
+
+RDF_TYPE_URI = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
+VITALTYPE_URI = 'http://vital.ai/ontology/vital-core#vitaltype'
+
+
+def graph_is_uri(graph_id: Optional[str]) -> bool:
+    """True if graph_id is an absolute IRI whose context UUID we can derive.
+
+    Accepts ``http(s)://…`` and ``urn:…``; rejects empty and the literal
+    ``"default"`` (a bare word with no scheme → ambiguous context).
+    """
+    return bool(graph_id) and graph_id != "default" and ":" in graph_id
+
+
+def _resolve_space_impl(backend):
+    """Return the SparqlSQLSpaceImpl from either the impl itself or an adapter.
+
+    Callers pass whatever `self.backend` they hold — sometimes the space impl
+    directly (KGEntities/KGFrames), sometimes a backend adapter wrapping it
+    (the generic list_objects path). The direct-SQL helpers need the impl's
+    `.schema` and `.db_impl`; return None for non-sparql_sql backends so the
+    caller falls back to SPARQL.
+    """
+    if hasattr(backend, 'schema') and hasattr(backend, 'db_impl'):
+        return backend
+    inner = getattr(backend, 'backend', None)
+    if inner is not None and hasattr(inner, 'schema') and hasattr(inner, 'db_impl'):
+        return inner
+    return None
+
+
+async def fast_typed_subject_count(backend, space_id: str, graph_id: str,
+                                   type_predicate_uri: str,
+                                   type_uris) -> Optional[int]:
+    """`COUNT(DISTINCT subject_uuid)` for subjects of the given type(s), or None."""
+    if not graph_is_uri(graph_id):
+        return None
+    impl = _resolve_space_impl(backend)
+    if impl is None:
+        return None
+    try:
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        t = impl.schema.get_table_names(space_id)
+        p_uuid = _generate_term_uuid(type_predicate_uri, 'U')
+        obj_uuids = [_generate_term_uuid(u, 'U') for u in type_uris]
+        g_uuid = _generate_term_uuid(graph_id, 'U')
+        async with impl.db_impl.connection_pool.acquire() as conn:
+            n = await conn.fetchval(
+                f"SELECT COUNT(DISTINCT subject_uuid) FROM {t['rdf_quad']} "
+                f"WHERE predicate_uuid = $1 AND object_uuid = ANY($2::uuid[]) "
+                f"AND context_uuid = $3",
+                p_uuid, obj_uuids, g_uuid,
+            )
+        return int(n or 0)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "fast_typed_subject_count failed, caller will fall back", exc_info=True)
+        return None
+
+
+async def fast_typed_subject_page(backend, space_id: str, graph_id: str,
+                                  type_predicate_uri: str, type_uris,
+                                  page_size: int, offset: int) -> Optional[list]:
+    """Ordered (`subject_uuid`) page of subject URIs of the given type(s), or None."""
+    if not graph_is_uri(graph_id):
+        return None
+    impl = _resolve_space_impl(backend)
+    if impl is None:
+        return None
+    try:
+        from ..db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+        t = impl.schema.get_table_names(space_id)
+        p_uuid = _generate_term_uuid(type_predicate_uri, 'U')
+        obj_uuids = [_generate_term_uuid(u, 'U') for u in type_uris]
+        g_uuid = _generate_term_uuid(graph_id, 'U')
+        async with impl.db_impl.connection_pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT tt.term_text AS uri "
+                f"FROM (SELECT DISTINCT subject_uuid FROM {t['rdf_quad']} "
+                f"      WHERE predicate_uuid = $1 "
+                f"      AND object_uuid = ANY($2::uuid[]) "
+                f"      AND context_uuid = $3 "
+                f"      ORDER BY subject_uuid LIMIT $4 OFFSET $5) sub "
+                f"JOIN {t['term']} tt ON tt.term_uuid = sub.subject_uuid "
+                f"ORDER BY sub.subject_uuid",
+                p_uuid, obj_uuids, g_uuid, page_size, offset,
+            )
+        return [r['uri'] for r in rows]
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "fast_typed_subject_page failed, caller will fall back", exc_info=True)
+        return None
+
+
 @dataclass
 class BackendOperationResult:
     """Result of a backend operation."""
@@ -936,6 +1042,47 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except Exception as e:
             self.logger.error("execute_sparql_update failed: %s", e)
             return False
+
+    # ------------------------------------------------------------------
+    # fast_entity_count — direct-SQL count for the default KGEntity listing
+    # ------------------------------------------------------------------
+
+    # The four KGEntity subclass objects (must stay in sync with
+    # _KGENTITY_TYPE_CLAUSE in kgentity_list_impl.py). Entities key on
+    # ``vitaltype`` (one per object → the fast count is exact).
+    _KGENTITY_TYPE_URIS = (
+        'http://vital.ai/ontology/haley-ai-kg#KGEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGNewsEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGProductEntity',
+        'http://vital.ai/ontology/haley-ai-kg#KGWebEntity',
+    )
+
+    async def fast_entity_count(self, space_id: str, graph_id: str,
+                                entity_type_uri: Optional[str] = None,
+                                search: Optional[str] = None,
+                                prop_filters: str = "",
+                                sort_by: Optional[str] = None) -> Optional[int]:
+        """Exact entity count for the *plain default* listing (see
+        ``fast_typed_subject_count``). Returns ``None`` (→ SPARQL fallback) for
+        any filtered/searched/sorted/typed shape."""
+        if entity_type_uri or search or prop_filters or sort_by:
+            return None
+        return await fast_typed_subject_count(
+            self.backend, space_id, graph_id, VITALTYPE_URI, self._KGENTITY_TYPE_URIS)
+
+    async def fast_entity_page(self, space_id: str, graph_id: str,
+                               page_size: int, offset: int,
+                               entity_type_uri: Optional[str] = None,
+                               search: Optional[str] = None,
+                               prop_filters: str = "",
+                               sort_by: Optional[str] = None) -> Optional[List[str]]:
+        """Ordered (`subject_uuid`) page of entity URIs for the *plain default*
+        listing (see ``fast_typed_subject_page``). ``None`` → SPARQL fallback."""
+        if entity_type_uri or search or prop_filters or sort_by:
+            return None
+        return await fast_typed_subject_page(
+            self.backend, space_id, graph_id, VITALTYPE_URI,
+            self._KGENTITY_TYPE_URIS, page_size, offset)
 
     # ------------------------------------------------------------------
     # validate_parent_connection

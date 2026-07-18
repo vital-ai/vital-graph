@@ -159,6 +159,24 @@ test.describe('KG Relations CRUD', () => {
     await expect(page.locator('[data-testid="kgrelation-detail-page"]')).toBeVisible({ timeout: 10_000 });
   });
 
+  test('relation detail page shows properties and Visualize button', async ({ page }) => {
+    await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/objects/kgrelations`);
+    await expect(page.locator('[data-testid="kgrelations-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // Navigate to detail via View button
+    const row = page.locator('[data-testid="relation-row"]', { hasText: RELATION_NAME });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await row.locator('button').first().click();
+    await expect(page.locator('[data-testid="kgrelation-detail-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // Properties table should contain the edge source and destination URIs
+    await expect(page.getByText(ENTITY_A_URI)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(ENTITY_B_URI)).toBeVisible();
+
+    // Should display the "Visualize in Graph" button
+    await expect(page.getByText('Visualize in Graph')).toBeVisible();
+  });
+
   test('delete the relation via the detail page', async ({ page }) => {
     await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/objects/kgrelations`);
     await expect(page.locator('[data-testid="kgrelations-page"]')).toBeVisible({ timeout: 10_000 });

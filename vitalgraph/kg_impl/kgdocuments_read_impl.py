@@ -20,6 +20,7 @@ _MANAGED_SEGMENT_TYPES = frozenset([
     "urn:segtype:segmentation_parent",
     "urn:segtype:markdown_section",
     "urn:segtype:text_chunk",
+    "urn:segtype:paragraph",
 ])
 
 # KGDocument type URIs (including subclasses)

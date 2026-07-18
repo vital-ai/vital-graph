@@ -154,6 +154,16 @@ export class ApiService {
     }) as any;
   }
 
+  async getDocuments(spaceId: string, graphId: string, options: {
+    page_size?: number; offset?: number; search?: string; include_segments?: boolean;
+  } = {}): Promise<QuadResponse> {
+    return vgClient.kgdocuments.list(
+      spaceId, graphId,
+      options.page_size ?? 10, options.offset ?? 0,
+      options.search, options.include_segments ?? false,
+    ) as any;
+  }
+
   async getEntity(spaceId: string, graphId: string, entityUri: string): Promise<QuadResponse> {
     return vgClient.kgentities.get(spaceId, graphId, entityUri) as any;
   }

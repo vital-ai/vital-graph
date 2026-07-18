@@ -167,7 +167,7 @@ test.describe('Indexes CRUD — Vector', () => {
     await expect(modal.getByRole('heading', { name: 'Delete Index' })).toBeVisible({ timeout: 5_000 });
     await modal.locator('button', { hasText: 'Delete' }).first().click();
 
-    // Index should be removed (allow extra time for backend deletion)
-    await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).not.toBeVisible({ timeout: 10_000 });
+    // Index should be removed (allow extra time for backend deletion + UI refresh)
+    await expect(page.locator('table').getByText(VECTOR_INDEX_NAME)).not.toBeVisible({ timeout: 20_000 });
   });
 });

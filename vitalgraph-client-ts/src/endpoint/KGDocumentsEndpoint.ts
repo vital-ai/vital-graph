@@ -11,10 +11,10 @@ import type {
 } from '../response/types.js';
 
 export class KGDocumentsEndpoint extends BaseEndpoint {
-  async list(spaceId: string, graphId: string, pageSize = 10, offset = 0, search?: string): Promise<KGDocumentsListResponse> {
+  async list(spaceId: string, graphId: string, pageSize = 10, offset = 0, search?: string, includeSegments = false): Promise<KGDocumentsListResponse> {
     validateRequired({ space_id: spaceId, graph_id: graphId });
     return this.request('GET', '/api/graphs/kgdocuments', {
-      params: { space_id: spaceId, graph_id: graphId, page_size: pageSize, offset, search },
+      params: { space_id: spaceId, graph_id: graphId, page_size: pageSize, offset, search, include_segments: includeSegments },
     });
   }
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
-import { Alert, Badge, Button, FileInput, Modal, Select, Spinner, TextInput, ToggleSwitch, Card } from 'flowbite-react';
+import { Alert, Badge, Button, FileInput, Modal, Pagination, Select, Spinner, TextInput, ToggleSwitch, Card } from 'flowbite-react';
 import { HiSearch, HiDocumentText, HiChevronRight, HiRefresh, HiPlus, HiUpload } from 'react-icons/hi';
 import { type SpaceInfo } from '../types/api';
 import { type GraphInfo } from '../types/graphs';
@@ -10,7 +10,23 @@ import { vgClient } from '../services/ApiService';
 import {
   shortenUri,
   extractGraphName,
+  groupQuadsBySubject,
+  getFirstValue,
+  HAS_NAME,
 } from '../utils/QuadUtils';
+
+// KGDocument property predicates (for parsing endpoint quads → DocumentEntry)
+const HALEY = 'http://vital.ai/ontology/haley-ai-kg#';
+const DOC_PRED = {
+  headline: `${HALEY}hasKGDocumentHeadline`,
+  docType: `${HALEY}hasKGDocumentType`,
+  segIndex: `${HALEY}hasKGDocumentSegmentIndex`,
+  segMethod: `${HALEY}hasKGDocumentSegmentMethodURI`,
+  segType: `${HALEY}hasKGDocumentSegmentTypeURI`,
+  tokenLen: `${HALEY}hasKGDocumentSegmentTokenLength`,
+  url: `${HALEY}hasKGDocumentURL`,
+  indexDt: `${HALEY}hasKGIndexDateTime`,
+};
 
 
 interface DocumentEntry {
@@ -43,6 +59,9 @@ const KGDocuments: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showSegments, setShowSegments] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(25);
+  const [totalCount, setTotalCount] = useState(0);
   const [segStatusMap, setSegStatusMap] = useState<Record<string, { status: string; segment_count?: number }>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -88,65 +107,61 @@ const KGDocuments: React.FC = () => {
   }, [selectedSpace]);
   useEffect(() => { fetchGraphs(); }, [fetchGraphs]);
 
-  // Fetch documents
+  // Fetch documents via the paginated /kgdocuments endpoint. Segment
+  // inclusion/exclusion is handled server-side by the include_segments flag
+  // (default off = top-level documents only), so the whole space is browsable
+  // page-by-page rather than capped client-side.
   const fetchDocuments = useCallback(async () => {
     if (!selectedSpace || !selectedGraph) {
       setDocuments([]);
+      setTotalCount(0);
       return;
     }
     try {
       setLoading(true);
       setError(null);
 
-      // Use SPARQL to list KGDocuments
-      const sparql = `
-        PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-        PREFIX vital: <http://vital.ai/ontology/vital-core#>
-        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+      const data = await apiService.getDocuments(selectedSpace, selectedGraph, {
+        page_size: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        search: debouncedSearch || undefined,
+        include_segments: showSegments,
+      });
 
-        SELECT ?s ?name ?headline ?docType ?segIndex ?segMethod ?segType ?tokenLen ?docUrl ?indexDt
-        WHERE {
-          GRAPH <${selectedGraph}> {
-            ?s rdf:type haley:KGDocument .
-            OPTIONAL { ?s vital:hasName ?name }
-            OPTIONAL { ?s haley:hasKGDocumentHeadline ?headline }
-            OPTIONAL { ?s haley:hasKGDocumentType ?docType }
-            OPTIONAL { ?s haley:hasKGDocumentSegmentIndex ?segIndex }
-            OPTIONAL { ?s haley:hasKGDocumentSegmentMethodURI ?segMethod }
-            OPTIONAL { ?s haley:hasKGDocumentSegmentTypeURI ?segType }
-            OPTIONAL { ?s haley:hasKGDocumentSegmentTokenLength ?tokenLen }
-            OPTIONAL { ?s haley:hasKGDocumentURL ?docUrl }
-            OPTIONAL { ?s haley:hasKGIndexDateTime ?indexDt }
-          }
-        }
-        ORDER BY ?segIndex ?s
-        LIMIT 200
-      `;
-
-      const response = await apiService.executeSparqlQuery(selectedSpace, sparql);
-      const results: DocumentEntry[] = (response?.results?.bindings || []).map((row: Record<string, {value?: string}>) => ({
-        uri: row.s?.value || '',
-        name: row.name?.value || '',
-        headline: row.headline?.value || '',
-        document_type: row.docType?.value || '',
-        segment_index: row.segIndex?.value != null ? parseInt(row.segIndex.value) : null,
-        segment_method: row.segMethod?.value || '',
-        segment_type: row.segType?.value || '',
-        token_length: row.tokenLen?.value != null ? parseInt(row.tokenLen.value) : null,
-        url: row.docUrl?.value || '',
-        index_datetime: row.indexDt?.value || '',
-      }));
+      const bySubject = groupQuadsBySubject(data.results || []);
+      const results: DocumentEntry[] = [];
+      for (const [uri, preds] of bySubject) {
+        const segIdx = getFirstValue(preds, DOC_PRED.segIndex);
+        const tokLen = getFirstValue(preds, DOC_PRED.tokenLen);
+        results.push({
+          uri,
+          name: getFirstValue(preds, HAS_NAME) || shortenUri(uri),
+          headline: getFirstValue(preds, DOC_PRED.headline),
+          document_type: getFirstValue(preds, DOC_PRED.docType),
+          segment_index: segIdx ? parseInt(segIdx) : null,
+          segment_method: getFirstValue(preds, DOC_PRED.segMethod),
+          segment_type: getFirstValue(preds, DOC_PRED.segType),
+          token_length: tokLen ? parseInt(tokLen) : null,
+          url: getFirstValue(preds, DOC_PRED.url),
+          index_datetime: getFirstValue(preds, DOC_PRED.indexDt),
+        });
+      }
 
       setDocuments(results);
+      setTotalCount(data.total_count ?? results.length);
     } catch (e: unknown) {
       setError(`Failed to load documents: ${e instanceof Error ? e.message : String(e)}`);
       setDocuments([]);
+      setTotalCount(0);
     } finally {
       setLoading(false);
     }
-  }, [selectedSpace, selectedGraph]);
+  }, [selectedSpace, selectedGraph, itemsPerPage, currentPage, debouncedSearch, showSegments]);
 
   useEffect(() => { fetchDocuments(); }, [fetchDocuments]);
+
+  // Reset to page 1 when the search term or segment toggle changes.
+  useEffect(() => { setCurrentPage(1); }, [debouncedSearch, showSegments]);
 
   // Fetch segmentation statuses for all documents in this space
   const fetchSegStatuses = useCallback(async () => {
@@ -184,27 +199,10 @@ const KGDocuments: React.FC = () => {
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [segStatusMap, fetchSegStatuses]);
 
-  // Filter documents based on search and segment visibility
-  const filteredDocuments = documents.filter(doc => {
-    // Hide segments unless toggle is on
-    if (!showSegments && doc.segment_index !== null && doc.segment_index > 0) {
-      return false;
-    }
-    // Also hide segmentation parents unless toggle is on
-    if (!showSegments && doc.segment_type === 'urn:segtype:segmentation_parent') {
-      return false;
-    }
-    // Search filter
-    if (debouncedSearch) {
-      const term = debouncedSearch.toLowerCase();
-      return (
-        doc.name.toLowerCase().includes(term) ||
-        doc.headline.toLowerCase().includes(term) ||
-        doc.uri.toLowerCase().includes(term)
-      );
-    }
-    return true;
-  });
+  // Segment inclusion and search are handled server-side (include_segments +
+  // the endpoint's search), so the page renders the returned set directly.
+  const filteredDocuments = documents;
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
 
   const getDocTypeBadge = (doc: DocumentEntry) => {
     if (doc.segment_type === 'urn:segtype:segmentation_parent') {
@@ -338,7 +336,7 @@ const KGDocuments: React.FC = () => {
           />
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">
-          {filteredDocuments.length} of {documents.length} documents
+          {totalCount} {showSegments ? 'documents + segments' : 'document' + (totalCount === 1 ? '' : 's')}
         </div>
       </div>
 
@@ -421,6 +419,18 @@ const KGDocuments: React.FC = () => {
               </div>
             </Card>
           ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {!loading && totalPages > 1 && (
+        <div className="flex justify-center mt-4">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={setCurrentPage}
+            showIcons
+          />
         </div>
       )}
 

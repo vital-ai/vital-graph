@@ -723,11 +723,14 @@ class GraphObjectRetriever:
         if property_filters:
             for prop_uri, value_uri in property_filters.items():
                 if prop_uri == "_exclude_segment_types":
-                    # Exclude managed segment objects via FILTER NOT EXISTS
-                    from vitalgraph.kg_impl.kgdocuments_read_impl import _MANAGED_SEGMENT_TYPES, _HAS_SEGMENT_TYPE_URI
-                    seg_values = ", ".join(f'<{v}>' for v in _MANAGED_SEGMENT_TYPES)
+                    # Exclude ALL segment objects. Any object carrying a
+                    # hasKGDocumentSegmentTypeURI is a managed segment (parent
+                    # copy, markdown_section, paragraph, text_chunk, …); original
+                    # documents never have it. Type-agnostic so new segment types
+                    # can't leak into the default listing.
+                    from vitalgraph.kg_impl.kgdocuments_read_impl import _HAS_SEGMENT_TYPE_URI
                     property_filter_clauses.append(
-                        f"FILTER NOT EXISTS {{ ?s <{_HAS_SEGMENT_TYPE_URI}> ?_segType . FILTER(?_segType IN ({seg_values})) }}"
+                        f"FILTER NOT EXISTS {{ ?s <{_HAS_SEGMENT_TYPE_URI}> ?_segType }}"
                     )
                 elif prop_uri == "document_type_uri":
                     property_filter_clauses.append(
@@ -759,37 +762,80 @@ class GraphObjectRetriever:
             {all_filters}
         """
         
-        # Query for objects with pagination
-        query = f"""
-            PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
-            PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
-            
-            SELECT ?s ?p ?o WHERE {{
-                GRAPH <{graph_id}> {{
-                    {{
-                        SELECT DISTINCT ?s WHERE {{
-                            {subquery_filter}
+        # --- Fast default path: page by subject_uuid instead of ORDER BY ?s ---
+        # Engages only for the plain type-only listing (no property/search
+        # filters, materialized edges excluded). Keys on rdf:type with the same
+        # type_uris the SPARQL uses, so the page/count equal the SPARQL results;
+        # only the page's subjects are resolved to text (avoids resolving every
+        # URI to sort). Default order becomes subject_uuid (stable).
+        from .kg_backend_utils import (
+            graph_is_uri, RDF_TYPE_URI,
+            fast_typed_subject_page, fast_typed_subject_count,
+        )
+        fast_uris = None
+        if (not property_filters and not search
+                and not include_materialized_edges and graph_is_uri(graph_id)):
+            fast_uris = await fast_typed_subject_page(
+                self.backend, space_id, graph_id, RDF_TYPE_URI, type_uris,
+                page_size, offset)
+
+        if fast_uris is not None:
+            if fast_uris:
+                values = " ".join(f"<{u}>" for u in fast_uris)
+                query = f"""
+                    PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+                    PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+                    SELECT ?s ?p ?o WHERE {{
+                        GRAPH <{graph_id}> {{
+                            VALUES ?s {{ {values} }}
+                            ?s ?p ?o .
+                            {filter_clause}
                         }}
-                        ORDER BY ?s
-                        LIMIT {page_size}
-                        OFFSET {offset}
                     }}
-                    ?s ?p ?o .
-                    {filter_clause}
+                """
+                results = await self.backend.execute_sparql_query(space_id, query)
+                if isinstance(results, dict):
+                    results = results.get('results', {}).get('bindings', [])
+            else:
+                results = []
+        else:
+            # Query for objects with pagination
+            query = f"""
+                PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
+                PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
+
+                SELECT ?s ?p ?o WHERE {{
+                    GRAPH <{graph_id}> {{
+                        {{
+                            SELECT DISTINCT ?s WHERE {{
+                                {subquery_filter}
+                            }}
+                            ORDER BY ?s
+                            LIMIT {page_size}
+                            OFFSET {offset}
+                        }}
+                        ?s ?p ?o .
+                        {filter_clause}
+                    }}
                 }}
-            }}
-            ORDER BY ?s
-        """
-        
-        results = await self.backend.execute_sparql_query(space_id, query)
-        
-        # Handle dictionary response format (unwrap if needed)
-        if isinstance(results, dict):
-            results = results.get('results', {}).get('bindings', [])
+                ORDER BY ?s
+            """
+
+            results = await self.backend.execute_sparql_query(space_id, query)
+
+            # Handle dictionary response format (unwrap if needed)
+            if isinstance(results, dict):
+                results = results.get('results', {}).get('bindings', [])
         
         # Get total count for pagination (optional for performance)
         total_count = -1  # Default to -1 when count is not requested
-        if include_count:
+        if include_count and fast_uris is not None:
+            c = await fast_typed_subject_count(
+                self.backend, space_id, graph_id, RDF_TYPE_URI, type_uris)
+            if c is not None:
+                total_count = c
+        elif include_count:
             count_query = f"""
                 PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
                 PREFIX vital-core: <http://vital.ai/ontology/vital-core#>
@@ -836,5 +882,11 @@ class GraphObjectRetriever:
                     obj = Literal(obj_value)
             
             triples.append((subject, predicate, obj))
-        
+
+        # Fast path selected the page by subject_uuid (the VALUES fetch does not
+        # preserve that order); re-order triples to match so pagination is stable.
+        if fast_uris is not None and triples:
+            order = {u: i for i, u in enumerate(fast_uris)}
+            triples.sort(key=lambda tr: order.get(str(tr[0]), len(fast_uris)))
+
         return triples, total_count

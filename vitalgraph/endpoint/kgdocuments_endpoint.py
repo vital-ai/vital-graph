@@ -954,6 +954,7 @@ class KGDocumentsEndpoint:
         "urn:segtype:segmentation_parent",
         "urn:segtype:markdown_section",
         "urn:segtype:text_chunk",
+        "urn:segtype:paragraph",
     ])
 
     _HAS_SEGMENT_TYPE_PRED = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"

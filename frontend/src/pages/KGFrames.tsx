@@ -104,8 +104,10 @@ const KGFrames: React.FC = () => {
         page_size: itemsPerPage,
         offset: (currentPage - 1) * itemsPerPage,
         search: debouncedSearch || undefined,
-        sort_by: sortBy || undefined,
-        sort_order: sortBy ? sortOrder : undefined,
+        // Sort only once a search/filter narrows the set (full-dataset sort is
+        // a full scan + sort).
+        sort_by: (sortBy && (debouncedSearch || formType)) ? sortBy : undefined,
+        sort_order: (sortBy && (debouncedSearch || formType)) ? sortOrder : undefined,
         form_type: formType || undefined,
       });
       const quads: Quad[] = data.results || [];
@@ -129,6 +131,13 @@ const KGFrames: React.FC = () => {
 
   useEffect(() => { fetchFrames(); }, [fetchFrames]);
 
+  // Sorting is offered only once a search/filter narrows the set — sorting the
+  // entire space is a full scan + sort. Reset sort when the narrowing clears.
+  const sortEnabled = Boolean(debouncedSearch || formType);
+  useEffect(() => {
+    if (!sortEnabled && sortBy) setSortBy('');
+  }, [sortEnabled, sortBy]);
+
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
   const hasSelection = selectedSpace && selectedGraph;
 
@@ -144,6 +153,7 @@ const KGFrames: React.FC = () => {
   };
 
   const toggleSort = (field: string) => {
+    if (!debouncedSearch && !formType) return; // sort only on a narrowed set
     if (sortBy === field) {
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -243,8 +253,8 @@ const KGFrames: React.FC = () => {
               onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
           <div className="w-36 flex-shrink-0">
-            <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
-              <option value="">Sort by...</option>
+            <Select value={sortBy} disabled={!sortEnabled} title={sortEnabled ? undefined : 'Search or filter to enable sorting'} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+              <option value="">{sortEnabled ? 'Sort by...' : 'Sort (search first)'}</option>
               {FRAME_SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </Select>
           </div>
@@ -305,9 +315,13 @@ const KGFrames: React.FC = () => {
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">
-                    <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
-                      Frame <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
-                    </button>
+                    {sortEnabled ? (
+                      <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                        Frame <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
+                      </button>
+                    ) : (
+                      <span title="Search or filter to enable sorting">Frame</span>
+                    )}
                   </th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3 w-28">Properties</th>

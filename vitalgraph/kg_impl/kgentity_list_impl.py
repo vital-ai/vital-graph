@@ -22,6 +22,9 @@ from ai_haley_kg_domain.model.KGEntity import KGEntity
 # Property registry for datatype-aware sort handling (uri_list needs GROUP BY)
 from vitalgraph.model.kgentities_model import _FILTERABLE_ENTITY_PROPERTIES
 
+# Count cache — shared with the /kgentities/count endpoint; invalidated on writes.
+from vitalgraph.cache.count_cache import _count_cache
+
 # ---------------------------------------------------------------------------
 # KGEntity subclass type clause — matches KGEntity and all known subclasses.
 # Must be kept in sync with kg_query_builder.py entity_type_clause.
@@ -153,31 +156,66 @@ class KGEntityListProcessor:
                                   backend_adapter,
                                   sort_by=None, sort_order="asc",
                                   prop_filters: str = "") -> ListEntitiesResult:
-        """Single SPARQL query fetches paginated entity properties directly."""
-        from collections import defaultdict
+        """Fetch one page of entities + total count as cheaply as possible.
 
+        Fast path (plain default listing): a direct-SQL page ordered by
+        ``subject_uuid`` (``fast_entity_page``) that materializes only the
+        page's subjects, avoiding the ``ORDER BY ?s`` full-URI resolution that
+        dominates cold renders on large spaces.  Falls back to the SPARQL
+        properties query for filtered/searched/sorted lists or backends
+        without the fast path.
+        """
         count_sparql = self._build_count_query(
             graph_id, entity_type_uri, search,
             sort_by=sort_by, prop_filters=prop_filters,
         )
 
-        # Build the optimized single query
+        # --- Fast default path: direct-SQL page ordered by subject_uuid ---
+        fast_page_fn = getattr(backend_adapter, 'fast_entity_page', None)
+        fast_uris = None
+        if fast_page_fn is not None:
+            fast_uris = await fast_page_fn(
+                space_id, graph_id, page_size, offset,
+                entity_type_uri, search, prop_filters, sort_by)
+
+        if fast_uris is not None:
+            async def _fetch_objects():
+                if not fast_uris:
+                    return []
+                objs = await backend_adapter.get_objects_by_uris(
+                    space_id, fast_uris, graph_id)
+                # Preserve the subject_uuid page order.
+                by_uri = {}
+                for o in objs:
+                    u = str(o.URI) if getattr(o, 'URI', None) else None
+                    if u and u not in by_uri:
+                        by_uri[u] = o
+                return [by_uri[u] for u in fast_uris if u in by_uri]
+
+            objs_task = asyncio.ensure_future(_fetch_objects())
+            count_task = asyncio.ensure_future(self._resolve_total_count(
+                space_id, graph_id, backend_adapter, count_sparql,
+                entity_type_uri, search, prop_filters, sort_by))
+            objects, total_count = await asyncio.gather(objs_task, count_task)
+            self.logger.debug("list_entities_fast(direct): %d objects, total=%d",
+                              len(objects), total_count)
+            return ListEntitiesResult(entities=objects, total_count=total_count)
+
+        # --- Fallback: SPARQL properties query (filtered/sorted/searched) ---
         sparql = self._build_optimized_properties_query(
             graph_id, page_size, offset, entity_type_uri, search,
             sort_by=sort_by, sort_order=sort_order,
             prop_filters=prop_filters,
         )
 
-        # Run data query and count query concurrently
-        data_task = backend_adapter.execute_sparql_query(space_id, sparql)
-        count_task = backend_adapter.execute_sparql_query(space_id, count_sparql)
-        data_result, count_result = await asyncio.gather(data_task, count_task)
-
-        # Parse count
-        count_bindings = _extract_bindings(count_result)
-        total_count = 0
-        if count_bindings and 'count' in count_bindings[0]:
-            total_count = int(count_bindings[0]['count']['value'])
+        # Run data query and count concurrently. The count resolves via
+        # cache → fast direct-SQL → SPARQL (see _resolve_total_count).
+        data_task = asyncio.ensure_future(
+            backend_adapter.execute_sparql_query(space_id, sparql))
+        count_task = asyncio.ensure_future(self._resolve_total_count(
+            space_id, graph_id, backend_adapter, count_sparql,
+            entity_type_uri, search, prop_filters, sort_by))
+        data_result, total_count = await asyncio.gather(data_task, count_task)
 
         # Parse data bindings → GraphObjects via from_property_maps
         bindings = _extract_bindings(data_result)
@@ -208,16 +246,13 @@ class KGEntityListProcessor:
         )
         count_sparql = self._build_count_query(graph_id, entity_type_uri, search, sort_by=sort_by, prop_filters=prop_filters)
 
-        # Run URI + count concurrently
-        uri_task = backend_adapter.execute_sparql_query(space_id, uri_sparql)
-        count_task = backend_adapter.execute_sparql_query(space_id, count_sparql)
-        uri_result, count_result = await asyncio.gather(uri_task, count_task)
-
-        # Parse count
-        count_bindings = _extract_bindings(count_result)
-        total_count = 0
-        if count_bindings and 'count' in count_bindings[0]:
-            total_count = int(count_bindings[0]['count']['value'])
+        # Run URI + count concurrently (count via cache → fast SQL → SPARQL)
+        uri_task = asyncio.ensure_future(
+            backend_adapter.execute_sparql_query(space_id, uri_sparql))
+        count_task = asyncio.ensure_future(self._resolve_total_count(
+            space_id, graph_id, backend_adapter, count_sparql,
+            entity_type_uri, search, prop_filters, sort_by))
+        uri_result, total_count = await asyncio.gather(uri_task, count_task)
 
         # Parse URIs
         uri_bindings = _extract_bindings(uri_result)
@@ -249,6 +284,49 @@ class KGEntityListProcessor:
 
         self.logger.debug("list_entities_with_graph: %d objects, total=%d", len(entities), total_count)
         return ListEntitiesResult(entities=entities, total_count=total_count)
+
+    # ------------------------------------------------------------------
+    # Total-count resolution: cache → fast direct-SQL → SPARQL
+    # ------------------------------------------------------------------
+
+    async def _resolve_total_count(self, space_id, graph_id, backend_adapter,
+                                   count_sparql, entity_type_uri, search,
+                                   prop_filters, sort_by) -> int:
+        """Resolve the listing's total count as cheaply as possible.
+
+        1. Count cache (shared with /kgentities/count, invalidated on writes).
+        2. Fast exact direct-SQL count for the plain default listing
+           (``backend_adapter.fast_entity_count``) — avoids the
+           COUNT(DISTINCT) 4-way UNION scan.
+        3. SPARQL COUNT(DISTINCT) fallback for filtered/searched/sorted lists
+           or backends without the fast path.
+
+        The result is written back to the cache keyed by the SPARQL count
+        query hash, so it is shared with the standalone count endpoints.
+        """
+        qhash = _count_cache.query_hash(count_sparql)
+        cached = _count_cache.get(space_id, graph_id, qhash)
+        if cached is not None:
+            return cached
+
+        total: Optional[int] = None
+        fast_fn = getattr(backend_adapter, 'fast_entity_count', None)
+        if fast_fn is not None:
+            try:
+                total = await fast_fn(space_id, graph_id, entity_type_uri,
+                                      search, prop_filters, sort_by)
+            except Exception as e:
+                self.logger.warning("fast_entity_count errored, using SPARQL: %s", e)
+                total = None
+
+        if total is None:
+            count_result = await backend_adapter.execute_sparql_query(space_id, count_sparql)
+            count_bindings = _extract_bindings(count_result)
+            total = (int(count_bindings[0]['count']['value'])
+                     if count_bindings and 'count' in count_bindings[0] else 0)
+
+        _count_cache.put(space_id, graph_id, qhash, total)
+        return total
 
     # ------------------------------------------------------------------
     # Binding → GraphObject conversion (fast path, no rdflib)

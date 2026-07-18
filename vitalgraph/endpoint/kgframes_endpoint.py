@@ -798,7 +798,39 @@ class KGFramesEndpoint:
             backend = space_impl.get_db_space_impl()
             if not backend:
                 return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+
+            # --- Fast default path: page frames by subject_uuid (vitaltype=KGFrame),
+            # like KGEntities. Avoids the ORDER BY ?frame full-URI resolution.
+            # Engages only for the plain default listing (no filters/search/sort);
+            # anything else falls back to the SPARQL path below. ---
+            from ..kg_impl.kg_backend_utils import (
+                fast_typed_subject_page, fast_typed_subject_count, VITALTYPE_URI)
+            _KGFRAME_TYPE_URIS = ['http://vital.ai/ontology/haley-ai-kg#KGFrame']
+            _no_filters = not any([
+                search, form_type, frame_type_uri, status, exclude_status,
+                created_after, created_before, modified_after, modified_before,
+                sort_by,
+            ])
+            fast_uris = None
+            if _no_filters:
+                fast_uris = await fast_typed_subject_page(
+                    backend, space_id, graph_id, VITALTYPE_URI,
+                    _KGFRAME_TYPE_URIS, page_size, offset)
+            if fast_uris is not None:
+                fake_results = {"bindings": [{"frame": {"value": u}} for u in fast_uris]}
+                frames = await self._sparql_results_to_frames(
+                    backend, graph_id, fake_results, space_id)
+                # Preserve the subject_uuid page order.
+                _order = {u: i for i, u in enumerate(fast_uris)}
+                frames = sorted(frames or [], key=lambda fr: _order.get(str(fr.URI), len(fast_uris)))
+                fc = await fast_typed_subject_count(
+                    backend, space_id, graph_id, VITALTYPE_URI, _KGFRAME_TYPE_URIS)
+                total_count = fc if fc is not None else len(frames)
+                quads = await asyncio.to_thread(graphobjects_to_quad_list, frames, graph_id)
+                return QuadResponse(
+                    results=quads, total_count=total_count,
+                    page_size=page_size, offset=offset)
+
             # Build SPARQL query for listing frames
             sparql_query = self._build_list_frames_query(
                 backend, space_id, graph_id, search, page_size, offset,
@@ -1640,9 +1672,36 @@ class KGFramesEndpoint:
                     CONTAINS(LCASE(STR(?frame)), LCASE("{search}"))
                 )""")
 
-        # Form type (Assertion / Aspect)
+        # Form type (Assertion / Aspect). When hasKGFormType is unset, the frame
+        # defaults by whether it has a hasFrameGraphURI: no URI → Assertion,
+        # has URI → Aspect. So each filter matches explicit values plus the
+        # corresponding unset default.
         if form_type:
-            parts.append(f'?frame <{self.haley_prefix}hasKGFormType> <{form_type}> .')
+            _assertion_uri = f'{self.haley_prefix}KGFormType_Assertion'
+            _aspect_uri = f'{self.haley_prefix}KGFormType_Aspect'
+            if form_type == _assertion_uri:
+                # Assertion = explicit, OR (no form type AND no frame graph URI).
+                # The default branch re-anchors ?frame with a positive pattern
+                # (?frame a KGFrame) so the FILTER NOT EXISTS clauses bind
+                # per-frame — a filter-only UNION branch mistranslates to SQL as
+                # a global anti-join when other frames have hasFrameGraphURI.
+                parts.append(
+                    f'{{ {{ ?frame <{self.haley_prefix}hasKGFormType> <{form_type}> . }}\n'
+                    f'                UNION\n'
+                    f'                {{ ?frame a <{self.haley_prefix}KGFrame> .\n'
+                    f'                  FILTER NOT EXISTS {{ ?frame <{self.haley_prefix}hasKGFormType> ?_ft . }}\n'
+                    f'                  FILTER NOT EXISTS {{ ?frame <{self.haley_prefix}hasFrameGraphURI> ?_fg . }} }} }}'
+                )
+            elif form_type == _aspect_uri:
+                # Aspect = explicit, OR (no form type AND has a frame graph URI)
+                parts.append(
+                    f'{{ {{ ?frame <{self.haley_prefix}hasKGFormType> <{form_type}> . }}\n'
+                    f'                UNION\n'
+                    f'                {{ FILTER NOT EXISTS {{ ?frame <{self.haley_prefix}hasKGFormType> ?_ft . }}\n'
+                    f'                  ?frame <{self.haley_prefix}hasFrameGraphURI> ?_fg . }} }}'
+                )
+            else:
+                parts.append(f'?frame <{self.haley_prefix}hasKGFormType> <{form_type}> .')
 
         # Frame type URI
         if frame_type_uri:
@@ -1719,7 +1778,6 @@ class KGFramesEndpoint:
         
         SELECT DISTINCT ?frame WHERE {{
             GRAPH <{full_graph_uri}> {{
-                ?frame haley:hasFrameGraphURI ?frameGraphURI .
                 ?frame a haley:KGFrame .
                 {filters}
                 {sort_optional}
@@ -1761,7 +1819,6 @@ class KGFramesEndpoint:
         
         SELECT (COUNT(DISTINCT ?frame) as ?count) WHERE {{
             GRAPH <{full_graph_uri}> {{
-                ?frame haley:hasFrameGraphURI ?frameGraphURI .
                 ?frame a haley:KGFrame .
                 {filters}
             }}

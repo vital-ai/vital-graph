@@ -104,11 +104,15 @@ test.describe('KG Documents CRUD — UI lifecycle', () => {
     await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
     await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
 
-    // Wait for documents to load
-    await expect(page.locator('[data-testid="document-card"]').first()).toBeVisible({ timeout: 10_000 });
+    // Search for the seeded document to bypass pagination with accumulated docs
+    const searchInput = page.locator('input[placeholder*="Search documents"]');
+    if (await searchInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await searchInput.fill(SEEDED_DOCUMENT.title);
+      await page.waitForTimeout(500);
+    }
 
     // Seeded document should be visible
-    await expect(page.getByText(SEEDED_DOCUMENT.title).first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(SEEDED_DOCUMENT.title).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('create a document via the Upload modal', async ({ page }) => {
@@ -271,14 +275,16 @@ test.describe('KG Documents — Segmentation & Search', () => {
   });
 
   test('list page shows "Ready" badge after segmentation completes', async ({ page }) => {
+    test.setTimeout(90_000); // vectorization may still be finishing from previous test
     await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/kgdocuments`);
     await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE })).toBeVisible({ timeout: 10_000 });
 
     // After the lifecycle completes (previous test), the list page should
-    // show "✅ Ready" on the document card (status == completed)
+    // show "✅ Ready" on the document card (status == completed).
+    // Allow up to 60s for vectorization to finish if still in progress.
     const card = page.locator('[data-testid="document-card"]', { hasText: MARKDOWN_DOC_HEADLINE });
-    await expect(card.getByText('✅ Ready', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(card.getByText('✅ Ready', { exact: true })).toBeVisible({ timeout: 60_000 });
   });
 
   // ─── NOW create vector index + mapping (segments already exist) ───────────

@@ -104,12 +104,10 @@ test.describe('KG Frame Detail', () => {
     // Navigate to frames list first to see if any frames exist
     await page.goto(`${PREFIX}/objects/kgframes`);
     await expect(page.locator('[data-testid="kgframes-page"]')).toBeVisible({ timeout: 10_000 });
-    // If there are frame rows, click into the first one
+    // If there are frame rows, click the View button on the first one
     const rows = page.locator('[data-testid="frame-row"]');
-    const count = await rows.count();
-    if (count > 0) {
-      // Find the view button in the first row
-      await rows.first().locator('a, button').first().click();
+    if (await rows.first().isVisible({ timeout: 10_000 }).catch(() => false)) {
+      await rows.first().locator('button[title="View"]').click();
       await expect(page.locator('[data-testid="kgframe-detail-page"]')).toBeVisible({ timeout: 10_000 });
     }
     // If no frames exist, this test just verifies the list page loaded
@@ -122,7 +120,14 @@ test.describe('KG Document Detail', () => {
   test('seeded document visible in document list', async ({ page }) => {
     await page.goto(`${PREFIX}/objects/kgdocuments`);
     await expect(page.locator('[data-testid="kgdocuments-page"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText(SEEDED_DOCUMENT.title).first()).toBeVisible({ timeout: 10_000 });
+
+    // Search for the seeded document to bypass pagination with accumulated docs
+    const searchInput = page.locator('input[placeholder*="Search documents"]');
+    if (await searchInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await searchInput.fill(SEEDED_DOCUMENT.title);
+      await page.waitForTimeout(500);
+    }
+    await expect(page.getByText(SEEDED_DOCUMENT.title).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('navigates to seeded document detail', async ({ page }) => {

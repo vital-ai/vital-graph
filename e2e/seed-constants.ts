@@ -33,6 +33,18 @@ export const ENTITIES = {
 
 export const EXPECTED_ENTITY_COUNT = Object.keys(ENTITIES).length;
 
+// Seeded KG Frames
+export const FRAMES = {
+  alice_profile: {
+    uri: 'urn:e2e:frame:alice_profile',
+    name: 'Alice Profile Frame',
+  },
+  bob_profile: {
+    uri: 'urn:e2e:frame:bob_profile',
+    name: 'Bob Profile Frame',
+  },
+} as const;
+
 // Seeded KGDocument
 export const SEEDED_DOCUMENT = {
   uri: 'urn:e2e:document:readme',

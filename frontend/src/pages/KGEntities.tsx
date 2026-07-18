@@ -98,8 +98,10 @@ const KGEntities: React.FC = () => {
         offset: (currentPage - 1) * itemsPerPage,
         search: committedSearch || undefined,
         entity_type_uri: entityTypeFilter || undefined,
-        sort_by: sortBy || undefined,
-        sort_order: sortBy ? sortOrder : undefined,
+        // Sorting the whole dataset is a full scan + full sort, so it is only
+        // sent once a search/type filter has narrowed the result set.
+        sort_by: (sortBy && (committedSearch || entityTypeFilter)) ? sortBy : undefined,
+        sort_order: (sortBy && (committedSearch || entityTypeFilter)) ? sortOrder : undefined,
       });
       const quads: Quad[] = data.results || [];
       const grouped = parseEntitiesFromQuads(quads);
@@ -122,6 +124,14 @@ const KGEntities: React.FC = () => {
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 
+  // Sorting is offered only once a search/type filter narrows the set — sorting
+  // the entire space is a full scan + sort. Reset sort when the narrowing is
+  // cleared so the fast default (subject_uuid) order returns.
+  const sortEnabled = Boolean(committedSearch || entityTypeFilter);
+  useEffect(() => {
+    if (!sortEnabled && sortBy) setSortBy('');
+  }, [sortEnabled, sortBy]);
+
   const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage));
   const hasSelection = selectedSpace && selectedGraph;
 
@@ -137,6 +147,7 @@ const KGEntities: React.FC = () => {
   };
 
   const toggleSort = (field: string) => {
+    if (!committedSearch && !entityTypeFilter) return; // sort only on a narrowed set
     if (sortBy === field) {
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
@@ -232,8 +243,8 @@ const KGEntities: React.FC = () => {
             />
           </div>
           <div className="w-36 flex-shrink-0">
-            <Select value={sortBy} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
-              <option value="">Sort by...</option>
+            <Select value={sortBy} disabled={!sortEnabled} title={sortEnabled ? undefined : 'Search or filter to enable sorting'} onChange={(e) => { setSortBy(e.target.value); setCurrentPage(1); }}>
+              <option value="">{sortEnabled ? 'Sort by...' : 'Sort (search first)'}</option>
               {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </Select>
           </div>
@@ -295,9 +306,13 @@ const KGEntities: React.FC = () => {
               <thead className="text-xs text-gray-500 dark:text-gray-400 uppercase bg-gray-50 dark:bg-gray-800">
                 <tr>
                   <th className="px-4 py-3">
-                    <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
-                      Entity <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
-                    </button>
+                    {sortEnabled ? (
+                      <button onClick={() => toggleSort('http://vital.ai/ontology/vital-core#hasName')} className="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
+                        Entity <SortIcon field="http://vital.ai/ontology/vital-core#hasName" />
+                      </button>
+                    ) : (
+                      <span title="Search or filter to enable sorting">Entity</span>
+                    )}
                   </th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3 w-28">Properties</th>

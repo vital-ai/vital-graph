@@ -30,6 +30,7 @@ _MANAGED_SEGMENT_TYPES = frozenset([
     "urn:segtype:segmentation_parent",
     "urn:segtype:markdown_section",
     "urn:segtype:text_chunk",
+    "urn:segtype:paragraph",
 ])
 
 _HAS_SEGMENT_TYPE = "http://vital.ai/ontology/haley-ai-kg#hasKGDocumentSegmentTypeURI"

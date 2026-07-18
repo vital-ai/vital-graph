@@ -1,5 +1,5 @@
 import { test, expect, request } from '@playwright/test';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID, ENTITIES } from '../seed-constants';
 
 /**
  * Tier 7 — KG Entities CRUD Write Operations
@@ -125,5 +125,41 @@ test.describe('KG Entities CRUD', () => {
     await expect(
       page.locator('[data-testid="entity-row"]', { hasText: CRUD_ENTITY_NAME })
     ).not.toBeVisible({ timeout: 5_000 });
+  });
+});
+
+// ── Visualize in Graph button ─────────────────────────────────────────────
+
+test.describe('KG Entity — Visualize in Graph', () => {
+  test('entity detail page shows Visualize in Graph button', async ({ page }) => {
+    // Navigate to the seeded Alice entity detail page
+    const entityUrl = `/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/entity/${encodeURIComponent(ENTITIES.alice.uri)}`;
+    await page.goto(entityUrl);
+    await expect(page.locator('[data-testid="kgentity-detail-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // The "Visualize in Graph" button should be visible
+    await expect(page.getByText('Visualize in Graph')).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('clicking Visualize in Graph navigates to visualization page', async ({ page }) => {
+    const entityUrl = `/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/entity/${encodeURIComponent(ENTITIES.alice.uri)}`;
+    await page.goto(entityUrl);
+    await expect(page.locator('[data-testid="kgentity-detail-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // Click the Visualize in Graph button — opens a session picker menu
+    await page.getByText('Visualize in Graph').click();
+
+    // Either a dropdown appears (if sessions exist) or it navigates directly.
+    // Click "+ New session" if the dropdown is shown, otherwise we already navigated.
+    const newSessionBtn = page.getByText('+ New session');
+    if (await newSessionBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await newSessionBtn.click();
+    }
+
+    // Should navigate to the visualization page
+    await expect(page.locator('[data-testid="graph-visualization-page"]')).toBeVisible({ timeout: 10_000 });
+
+    // The URL should contain /visualization
+    await expect(page).toHaveURL(/\/visualization/);
   });
 });
