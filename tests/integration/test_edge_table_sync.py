@@ -63,6 +63,30 @@ class TestEdgeTableSync:
         assert row["src"] == str(src)
         assert row["dst"] == str(dst)
 
+    async def test_edge_sync_over_chunk_boundary(self, space_impl):
+        """>SYNC_CHUNK edges in one bulk insert sync correctly across chunks."""
+        import uuid as _uuid
+        from vitalgraph.db.sparql_sql.sync_edge_table import SYNC_CHUNK
+        from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+
+        n = SYNC_CHUNK + 500  # -> 2 aux-sync chunks
+        sid = f"inttest_edgechunk_{_uuid.uuid4().hex[:8]}"
+        async with space_impl.db_impl.connection_pool.acquire() as conn:
+            await SparqlSQLSchema.create_space(conn, sid)
+        try:
+            quads = []
+            for i in range(n):
+                e = URIRef(f"urn:test:ce:{i}")
+                quads.append((e, HAS_EDGE_SOURCE, URIRef(f"urn:test:cs:{i}"), GRAPH))
+                quads.append((e, HAS_EDGE_DEST, URIRef(f"urn:test:cd:{i}"), GRAPH))
+            await space_impl.add_rdf_quads_batch_bulk(sid, quads)
+            async with space_impl.db_impl.connection_pool.acquire() as conn:
+                cnt = await conn.fetchval(f"SELECT count(*) FROM {sid}_edge")
+            assert cnt == n, cnt  # every edge synced, no chunk dropped/double-counted
+        finally:
+            async with space_impl.db_impl.connection_pool.acquire() as conn:
+                await SparqlSQLSchema.drop_space(conn, sid)
+
     async def test_edge_sync_across_batches(
         self, test_space, space_impl, pg_conn
     ):

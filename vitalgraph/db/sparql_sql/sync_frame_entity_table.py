@@ -73,33 +73,37 @@ async def sync_frame_entity_after_edge_insert(
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
 
-    result = await conn.execute(f"""
-        INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
-        SELECT
-            emv.source_node_uuid AS frame_uuid,
-            (array_agg(sv.object_uuid) FILTER (
-                WHERE st.object_uuid = $3
-            ))[1] AS source_entity_uuid,
-            (array_agg(sv.object_uuid) FILTER (
-                WHERE st.object_uuid = $4
-            ))[1] AS dest_entity_uuid,
-            emv.context_uuid
-        FROM {t_edge} emv
-        JOIN {t_quad} st
-            ON st.subject_uuid = emv.dest_node_uuid
-            AND st.predicate_uuid = $1
-        JOIN {t_quad} sv
-            ON sv.subject_uuid = emv.dest_node_uuid
-            AND sv.predicate_uuid = $2
-        WHERE st.object_uuid IN ($3, $4)
-          AND emv.source_node_uuid = ANY($5)
-        GROUP BY emv.source_node_uuid, emv.context_uuid
-        HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
-           AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
-        ON CONFLICT DO NOTHING
-    """, st_uuid, sv_uuid, src_uuid, dst_uuid, edge_source_uuids)
+    from .sync_edge_table import chunk_uuids
 
-    inserted = int(result.split()[-1]) if result else 0
+    inserted = 0
+    for chunk in chunk_uuids(edge_source_uuids):
+        result = await conn.execute(f"""
+            INSERT INTO {t_fe} (frame_uuid, source_entity_uuid, dest_entity_uuid, context_uuid)
+            SELECT
+                emv.source_node_uuid AS frame_uuid,
+                (array_agg(sv.object_uuid) FILTER (
+                    WHERE st.object_uuid = $3
+                ))[1] AS source_entity_uuid,
+                (array_agg(sv.object_uuid) FILTER (
+                    WHERE st.object_uuid = $4
+                ))[1] AS dest_entity_uuid,
+                emv.context_uuid
+            FROM {t_edge} emv
+            JOIN {t_quad} st
+                ON st.subject_uuid = emv.dest_node_uuid
+                AND st.predicate_uuid = $1
+            JOIN {t_quad} sv
+                ON sv.subject_uuid = emv.dest_node_uuid
+                AND sv.predicate_uuid = $2
+            WHERE st.object_uuid IN ($3, $4)
+              AND emv.source_node_uuid = ANY($5)
+            GROUP BY emv.source_node_uuid, emv.context_uuid
+            HAVING (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $3))[1] IS NOT NULL
+               AND (array_agg(sv.object_uuid) FILTER (WHERE st.object_uuid = $4))[1] IS NOT NULL
+            ON CONFLICT DO NOTHING
+        """, st_uuid, sv_uuid, src_uuid, dst_uuid, chunk)
+        inserted += int(result.split()[-1]) if result else 0
+
     if inserted:
         logger.debug("sync_frame_entity_after_edge_insert(%s): %d rows", space_id, inserted)
     return inserted

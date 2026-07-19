@@ -23,6 +23,18 @@ _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
 _EDGE_SRC_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{EDGE_SOURCE_URI}\x00U")
 _EDGE_DST_UUID = uuid.uuid5(_VITALGRAPH_NS, f"{EDGE_DEST_URI}\x00U")
 
+# Cap the subject-array size per aux-sync statement. A bulk load can touch
+# hundreds of thousands of subjects at once; passing them all as one ANY($)
+# array makes a huge parameter and an unbounded self-join. Chunking keeps each
+# statement's work bounded (per-write cost stays flat vs load size).
+SYNC_CHUNK = 10_000
+
+
+def chunk_uuids(seq: List[uuid.UUID], n: int = SYNC_CHUNK):
+    """Yield successive n-sized slices of a UUID list."""
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
 
 async def sync_edge_table_after_insert(
     conn,
@@ -40,24 +52,26 @@ async def sync_edge_table_after_insert(
     t_edge = f"{space_id}_edge"
     t_quad = f"{space_id}_rdf_quad"
 
-    result = await conn.execute(f"""
-        INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid, context_uuid)
-        SELECT
-            src.subject_uuid,
-            src.object_uuid,
-            dst.object_uuid,
-            src.context_uuid
-        FROM {t_quad} src
-        JOIN {t_quad} dst
-            ON dst.subject_uuid = src.subject_uuid
-            AND dst.context_uuid = src.context_uuid
-        WHERE src.predicate_uuid = $1
-          AND dst.predicate_uuid = $2
-          AND src.subject_uuid = ANY($3)
-        ON CONFLICT DO NOTHING
-    """, _EDGE_SRC_UUID, _EDGE_DST_UUID, subject_uuids)
+    inserted = 0
+    for chunk in chunk_uuids(subject_uuids):
+        result = await conn.execute(f"""
+            INSERT INTO {t_edge} (edge_uuid, source_node_uuid, dest_node_uuid, context_uuid)
+            SELECT
+                src.subject_uuid,
+                src.object_uuid,
+                dst.object_uuid,
+                src.context_uuid
+            FROM {t_quad} src
+            JOIN {t_quad} dst
+                ON dst.subject_uuid = src.subject_uuid
+                AND dst.context_uuid = src.context_uuid
+            WHERE src.predicate_uuid = $1
+              AND dst.predicate_uuid = $2
+              AND src.subject_uuid = ANY($3)
+            ON CONFLICT DO NOTHING
+        """, _EDGE_SRC_UUID, _EDGE_DST_UUID, chunk)
+        inserted += int(result.split()[-1]) if result else 0
 
-    inserted = int(result.split()[-1]) if result else 0
     if inserted:
         logger.debug("sync_edge_table_after_insert(%s): %d edge rows", space_id, inserted)
     return inserted
