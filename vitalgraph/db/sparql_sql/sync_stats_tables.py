@@ -16,6 +16,17 @@ from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
+# The join-reorder loader (generator._load_quad_stats) reads only pairs with
+# STATS_MIN_ROW_COUNT <= row_count <= STATS_MAX_ROW_COUNT, taking the lowest
+# STATS_LOAD_LIMIT of them. Everything else in rdf_stats is dead weight — at 1B
+# quads the row_count=1 singletons (one per distinct object) alone reach
+# 50-200M rows. prune_stats_tables bounds the table to what the reorder uses.
+STATS_MIN_ROW_COUNT = 2
+STATS_MAX_ROW_COUNT = 200_000
+STATS_LOAD_LIMIT = 10_000
+# Keep comfortably more than the load limit so the lowest-N window is intact.
+STATS_KEEP_DEFAULT = 50_000
+
 
 async def sync_stats_after_insert(
     conn,
@@ -195,3 +206,41 @@ async def resync_stats_tables(conn, space_id: str) -> Dict[str, int]:
     logger.info("resync_stats_tables(%s): %d pred_stats, %d quad_stats",
                 space_id, pred_count, stats_count)
     return {'pred_stats': pred_count, 'quad_stats': stats_count}
+
+
+async def prune_stats_tables(conn, space_id: str,
+                             keep_top_n: int = STATS_KEEP_DEFAULT) -> int:
+    """Bound {space}_rdf_stats to what the join reorder actually reads.
+
+    rdf_stats accumulates one row per distinct (predicate, object) pair — at
+    scale dominated by row_count=1 singletons (one per unique object) that the
+    reorder loader never reads (it filters row_count >= 2). This removes the
+    pairs outside the reorder's window (row_count < MIN or > MAX) and then
+    hard-caps the remainder to the ``keep_top_n`` lowest-row_count pairs.
+
+    Because the loader takes only the lowest STATS_LOAD_LIMIT pairs in
+    [MIN, MAX], any keep_top_n >= that limit leaves the reorder's input
+    unchanged — this is a size bound, not a behavior change. Returns rows kept.
+    pred_stats is left alone (bounded by the distinct-predicate count).
+    """
+    t_stats = f"{space_id}_rdf_stats"
+
+    # 1. Drop pairs the reorder never uses: singletons and super-common pairs.
+    await conn.execute(
+        f"DELETE FROM {t_stats} "
+        f"WHERE row_count < $1 OR row_count > $2",
+        STATS_MIN_ROW_COUNT, STATS_MAX_ROW_COUNT)
+
+    # 2. Hard cap: keep the keep_top_n lowest-row_count pairs (the window the
+    #    loader draws from), delete the rest. Deterministic tiebreak.
+    await conn.execute(
+        f"DELETE FROM {t_stats} WHERE ctid IN ("
+        f"  SELECT ctid FROM {t_stats} "
+        f"  ORDER BY row_count ASC, predicate_uuid, object_uuid "
+        f"  OFFSET $1)",
+        keep_top_n)
+
+    kept = await conn.fetchval(f"SELECT count(*) FROM {t_stats}")
+    logger.info("prune_stats_tables(%s): kept %d rows (cap %d)",
+                space_id, kept, keep_top_n)
+    return kept

@@ -133,6 +133,11 @@ class MaintenanceJob:
             if fe_result:
                 summary["frame_entity_integrity"] = fe_result
 
+            # --- Stats prune (bound rdf_stats to the reorder window) ---
+            stats_prune_result = await self._run_stats_prune(list(stats.keys()))
+            if stats_prune_result:
+                summary["stats_prune"] = stats_prune_result
+
             # --- Vector index REINDEX ---
             vector_result = await self._run_vector_reindex(list(stats.keys()))
             if vector_result:
@@ -410,6 +415,40 @@ class MaintenanceJob:
                 await self._tracker.mark_failed(process_id, str(e))
             logger.error("VACUUM failed for space %s: %s", space_id, e)
             return {"space_id": space_id, "error": str(e)}
+
+    async def _run_stats_prune(self, space_ids: List[str]) -> Optional[Dict]:
+        """Prune the single space whose rdf_stats is most over its cap.
+
+        rdf_stats accumulates one row per (predicate, object) pair — at scale
+        dominated by row_count=1 singletons the join reorder never reads.
+        prune_stats_tables bounds it to the reorder's window without changing the
+        reorder's input (two DELETEs, cheap). One space per cycle. Uses the
+        pg_class.reltuples estimate to pick the target (no full COUNT).
+        """
+        from ..db.sparql_sql.sync_stats_tables import (
+            prune_stats_tables, STATS_KEEP_DEFAULT)
+
+        worst_space = None
+        worst_rows = 0.0
+        for space_id in space_ids:
+            try:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetchval(
+                        "SELECT reltuples FROM pg_class WHERE relname = $1",
+                        f"{space_id}_rdf_stats")
+            except Exception:
+                continue  # no rdf_stats table (e.g. non-KG) — skip
+            if rows and rows > STATS_KEEP_DEFAULT and rows > worst_rows:
+                worst_rows, worst_space = rows, space_id
+
+        if not worst_space:
+            return None
+
+        async with self._pool.acquire() as conn:
+            kept = await prune_stats_tables(conn, worst_space)
+        result = {"space_id": worst_space, "est_before": int(worst_rows), "kept": kept}
+        logger.info("Stats prune: %s ~%d → %d rows", worst_space, int(worst_rows), kept)
+        return result
 
     async def _run_edge_integrity(self, space_ids: List[str]) -> Optional[Dict]:
         """Resync the single worst-drifted {space}_edge table, if any.
