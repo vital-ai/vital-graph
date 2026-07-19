@@ -1,0 +1,10 @@
+# Data generators copied from the cardiff repo — borrowed test data, not vendored here.
+data_gen/
+
+# Locust outputs (load_test_data.py is a committed template that setup.py overwrites locally)
+validation_output/
+*.log
+*.csv
+
+__pycache__/
+.env
