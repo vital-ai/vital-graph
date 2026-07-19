@@ -414,8 +414,14 @@ class SparqlSQLSchema:
     # Per-space DDL generators
     # ------------------------------------------------------------------
 
-    def create_space_tables_sql(self, space_id: str) -> List[str]:
-        """Return SQL statements to create all per-space tables."""
+    def create_space_tables_sql(self, space_id: str,
+                                partition_quads: int = 0) -> List[str]:
+        """Return SQL statements to create all per-space tables.
+
+        ``partition_quads`` > 0 builds a HASH(context_uuid)-partitioned rdf_quad
+        with that many partitions, a slim 4-col PK, and a UUIDv7 quad_uuid
+        default (requires PostgreSQL 18). 0 = the classic non-partitioned table.
+        """
         t = self.get_table_names(space_id)
         stmts: List[str] = []
 
@@ -443,17 +449,41 @@ class SparqlSQLSchema:
         ''')
 
         # 3. RDF quad table
-        stmts.append(f'''
-            CREATE TABLE IF NOT EXISTS {t['rdf_quad']} (
-                subject_uuid   UUID NOT NULL,
-                predicate_uuid UUID NOT NULL,
-                object_uuid    UUID NOT NULL,
-                context_uuid   UUID NOT NULL,
-                quad_uuid      UUID NOT NULL DEFAULT gen_random_uuid(),
-                dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
-                PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
-            )
-        ''')
+        if partition_quads > 0:
+            # Partitioned variant (P3): HASH(context_uuid) so graph-scoped
+            # queries prune to one partition; slim 4-col PK (context_uuid is the
+            # partition key, so it MUST be in the PK) which also gives true
+            # (s,p,o,c) dedup; quad_uuid becomes a non-key UUIDv7 identity column
+            # (PG18) for insert locality.
+            stmts.append(f'''
+                CREATE TABLE IF NOT EXISTS {t['rdf_quad']} (
+                    subject_uuid   UUID NOT NULL,
+                    predicate_uuid UUID NOT NULL,
+                    object_uuid    UUID NOT NULL,
+                    context_uuid   UUID NOT NULL,
+                    quad_uuid      UUID NOT NULL DEFAULT uuidv7(),
+                    dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
+                    PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
+                ) PARTITION BY HASH (context_uuid)
+            ''')
+            base = t['rdf_quad'].split('.')[-1]
+            for i in range(partition_quads):
+                stmts.append(
+                    f"CREATE TABLE IF NOT EXISTS {base}_p{i} "
+                    f"PARTITION OF {t['rdf_quad']} "
+                    f"FOR VALUES WITH (MODULUS {partition_quads}, REMAINDER {i})")
+        else:
+            stmts.append(f'''
+                CREATE TABLE IF NOT EXISTS {t['rdf_quad']} (
+                    subject_uuid   UUID NOT NULL,
+                    predicate_uuid UUID NOT NULL,
+                    object_uuid    UUID NOT NULL,
+                    context_uuid   UUID NOT NULL,
+                    quad_uuid      UUID NOT NULL DEFAULT gen_random_uuid(),
+                    dataset        VARCHAR(50) NOT NULL DEFAULT 'primary',
+                    PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid, quad_uuid)
+                )
+            ''')
 
         # 4. Predicate statistics (used by generator for join reordering)
         stmts.append(f'''
@@ -783,11 +813,15 @@ class SparqlSQLSchema:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def create_space(conn, space_id: str) -> None:
-        """Create all per-space tables, indexes, and seed datatypes."""
+    async def create_space(conn, space_id: str, partition_quads: int = 0) -> None:
+        """Create all per-space tables, indexes, and seed datatypes.
+
+        ``partition_quads`` > 0 creates a HASH(context_uuid)-partitioned rdf_quad
+        (slim 4-col PK + UUIDv7, PG18) — see create_space_tables_sql.
+        """
         schema = SparqlSQLSchema()
 
-        for stmt in schema.create_space_tables_sql(space_id):
+        for stmt in schema.create_space_tables_sql(space_id, partition_quads):
             await conn.execute(stmt)
 
         for stmt in schema.create_space_indexes_sql(space_id):
