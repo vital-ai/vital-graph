@@ -25,16 +25,9 @@ pytestmark = [
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def count_space(space_impl):
-    """Ephemeral space for the count tests."""
-    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-
-    space_id = f"{TEST_SPACE_PREFIX}count_{uuid.uuid4().hex[:8]}"
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.create_space(conn, space_id)
-    yield space_id
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.drop_space(conn, space_id)
+async def count_space(make_space):
+    """Ephemeral space (via the space manager) for the count tests."""
+    return await make_space(f"{TEST_SPACE_PREFIX}count_{uuid.uuid4().hex[:8]}")
 
 
 def _sparql_count(proc, backend_adapter, space_id, graph):

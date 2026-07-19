@@ -35,11 +35,9 @@ def _needle(term: str) -> str:
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def trgm_space(pg_pool):
-    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-    sid = f"{TEST_SPACE_PREFIX}trgm_{uuid.uuid4().hex[:8]}"
+async def trgm_space(pg_pool, make_space):
+    sid = await make_space(f"{TEST_SPACE_PREFIX}trgm_{uuid.uuid4().hex[:8]}")
     async with pg_pool.acquire() as conn:
-        await SparqlSQLSchema.create_space(conn, sid)
         rows = [(uuid.uuid4(), f"filler record {i} lorem ipsum dolor sit", "L")
                 for i in range(N_FILLER)]
         rows += [
@@ -53,8 +51,6 @@ async def trgm_space(pg_pool):
             columns=["term_uuid", "term_text", "term_type"])
         await conn.execute(f"ANALYZE {sid}_term")
     yield sid
-    async with pg_pool.acquire() as conn:
-        await SparqlSQLSchema.drop_space(conn, sid)
 
 
 async def _assert_uses_trgm(conn, sid, pattern):

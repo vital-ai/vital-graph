@@ -30,15 +30,9 @@ N_EDGES = 30
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def two_spaces(space_impl):
-    sids = [f"{TEST_SPACE_PREFIX}exp_{k}_{uuid.uuid4().hex[:8]}" for k in ("src", "dst")]
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        for sid in sids:
-            await SparqlSQLSchema.create_space(conn, sid)
-    yield sids
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        for sid in sids:
-            await SparqlSQLSchema.drop_space(conn, sid)
+async def two_spaces(make_space):
+    return [await make_space(f"{TEST_SPACE_PREFIX}exp_{k}_{uuid.uuid4().hex[:8]}")
+            for k in ("src", "dst")]
 
 
 async def _counts(conn, sid):

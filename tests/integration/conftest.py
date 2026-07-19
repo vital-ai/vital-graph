@@ -121,24 +121,54 @@ PROTECTED_SPACES = frozenset({"sp_kg_types", "dawg_test"})
 TEST_SPACE_PREFIX = "inttest_"
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def space_manager(space_impl):
+    """SpaceManager over the test backend — the ONLY sanctioned way to create a
+    space in tests. Spaces are explicitly created/managed via the space table;
+    never call SparqlSQLSchema.create_space directly (it makes per-space tables
+    but no `space` catalog row, so quad inserts hit graph_space_id_fkey)."""
+    from vitalgraph.space.space_manager import SpaceManager
+    return SpaceManager(db_impl=getattr(space_impl, "db_impl", None),
+                        space_backend=space_impl)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def make_space(space_manager):
+    """Factory: create a space via the space manager (catalog row + tables),
+    dropped at session end. Session-scoped so fixtures of any scope can use it;
+    spaces are uniquely named so tests never collide. Returns an async
+    callable -> space_id."""
+    created = []
+
+    async def _make(space_id: str = None) -> str:
+        sid = space_id or f"{TEST_SPACE_PREFIX}{uuid.uuid4().hex[:12]}"
+        ok = await space_manager.create_space_with_tables(sid, sid)
+        assert ok, f"space manager failed to create {sid}"
+        created.append(sid)
+        return sid
+
+    yield _make
+
+    for sid in created:
+        try:
+            await space_manager.delete_space_with_tables(sid)
+        except Exception:
+            pass
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def test_space(pg_pool):
-    """Create an ephemeral test space, yield its space_id, then drop it.
+async def test_space(space_manager):
+    """Create an ephemeral test space via the space manager, yield its id, drop it.
 
     Uses prefix 'inttest_' to distinguish from production/system spaces.
     """
     space_id = f"{TEST_SPACE_PREFIX}{uuid.uuid4().hex[:12]}"
-
-    async with pg_pool.acquire() as conn:
-        from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-        await SparqlSQLSchema.create_space(conn, space_id)
-
+    await space_manager.create_space_with_tables(space_id, space_id)
     yield space_id
-
-    # Teardown: drop all tables for this space
-    async with pg_pool.acquire() as conn:
-        from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-        await SparqlSQLSchema.drop_space(conn, space_id)
+    try:
+        await space_manager.delete_space_with_tables(space_id)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

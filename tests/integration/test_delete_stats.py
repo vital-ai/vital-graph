@@ -25,14 +25,8 @@ HGU = "http://vital.ai/ontology/haley-ai-kg#hasKGGraphURI"
 
 
 @pytest_asyncio.fixture(loop_scope="session")
-async def del_space(space_impl):
-    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-    sid = f"{TEST_SPACE_PREFIX}delstats_{uuid.uuid4().hex[:8]}"
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.create_space(conn, sid)
-    yield sid
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.drop_space(conn, sid)
+async def del_space(make_space):
+    return await make_space(f"{TEST_SPACE_PREFIX}delstats_{uuid.uuid4().hex[:8]}")
 
 
 async def _stats(conn, sid):

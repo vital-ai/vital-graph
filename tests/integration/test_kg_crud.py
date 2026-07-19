@@ -27,18 +27,9 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
-async def kg_space(space_impl):
-    """Create an ephemeral space for KG CRUD tests."""
-    from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-
-    space_id = f"{TEST_SPACE_PREFIX}kgcrud_{uuid.uuid4().hex[:8]}"
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.create_space(conn, space_id)
-
-    yield space_id
-
-    async with space_impl.db_impl.connection_pool.acquire() as conn:
-        await SparqlSQLSchema.drop_space(conn, space_id)
+async def kg_space(make_space):
+    """Create an ephemeral space (via the space manager) for KG CRUD tests."""
+    return await make_space(f"{TEST_SPACE_PREFIX}kgcrud_{uuid.uuid4().hex[:8]}")
 
 
 @pytest.fixture
