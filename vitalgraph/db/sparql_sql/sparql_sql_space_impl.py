@@ -577,16 +577,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 [space_id],
             )
             existing_set = {r['graph_uri'] for r in existing} if existing else set()
-            for uri in graph_uris:
-                if uri not in existing_set:
-                    graph_name = uri.rsplit('/', 1)[-1]
-                    await self._db.execute_query(
-                        """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
-                           VALUES ($1, $2, $3, $4)
-                           ON CONFLICT (space_id, graph_uri) DO NOTHING""",
-                        [space_id, uri, graph_name, datetime.now()],
-                    )
-                    logger.debug("Auto-registered graph %s in space %s", uri, space_id)
+            new_uris = [u for u in graph_uris if u not in existing_set]
+            if new_uris:
+                # graph.space_id FKs to space.space_id. A space created via the
+                # schema-only path (e.g. tests calling SparqlSQLSchema.create_space
+                # without create_space_metadata) has no catalog row, so the graph
+                # insert would raise graph_space_id_fkey. Ensure the space row first
+                # — the same implicit-create side-effect this method applies to graphs.
+                await self._db.execute_query(
+                    """INSERT INTO space (space_id, space_name, tenant, update_time)
+                       VALUES ($1, $1, 'default', NOW())
+                       ON CONFLICT (space_id) DO NOTHING""",
+                    [space_id],
+                )
+            for uri in new_uris:
+                graph_name = uri.rsplit('/', 1)[-1]
+                await self._db.execute_query(
+                    """INSERT INTO graph (space_id, graph_uri, graph_name, created_time)
+                       VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (space_id, graph_uri) DO NOTHING""",
+                    [space_id, uri, graph_name, datetime.now()],
+                )
+                logger.debug("Auto-registered graph %s in space %s", uri, space_id)
         except Exception as e:
             logger.warning("_ensure_graphs_registered(%s) failed: %s", space_id, e)
 
