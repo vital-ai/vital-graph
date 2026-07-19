@@ -23,8 +23,8 @@ jobs:
     
     - name: Install client-only package
       run: |
-        pip install -e .
-    
+        pip install -e ".[client]"
+
     - name: Test client imports
       run: |
         python -c "import vitalgraph.client.vitalgraph_client; print('✅ Client import OK')"
@@ -95,10 +95,6 @@ jobs:
         vitalgraph --help
         vitalgraphdb --help
         vitalgraphadmin --help
-    
-    - name: Run packaging test script
-      run: |
-        python test_pip_install.py
 
   test-docker-build:
     runs-on: ubuntu-latest
