@@ -219,3 +219,17 @@ markers = [
     "integration: Tier 3 integration tests (require PG + Jena sidecar)",
     "api: Tier 4 API end-to-end tests (require running VitalGraph server)",
 ]
+
+[tool.check-manifest]
+# Dev/test/tooling trees intentionally excluded from the package sdist.
+ignore = [
+    "tests/**",
+    "e2e/**",
+    "docker/**",
+    "docker-compose.test.yml",
+    ".devin/**",
+    "issues/**",
+    "load_test_scripts/**",
+    "PACKAGING.md",
+    "vital_env.env",
+]
