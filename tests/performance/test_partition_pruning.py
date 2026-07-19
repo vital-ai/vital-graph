@@ -153,6 +153,57 @@ async def test_slim_pk_dedups_identical_quads(pg18_pool, part_space):
     assert cnt == 1, cnt
 
 
+async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool):
+    """Per-space migration: non-partitioned space -> partitioned, with set-parity
+    and correct (s,p,o,c) dedup."""
+    from vitalgraph.db.sparql_sql.partition_migrate import (
+        migrate_space_to_partitioned, distinct_quads)
+
+    schema = SparqlSQLSchema()
+    sid = f"p3mig_{uuid.uuid4().hex[:8]}"
+    async with pg18_pool.acquire() as conn:
+        for s in schema.create_space_tables_sql(sid):        # non-partitioned
+            await conn.execute(s)
+        for s in schema.create_space_indexes_sql(sid):
+            await conn.execute(s)
+    try:
+        t = SparqlSQLSchema.get_table_names(sid)
+        async with pg18_pool.acquire() as conn:
+            g = uuid.uuid4()
+            rows = [(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g) for _ in range(300)]
+            rows += [rows[0], rows[0]]                       # 2 duplicate quads
+            await conn.executemany(
+                f"INSERT INTO {t['rdf_quad']} "
+                f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+                f"VALUES ($1, $2, $3, $4)", rows)
+
+            before = await distinct_quads(conn, sid)
+            part_before = await conn.fetchval(
+                "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
+                "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+
+            async with conn.transaction():
+                summary = await migrate_space_to_partitioned(conn, sid, n_partitions=4)
+
+            after = await distinct_quads(conn, sid)
+            part_after = await conn.fetchval(
+                "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
+                "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+            plan = await explain_json(
+                conn, f"SELECT subject_uuid FROM {t['rdf_quad']} WHERE context_uuid = $1",
+                g, analyze=False)
+            scanned = _partitions_scanned(plan, sid)
+
+        assert part_before == 0 and part_after == 4          # became partitioned
+        assert before == after                               # set-semantics parity
+        assert summary == {"old_quads": 302, "new_quads": 300, "dupes_dropped": 2}
+        assert len(scanned) == 1                             # prunes post-migration
+    finally:
+        async with pg18_pool.acquire() as conn:
+            for s in schema.drop_space_tables_sql(sid):
+                await conn.execute(s)
+
+
 async def test_quad_uuid_is_time_ordered_uuidv7(pg18_pool, part_space):
     sid = part_space
     t = SparqlSQLSchema.get_table_names(sid)
