@@ -11,8 +11,15 @@ import { ADMIN_USER, ADMIN_PASS, SPACE_ID } from '../seed-constants';
 const FTS_INDEX_NAME = 'e2e_crud_fts';
 const VECTOR_INDEX_NAME = 'e2e_crud_vec';
 
-/** Delete test indexes via API (idempotent cleanup). */
-async function cleanupTestIndexes() {
+/**
+ * Delete a single test index via API (idempotent cleanup).
+ *
+ * IMPORTANT: cleanup is scoped to ONE index. The FTS and Vector describe blocks
+ * are `serial` but run in *parallel workers* (fullyParallel). A shared cleanup
+ * that deleted both indexes would let one suite's beforeAll/afterAll wipe the
+ * other suite's index mid-flight — an alternating "index not visible" flake.
+ */
+async function cleanupIndex(kind: 'fts' | 'vector', indexName: string) {
   const baseURL = process.env.VG_TEST_URL || 'http://localhost:8002';
   const ctx = await request.newContext({ baseURL });
   const loginResp = await ctx.post('/api/login', {
@@ -21,15 +28,9 @@ async function cleanupTestIndexes() {
   const { access_token } = await loginResp.json();
   const headers = { Authorization: `Bearer ${access_token}` };
 
-  // Try to delete FTS index
-  await ctx.delete('/api/fts-indexes', {
-    params: { space_id: SPACE_ID, index_name: FTS_INDEX_NAME },
-    headers,
-  });
-
-  // Try to delete vector index
-  await ctx.delete('/api/vector-indexes', {
-    params: { space_id: SPACE_ID, index_name: VECTOR_INDEX_NAME },
+  const path = kind === 'fts' ? '/api/fts-indexes' : '/api/vector-indexes';
+  await ctx.delete(path, {
+    params: { space_id: SPACE_ID, index_name: indexName },
     headers,
   });
 
@@ -39,8 +40,8 @@ async function cleanupTestIndexes() {
 test.describe('Indexes CRUD — FTS', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupTestIndexes(); });
-  test.afterAll(async () => { await cleanupTestIndexes(); });
+  test.beforeAll(async () => { await cleanupIndex('fts', FTS_INDEX_NAME); });
+  test.afterAll(async () => { await cleanupIndex('fts', FTS_INDEX_NAME); });
 
   test('create a new FTS index via the UI', async ({ page }) => {
     await page.goto('/indexes');
@@ -106,8 +107,8 @@ test.describe('Indexes CRUD — FTS', () => {
 test.describe('Indexes CRUD — Vector', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupTestIndexes(); });
-  test.afterAll(async () => { await cleanupTestIndexes(); });
+  test.beforeAll(async () => { await cleanupIndex('vector', VECTOR_INDEX_NAME); });
+  test.afterAll(async () => { await cleanupIndex('vector', VECTOR_INDEX_NAME); });
 
   test('create a new Vector index via the UI', async ({ page }) => {
     await page.goto('/indexes');

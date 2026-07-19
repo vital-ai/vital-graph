@@ -289,6 +289,10 @@ test.describe('KG Documents — Segmentation & Search', () => {
 
   // ─── NOW create vector index + mapping (segments already exist) ───────────
   test('create ONNX vector index and search mapping', async () => {
+    // Reindex embeds ~80 existing segments with the ONNX model (CPU-bound) —
+    // give the background job room to finish before the search test runs.
+    test.setTimeout(180_000);
+
     const { ctx, headers } = await getAuthHeaders();
     const jsonHeaders = { ...headers, 'Content-Type': 'application/json' };
 
@@ -345,6 +349,43 @@ test.describe('KG Documents — Segmentation & Search', () => {
         },
       });
     }
+
+    // The segments were created BEFORE this index/mapping existed, so auto_sync
+    // never embedded them — reindex now to backfill embeddings from the graph.
+    // (Without this, embedding_count stays 0 and semantic search returns nothing.)
+    const reindexResp = await ctx.post(
+      `${BASE_URL}/api/vector-indexes/reindex?space_id=${SPACE_ID}&index_name=${SEG_VECTOR_INDEX}`,
+      {
+        headers: jsonHeaders,
+        data: { graph_uri: GRAPH_ID, mapping_type: 'kgdocument_segment', batch_size: 50 },
+      },
+    );
+    expect(reindexResp.ok()).toBeTruthy();
+    const reindexBody = await reindexResp.json();
+    const jobId: string | undefined = reindexBody.job_id;
+
+    // Reindex runs as a background job — poll status until it completes.
+    let embeddingsStored = 0;
+    const deadline = Date.now() + 150_000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2_000));
+      const statusResp = await ctx.get(
+        `${BASE_URL}/api/vector-indexes/reindex/status?space_id=${SPACE_ID}` +
+          (jobId ? `&job_id=${jobId}` : `&index_name=${SEG_VECTOR_INDEX}`),
+        { headers },
+      );
+      const statusBody = await statusResp.json();
+      const job = statusBody.jobs?.[0];
+      if (!job) continue;
+      if (job.status === 'completed') {
+        embeddingsStored = job.embeddings_stored;
+        break;
+      }
+      if (job.status === 'failed') {
+        throw new Error(`Reindex failed: ${JSON.stringify(job.errors ?? job)}`);
+      }
+    }
+    expect(embeddingsStored, 'reindex should embed at least one segment').toBeGreaterThan(0);
 
     await ctx.dispose();
   });

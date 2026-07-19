@@ -98,8 +98,10 @@ test.describe('KG Frames — Filter & Search UI', () => {
     // Debounced search input
     await expect(page.locator('input[placeholder="Search frames..."]')).toBeVisible();
 
-    // Sort dropdown should have options
-    await expect(page.locator('select').filter({ hasText: 'Sort by...' })).toBeVisible();
+    // Sort dropdown is visible. Its placeholder is gated: "Sort by..." once a
+    // search/filter enables sorting, "Sort (search first)" before then — match
+    // either so the assertion is state-independent.
+    await expect(page.locator('select').filter({ hasText: /Sort/ })).toBeVisible();
   });
 
   test('clicking form type tab filters frames list', async ({ page }) => {
