@@ -3,91 +3,90 @@
 Root cause of the high-cardinality slot-value 60s timeouts
 (high_cardinality_slot_value_query_plan.md): Postgres assumes
 predicate_uuid ⟂ object_uuid and multiplies selectivities, so a
-(slot-predicate, value) leaf that actually matches tens of thousands of rows is
+(slot-predicate, value) leaf that actually matches thousands of rows is
 estimated at ~tens — the planner then seeds an 8-way join there and picks all
 nested loops -> timeout.
 
-This test builds a correlated dataset (a value that only ever appears as the
-object of one predicate) and asserts the planner's estimate is:
-  - ACCURATE with the extended stats the schema now creates (within a small factor)
-  - badly UNDER-estimated without them (proving the stats are what fix it)
+Runs against the real nurture lead dataset (a boolean slot value that only ever
+appears as the object of `hasBooleanSlotValue` — the same correlation shape as
+the prod `hasUriSlotValue -> nurture_lead`), and asserts the planner's estimate
+is ACCURATE with the extended stats the schema creates and badly UNDER-estimated
+without them. Skips if no such space is loaded.
 """
 
 from __future__ import annotations
 
-import uuid as _uuid
-
 import pytest
 
-from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-from .conftest import skip_no_pg
+from vitalgraph.db.sparql_sql.sparql_sql_space_impl import _generate_term_uuid
+from .conftest import skip_no_pg, space_exists
 from .harness import explain_json, estimated_rows, actual_rows
 
-pytestmark = [pytest.mark.performance, pytest.mark.slow, skip_no_pg,
+pytestmark = [pytest.mark.performance, skip_no_pg,
               pytest.mark.asyncio(loop_scope="session")]
 
-SPACE = "perf_corr"
-_NS = _uuid.UUID("6ba7b815-9dad-11d1-80b4-00c04fd430c8")
-N_FILLER = 1_000_000
-M_CORR = 20_000        # the correlated (slot-predicate, value) rows
+# Pre-loaded realistic spaces; hasBooleanSlotValue -> "false"/"true" is a value
+# that only ever appears under that one predicate (100% correlated).
+CANDIDATES = ["space_lead_dataset_test", "sp_sql_lead_dataset"]
+SLOT_PRED = "http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue"
 
 
-def _u(s: str):
-    return _uuid.uuid5(_NS, s)
+async def _pick_loaded(conn):
+    for sp in CANDIDATES:
+        if await space_exists(conn, sp):
+            return sp
+    return None
 
 
-async def _load_correlated(pool):
-    """COPY a big table where one (predicate, object) pair is 100% correlated."""
-    g = _u("ctx")
-    p_slot, p_filler, o_val = _u("pred:slot"), _u("pred:filler"), _u("obj:val")
-    quads = []
-    for i in range(N_FILLER):                       # filler: varied predicate/object
-        quads.append((_u(f"s:{i}"), p_filler, _u(f"o:{i % 1000}"), g, _u(f"qf:{i}")))
-    for j in range(M_CORR):                         # correlated: p_slot only ever -> o_val
-        quads.append((_u(f"cs:{j}"), p_slot, o_val, g, _u(f"qc:{j}")))
-    async with pool.acquire() as conn:
-        try:
-            await SparqlSQLSchema.drop_space(conn, SPACE)
-        except Exception:
-            pass
-        await SparqlSQLSchema.create_space(conn, SPACE)   # creates the extended stats DDL
-        t = SparqlSQLSchema.get_table_names(SPACE)
-        await conn.copy_records_to_table(
-            t["rdf_quad"].split(".")[-1], records=quads,
-            columns=["subject_uuid", "predicate_uuid", "object_uuid",
-                     "context_uuid", "quad_uuid"])
-        await conn.execute(f"VACUUM (ANALYZE) {t['rdf_quad']}")
-    return p_slot, o_val
+def _stats_ddl(space_id):
+    stat = f"stat_{space_id}_quad_po"
+    return (
+        f"CREATE STATISTICS IF NOT EXISTS {stat} (mcv, ndistinct) "
+        f"ON predicate_uuid, object_uuid FROM {space_id}_rdf_quad",
+        f"ALTER STATISTICS {stat} SET STATISTICS 1000")
 
 
 async def test_extended_stats_fix_correlation_estimate(perf_pool):
-    p_slot, o_val = await _load_correlated(perf_pool)
-    sql = f"SELECT 1 FROM {SPACE}_rdf_quad WHERE predicate_uuid = $1 AND object_uuid = $2"
-    try:
-        async with perf_pool.acquire() as conn:
-            # WITH extended stats (created by the schema DDL).
+    async with perf_pool.acquire() as conn:
+        space_id = await _pick_loaded(conn)
+        if not space_id:
+            pytest.skip("no realistic lead dataset loaded")
+        stat = f"stat_{space_id}_quad_po"
+        create, tune = _stats_ddl(space_id)
+
+        p_slot = _generate_term_uuid(SLOT_PRED, "U")
+        # The most common object of the slot predicate is the correlated value.
+        o_val = await conn.fetchval(
+            f"SELECT object_uuid FROM {space_id}_rdf_quad WHERE predicate_uuid = $1 "
+            f"GROUP BY object_uuid ORDER BY count(*) DESC LIMIT 1", p_slot)
+        if o_val is None:
+            pytest.skip(f"{space_id} has no {SLOT_PRED} slot values")
+
+        sql = (f"SELECT 1 FROM {space_id}_rdf_quad "
+               f"WHERE predicate_uuid = $1 AND object_uuid = $2")
+        try:
+            # WITH extended stats.
+            await conn.execute(create)
+            await conn.execute(tune)
+            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
             plan = await explain_json(conn, sql, p_slot, o_val)
             est_with, act = estimated_rows(plan), actual_rows(plan)
 
-            # Remove them and re-ANALYZE → the independence-assumption underestimate.
-            await conn.execute(f"DROP STATISTICS IF EXISTS stat_{SPACE}_quad_po")
-            await conn.execute(f"ANALYZE {SPACE}_rdf_quad")
-            plan2 = await explain_json(conn, sql, p_slot, o_val)
-            est_without = estimated_rows(plan2)
+            # WITHOUT them -> the independence-assumption underestimate.
+            await conn.execute(f"DROP STATISTICS IF EXISTS {stat}")
+            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
+            est_without = estimated_rows(await explain_json(conn, sql, p_slot, o_val))
 
-            print(f"\ncorrelated leaf: actual={act} est_with_stats={est_with} "
-                  f"est_without={est_without} "
-                  f"(under-est {act / max(est_without,1):.0f}x without)")
+            print(f"\n[{space_id}] correlated leaf: actual={act} "
+                  f"est_with={est_with} est_without={est_without} "
+                  f"(under-est {act / max(est_without, 1):.0f}x without)")
 
-            # With stats: estimate within ~4x of actual (correlation captured).
             assert 0.25 * act <= est_with <= 4 * act, (
                 f"extended stats did not correct the estimate: est={est_with} actual={act}")
-            # Without stats: badly under-estimated (this is the bug the stats fix).
             assert est_without <= act / 10, (
-                f"expected a large underestimate without stats; got est={est_without} actual={act}")
-    finally:
-        async with perf_pool.acquire() as conn:
-            try:
-                await SparqlSQLSchema.drop_space(conn, SPACE)
-            except Exception:
-                pass
+                f"expected a large underestimate without stats; est={est_without} actual={act}")
+        finally:
+            # Restore the stats so the shared space is left improved, not degraded.
+            await conn.execute(create)
+            await conn.execute(tune)
+            await conn.execute(f"ANALYZE {space_id}_rdf_quad")
