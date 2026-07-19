@@ -414,6 +414,16 @@ class SparqlSQLSchema:
     # Per-space DDL generators
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _partition_children(table_fqn: str, n: int) -> List[str]:
+        """CREATE TABLE ... PARTITION OF statements for n HASH partitions."""
+        base = table_fqn.split(".")[-1]
+        return [
+            f"CREATE TABLE IF NOT EXISTS {base}_p{i} PARTITION OF {table_fqn} "
+            f"FOR VALUES WITH (MODULUS {n}, REMAINDER {i})"
+            for i in range(n)
+        ]
+
     def create_space_tables_sql(self, space_id: str,
                                 partition_quads: int = 0) -> List[str]:
         """Return SQL statements to create all per-space tables.
@@ -466,12 +476,7 @@ class SparqlSQLSchema:
                     PRIMARY KEY (subject_uuid, predicate_uuid, object_uuid, context_uuid)
                 ) PARTITION BY HASH (context_uuid)
             ''')
-            base = t['rdf_quad'].split('.')[-1]
-            for i in range(partition_quads):
-                stmts.append(
-                    f"CREATE TABLE IF NOT EXISTS {base}_p{i} "
-                    f"PARTITION OF {t['rdf_quad']} "
-                    f"FOR VALUES WITH (MODULUS {partition_quads}, REMAINDER {i})")
+            stmts += self._partition_children(t['rdf_quad'], partition_quads)
         else:
             stmts.append(f'''
                 CREATE TABLE IF NOT EXISTS {t['rdf_quad']} (
@@ -503,7 +508,10 @@ class SparqlSQLSchema:
             )
         ''')
 
-        # 6. Edge table (maintained by app-level sync; replaces edge MV)
+        # 6. Edge table (maintained by app-level sync; replaces edge MV).
+        # Co-partitioned by HASH(context_uuid) with rdf_quad so edge-rewrite
+        # joins are partition-wise; context_uuid is already in the PK.
+        _part = " PARTITION BY HASH (context_uuid)" if partition_quads > 0 else ""
         stmts.append(f'''
             CREATE TABLE IF NOT EXISTS {t['edge']} (
                 edge_uuid        UUID NOT NULL,
@@ -511,8 +519,9 @@ class SparqlSQLSchema:
                 dest_node_uuid   UUID NOT NULL,
                 context_uuid     UUID NOT NULL,
                 PRIMARY KEY (edge_uuid, context_uuid)
-            )
-        ''')
+            ){_part}''')
+        if partition_quads > 0:
+            stmts += self._partition_children(t['edge'], partition_quads)
 
         # 7. Frame-entity table (maintained by app-level sync; replaces frame_entity MV)
         stmts.append(f'''
@@ -522,8 +531,9 @@ class SparqlSQLSchema:
                 dest_entity_uuid     UUID,
                 context_uuid         UUID NOT NULL,
                 PRIMARY KEY (frame_uuid, context_uuid)
-            )
-        ''')
+            ){_part}''')
+        if partition_quads > 0:
+            stmts += self._partition_children(t['frame_entity'], partition_quads)
 
         # 8. Vector index registry (per-space catalog of named vector indexes)
         stmts.append(f'''

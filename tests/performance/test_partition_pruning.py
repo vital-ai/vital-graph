@@ -123,6 +123,19 @@ async def test_graph_scoped_query_prunes_to_one_partition(pg18_pool, part_space)
             assert len(scanned) == 1, (g, scanned, node_types(plan))
 
 
+async def test_edge_and_frame_entity_are_co_partitioned(pg18_pool, part_space):
+    """rdf_quad, edge, frame_entity are all HASH(context_uuid)-partitioned with
+    the same modulus, so edge-rewrite joins can be partition-wise."""
+    sid = part_space
+    async with pg18_pool.acquire() as conn:
+        for tbl in ("rdf_quad", "edge", "frame_entity"):
+            n = await conn.fetchval(
+                "SELECT count(*) FROM pg_inherits i "
+                "JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = $1",
+                f"{sid}_{tbl}")
+            assert n == N_PARTITIONS, (tbl, n)
+
+
 async def test_slim_pk_dedups_identical_quads(pg18_pool, part_space):
     sid = part_space
     t = SparqlSQLSchema.get_table_names(sid)
