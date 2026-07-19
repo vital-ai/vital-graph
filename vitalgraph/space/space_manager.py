@@ -173,7 +173,9 @@ class SpaceManager:
         except Exception as e:
             self.logger.warning(f"System space '{SP_KG_TYPES}' bootstrap failed (non-critical): {e}")
       
-    async def create_space_with_tables(self, space_id: str, space_name: str, space_description: str = None) -> bool:
+    async def create_space_with_tables(self, space_id: str, space_name: str,
+                                       space_description: str = None,
+                                       partition_quads: int = 0) -> bool:
         """
         Create a new space with both database record and tables.
         
@@ -219,7 +221,7 @@ class SpaceManager:
                                  space_name=space_name, space_description=space_description)
             
             # Create space storage (backend handles all details - tables, records, etc.)
-            storage_created = await space_impl.create()
+            storage_created = await space_impl.create(partition_quads=partition_quads)
             if not storage_created:
                 self.logger.error(f"Failed to create space storage for '{space_id}'")
                 return False

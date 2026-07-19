@@ -405,10 +405,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
     # Space lifecycle
     # ==================================================================
 
-    async def create_space_storage(self, space_id: str) -> bool:
+    async def create_space_storage(self, space_id: str,
+                                   partition_quads: int = 0) -> bool:
         try:
             async with self._db._pool.acquire() as conn:
-                await SparqlSQLSchema.create_space(conn, space_id)
+                await SparqlSQLSchema.create_space(conn, space_id, partition_quads)
             return True
         except Exception as e:
             logger.error("create_space_storage(%s) failed: %s", space_id, e)

@@ -140,9 +140,10 @@ async def make_space(space_manager):
     callable -> space_id."""
     created = []
 
-    async def _make(space_id: str = None) -> str:
+    async def _make(space_id: str = None, partition_quads: int = 0) -> str:
         sid = space_id or f"{TEST_SPACE_PREFIX}{uuid.uuid4().hex[:12]}"
-        ok = await space_manager.create_space_with_tables(sid, sid)
+        ok = await space_manager.create_space_with_tables(
+            sid, sid, partition_quads=partition_quads)
         assert ok, f"space manager failed to create {sid}"
         created.append(sid)
         return sid

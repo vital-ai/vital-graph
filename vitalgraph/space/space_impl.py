@@ -36,18 +36,23 @@ class SpaceImpl:
         
         self.logger.debug(f"SpaceImpl initialization completed for space '{space_id}'")
     
-    async def create(self) -> bool:
+    async def create(self, partition_quads: int = 0) -> bool:
         """
         Create the space storage and metadata.
-        
+
+        Args:
+            partition_quads: sparql_sql-only — HASH(context)-partition rdf_quad
+                into this many partitions (0 = non-partitioned). Ignored by
+                other backends.
+
         Returns:
             True if creation successful, False otherwise
         """
         self.logger.info(f"create() called for space '{self.space_id}'")
-        
+
         try:
             # Create space storage (Fuseki dataset + PostgreSQL primary data tables)
-            success = await self.backend.create_space_storage(self.space_id)
+            success = await self.backend.create_space_storage(self.space_id, partition_quads)
             if not success:
                 self.logger.error(f"❌ Failed to create space storage '{self.space_id}'")
                 return False

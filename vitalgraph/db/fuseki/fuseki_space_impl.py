@@ -1135,8 +1135,9 @@ class FusekiSpaceImpl(SpaceBackendInterface):
         return await self.get_quad_count(space_id, graph_uri)
     
     # SpaceBackendInterface adapter methods
-    async def create_space_storage(self, space_id: str) -> bool:
-        """Create space storage - adapter for SpaceBackendInterface."""
+    async def create_space_storage(self, space_id: str, partition_quads: int = 0) -> bool:
+        """Create space storage - adapter for SpaceBackendInterface.
+        (partition_quads is a sparql_sql-only option and is ignored here.)"""
         return await self.init_space_storage(space_id)
     
     async def space_exists(self, space_id: str) -> bool:

@@ -573,9 +573,10 @@ class DualWriteCoordinator:
             message="" if fuseki_success else "FUSEKI_SYNC_FAILURE"
         )
 
-    async def create_space_storage(self, space_id: str) -> bool:
+    async def create_space_storage(self, space_id: str, partition_quads: int = 0) -> bool:
         """
         Create storage for a new space in both Fuseki and PostgreSQL.
+        (partition_quads is a sparql_sql-only option and is ignored here.)
         
         Args:
             space_id: Space identifier

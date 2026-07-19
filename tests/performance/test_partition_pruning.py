@@ -68,19 +68,49 @@ async def pg18_pool():
     await pool.close()
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def pg18_space_manager():
+    """SpaceManager over a PG18-connected backend — spaces (incl. partitioned)
+    are created via the manager, not SparqlSQLSchema directly."""
+    from vitalgraph.db.sparql_sql.sparql_sql_space_impl import SparqlSQLSpaceImpl
+    from vitalgraph.space.space_manager import SpaceManager
+    impl = SparqlSQLSpaceImpl(
+        postgresql_config={"host": PG18["host"], "port": PG18["port"],
+                           "database": PG18["database"], "username": PG18["user"],
+                           "password": PG18["password"],
+                           "min_pool_size": 1, "max_pool_size": 4},
+        sidecar_config={"url": os.environ.get("VG_TEST_SIDECAR_URL",
+                                              "http://localhost:7071")})
+    await impl.connect()
+    yield SpaceManager(db_impl=getattr(impl, "db_impl", None), space_backend=impl)
+    await impl.disconnect()
+
+
 @pytest_asyncio.fixture(loop_scope="session")
-async def part_space(pg18_pool):
-    schema = SparqlSQLSchema()
-    sid = f"p3test_{uuid.uuid4().hex[:8]}"
-    async with pg18_pool.acquire() as conn:
-        for s in schema.create_space_tables_sql(sid, partition_quads=N_PARTITIONS):
-            await conn.execute(s)
-        for s in schema.create_space_indexes_sql(sid):
-            await conn.execute(s)
-    yield sid
-    async with pg18_pool.acquire() as conn:
-        for s in schema.drop_space_tables_sql(sid):
-            await conn.execute(s)
+async def make_pg18_space(pg18_space_manager):
+    """Factory: create a (optionally partitioned) space via the manager, dropped
+    on teardown."""
+    created = []
+
+    async def _make(partition_quads: int = 0) -> str:
+        sid = f"p3test_{uuid.uuid4().hex[:8]}"
+        ok = await pg18_space_manager.create_space_with_tables(
+            sid, sid, partition_quads=partition_quads)
+        assert ok, f"space manager failed to create {sid}"
+        created.append(sid)
+        return sid
+
+    yield _make
+    for sid in created:
+        try:
+            await pg18_space_manager.delete_space_with_tables(sid)
+        except Exception:
+            pass
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def part_space(make_pg18_space):
+    return await make_pg18_space(partition_quads=N_PARTITIONS)
 
 
 def _partitions_scanned(plan, sid):
@@ -153,55 +183,44 @@ async def test_slim_pk_dedups_identical_quads(pg18_pool, part_space):
     assert cnt == 1, cnt
 
 
-async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool):
+async def test_migrate_nonpartitioned_space_preserves_data(pg18_pool, make_pg18_space):
     """Per-space migration: non-partitioned space -> partitioned, with set-parity
     and correct (s,p,o,c) dedup."""
     from vitalgraph.db.sparql_sql.partition_migrate import (
         migrate_space_to_partitioned, distinct_quads)
 
-    schema = SparqlSQLSchema()
-    sid = f"p3mig_{uuid.uuid4().hex[:8]}"
+    sid = await make_pg18_space(partition_quads=0)            # non-partitioned
+    t = SparqlSQLSchema.get_table_names(sid)
     async with pg18_pool.acquire() as conn:
-        for s in schema.create_space_tables_sql(sid):        # non-partitioned
-            await conn.execute(s)
-        for s in schema.create_space_indexes_sql(sid):
-            await conn.execute(s)
-    try:
-        t = SparqlSQLSchema.get_table_names(sid)
-        async with pg18_pool.acquire() as conn:
-            g = uuid.uuid4()
-            rows = [(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g) for _ in range(300)]
-            rows += [rows[0], rows[0]]                       # 2 duplicate quads
-            await conn.executemany(
-                f"INSERT INTO {t['rdf_quad']} "
-                f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
-                f"VALUES ($1, $2, $3, $4)", rows)
+        g = uuid.uuid4()
+        rows = [(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), g) for _ in range(300)]
+        rows += [rows[0], rows[0]]                           # 2 duplicate quads
+        await conn.executemany(
+            f"INSERT INTO {t['rdf_quad']} "
+            f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+            f"VALUES ($1, $2, $3, $4)", rows)
 
-            before = await distinct_quads(conn, sid)
-            part_before = await conn.fetchval(
-                "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
-                "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+        before = await distinct_quads(conn, sid)
+        part_before = await conn.fetchval(
+            "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
+            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
 
-            async with conn.transaction():
-                summary = await migrate_space_to_partitioned(conn, sid, n_partitions=4)
+        async with conn.transaction():
+            summary = await migrate_space_to_partitioned(conn, sid, n_partitions=4)
 
-            after = await distinct_quads(conn, sid)
-            part_after = await conn.fetchval(
-                "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
-                "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
-            plan = await explain_json(
-                conn, f"SELECT subject_uuid FROM {t['rdf_quad']} WHERE context_uuid = $1",
-                g, analyze=False)
-            scanned = _partitions_scanned(plan, sid)
+        after = await distinct_quads(conn, sid)
+        part_after = await conn.fetchval(
+            "SELECT count(*) FROM pg_inherits i JOIN pg_class p "
+            "ON p.oid = i.inhparent WHERE p.relname = $1", f"{sid}_rdf_quad")
+        plan = await explain_json(
+            conn, f"SELECT subject_uuid FROM {t['rdf_quad']} WHERE context_uuid = $1",
+            g, analyze=False)
+        scanned = _partitions_scanned(plan, sid)
 
-        assert part_before == 0 and part_after == 4          # became partitioned
-        assert before == after                               # set-semantics parity
-        assert summary == {"old_quads": 302, "new_quads": 300, "dupes_dropped": 2}
-        assert len(scanned) == 1                             # prunes post-migration
-    finally:
-        async with pg18_pool.acquire() as conn:
-            for s in schema.drop_space_tables_sql(sid):
-                await conn.execute(s)
+    assert part_before == 0 and part_after == 4              # became partitioned
+    assert before == after                                   # set-semantics parity
+    assert summary == {"old_quads": 302, "new_quads": 300, "dupes_dropped": 2}
+    assert len(scanned) == 1                                 # prunes post-migration
 
 
 async def test_quad_uuid_is_time_ordered_uuidv7(pg18_pool, part_space):

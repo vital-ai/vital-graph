@@ -384,8 +384,11 @@ class FusekiPostgreSQLSpaceImpl(SpaceBackendInterface):
     
     # Space lifecycle operations
     
-    async def create_space_storage(self, space_id: str) -> bool:
-        """Create storage for a new space in both Fuseki and PostgreSQL."""
+    async def create_space_storage(self, space_id: str, partition_quads: int = 0) -> bool:
+        """Create storage for a new space in both Fuseki and PostgreSQL.
+
+        ``partition_quads`` is a PostgreSQL-only option (sparql_sql backend) and
+        is ignored here."""
         if not self.connected:
             raise RuntimeError("Backend not connected")
         

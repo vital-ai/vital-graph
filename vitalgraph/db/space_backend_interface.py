@@ -54,7 +54,7 @@ class SpaceBackendInterface(ABC):
     # ========================================
     
     @abstractmethod
-    async def create_space_storage(self, space_id: str) -> bool:
+    async def create_space_storage(self, space_id: str, partition_quads: int = 0) -> bool:
         """
         Create storage structures for a new space.
         
