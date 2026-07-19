@@ -16,7 +16,8 @@ from rdflib import URIRef, Literal
 from rdflib.namespace import XSD
 
 from .conftest import skip_no_infra, TEST_SPACE_PREFIX
-from vitalgraph.db.sparql_sql.bulk_export import export_space, import_space
+from vitalgraph.db.sparql_sql.bulk_export import (
+    export_space, import_space, export_space_to_nquads)
 from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
 
 pytestmark = [pytest.mark.integration, skip_no_infra,
@@ -80,3 +81,38 @@ async def test_export_import_round_trip(space_impl, two_spaces, tmp_path):
     assert src_counts["edge"] == N_EDGES        # derived table populated in src...
     assert dst_counts["edge"] == N_EDGES        # ...and rebuilt on import
     assert dst_quads == src_quads               # byte-exact quad_uuid fidelity
+
+
+async def test_nquads_export_roundtrips_terms_and_escaping(space_impl, two_spaces, tmp_path):
+    """DB → N-Quads → rdflib reparse preserves URIs, langs, datatypes, and
+    literals with N-Triples special characters."""
+    import rdflib
+    from rdflib.namespace import XSD
+
+    sid = two_spaces[0]
+    g = URIRef("urn:nq:g")
+    s = URIRef("urn:nq:s1")
+    quads = [
+        (s, URIRef("urn:nq:pu"), URIRef("urn:nq:obj"), g),
+        (s, URIRef("urn:nq:plain"), Literal("hello world"), g),
+        (s, URIRef("urn:nq:lang"), Literal("bonjour", lang="fr"), g),
+        (s, URIRef("urn:nq:int"), Literal(42), g),                    # xsd:integer
+        (s, URIRef("urn:nq:esc"), Literal('a "quote"\nand\\slash\ttab'), g),
+    ]
+    await space_impl.add_rdf_quads_batch_bulk(sid, quads)
+
+    out = str(tmp_path / "export.nq")
+    async with space_impl.db_impl.connection_pool.acquire() as conn:
+        n = await export_space_to_nquads(conn, sid, out, graph_uri=str(g))
+    assert n == len(quads)
+
+    ds = rdflib.Dataset()
+    ds.parse(out, format="nquads")
+    got = {(str(qs), str(qp), str(qo)) for qs, qp, qo, _ in ds.quads()}
+    want = {(str(a), str(b), str(c)) for a, b, c, _ in quads}
+    assert got == want, (got ^ want)
+
+    # datatype + lang survived (not just lexical form)
+    objs = {p: o for _, p, o, _ in ds.quads()}
+    assert objs[rdflib.URIRef("urn:nq:int")].datatype == XSD.integer
+    assert objs[rdflib.URIRef("urn:nq:lang")].language == "fr"

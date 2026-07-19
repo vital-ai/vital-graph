@@ -85,3 +85,92 @@ async def import_space(conn, space_id: str, paths: Dict[str, str],
         counts[key] = await conn.fetchval(f"SELECT count(*) FROM {_bare(t[key])}")
     logger.info("import_space(%s): restored %s", space_id, counts)
     return counts
+
+
+# ---------------------------------------------------------------------------
+# RDF (N-Quads) export — reconstruct portable RDF from the UUID-encoded tables
+# ---------------------------------------------------------------------------
+
+def _nt_term_sql(alias: str, dt_alias: str = None) -> str:
+    """SQL expression rendering term row `alias` as an N-Triples/N-Quads term.
+
+    'U'/'G' -> <iri>; 'B' -> _:label; 'L' -> "escaped"(@lang | ^^<datatype>).
+    Literal text is escaped per the N-Triples grammar (backslash first).
+    """
+    esc = (f"replace(replace(replace(replace(replace({alias}.term_text, "
+           r"E'\\', E'\\\\'), E'\"', E'\\\"'), E'\n', E'\\n'), "
+           r"E'\r', E'\\r'), E'\t', E'\\t')")
+    lit_suffix = (
+        f"CASE WHEN {alias}.lang IS NOT NULL AND {alias}.lang <> '' "
+        f"THEN '@' || {alias}.lang ")
+    if dt_alias:
+        lit_suffix += (f"WHEN {dt_alias}.datatype_uri IS NOT NULL "
+                       f"THEN '^^<' || {dt_alias}.datatype_uri || '>' ")
+    lit_suffix += "ELSE '' END"
+    return (
+        f"CASE {alias}.term_type "
+        f"WHEN 'U' THEN '<' || {alias}.term_text || '>' "
+        f"WHEN 'G' THEN '<' || {alias}.term_text || '>' "
+        f"WHEN 'B' THEN '_:' || {alias}.term_text "
+        f"WHEN 'L' THEN '\"' || {esc} || '\"' || ({lit_suffix}) "
+        f"ELSE '<' || {alias}.term_text || '>' END")
+
+
+async def export_space_to_nquads(conn, space_id: str, output_path: str,
+                                 graph_uri: str = None, limit: int = None) -> int:
+    """Stream a space's quads to `output_path` as N-Quads (one quad per line).
+
+    Reconstructs real RDF from the UUID tables (4-way term join + datatype),
+    formatting each row server-side and COPYing the text stream to the file, so
+    peak memory is independent of size. Optionally restrict to one `graph_uri`
+    (context) and/or `limit` rows. Returns the number of quads written.
+    """
+    t = SparqlSQLSchema.get_table_names(space_id)
+    q, term, dtab = _bare(t["rdf_quad"]), _bare(t["term"]), _bare(t["datatype"])
+
+    where = ""
+    if graph_uri is not None:
+        from .sparql_sql_space_impl import _generate_term_uuid
+        g_uuid = _generate_term_uuid(graph_uri, "U")
+        where = f"WHERE q.context_uuid = '{g_uuid}'"
+    lim = f"LIMIT {int(limit)}" if limit else ""
+
+    line = (f"{_nt_term_sql('ts')} || ' ' || {_nt_term_sql('tp')} || ' ' || "
+            f"{_nt_term_sql('tobj', 'd')} || ' ' || {_nt_term_sql('tc')} || ' .'")
+    query = (
+        f"SELECT {line} FROM {q} q "
+        f"JOIN {term} ts ON ts.term_uuid = q.subject_uuid "
+        f"JOIN {term} tp ON tp.term_uuid = q.predicate_uuid "
+        f"JOIN {term} tobj ON tobj.term_uuid = q.object_uuid "
+        f"JOIN {term} tc ON tc.term_uuid = q.context_uuid "
+        f"LEFT JOIN {dtab} d ON d.datatype_id = tobj.datatype_id "
+        f"{where} {lim}")
+
+    # Server-side cursor (constant memory), batched. NOT COPY: COPY's text
+    # format would re-escape the already-N-Triples-escaped lines.
+    written = 0
+    with open(output_path, "w", encoding="utf-8") as fh:
+        async with conn.transaction():
+            cur = await conn.cursor(query)
+            while True:
+                rows = await cur.fetch(10_000)
+                if not rows:
+                    break
+                fh.write("\n".join(r[0] for r in rows))
+                fh.write("\n")
+                written += len(rows)
+
+    # The 4 term joins are INNER, so any quad whose subject/predicate/object/
+    # context term is absent from the term table is dropped (unrenderable).
+    # Report it rather than silently losing rows.
+    if graph_uri is None and not limit:
+        total = await conn.fetchval(f"SELECT count(*) FROM {q}")
+        if written < total:
+            logger.warning(
+                "export_space_to_nquads(%s): dropped %d of %d quads with a "
+                "term missing from the term table (unrenderable)",
+                space_id, total - written, total)
+
+    logger.info("export_space_to_nquads(%s): %d quads -> %s",
+                space_id, written, output_path)
+    return written
