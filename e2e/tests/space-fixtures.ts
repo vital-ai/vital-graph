@@ -20,11 +20,23 @@ const BASE_URL = process.env.VG_TEST_URL || 'http://localhost:8002';
 
 async function authContext() {
   const ctx = await request.newContext({ baseURL: BASE_URL });
-  const loginResp = await ctx.post('/api/login', {
-    form: { username: ADMIN_USER, password: ADMIN_PASS },
-  });
-  const { access_token } = await loginResp.json();
-  return { ctx, headers: { Authorization: `Bearer ${access_token}` } };
+  // Retry login on transient connection errors ("socket hang up", ECONNRESET).
+  // This runs in beforeAll/afterAll, so a one-off dropped connection under the
+  // full suite's load would otherwise fail the whole describe block.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const loginResp = await ctx.post('/api/login', {
+        form: { username: ADMIN_USER, password: ADMIN_PASS },
+      });
+      const { access_token } = await loginResp.json();
+      return { ctx, headers: { Authorization: `Bearer ${access_token}` } };
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 
 /** Drop a space if it exists (idempotent — 404s are fine). */

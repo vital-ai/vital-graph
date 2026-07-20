@@ -141,20 +141,25 @@ test.describe('Graph Visualization — Sessions & Interaction', () => {
     await page.goto('/visualization');
     await expect(page.locator(VIZ_PAGE)).toBeVisible({ timeout: 10_000 });
 
-    // Click the "New session" button (the + button in the session bar)
+    // Wait for the session bar to render (Session 1 present) before clicking —
+    // clicking "New session" before the bar is interactive drops the click and
+    // "Session 2" never appears (flaky under full-suite load).
+    await expect(page.getByText('Session 1', { exact: true })).toBeVisible({ timeout: 10_000 });
     await page.locator('button[title="New session"]').click();
 
     // A second session tab should appear — "Session 2"
-    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 
   test('switch sessions changes active tab', async ({ page }) => {
     await page.goto('/visualization');
     await expect(page.locator(VIZ_PAGE)).toBeVisible({ timeout: 10_000 });
 
-    // Ensure at least 2 sessions
+    // Ensure at least 2 sessions — wait for the session bar to be interactive
+    // first so the "New session" click isn't dropped (flaky under load).
+    await expect(page.getByText('Session 1', { exact: true })).toBeVisible({ timeout: 10_000 });
     await page.locator('button[title="New session"]').click();
-    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('Session 2', { exact: true })).toBeVisible({ timeout: 10_000 });
 
     // Click Session 1 tab
     await page.getByText('Session 1', { exact: true }).click();
