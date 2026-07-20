@@ -1,5 +1,10 @@
 # Concurrent INSERT DATA: term table UniqueViolationError
 
+## Status: ✅ FIXED — `emit_update._term_upsert` now emits `ON CONFLICT (term_uuid) DO NOTHING`.
+See issues/019 for the full root-cause chain (this race also poisoned pooled
+connections and bled the pool, causing unrelated reads to hang/return empty) and
+the regression test `tests/integration/test_read_after_write_concurrency.py`.
+
 ## Summary
 
 When multiple SPARQL INSERT DATA operations run concurrently and reference

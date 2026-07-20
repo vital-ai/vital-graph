@@ -64,12 +64,11 @@ test.describe('Triples CRUD', () => {
   test('triple appears in the list via filter', async ({ page }) => {
     // First, confirm the triple exists via API before testing UI filter.
     //
-    // NOTE: this can intermittently fail under full-suite high concurrency — the
-    // just-added triple isn't found for a window. The read/write/SQL paths were
-    // exhaustively verified correct in isolation (see
-    // issues/019_triples_list_count_divergence_under_load.md); the root cause is
-    // an unreproduced read-after-write/space-lifecycle race. Left as a plain
-    // single-shot check (no retry) so the flake stays visible until root-caused.
+    // This used to flake under full-suite concurrency: a concurrent term-insert
+    // race in the SPARQL UPDATE path poisoned pooled connections and bled the
+    // pool, so this read intermittently hung/returned empty. Fixed at the source
+    // (emit_update._term_upsert → ON CONFLICT) with a low-level regression test —
+    // see issues/019. Kept as a plain single-shot check (no retry).
     const { ctx, headers } = await getAuthHeaders();
     const apiCheck = await ctx.get('/api/graphs/triples', {
       params: { space_id: SPACE_ID, graph_id: GRAPH_ID, page_size: 10, subject: TEST_SUBJECT },

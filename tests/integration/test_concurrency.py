@@ -28,12 +28,6 @@ pytestmark = [
 class TestConcurrentWrites:
     """Parallel INSERT DATA operations produce correct results."""
 
-    @pytest.mark.xfail(
-        reason="emit_update.py term INSERT uses WHERE NOT EXISTS which races "
-               "under concurrent transactions — shared predicate URIs collide "
-               "(see issues/003)",
-        strict=False,
-    )
     async def test_parallel_inserts_no_data_loss(
         self, test_space, sparql_update, sparql_execute,
     ):
@@ -61,11 +55,6 @@ class TestConcurrentWrites:
             f"Missing indices: {expected - found_indices}"
         )
 
-    @pytest.mark.xfail(
-        reason="emit_update.py term INSERT uses WHERE NOT EXISTS which races "
-               "under concurrent transactions (see issues/003)",
-        strict=False,
-    )
     async def test_parallel_inserts_different_predicates(
         self, test_space, sparql_update, sparql_execute,
     ):

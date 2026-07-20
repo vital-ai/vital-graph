@@ -181,20 +181,25 @@ def _node_lang(node: RDFNode) -> Optional[str]:
 def _term_upsert(term_table: str, text: str, ttype: str,
                  lang: Optional[str] = None,
                  datatype_id: Optional[int] = None) -> str:
-    """Generate INSERT ... WHERE NOT EXISTS for a term row.
+    """Generate an idempotent, concurrency-safe term INSERT.
 
     Uses deterministic UUID v5 (matching _generate_term_uuid) so that
     term rows created here are consistent with the main write path.
+
+    ``ON CONFLICT (term_uuid) DO NOTHING`` — NOT ``WHERE NOT EXISTS`` — because
+    the latter's existence check and insert are not atomic: two concurrent
+    UPDATEs referencing the same term (e.g. a shared predicate or graph URI)
+    both pass the check and both insert, raising a duplicate-key error that
+    aborts the transaction and poisons the pooled connection (see issue 003 /
+    019). ``ON CONFLICT`` lets Postgres resolve the race in a single statement.
     """
     term_uuid = _generate_term_uuid(text, ttype, lang=lang, datatype_id=datatype_id)
     lang_val = f"'{_esc(lang)}'" if lang else "NULL"
     dt_val = str(datatype_id) if datatype_id is not None else "NULL"
     return (
         f"INSERT INTO {term_table} (term_uuid, term_text, term_type, lang, datatype_id) "
-        f"SELECT '{term_uuid}', '{_esc(text)}', '{ttype}', {lang_val}, {dt_val} "
-        f"WHERE NOT EXISTS ("
-        f"SELECT 1 FROM {term_table} "
-        f"WHERE term_uuid = '{term_uuid}')"
+        f"VALUES ('{term_uuid}', '{_esc(text)}', '{ttype}', {lang_val}, {dt_val}) "
+        f"ON CONFLICT (term_uuid) DO NOTHING"
     )
 
 
