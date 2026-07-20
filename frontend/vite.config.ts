@@ -32,6 +32,10 @@ export default defineConfig({
     },
   },
   build: {
+    // Wipe the output dir on every build so old content-hashed bundles don't
+    // pile up (they'd otherwise be copied into the packaged app and bloat the
+    // wheel). Explicit because the deploy step copies dist elsewhere.
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks: {

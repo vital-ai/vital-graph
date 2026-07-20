@@ -7,7 +7,7 @@
     "dev": "vite",
     "build:only": "tsc -b && vite build",
     "build": "npm run build:only && npm run deploy:local",
-    "deploy:local": "mkdir -p ../vitalgraph/api/frontend && cp -r dist ../vitalgraph/api/frontend/",
+    "deploy:local": "rm -rf ../vitalgraph/api/frontend/dist && mkdir -p ../vitalgraph/api/frontend && cp -r dist ../vitalgraph/api/frontend/",
     "lint": "eslint .",
     "preview": "vite preview",
     "format": "prettier . --write",
