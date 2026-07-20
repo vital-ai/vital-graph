@@ -1,5 +1,5 @@
-import { test, expect, request } from '@playwright/test';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID } from '../seed-constants';
+import { test, expect } from '@playwright/test';
+import { createSpace, dropSpace } from './space-fixtures';
 
 /**
  * Tier 7 — Indexes CRUD Write Operations
@@ -11,37 +11,22 @@ import { ADMIN_USER, ADMIN_PASS, SPACE_ID } from '../seed-constants';
 const FTS_INDEX_NAME = 'e2e_crud_fts';
 const VECTOR_INDEX_NAME = 'e2e_crud_vec';
 
-/**
- * Delete a single test index via API (idempotent cleanup).
- *
- * IMPORTANT: cleanup is scoped to ONE index. The FTS and Vector describe blocks
- * are `serial` but run in *parallel workers* (fullyParallel). A shared cleanup
- * that deleted both indexes would let one suite's beforeAll/afterAll wipe the
- * other suite's index mid-flight — an alternating "index not visible" flake.
- */
-async function cleanupIndex(kind: 'fts' | 'vector', indexName: string) {
-  const baseURL = process.env.VG_TEST_URL || 'http://localhost:8002';
-  const ctx = await request.newContext({ baseURL });
-  const loginResp = await ctx.post('/api/login', {
-    form: { username: ADMIN_USER, password: ADMIN_PASS },
-  });
-  const { access_token } = await loginResp.json();
-  const headers = { Authorization: `Bearer ${access_token}` };
-
-  const path = kind === 'fts' ? '/api/fts-indexes' : '/api/vector-indexes';
-  await ctx.delete(path, {
-    params: { space_id: SPACE_ID, index_name: indexName },
-    headers,
-  });
-
-  await ctx.dispose();
-}
+// Each describe gets its OWN space. The FTS and Vector blocks are `serial` but
+// run in separate workers (fullyParallel) even though they share this file, so
+// they must not share a space — otherwise one block's afterAll space-drop would
+// wipe the other's index mid-flight. Dropping the space removes its index, so no
+// per-index cleanup is needed.
+const FTS_SPACE_ID = 'e2e_indexes_fts_space';
+const VEC_SPACE_ID = 'e2e_indexes_vec_space';
+const GRAPH_ID = 'urn:e2e:indexes:graph';
 
 test.describe('Indexes CRUD — FTS', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupIndex('fts', FTS_INDEX_NAME); });
-  test.afterAll(async () => { await cleanupIndex('fts', FTS_INDEX_NAME); });
+  test.beforeAll(async () => { await createSpace(FTS_SPACE_ID, GRAPH_ID, { name: 'E2E Indexes FTS Space' }); });
+  test.afterAll(async () => { await dropSpace(FTS_SPACE_ID); });
+
+  const SPACE_ID = FTS_SPACE_ID;
 
   test('create a new FTS index via the UI', async ({ page }) => {
     await page.goto('/indexes');
@@ -107,8 +92,10 @@ test.describe('Indexes CRUD — FTS', () => {
 test.describe('Indexes CRUD — Vector', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupIndex('vector', VECTOR_INDEX_NAME); });
-  test.afterAll(async () => { await cleanupIndex('vector', VECTOR_INDEX_NAME); });
+  test.beforeAll(async () => { await createSpace(VEC_SPACE_ID, GRAPH_ID, { name: 'E2E Indexes Vector Space' }); });
+  test.afterAll(async () => { await dropSpace(VEC_SPACE_ID); });
+
+  const SPACE_ID = VEC_SPACE_ID;
 
   test('create a new Vector index via the UI', async ({ page }) => {
     await page.goto('/indexes');

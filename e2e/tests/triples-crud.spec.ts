@@ -1,5 +1,11 @@
 import { test, expect, request } from '@playwright/test';
-import { ADMIN_USER, ADMIN_PASS, SPACE_ID, GRAPH_ID } from '../seed-constants';
+import { ADMIN_USER, ADMIN_PASS } from '../seed-constants';
+import { createSpace, dropSpace } from './space-fixtures';
+
+// Dedicated, isolated space/graph so this mutating suite can't race any other
+// suite under fullyParallel (see space-fixtures.ts).
+const SPACE_ID = 'e2e_triples_space';
+const GRAPH_ID = 'urn:e2e:triples:graph';
 
 /**
  * Tier 7 — Triples CRUD Write Operations
@@ -26,33 +32,13 @@ async function getAuthHeaders() {
   return { ctx, headers: { Authorization: `Bearer ${access_token}` } };
 }
 
-/** Delete any leftover test triples via API. */
-async function cleanupTestTriples() {
-  const { ctx, headers } = await getAuthHeaders();
-  // List only triples with our test subject
-  const resp = await ctx.get('/api/graphs/triples', {
-    params: { space_id: SPACE_ID, graph_id: GRAPH_ID, page_size: 100, subject: TEST_SUBJECT },
-    headers,
-  });
-  const data = await resp.json();
-  const quads = data.results || [];
-  if (quads.length > 0) {
-    await ctx.delete('/api/graphs/triples', {
-      params: { space_id: SPACE_ID, graph_id: GRAPH_ID },
-      headers,
-      data: { quads },
-    });
-  }
-  await ctx.dispose();
-}
-
 // ── tests ────────────────────────────────────────────────────────────────────
 
 test.describe('Triples CRUD', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async () => { await cleanupTestTriples(); });
-  test.afterAll(async () => { await cleanupTestTriples(); });
+  test.beforeAll(async () => { await createSpace(SPACE_ID, GRAPH_ID, { name: 'E2E Triples Space' }); });
+  test.afterAll(async () => { await dropSpace(SPACE_ID); });
 
   test('add a triple via the UI', async ({ page }) => {
     await page.goto(`/space/${SPACE_ID}/graph/${ENCODED_GRAPH}/triples`);
@@ -76,7 +62,14 @@ test.describe('Triples CRUD', () => {
   });
 
   test('triple appears in the list via filter', async ({ page }) => {
-    // First, confirm the triple exists via API before testing UI filter
+    // First, confirm the triple exists via API before testing UI filter.
+    //
+    // NOTE: this can intermittently fail under full-suite high concurrency — the
+    // just-added triple isn't found for a window. The read/write/SQL paths were
+    // exhaustively verified correct in isolation (see
+    // issues/019_triples_list_count_divergence_under_load.md); the root cause is
+    // an unreproduced read-after-write/space-lifecycle race. Left as a plain
+    // single-shot check (no retry) so the flake stays visible until root-caused.
     const { ctx, headers } = await getAuthHeaders();
     const apiCheck = await ctx.get('/api/graphs/triples', {
       params: { space_id: SPACE_ID, graph_id: GRAPH_ID, page_size: 10, subject: TEST_SUBJECT },
