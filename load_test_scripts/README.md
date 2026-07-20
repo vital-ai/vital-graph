@@ -8,11 +8,11 @@ under concurrent mixed read/write load. See
 
 ## One-time: data generators
 
-The org-entity generator is **copied from the cardiff repo into the gitignored
+The org-entity generator is **copied from the acme repo into the gitignored
 `data_gen/`** (borrowed test data). If it's missing:
 
 ```bash
-cp /path/to/cardiff-resource-rest/test_kg_endpoints/kg_test_data.py load_test_scripts/data_gen/
+cp /path/to/acme-resource-rest/test_kg_endpoints/kg_test_data.py load_test_scripts/data_gen/
 # plus a data_gen/organizations.py exposing ORGANIZATIONS = [...]
 ```
 
@@ -47,4 +47,4 @@ overridable via `LOAD_TEST_<ENV>_VITALGRAPH_URL` / `_USERNAME` / `_PASSWORD`
 | `setup.py` | seed/teardown space + entities via `VitalGraphClient` |
 | `load_test_config.py` | environment/target resolution |
 | `load_test_data.py` | space/graph id + entity pool (rewritten by `setup.py`) |
-| `data_gen/` | **gitignored** — org-entity generator copied from cardiff |
+| `data_gen/` | **gitignored** — org-entity generator copied from acme |

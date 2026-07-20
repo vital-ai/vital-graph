@@ -13,7 +13,7 @@ This destroys the entire frame graph if the caller only intends to update entity
 ### Observed Behavior
 
 ```
-POST /api/graphs/kgentities?space_id=cardiff_kg&graph_id=urn%3Acardiff_kg&operation_mode=update
+POST /api/graphs/kgentities?space_id=acme_kg&graph_id=urn%3Aacme_kg&operation_mode=update
 
 Payload: 1 KGEntity object (10 quads)
 Result:  deleted 485 quads for 69 subjects → inserted 10 quads

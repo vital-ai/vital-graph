@@ -17,8 +17,8 @@ from vitalgraph.client.vitalgraph_client import VitalGraphClient
 from vitalgraph.model.sparql_model import SPARQLQueryRequest
 
 
-SPACE_ID = os.getenv("SPACE_ID", "cardiff_kg")
-ENTITY_URI = os.getenv("ENTITY_URI", "urn:cardiff:nurture:TEST_DISPATCH_001:winback_sms")
+SPACE_ID = os.getenv("SPACE_ID", "acme_kg")
+ENTITY_URI = os.getenv("ENTITY_URI", "urn:acme:nurture:TEST_DISPATCH_001:winback_sms")
 
 
 async def main():

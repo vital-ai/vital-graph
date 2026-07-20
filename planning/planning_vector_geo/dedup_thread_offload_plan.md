@@ -204,7 +204,7 @@ VITALGRAPH_CLIENT_ENVIRONMENT=local python vitalgraph_client_test/test_entity_re
 After deploy, check CloudWatch for stall events during entity registry traffic:
 
 ```bash
-AWS_PROFILE=cardiffprod aws logs filter-log-events \
+AWS_PROFILE=acmeprod aws logs filter-log-events \
   --log-group-name /ecs/vitalgraph-prod \
   --filter-pattern "EVENT LOOP STALL" \
   --start-time <deploy_timestamp_ms> \

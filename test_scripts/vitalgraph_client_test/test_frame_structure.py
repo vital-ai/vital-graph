@@ -176,7 +176,7 @@ def load_and_visualize_frame_structure():
         logger.info(f"\nDetailed Parent-Child Mapping:")
         for parent_uri, children in sorted(parent_to_children.items()):
             # Extract meaningful frame name from URI
-            # URI format: urn:cardiff:lead:LEADID:frame:FRAMETYPE:INDEX
+            # URI format: urn:acme:lead:LEADID:frame:FRAMETYPE:INDEX
             parts = parent_uri.split(':frame:')
             parent_name = parts[-1] if len(parts) > 1 else parent_uri
             logger.info(f"  {parent_name} ({len(children)} children):")

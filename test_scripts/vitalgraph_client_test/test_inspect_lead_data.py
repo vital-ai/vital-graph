@@ -441,19 +441,19 @@ class LeadDataInspector:
                 ?frame_edge_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .
                 ?frame_edge_0 vital-core:hasEdgeSource ?entity .
                 ?frame_edge_0 vital-core:hasEdgeDestination ?frame_0 .
-                ?frame_0 haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusFrame> .
+                ?frame_0 haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusFrame> .
                 
                 # Parent Frame → Child Frame
                 ?frame_edge_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .
                 ?frame_edge_0_0 vital-core:hasEdgeSource ?frame_0 .
                 ?frame_edge_0_0 vital-core:hasEdgeDestination ?frame_0_0 .
-                ?frame_0_0 haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusQualificationFrame> .
+                ?frame_0_0 haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusQualificationFrame> .
                 
                 # Child Frame → Slot
                 ?slot_edge_0_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
                 ?slot_edge_0_0_0 vital-core:hasEdgeSource ?frame_0_0 .
                 ?slot_edge_0_0_0 vital-core:hasEdgeDestination ?slot_0_0_0 .
-                ?slot_0_0_0 haley-ai-kg:hasKGSlotType <urn:cardiff:kg:slot:MQLv2> .
+                ?slot_0_0_0 haley-ai-kg:hasKGSlotType <urn:acme:kg:slot:MQLv2> .
                 ?slot_0_0_0 haley-ai-kg:hasBooleanSlotValue true .
             }}
         }}
@@ -518,9 +518,9 @@ class LeadDataInspector:
                 ?slot_0_0_0 haley-ai-kg:hasBooleanSlotValue ?slotValue .
                 
                 # Apply filters
-                FILTER(?parentFrameType = <urn:cardiff:kg:frame:LeadStatusFrame>)
-                FILTER(?childFrameType = <urn:cardiff:kg:frame:LeadStatusQualificationFrame>)
-                FILTER(?slotType = <urn:cardiff:kg:slot:MQLv2>)
+                FILTER(?parentFrameType = <urn:acme:kg:frame:LeadStatusFrame>)
+                FILTER(?childFrameType = <urn:acme:kg:frame:LeadStatusQualificationFrame>)
+                FILTER(?slotType = <urn:acme:kg:slot:MQLv2>)
                 FILTER(?slotValue = true)
             }}
         }}
@@ -553,20 +553,20 @@ class LeadDataInspector:
         WHERE {{
             GRAPH <{self.graph_id}> {{
                 # Start with Slot (most selective)
-                ?slot_0_0_0 haley-ai-kg:hasKGSlotType <urn:cardiff:kg:slot:MQLv2> .
+                ?slot_0_0_0 haley-ai-kg:hasKGSlotType <urn:acme:kg:slot:MQLv2> .
                 ?slot_0_0_0 haley-ai-kg:hasBooleanSlotValue true .
                 
                 # Slot → Child Frame
                 ?slot_edge_0_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
                 ?slot_edge_0_0_0 vital-core:hasEdgeDestination ?slot_0_0_0 .
                 ?slot_edge_0_0_0 vital-core:hasEdgeSource ?frame_0_0 .
-                ?frame_0_0 haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusQualificationFrame> .
+                ?frame_0_0 haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusQualificationFrame> .
                 
                 # Child Frame → Parent Frame
                 ?frame_edge_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .
                 ?frame_edge_0_0 vital-core:hasEdgeDestination ?frame_0_0 .
                 ?frame_edge_0_0 vital-core:hasEdgeSource ?frame_0 .
-                ?frame_0 haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusFrame> .
+                ?frame_0 haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusFrame> .
                 
                 # Parent Frame → Entity
                 ?frame_edge_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .
@@ -718,15 +718,15 @@ class LeadDataInspector:
                 
                 # Direct: Entity → Parent Frame (no edge hop)
                 ?entity vg-direct:hasEntityFrame ?parentFrame .
-                ?parentFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusFrame> .
+                ?parentFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusFrame> .
                 
                 # Direct: Parent Frame → Child Frame (no edge hop)
                 ?parentFrame vg-direct:hasFrame ?childFrame .
-                ?childFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusQualificationFrame> .
+                ?childFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusQualificationFrame> .
                 
                 # Direct: Child Frame → Slot (no edge hop)
                 ?childFrame vg-direct:hasSlot ?slot .
-                ?slot haley-ai-kg:hasKGSlotType <urn:cardiff:kg:slot:MQLv2> .
+                ?slot haley-ai-kg:hasKGSlotType <urn:acme:kg:slot:MQLv2> .
                 ?slot haley-ai-kg:hasBooleanSlotValue true .
             }}
         }}
@@ -1068,13 +1068,13 @@ class LeadDataInspector:
             # Build hierarchical frame criteria for lead data:
             # Entity → LeadStatusFrame (parent) → LeadStatusQualificationFrame (child) → MQLV2 slot
             hierarchical_frame_criteria = FrameCriteria(
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                 frame_criteria=[  # Child frames
                     FrameCriteria(
-                        frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",  # Child frame
+                        frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",  # Child frame
                         slot_criteria=[
                             SlotCriteria(
-                                slot_type="urn:cardiff:kg:slot:MQLv2",
+                                slot_type="urn:acme:kg:slot:MQLv2",
                                 slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                 value=True,
                                 comparator="eq"
@@ -1161,11 +1161,11 @@ class LeadDataInspector:
         SELECT DISTINCT ?slotType (COUNT(?slot) as ?count)
         WHERE {{
             GRAPH <{self.graph_id}> {{
-                ?parentFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadTrackingFrame> .
+                ?parentFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadTrackingFrame> .
                 ?frameEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGFrame .
                 ?frameEdge vital-core:hasEdgeSource ?parentFrame .
                 ?frameEdge vital-core:hasEdgeDestination ?childFrame .
-                ?childFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadOwnerFrame> .
+                ?childFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadOwnerFrame> .
                 ?slotEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGSlot .
                 ?slotEdge vital-core:hasEdgeSource ?childFrame .
                 ?slotEdge vital-core:hasEdgeDestination ?slot .
@@ -1203,7 +1203,7 @@ class LeadDataInspector:
         SELECT (COUNT(?frame) as ?count)
         WHERE {{
             GRAPH <{self.graph_id}> {{
-                ?frame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:BankingFrame> .
+                ?frame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:BankingFrame> .
             }}
         }}
         """
@@ -1252,7 +1252,7 @@ class LeadDataInspector:
         SELECT DISTINCT ?slotType (COUNT(?slot) as ?count)
         WHERE {{
             GRAPH <{self.graph_id}> {{
-                ?frame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusConversionFrame> .
+                ?frame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:LeadStatusConversionFrame> .
                 ?slotEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGSlot .
                 ?slotEdge vital-core:hasEdgeSource ?frame .
                 ?slotEdge vital-core:hasEdgeDestination ?slot .
@@ -1286,7 +1286,7 @@ class LeadDataInspector:
         SELECT ?value (COUNT(?slot) as ?count)
         WHERE {{
             GRAPH <{self.graph_id}> {{
-                ?slot haley-ai-kg:hasKGSlotType <urn:cardiff:kg:slot:MQLv2> .
+                ?slot haley-ai-kg:hasKGSlotType <urn:acme:kg:slot:MQLv2> .
                 ?slot haley-ai-kg:hasBooleanSlotValue ?value .
             }}
         }}
@@ -1338,7 +1338,7 @@ class LeadDataInspector:
                 ?slotEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGSlot .
                 ?slotEdge vital-core:hasEdgeSource ?childFrame .
                 ?slotEdge vital-core:hasEdgeDestination ?slot .
-                ?slot haley-ai-kg:hasKGSlotType <urn:cardiff:kg:slot:MQL> .
+                ?slot haley-ai-kg:hasKGSlotType <urn:acme:kg:slot:MQL> .
             }}
         }}
         GROUP BY ?parentFrameType ?childFrameType
@@ -1379,13 +1379,13 @@ class LeadDataInspector:
                 ?entityFrameEdge vital-core:vitaltype haley-ai-kg:Edge_hasEntityKGFrame .
                 ?entityFrameEdge vital-core:hasEdgeSource ?entity .
                 ?entityFrameEdge vital-core:hasEdgeDestination ?systemFrame .
-                ?systemFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:SystemFrame> .
+                ?systemFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:SystemFrame> .
                 
                 # Find SystemFlagsFrame child
                 ?frameEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGFrame .
                 ?frameEdge vital-core:hasEdgeSource ?systemFrame .
                 ?frameEdge vital-core:hasEdgeDestination ?flagsFrame .
-                ?flagsFrame haley-ai-kg:hasKGFrameType <urn:cardiff:kg:frame:SystemFlagsFrame> .
+                ?flagsFrame haley-ai-kg:hasKGFrameType <urn:acme:kg:frame:SystemFlagsFrame> .
                 
                 # Find slots in SystemFlagsFrame
                 ?slotEdge vital-core:vitaltype haley-ai-kg:Edge_hasKGSlot .
@@ -1888,11 +1888,11 @@ class LeadDataInspector:
         
         # Focus on a few interesting frame types
         interesting_frames = [
-            'urn:cardiff:kg:frame:LeadStatusQualificationFrame',
-            'urn:cardiff:kg:frame:CompanyAddressFrame',
-            'urn:cardiff:kg:frame:SystemFlagsFrame',
-            'urn:cardiff:kg:frame:BankAccountFrame',
-            'urn:cardiff:kg:frame:LeadStatusConversionFrame'
+            'urn:acme:kg:frame:LeadStatusQualificationFrame',
+            'urn:acme:kg:frame:CompanyAddressFrame',
+            'urn:acme:kg:frame:SystemFlagsFrame',
+            'urn:acme:kg:frame:BankAccountFrame',
+            'urn:acme:kg:frame:LeadStatusConversionFrame'
         ]
         
         recommendations = []
@@ -2109,7 +2109,7 @@ def main():
         # logger.info("")
         # 
         # # Pick the first entity to test
-        # test_entity_uri = "urn:cardiff:lead:00QUg00000Xzjy8MAB"
+        # test_entity_uri = "urn:acme:lead:00QUg00000Xzjy8MAB"
         # 
         # delete_step1_query = f"""
         # PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>

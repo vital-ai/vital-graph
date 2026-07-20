@@ -361,7 +361,7 @@ COMPARISON_QUERIES = [
                 GRAPH <{LD_GRAPH}> {{
                     ?entity <http://vital.ai/vitalgraph/direct#hasEntityFrame> ?frame .
                     ?frame <http://vital.ai/ontology/haley-ai-kg#hasKGFrameType>
-                           <urn:cardiff:kg:frame:LeadStatusFrame> .
+                           <urn:acme:kg:frame:LeadStatusFrame> .
                 }}
             }} LIMIT 10
         """,
@@ -383,7 +383,7 @@ COMPARISON_QUERIES = [
                     ?parentFrame <http://vital.ai/vitalgraph/direct#hasFrame> ?childFrame .
                     ?childFrame <http://vital.ai/vitalgraph/direct#hasSlot> ?slot .
                     ?slot <http://vital.ai/ontology/haley-ai-kg#hasKGSlotType>
-                          <urn:cardiff:kg:slot:MQLv2> .
+                          <urn:acme:kg:slot:MQLv2> .
                     ?slot <http://vital.ai/ontology/haley-ai-kg#hasBooleanSlotValue> true .
                 }}
             }}

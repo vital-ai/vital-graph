@@ -41,13 +41,13 @@ The project already has a `.env` file with the following structure:
   - `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`
   - `KEYCLOAK_USERNAME`, `KEYCLOAK_PASSWORD`
 - **Fuseki URL**: `FUSEKI_URL` (environment-specific)
-- **Weaviate Configuration**: Complete Weaviate setup for Cardiff Bank deployment
+- **Weaviate Configuration**: Complete Weaviate setup for Acme Bank deployment
   - Keycloak token URL, client credentials
   - REST and gRPC endpoints
 
 ⚠️ **SECURITY NOTE**: The `.env` file contains production credentials including:
 - Real OpenAI API key
-- Real Keycloak credentials for cardiffbank.co
+- Real Keycloak credentials for acmebank.co
 - Real Weaviate client secrets
 - Production URLs and endpoints
 

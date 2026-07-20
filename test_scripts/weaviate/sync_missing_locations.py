@@ -133,7 +133,7 @@ async def main():
 
     # Connect to PostgreSQL
     conn = await asyncpg.connect(
-        host='cardiff-postgres-prod.c65akm0oyqv9.us-east-1.rds.amazonaws.com',
+        host='acme-postgres-prod.c65akm0oyqv9.us-east-1.rds.amazonaws.com',
         port=5432, database='vitalgraphdb', user='postgres',
         password='VgProd2026!RdsSecure#X9',
     )

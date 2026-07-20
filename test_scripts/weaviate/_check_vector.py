@@ -15,7 +15,7 @@ resp = httpx.post(keycloak_url, data={
 }, timeout=15)
 token = resp.json()['access_token']
 headers = {'Authorization': f'Bearer {token}'}
-base = 'https://weaviate.cardiffbank.co/v1'
+base = 'https://weaviate.acmebank.co/v1'
 
 # Check location_id=1584341 (entity e_r57jbtenz3)
 loc_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, 'vitalgraph:location:1584341'))

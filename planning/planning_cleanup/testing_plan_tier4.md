@@ -539,7 +539,7 @@ caches type descriptions with a 10-min TTL LRU cache. Tests should verify:
 ### 5. Geo Points Endpoint (1 route) — `geo_points_endpoint.py`
 
 > **✅ IMPLEMENTED** — `test_geo_search_api.py` already includes `TestGeoPoints`
-> with 5 tests covering list all, radius (Cardiff), large radius, graph filter,
+> with 5 tests covering list all, radius (Acme), large radius, graph filter,
 > and pagination. All 17 tests in the file pass.
 
 **Estimated**: ~4–5 tests

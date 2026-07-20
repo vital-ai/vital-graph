@@ -131,10 +131,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="asc",
                     priority=1
@@ -184,10 +184,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="desc",
                     priority=1
@@ -234,10 +234,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:CompanyFrame",
-                        "urn:cardiff:kg:frame:CompanyAddressFrame"
+                        "urn:acme:kg:frame:CompanyFrame",
+                        "urn:acme:kg:frame:CompanyAddressFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                    slot_type="urn:acme:kg:slot:CompanyStateCode",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                     sort_order="asc",
                     priority=1
@@ -284,10 +284,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:CompanyFrame",
-                        "urn:cardiff:kg:frame:CompanyAddressFrame"
+                        "urn:acme:kg:frame:CompanyFrame",
+                        "urn:acme:kg:frame:CompanyAddressFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:CompanyCity",
+                    slot_type="urn:acme:kg:slot:CompanyCity",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                     sort_order="asc",
                     priority=1
@@ -334,10 +334,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:CompanyFrame",
-                        "urn:cardiff:kg:frame:CompanyAddressFrame"
+                        "urn:acme:kg:frame:CompanyFrame",
+                        "urn:acme:kg:frame:CompanyAddressFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                    slot_type="urn:acme:kg:slot:CompanyStateCode",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                     sort_order="asc",
                     priority=1
@@ -345,10 +345,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="desc",
                     priority=2
@@ -394,13 +394,13 @@ class KGQuerySortQueriesTester:
             # Filter: MQL=true
             frame_criteria = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",
                     frame_criteria=[
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLv2",
+                                    slot_type="urn:acme:kg:slot:MQLv2",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -416,10 +416,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="desc",
                     priority=1
@@ -467,10 +467,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="asc",
                     priority=1
@@ -546,7 +546,7 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="frame_slot",
                     frame_path=[],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="desc",
                     priority=1
@@ -557,7 +557,7 @@ class KGQuerySortQueriesTester:
             response = await self.client.kgqueries.query_frames(
                 space_id=space_id,
                 graph_id=graph_id,
-                frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                 sort_criteria=sort_criteria,
                 page_size=20,
                 offset=0
@@ -693,7 +693,7 @@ class KGQuerySortQueriesTester:
 
             frame_criteria = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame"
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame"
                 )
             ]
 
@@ -791,10 +791,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusConversionFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusConversionFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:IsConverted",
+                    slot_type="urn:acme:kg:slot:IsConverted",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                     sort_order="asc",
                     priority=1
@@ -894,10 +894,10 @@ class KGQuerySortQueriesTester:
                 SortCriteria(
                     sort_type="entity_frame_slot",
                     frame_path=[
-                        "urn:cardiff:kg:frame:LeadStatusFrame",
-                        "urn:cardiff:kg:frame:LeadStatusQualificationFrame"
+                        "urn:acme:kg:frame:LeadStatusFrame",
+                        "urn:acme:kg:frame:LeadStatusQualificationFrame"
                     ],
-                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                    slot_type="urn:acme:kg:slot:MQLRating",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                     sort_order="desc",
                     priority=2

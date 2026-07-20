@@ -129,7 +129,7 @@ pipeline correctly propagates `__datatype` end-to-end.
 `emit_bgp.py:166` **always** passes `dt_case_sql=ctx.dt_case_expr(t_alias)`.
 `dt_case_expr()` builds `CASE t.datatype_id WHEN {id} THEN '{uri}' ... END`
 from the `datatype_cache`, which is loaded from `{space}_datatype` at
-generation time.  Live test on `cardiff_kg` (20 datatype entries) confirms
+generation time.  Live test on `acme_kg` (20 datatype entries) confirms
 the CASE expression resolves correctly.
 
 #### Candidate 2: `str(val)` datetime format mismatch — ❌ ELIMINATED
@@ -219,7 +219,7 @@ pool + space_manager, started at startup, and stopped at shutdown.
    function created in PostgreSQL using `pgcrypto` extension.  Matches
    Python `_generate_term_uuid()` exactly (verified via test script).
    Auto-created via `vitalgraphdb init` (`sparql_sql_admin.py`).
-7. ✅ **`pgcrypto`** — Installed on prod RDS (`cardiff-postgres-prod`)
+7. ✅ **`pgcrypto`** — Installed on prod RDS (`acme-postgres-prod`)
    and local (`sparql_sql_graph`).
 8. ✅ **All write paths migrated** — Every `update_quads()` caller that
    performed quad-level delete has been migrated to `update_subjects_graph()`

@@ -22,7 +22,7 @@ LON_PRED = "http://schema.org/longitude"
 LAT_PRED_2 = "http://www.w3.org/2003/01/geo/wgs84_pos#lat"
 LON_PRED_2 = "http://www.w3.org/2003/01/geo/wgs84_pos#long"
 
-GEO_ENTITY_1 = "urn:test:place:cardiff"
+GEO_ENTITY_1 = "urn:test:place:acme"
 GEO_ENTITY_2 = "urn:test:place:london"
 GEO_ENTITY_3 = "urn:test:place:paris"
 
@@ -36,7 +36,7 @@ async def geo_env(vg_client, test_space, test_graph):
     sparql_stmt = (
         f'INSERT DATA {{ '
         f'GRAPH <{test_graph}> {{ '
-        f'<{GEO_ENTITY_1}> <http://schema.org/name> "Cardiff" . '
+        f'<{GEO_ENTITY_1}> <http://schema.org/name> "Acme" . '
         f'<{GEO_ENTITY_1}> <{LAT_PRED}> "51.4816"^^<http://www.w3.org/2001/XMLSchema#double> . '
         f'<{GEO_ENTITY_1}> <{LON_PRED}> "-3.1791"^^<http://www.w3.org/2001/XMLSchema#double> . '
         f'<{GEO_ENTITY_2}> <http://schema.org/name> "London" . '
@@ -134,8 +134,8 @@ class TestGeoPoints:
         # either way the endpoint must respond cleanly.
         assert resp.total_count is not None
 
-    async def test_list_points_with_radius_cardiff(self, vg_client, geo_env):
-        """Radius query centered near Cardiff."""
+    async def test_list_points_with_radius_acme(self, vg_client, geo_env):
+        """Radius query centered near Acme."""
         resp = await vg_client.geo_points.list_points(
             space_id=geo_env["space_id"],
             near_lat=51.48,

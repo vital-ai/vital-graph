@@ -15,7 +15,7 @@ resp = httpx.post(keycloak_url, data={
 }, timeout=15)
 token = resp.json()['access_token']
 headers = {'Authorization': f'Bearer {token}'}
-base = 'https://weaviate.cardiffbank.co/v1'
+base = 'https://weaviate.acmebank.co/v1'
 
 for coll in ['ProdxxxEntityIndex', 'ProdxxxLocationIndex']:
     print(f'\n{"=" * 60}')

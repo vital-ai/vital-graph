@@ -26,7 +26,7 @@ from vitalgraph.client.vitalgraph_client import VitalGraphClient
 async def main():
     SPACE_ID = "lead_test"
     GRAPH_ID = "urn:lead_test"
-    ENTITY_URI = "http://vital.ai/cardiff/kgentity/lead/7bad756d-07bc-45ff-a575-b971963cdef3"
+    ENTITY_URI = "http://vital.ai/acme/kgentity/lead/7bad756d-07bc-45ff-a575-b971963cdef3"
 
     client = VitalGraphClient()
     await client.open()

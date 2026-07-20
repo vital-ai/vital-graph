@@ -20,7 +20,7 @@ from vitalgraph.client.vitalgraph_client import VitalGraphClient
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
-KGLEAD_TYPE = os.getenv("TEST_ENTITY_TYPE", "urn:cardiff:kg:entity:Lead")
+KGLEAD_TYPE = os.getenv("TEST_ENTITY_TYPE", "urn:acme:kg:entity:Lead")
 
 
 async def main():

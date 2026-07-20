@@ -138,13 +138,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLv2",
+                                    slot_type="urn:acme:kg:slot:MQLv2",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -206,13 +206,13 @@ class KGQueryLeadQueriesTester:
             # Hierarchical frame criteria: parent frame with nested child frame
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadTrackingFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadTrackingFrame",  # Parent frame
                     frame_criteria=[  # Nested child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadOwnerFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadOwnerFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:LeadOwnerName",
+                                    slot_type="urn:acme:kg:slot:LeadOwnerName",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                                     comparator="exists"  # Just check if the slot exists
                                 )
@@ -270,13 +270,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:CompanyFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:CompanyAddressFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                                    slot_type="urn:acme:kg:slot:CompanyStateCode",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                                     value="CA",
                                     comparator="eq"
@@ -335,13 +335,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:CompanyFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:CompanyAddressFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:CompanyCity",
+                                    slot_type="urn:acme:kg:slot:CompanyCity",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                                     value="Los Angeles",
                                     comparator="eq"
@@ -400,13 +400,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                                    slot_type="urn:acme:kg:slot:MQLRating",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                                     value=65.0,
                                     comparator="gte"
@@ -465,13 +465,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:PlaidBankingFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:PlaidBankingFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:BankAccountFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:BankAccountFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:HasBizAccount",
+                                    slot_type="urn:acme:kg:slot:HasBizAccount",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -530,13 +530,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusConversionFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadStatusConversionFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:IsConverted",
+                                    slot_type="urn:acme:kg:slot:IsConverted",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -595,13 +595,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:SystemFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:SystemFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:SystemFlagsFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:SystemFlagsFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:Abandoned",
+                                    slot_type="urn:acme:kg:slot:Abandoned",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -660,19 +660,19 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLv2",
+                                    slot_type="urn:acme:kg:slot:MQLv2",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
                                 ),
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                                    slot_type="urn:acme:kg:slot:MQLRating",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                                     value=65.0,
                                     comparator="gte"
@@ -682,13 +682,13 @@ class KGQueryLeadQueriesTester:
                     ]
                 ),
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:CompanyFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:CompanyAddressFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                                    slot_type="urn:acme:kg:slot:CompanyStateCode",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                                     value="CA",
                                     comparator="eq"
@@ -749,19 +749,19 @@ class KGQueryLeadQueriesTester:
             # This requires TWO numeric FILTERs on the same slot type
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",
                     frame_criteria=[
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                                    slot_type="urn:acme:kg:slot:MQLRating",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                                     value=50.0,
                                     comparator="gte"
                                 ),
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLRating",
+                                    slot_type="urn:acme:kg:slot:MQLRating",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                                     value=80.0,
                                     comparator="lte"
@@ -820,13 +820,13 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusFrame",  # Parent frame
+                    frame_type="urn:acme:kg:frame:LeadStatusFrame",  # Parent frame
                     frame_criteria=[  # Child frames
                         FrameCriteria(
-                            frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",  # Child frame
+                            frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",  # Child frame
                             slot_criteria=[
                                 SlotCriteria(
-                                    slot_type="urn:cardiff:kg:slot:MQLv2",
+                                    slot_type="urn:acme:kg:slot:MQLv2",
                                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                     value=True,
                                     comparator="eq"
@@ -903,10 +903,10 @@ class KGQueryLeadQueriesTester:
             
             frame_criteria_list = [
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:NonExistentFrame",
+                    frame_type="urn:acme:kg:frame:NonExistentFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:NonExistentSlot",
+                            slot_type="urn:acme:kg:slot:NonExistentSlot",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                             value="NonExistent",
                             comparator="eq"

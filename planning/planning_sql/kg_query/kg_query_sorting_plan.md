@@ -56,7 +56,7 @@ class SortCriteria(BaseModel):
                             # "entity_property" for direct property on entity node
     frame_path: List[str]   # Ordered list of frame type URIs from entity to the slot's parent frame
                             # (unused for entity_property)
-    slot_type: str          # Slot type URI (e.g. "urn:cardiff:kg:slot:ZipCode")
+    slot_type: str          # Slot type URI (e.g. "urn:acme:kg:slot:ZipCode")
                             # (unused for entity_property)
     slot_class_uri: str     # Slot class (KGTextSlot, KGDoubleSlot, etc.) — determines value property
                             # (unused for entity_property)
@@ -108,11 +108,11 @@ SELECT DISTINCT ?entity ?sort_val_0 WHERE {
         ?sort_frame_edge_0 vital-core:vitaltype <Edge_hasEntityKGFrame> .
         ?sort_frame_edge_0 vital-core:hasEdgeSource ?entity .
         ?sort_frame_edge_0 vital-core:hasEdgeDestination ?sort_frame_0 .
-        ?sort_frame_0 haley:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusFrame> .
+        ?sort_frame_0 haley:hasKGFrameType <urn:acme:kg:frame:LeadStatusFrame> .
         ?sort_slot_edge_0 vital-core:vitaltype <Edge_hasKGSlot> .
         ?sort_slot_edge_0 vital-core:hasEdgeSource ?sort_frame_0 .
         ?sort_slot_edge_0 vital-core:hasEdgeDestination ?sort_slot_0 .
-        ?sort_slot_0 haley:hasKGSlotType <urn:cardiff:kg:slot:MQLRating> .
+        ?sort_slot_0 haley:hasKGSlotType <urn:acme:kg:slot:MQLRating> .
         ?sort_slot_0 haley:hasDoubleSlotValue ?sort_val_0 .
     }
 }

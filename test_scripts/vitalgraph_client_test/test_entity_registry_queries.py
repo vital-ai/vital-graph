@@ -8,7 +8,7 @@ using the real dataset imported from registry_output/.
 Covers:
   - Entity CRUD and retrieval
   - Alias lookup and matching
-  - Identifier lookup (SF_ACCOUNT_ID, EIN, PHONE, EMAIL, CARDIFF_DM_CODE)
+  - Identifier lookup (SF_ACCOUNT_ID, EIN, PHONE, EMAIL, ACME_DM_CODE)
   - Category filtering
   - Geo-radius location search
   - Semantic (vector topic) search
@@ -73,7 +73,7 @@ SUB_ZERO = 'ent_39pecn0dl5'
 # Business entity with alias "Pixel Canvas", Los Angeles CA, corporation
 PIXEL_CANVAS = 'ent_gx32uew9g6'
 
-# Business person with 5 identifiers (SF_LEAD_ID, EMAIL, PHONE, CARDIFF_DM_CODE)
+# Business person with 5 identifiers (SF_LEAD_ID, EMAIL, PHONE, ACME_DM_CODE)
 DOLORES_DE_ALBA = 'ent_tp4julsxl8'
 
 # Business entity with alias "Smoking Monkey Pizza", misspelled name "Tb Enterpises", Renton WA

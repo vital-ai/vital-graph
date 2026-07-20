@@ -1,4 +1,4 @@
-# Data generators copied from the cardiff repo — borrowed test data, not vendored here.
+# Data generators copied from the acme repo — borrowed test data, not vendored here.
 data_gen/
 
 # Locust outputs (load_test_data.py is a committed template that setup.py overwrites locally)

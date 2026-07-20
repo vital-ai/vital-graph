@@ -501,13 +501,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 1: Find MQL (Marketing Qualified Leads)...")
     await _run_frame_query("Find MQL leads", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+            frame_type="urn:acme:kg:frame:LeadStatusFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLv2",
+                            slot_type="urn:acme:kg:slot:MQLv2",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                             value=True, comparator="eq",
                         )
@@ -521,13 +521,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 2: Hierarchical Frame Query (Parent → Child Frame)...")
     await _run_frame_query("Hierarchical frame query", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadTrackingFrame",
+            frame_type="urn:acme:kg:frame:LeadTrackingFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadOwnerFrame",
+                    frame_type="urn:acme:kg:frame:LeadOwnerFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:LeadOwnerName",
+                            slot_type="urn:acme:kg:slot:LeadOwnerName",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                             comparator="exists",
                         )
@@ -541,13 +541,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 3: Find leads in California...")
     await _run_frame_query("Find leads in California", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:CompanyFrame",
+            frame_type="urn:acme:kg:frame:CompanyFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",
+                    frame_type="urn:acme:kg:frame:CompanyAddressFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                            slot_type="urn:acme:kg:slot:CompanyStateCode",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                             value="CA", comparator="eq",
                         )
@@ -561,13 +561,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 4: Find leads in Los Angeles...")
     await _run_frame_query("Find leads in Los Angeles", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:CompanyFrame",
+            frame_type="urn:acme:kg:frame:CompanyFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",
+                    frame_type="urn:acme:kg:frame:CompanyAddressFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:CompanyCity",
+                            slot_type="urn:acme:kg:slot:CompanyCity",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                             value="Los Angeles", comparator="eq",
                         )
@@ -581,13 +581,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 5: Find high-rated leads (MQL rating >= 65)...")
     await _run_frame_query("Find high-rated leads", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+            frame_type="urn:acme:kg:frame:LeadStatusFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLRating",
+                            slot_type="urn:acme:kg:slot:MQLRating",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                             value=65.0, comparator="gte",
                         )
@@ -601,13 +601,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 6: Find leads with business bank accounts...")
     await _run_frame_query("Find leads with business accounts", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:PlaidBankingFrame",
+            frame_type="urn:acme:kg:frame:PlaidBankingFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:BankAccountFrame",
+                    frame_type="urn:acme:kg:frame:BankAccountFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:HasBizAccount",
+                            slot_type="urn:acme:kg:slot:HasBizAccount",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                             value=True, comparator="eq",
                         )
@@ -621,13 +621,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 7: Find converted leads...")
     await _run_frame_query("Find converted leads", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+            frame_type="urn:acme:kg:frame:LeadStatusFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusConversionFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusConversionFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:IsConverted",
+                            slot_type="urn:acme:kg:slot:IsConverted",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                             value=True, comparator="eq",
                         )
@@ -641,13 +641,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 8: Find abandoned leads...")
     await _run_frame_query("Find abandoned leads", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:SystemFrame",
+            frame_type="urn:acme:kg:frame:SystemFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:SystemFlagsFrame",
+                    frame_type="urn:acme:kg:frame:SystemFlagsFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:Abandoned",
+                            slot_type="urn:acme:kg:slot:Abandoned",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                             value=True, comparator="eq",
                         )
@@ -661,18 +661,18 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 9: Multi-criteria query (MQL + California + high rating)...")
     await _run_frame_query("Multi-criteria query", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+            frame_type="urn:acme:kg:frame:LeadStatusFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLv2",
+                            slot_type="urn:acme:kg:slot:MQLv2",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                             value=True, comparator="eq",
                         ),
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLRating",
+                            slot_type="urn:acme:kg:slot:MQLRating",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                             value=65.0, comparator="gte",
                         ),
@@ -681,13 +681,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
             ],
         ),
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:CompanyFrame",
+            frame_type="urn:acme:kg:frame:CompanyFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:CompanyAddressFrame",
+                    frame_type="urn:acme:kg:frame:CompanyAddressFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:CompanyStateCode",
+                            slot_type="urn:acme:kg:slot:CompanyStateCode",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                             value="CA", comparator="eq",
                         )
@@ -701,18 +701,18 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 9b: Range query (50 <= MQLRating <= 80)...")
     await _run_frame_query("Range query with multiple FILTERs", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+            frame_type="urn:acme:kg:frame:LeadStatusFrame",
             frame_criteria=[
                 FrameCriteria(
-                    frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                    frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                     slot_criteria=[
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLRating",
+                            slot_type="urn:acme:kg:slot:MQLRating",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                             value=50.0, comparator="gte",
                         ),
                         SlotCriteria(
-                            slot_type="urn:cardiff:kg:slot:MQLRating",
+                            slot_type="urn:acme:kg:slot:MQLRating",
                             slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGDoubleSlot",
                             value=80.0, comparator="lte",
                         ),
@@ -728,13 +728,13 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
         entity_type="http://vital.ai/ontology/haley-ai-kg#KGEntity",
         frame_criteria=[
             FrameCriteria(
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 frame_criteria=[
                     FrameCriteria(
-                        frame_type="urn:cardiff:kg:frame:LeadStatusQualificationFrame",
+                        frame_type="urn:acme:kg:frame:LeadStatusQualificationFrame",
                         slot_criteria=[
                             SlotCriteria(
-                                slot_type="urn:cardiff:kg:slot:MQLv2",
+                                slot_type="urn:acme:kg:slot:MQLv2",
                                 slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGBooleanSlot",
                                 value=True, comparator="eq",
                             )
@@ -762,10 +762,10 @@ async def step_kgquery(space_impl: SparqlSQLSpaceImpl,
     print(f"\n  Test 11: Empty results (non-existent criteria)...")
     await _run_frame_query("Empty results", [
         FrameCriteria(
-            frame_type="urn:cardiff:kg:frame:NonExistentFrame",
+            frame_type="urn:acme:kg:frame:NonExistentFrame",
             slot_criteria=[
                 SlotCriteria(
-                    slot_type="urn:cardiff:kg:slot:NonExistentSlot",
+                    slot_type="urn:acme:kg:slot:NonExistentSlot",
                     slot_class_uri="http://vital.ai/ontology/haley-ai-kg#KGTextSlot",
                     value="NonExistent", comparator="eq",
                 )

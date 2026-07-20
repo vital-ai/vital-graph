@@ -197,7 +197,7 @@ Two configuration files are maintained (not in git):
 
 **Production** - `vitalgraphdb-config-production.yaml`:
 - Production PostgreSQL endpoints
-- Production Fuseki with HTTPS (https://graphdb.cardiffbank.co)
+- Production Fuseki with HTTPS (https://graphdb.acmebank.co)
 - Keycloak JWT authentication enabled
 - AWS S3 for file storage
 - INFO log level

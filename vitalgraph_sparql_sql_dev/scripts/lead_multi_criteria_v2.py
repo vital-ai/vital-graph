@@ -142,34 +142,34 @@ async def run():
         ?frame_edge_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .
         ?frame_edge_0 vital-core:hasEdgeSource ?entity .
         ?frame_edge_0 vital-core:hasEdgeDestination ?frame_0 .
-        ?frame_0 haley:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusFrame> .
+        ?frame_0 haley:hasKGFrameType <urn:acme:kg:frame:LeadStatusFrame> .
         ?frame_edge_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .
         ?frame_edge_0_0 vital-core:hasEdgeSource ?frame_0 .
         ?frame_edge_0_0 vital-core:hasEdgeDestination ?frame_0_0 .
-        ?frame_0_0 haley:hasKGFrameType <urn:cardiff:kg:frame:LeadStatusQualificationFrame> .
+        ?frame_0_0 haley:hasKGFrameType <urn:acme:kg:frame:LeadStatusQualificationFrame> .
         ?slot_edge_0_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
         ?slot_edge_0_0_0 vital-core:hasEdgeSource ?frame_0_0 .
         ?slot_edge_0_0_0 vital-core:hasEdgeDestination ?slot_0_0_0 .
-        ?slot_0_0_0 haley:hasKGSlotType <urn:cardiff:kg:slot:MQLv2> .
+        ?slot_0_0_0 haley:hasKGSlotType <urn:acme:kg:slot:MQLv2> .
         ?slot_0_0_0 haley:hasBooleanSlotValue true .
         ?slot_edge_0_0_1 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
         ?slot_edge_0_0_1 vital-core:hasEdgeSource ?frame_0_0 .
         ?slot_edge_0_0_1 vital-core:hasEdgeDestination ?slot_0_0_1 .
-        ?slot_0_0_1 haley:hasKGSlotType <urn:cardiff:kg:slot:MQLRating> .
+        ?slot_0_0_1 haley:hasKGSlotType <urn:acme:kg:slot:MQLRating> .
         ?slot_0_0_1 haley:hasDoubleSlotValue ?val_0_0_1 .
         FILTER(?val_0_0_1 >= 65.0)
         ?frame_edge_1 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasEntityKGFrame> .
         ?frame_edge_1 vital-core:hasEdgeSource ?entity .
         ?frame_edge_1 vital-core:hasEdgeDestination ?frame_1 .
-        ?frame_1 haley:hasKGFrameType <urn:cardiff:kg:frame:CompanyFrame> .
+        ?frame_1 haley:hasKGFrameType <urn:acme:kg:frame:CompanyFrame> .
         ?frame_edge_1_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGFrame> .
         ?frame_edge_1_0 vital-core:hasEdgeSource ?frame_1 .
         ?frame_edge_1_0 vital-core:hasEdgeDestination ?frame_1_0 .
-        ?frame_1_0 haley:hasKGFrameType <urn:cardiff:kg:frame:CompanyAddressFrame> .
+        ?frame_1_0 haley:hasKGFrameType <urn:acme:kg:frame:CompanyAddressFrame> .
         ?slot_edge_1_0_0 vital-core:vitaltype <http://vital.ai/ontology/haley-ai-kg#Edge_hasKGSlot> .
         ?slot_edge_1_0_0 vital-core:hasEdgeSource ?frame_1_0 .
         ?slot_edge_1_0_0 vital-core:hasEdgeDestination ?slot_1_0_0 .
-        ?slot_1_0_0 haley:hasKGSlotType <urn:cardiff:kg:slot:CompanyStateCode> .
+        ?slot_1_0_0 haley:hasKGSlotType <urn:acme:kg:slot:CompanyStateCode> .
         ?slot_1_0_0 haley:hasTextSlotValue "CA" .
                 }
             }

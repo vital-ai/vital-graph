@@ -151,7 +151,7 @@ comparison testing because:
 - **Large enough** to exercise query performance and correctness at scale
 - **Rich variety** of slot types: text, integer, boolean, datetime, double, currency, choice, JSON
 - **Complex graph structure**: entity → frame → slot traversal via edge objects
-- **Real-world data**: Cardiff lead records with realistic property distributions
+- **Real-world data**: Acme lead records with realistic property distributions
 
 ### SPARQL vs SQL Result Differences
 
@@ -179,9 +179,9 @@ The comparison test normalizer must:
 
 | Space | Quads | Notes |
 |---|---|---|
-| `lead_test` | 674,334 | Largest, real Cardiff lead data, 107K terms |
+| `lead_test` | 674,334 | Largest, real Acme lead data, 107K terms |
 | `space_lead_dataset_test` | 264,619 | Lead dataset, 42K terms |
-| `cardiff_kg_test_fresh` | 12,222 | 2 named graphs, Person/Org types |
+| `acme_kg_test_fresh` | 12,222 | 2 named graphs, Person/Org types |
 | `kg_load_test` | 7,595 | Clean org data (TechCorp), readable URIs |
 | `space_kgquery_test` | 4,875 | Likely query test data |
 

@@ -88,7 +88,7 @@ class FrameQueryTester:
             response = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 page_size=10,
                 offset=0
             )
@@ -114,14 +114,14 @@ class FrameQueryTester:
             r_company = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:CompanyFrame",
+                frame_type="urn:acme:kg:frame:CompanyFrame",
                 page_size=10,
                 offset=0
             )
             r_status = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 page_size=10,
                 offset=0
             )
@@ -149,14 +149,14 @@ class FrameQueryTester:
             r1 = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 page_size=5,
                 offset=0
             )
             r2 = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 page_size=5,
                 offset=5
             )
@@ -208,7 +208,7 @@ class FrameQueryTester:
             response = await self.client.kgqueries.query_frames(
                 space_id=SPACE_ID,
                 graph_id=GRAPH_ID,
-                frame_type="urn:cardiff:kg:frame:LeadStatusFrame",
+                frame_type="urn:acme:kg:frame:LeadStatusFrame",
                 page_size=3,
                 offset=0
             )

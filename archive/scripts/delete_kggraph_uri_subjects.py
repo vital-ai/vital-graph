@@ -14,7 +14,7 @@ from vitalgraph.client.vitalgraph_client import VitalGraphClient
 from vitalgraph.model.sparql_model import SPARQLQueryRequest
 
 
-SPACE_ID = "cardiff_kg"
+SPACE_ID = "acme_kg"
 
 SUBJECTS_QUERY = """\
 PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
@@ -22,8 +22,8 @@ PREFIX haley: <http://vital.ai/ontology/haley-ai-kg#>
 SELECT DISTINCT ?subject ?graphURI WHERE {
   ?subject haley:hasKGGraphURI ?graphURI .
   FILTER(?graphURI IN (
-    <urn:cardiff:campaign:cer:under30k_incomplete_1>,
-    <urn:cardiff:campaign:cer:under30k_nurture_1>
+    <urn:acme:campaign:cer:under30k_incomplete_1>,
+    <urn:acme:campaign:cer:under30k_nurture_1>
   ))
 }
 ORDER BY ?graphURI ?subject

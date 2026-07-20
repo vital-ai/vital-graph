@@ -36,7 +36,7 @@ asyncpg.exceptions.ProgramLimitExceededError:
 
 | Space | Max literal length | Status |
 |-------|-------------------|--------|
-| `cardiff_kg` | 3,745 chars | Loaded via COPY; index entry likely missing |
+| `acme_kg` | 3,745 chars | Loaded via COPY; index entry likely missing |
 | `framenet_kgtypes_test` | 2,500 chars (truncated) | Workaround applied |
 
 The issue has not surfaced before because most loaded data had shorter
