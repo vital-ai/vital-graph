@@ -1,63 +1,58 @@
-# 020 — Registry base tables must be created by an explicit script/CLI, never by the app
+# 020 — Registry provisioning: already script-only; close two small gaps
 
-## Status: 🔴 OPEN (product gap + design correction — app team)
+## Status: 🟢 MOSTLY COMPLIANT — two minor open items (app team)
 
 ## Principle
 
-**Tables must never be created as a side effect in the app.** No `ensure_tables()`,
-no schema-create at startup — for **any** case, including the **entity registry**
-and the **agent registry**. Base tables are created **only** by an explicit
-script / CLI command that an operator runs deliberately. (Same philosophy as
-spaces: schema/DDL is explicitly provisioned and managed, never auto-created by a
-data/app code path.)
+Tables are created only by an **explicit action** (a provisioning script/CLI, or
+`create-space` via the space manager), **never as an implicit app side effect**
+(no `ensure_tables()`/schema-create firing on app boot). The app assumes its
+tables exist and fails clearly if they don't.
 
-## Current state (violates the principle)
+## Finding (corrects the original note)
 
-- The entity-registry CLI
-  (`vitalgraph/entity_registry_cmd/vitalgraph_entity_registry_cmd.py`) can create
-  and manage *records* — types, entities, aliases, identifiers, categories,
-  relationships — but has **no command to create the base tables**.
-- Instead, base tables are created **as an app side effect** at startup:
-  - `vitalgraph/impl/vitalgraphapp_impl.py:247-250` — instantiates
-    `EntityRegistrySchema()` and runs `create_tables_sql()`.
-  - `vitalgraph/impl/vitalgraphapp_impl.py:385` — `await self.entity_registry.ensure_tables()`.
-- The **agent registry** has the same shape (schema-create reachable from the app
-  rather than an explicit provisioning command).
+The codebase **already follows the principle** — contrary to the first draft of
+this issue, `ensure_tables()` does NOT create tables:
 
-## Required change
+- `EntityRegistryImpl.ensure_tables()` and `AgentRegistryImpl.ensure_tables()`
+  are **verify-only**: they check `information_schema` and raise
+  "tables not found → run the migrate script" if missing. No DDL.
+- Base tables are provisioned **only by explicit scripts**:
+  `apps/entity_registry/migrate.py` and `apps/agent_registry/migrate_agents.py`
+  (both `CREATE TABLE IF NOT EXISTS …`, idempotent, with `main()`).
+- App startup creates **no** registry tables in production:
+  - entity — `vitalgraphapp_impl.py:385` calls `ensure_tables()` (verify-only);
+  - agent — startup only constructs `AgentRegistryImpl(pool)`; no table op.
 
-Two parts, both registries (entity **and** agent):
+So the `:247-250 / :385` "app creates tables" claim in the first draft was wrong.
 
-1. **Remove app-side table creation.** Delete the startup schema-create /
-   `ensure_tables()` side effects (`vitalgraphapp_impl.py:247-250` and `:385`,
-   and the equivalent agent-registry path). The app should assume its tables
-   already exist and fail clearly (not silently create) if they don't.
-2. **Add an explicit `create` / `init` CLI command** to each registry CLI that
-   provisions the base tables (core + vector/FTS), idempotently
-   (`CREATE TABLE IF NOT EXISTS` is already used, so re-running is safe). This
-   becomes the *only* sanctioned way to create the base.
+## Remaining open items
 
-Suggested shape (mirror the existing `cmd_*` handlers):
+1. **`VG_AUTO_INIT=true` still creates tables at app startup (test-only).**
+   `vitalgraphapp_impl.py::_auto_init_entity_registry` (via `_auto_init_tables`,
+   gated by the env var, set in `docker-compose.test.yml:69`) creates admin +
+   entity-registry tables on boot. This is the **only** app-side creation left,
+   and it's the one thing that doesn't fit the principle.
+   - **Decision needed:** either (a) accept it as an explicit, env-gated,
+     documented **test-only opt-in** (setting `VG_AUTO_INIT` *is* a deliberate
+     action), or (b) remove the table-creation from `_auto_init_*` and have the
+     test stack provision by running `apps/*/migrate*.py` (e.g. in the container
+     entrypoint or the seed step) — the fully principle-pure option.
+   - If (b): route the SQL through the existing `migrate*.py` provisioning so
+     there's a single source of truth, and drop `VG_AUTO_INIT` table creation.
 
-- `vitalgraph-entity-registry create` / `vitalgraph-agent-registry create` —
-  create/ensure the base tables, then exit; report clearly if already present.
-- Optional flags to match setup needs (include/skip vector + FTS tables; target
-  space/DB selection consistent with the other subcommands).
-
-## Why it matters
-
-- **Explicit provisioning**: creation is a deliberate, auditable operator step —
-  not something that happens implicitly on app boot (which hides drift, races
-  DDL against a live app, and blurs who owns schema).
-- **Consistency**: every other registry lifecycle op is already CLI-driven; base
-  creation is the one step that isn't. Do entity and agent registries together
-  with a shared pattern.
+2. **No CLI subcommand for provisioning (convenience gap).**
+   Base creation lives only in the standalone `apps/*/migrate*.py` scripts, not
+   in the registry CLIs (`vitalgraph/entity_registry_cmd/`,
+   `vitalgraph/agent_registry_cmd/`). Optional: add a `create` subcommand that
+   delegates to the same schema provisioning, so operators use one tool. Purely
+   ergonomic — the script path already satisfies the principle.
 
 ## Pointers
 
-- Entity CLI: `vitalgraph/entity_registry_cmd/vitalgraph_entity_registry_cmd.py`
-- Agent CLI: `vitalgraph/agent_registry_cmd/vitalgraph_agent_registry_cmd.py`
-- Entity schema: `vitalgraph/entity_registry/entity_registry_schema.py`,
-  `entity_registry_vector_schema.py`; ensure path
-  `entity_registry/entity_registry_impl.py::ensure_tables()`
-- App side effects to remove: `vitalgraph/impl/vitalgraphapp_impl.py:247-250, 385`
+- Verify-only: `entity_registry/entity_registry_impl.py::ensure_tables()` (:89),
+  `agent_registry/agent_registry_impl.py::ensure_tables()` (:70)
+- Provisioning scripts: `apps/entity_registry/migrate.py`,
+  `apps/agent_registry/migrate_agents.py`
+- Test-only startup creation: `vitalgraph/impl/vitalgraphapp_impl.py`
+  `_auto_init_tables` / `_auto_init_entity_registry` (gated by `VG_AUTO_INIT`)
