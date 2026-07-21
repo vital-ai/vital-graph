@@ -1,6 +1,6 @@
 # 020 — Registry provisioning: already script-only; close two small gaps
 
-## Status: 🟢 MOSTLY COMPLIANT — two minor open items (app team)
+## Status: 🟢 COMPLIANT — VG_AUTO_INIT accepted as test-only opt-in; one optional ergonomic item
 
 ## Principle
 
@@ -28,20 +28,16 @@ So the `:247-250 / :385` "app creates tables" claim in the first draft was wrong
 
 ## Remaining open items
 
-1. **`VG_AUTO_INIT=true` still creates tables at app startup (test-only).**
+1. **`VG_AUTO_INIT=true` table creation at startup — ✅ ACCEPTED (decision).**
    `vitalgraphapp_impl.py::_auto_init_entity_registry` (via `_auto_init_tables`,
    gated by the env var, set in `docker-compose.test.yml:69`) creates admin +
-   entity-registry tables on boot. This is the **only** app-side creation left,
-   and it's the one thing that doesn't fit the principle.
-   - **Decision needed:** either (a) accept it as an explicit, env-gated,
-     documented **test-only opt-in** (setting `VG_AUTO_INIT` *is* a deliberate
-     action), or (b) remove the table-creation from `_auto_init_*` and have the
-     test stack provision by running `apps/*/migrate*.py` (e.g. in the container
-     entrypoint or the seed step) — the fully principle-pure option.
-   - If (b): route the SQL through the existing `migrate*.py` provisioning so
-     there's a single source of truth, and drop `VG_AUTO_INIT` table creation.
+   entity-registry tables on boot. **Decision: keep as-is** — it is an explicit,
+   env-gated, documented **test-only opt-in** (setting `VG_AUTO_INIT` is a
+   deliberate action), so it fits the "explicit action, not implicit side effect"
+   rule and carries zero risk. No change. (Do NOT enable `VG_AUTO_INIT` outside
+   test environments.)
 
-2. **No CLI subcommand for provisioning (convenience gap).**
+2. **No CLI subcommand for provisioning (optional, ergonomic).**
    Base creation lives only in the standalone `apps/*/migrate*.py` scripts, not
    in the registry CLIs (`vitalgraph/entity_registry_cmd/`,
    `vitalgraph/agent_registry_cmd/`). Optional: add a `create` subcommand that
