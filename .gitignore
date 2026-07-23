@@ -236,6 +236,8 @@ dist
 # Gatsby files
 .cache/
 public
+# Vite serves frontend/public as static assets (logo, SVGs) — must be tracked
+!/frontend/public/
 
 # Vite
 .vite/
