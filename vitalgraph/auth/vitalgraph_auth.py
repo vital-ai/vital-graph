@@ -40,18 +40,25 @@ class VitalGraphAuth:
         # Token version cache — reduces DB lookups for revocation checks
         self._token_version_cache = TokenVersionCache(ttl_seconds=token_version_cache_ttl)
 
-        # Fallback in-memory admin for bootstrap (used only when DB is unavailable)
+        # First-run bootstrap admin: an in-memory, config/env-provided admin
+        # credential honored ONLY while the DB has no real admin user yet, so a
+        # fresh deployment can log in and provision the first real admin. It
+        # self-retires permanently the moment a real admin exists.
         self._bootstrap_admin: Optional[Dict] = None
+        # Latches True once a real admin is observed — bootstrap never re-enables
+        # within this process after that.
+        self._bootstrap_retired: bool = False
 
     def set_db_impl(self, db_impl) -> None:
         """Set or update the database implementation reference."""
         self.db_impl = db_impl
 
     def set_bootstrap_admin(self, username: str, password: str) -> None:
-        """Configure a bootstrap admin for when no DB users exist yet.
+        """Configure the first-run bootstrap admin.
 
-        The bootstrap admin is used only if the database has no users.
-        On first successful login, the admin should be persisted to the DB.
+        Honored on both login and per-request authorization, but only while the
+        database contains no active admin user. Use it to create the first real
+        admin; once that exists, the bootstrap credential stops working.
         """
         self._bootstrap_admin = {
             "username": username,
@@ -64,6 +71,33 @@ class VitalGraphAuth:
             "spaces": {},
         }
 
+    async def _bootstrap_available(self, username: str) -> bool:
+        """Whether the bootstrap admin may be used for ``username`` right now.
+
+        True only when: a bootstrap admin is configured, it matches ``username``,
+        it has not retired, and the DB has no active admin user yet. Retires
+        permanently (for this process) as soon as a real admin is observed.
+
+        If the DB is unreachable the service has no functionality anyway, so we
+        do NOT enable bootstrap on error — it returns False rather than fail-open.
+        """
+        if not self._bootstrap_admin or self._bootstrap_retired:
+            return False
+        if self._bootstrap_admin["username"] != username:
+            return False
+        if self.db_impl is None:
+            # DB not wired yet (very early startup) — allow bootstrap.
+            return True
+        try:
+            admin_count = await self.db_impl.count_active_admins()
+        except Exception as e:
+            logger.warning(f"Bootstrap gate: admin-count query failed: {e}")
+            return False
+        if admin_count > 0:
+            self._bootstrap_retired = True
+            return False
+        return True
+
     async def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
         """Authenticate a user by username and password.
 
@@ -73,9 +107,8 @@ class VitalGraphAuth:
         user = await self._get_user_from_db(username)
 
         if user is None:
-            # Fallback to bootstrap admin
-            if (self._bootstrap_admin and
-                    self._bootstrap_admin["username"] == username):
+            # Fallback to bootstrap admin, but only while no real admin exists.
+            if await self._bootstrap_available(username):
                 if verify_password(password, self._bootstrap_admin["password_hash"]):
                     emit_audit_event("auth.bootstrap.used", username, level="WARN")
                     return self._bootstrap_admin
@@ -312,19 +345,34 @@ class VitalGraphAuth:
             if cached_version is None and self.db_impl is not None:
                 try:
                     user = await self.db_impl.get_user_by_username(username)
-                    if user is None or not user.get("is_active", True):
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="User not found or inactive",
-                        )
-                    cached_version = user.get("token_version", 0)
-                    self._token_version_cache.set(username, cached_version)
-                except HTTPException:
-                    raise
                 except Exception as e:
+                    # The service has no functionality without the DB, so failing
+                    # open would only wave requests through to a dead backend.
+                    # Fail closed with 503 instead.
                     logger.warning(f"Token version cache DB lookup failed for '{username}': {e}")
-                    # On DB error, allow request through (fail-open for availability)
-                    cached_version = None
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Authentication backend unavailable",
+                    )
+                if user is None or not user.get("is_active", True):
+                    # No DB row: honor the first-run bootstrap admin while no real
+                    # admin exists yet, so a fresh deployment can provision one.
+                    if await self._bootstrap_available(username):
+                        emit_audit_event("auth.bootstrap.used", username, level="WARN")
+                        return {
+                            "username": self._bootstrap_admin["username"],
+                            "full_name": self._bootstrap_admin["full_name"],
+                            "email": self._bootstrap_admin["email"],
+                            "role": self._bootstrap_admin["role"],
+                            "spaces": self._bootstrap_admin["spaces"],
+                            "token_version": self._bootstrap_admin["token_version"],
+                        }
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User not found or inactive",
+                    )
+                cached_version = user.get("token_version", 0)
+                self._token_version_cache.set(username, cached_version)
 
             if cached_version is not None and token_version_in_jwt < cached_version:
                 emit_audit_event("auth.token.revoked", username, level="WARN",

@@ -63,6 +63,20 @@ class UserManagementMixin:
         )
         return rows if rows else []
 
+    async def count_active_admins(self) -> int:
+        """Count active users with the admin role.
+
+        Used to gate the bootstrap-admin fallback, which self-retires once a
+        real admin exists in the database.
+        """
+        rows = await self.execute_query(
+            'SELECT COUNT(*) AS n FROM "user" WHERE role = $1 AND is_active = true',
+            ['admin']
+        )
+        if not rows:
+            return 0
+        return int(rows[0].get('n', 0) or 0)
+
     async def create_user(
         self,
         username: str,

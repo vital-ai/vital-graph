@@ -316,5 +316,4 @@ deploy/fuseki_deploy_test/docker/databases/
 
 # Generated Wikipedia test documents (regenerate via
 # test_scripts/data/fetch_wikipedia_test_docs.py)
-/test_files/wikipedia/*
-!/test_files/wikipedia/coffee.md
+#/test_files/wikipedia/*
