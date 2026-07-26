@@ -123,7 +123,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   }
 
   async removeIdentifier(identifierId: number): Promise<VitalGraphResponse> {
-    return this.request('DELETE', '/api/registry/identifiers/remove', {
+    return this.request('DELETE', '/api/registry/identifiers/retract', {
       params: { identifier_id: identifierId },
     });
   }
@@ -155,7 +155,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   }
 
   async removeAlias(aliasId: number): Promise<VitalGraphResponse> {
-    return this.request('DELETE', '/api/registry/aliases/remove', {
+    return this.request('DELETE', '/api/registry/aliases/retract', {
       params: { alias_id: aliasId },
     });
   }
@@ -189,7 +189,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
 
   async removeEntityCategory(entityId: string, categoryKey: string): Promise<VitalGraphResponse> {
     validateRequired({ entity_id: entityId, category_key: categoryKey });
-    return this.request('DELETE', '/api/registry/categories/remove', {
+    return this.request('DELETE', '/api/registry/categories/retract', {
       params: { entity_id: entityId, category_key: categoryKey },
     });
   }
@@ -246,7 +246,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   }
 
   async removeLocation(locationId: number): Promise<VitalGraphResponse> {
-    return this.request('DELETE', '/api/registry/locations/remove', {
+    return this.request('DELETE', '/api/registry/locations/retract', {
       params: { location_id: locationId },
     });
   }
@@ -263,7 +263,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   }
 
   async removeLocationCategory(locationId: number, categoryKey: string): Promise<VitalGraphResponse> {
-    return this.request('DELETE', '/api/registry/locations/categories/remove', {
+    return this.request('DELETE', '/api/registry/locations/categories/retract', {
       params: { location_id: locationId, category_key: categoryKey },
     });
   }
@@ -315,7 +315,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   }
 
   async removeRelationship(relationshipId: number): Promise<VitalGraphResponse> {
-    return this.request('DELETE', '/api/registry/relationships/remove', {
+    return this.request('DELETE', '/api/registry/relationships/retract', {
       params: { relationship_id: relationshipId },
     });
   }
@@ -359,6 +359,47 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
 
   async createEntityType(data: Record<string, unknown>): Promise<VitalGraphResponse> {
     return this.request('POST', '/api/registry/entity/types', { json: data });
+  }
+
+  // ------------------------------------------------------------------
+  // Unified metadata management
+  //   kind ∈ entity-types | categories | relationship-types | location-types
+  //          | identifier-types | alias-types
+  // ------------------------------------------------------------------
+
+  /** List a metadata vocabulary. Active-only and count-free by default (dropdowns). */
+  async listMetadata(
+    kind: string,
+    opts: { includeInactive?: boolean; includeUsage?: boolean; q?: string } = {},
+  ): Promise<VitalGraphResponse> {
+    return this.request('GET', `/api/registry/metadata/${kind}`, {
+      params: {
+        include_inactive: opts.includeInactive || undefined,
+        include_usage: opts.includeUsage || undefined,
+        q: opts.q,
+      },
+    });
+  }
+
+  async getMetadata(kind: string, key: string): Promise<VitalGraphResponse> {
+    validateRequired({ key });
+    return this.request('GET', `/api/registry/metadata/${kind}/get`, { params: { key } });
+  }
+
+  async createMetadata(kind: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+    return this.request('POST', `/api/registry/metadata/${kind}`, { json: data });
+  }
+
+  async updateMetadata(kind: string, key: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+    validateRequired({ key });
+    return this.request('PUT', `/api/registry/metadata/${kind}/update`, {
+      params: { key }, json: data,
+    });
+  }
+
+  async deleteMetadata(kind: string, key: string): Promise<VitalGraphResponse> {
+    validateRequired({ key });
+    return this.request('DELETE', `/api/registry/metadata/${kind}/delete`, { params: { key } });
   }
 
   // ------------------------------------------------------------------

@@ -84,7 +84,7 @@ External IDs (DUNS, EIN, CRM IDs, etc.) mapped to entities. Not held unique — 
 |--------|------|-------------|
 | `POST` | `/identifiers/add?entity_id=X` | Add identifier |
 | `GET` | `/identifiers/list?entity_id=X` | List identifiers |
-| `DELETE` | `/identifiers/remove?identifier_id=X` | Retract identifier |
+| `DELETE` | `/identifiers/retract?identifier_id=X` | Retract identifier |
 | `GET` | `/identifiers/lookup?namespace=X&value=Y` | Lookup entities by identifier |
 
 ### Aliases
@@ -95,7 +95,7 @@ Alternate names: AKA, DBA, former names, abbreviations, trade names.
 |--------|------|-------------|
 | `POST` | `/aliases/add?entity_id=X` | Add alias |
 | `GET` | `/aliases/list?entity_id=X` | List aliases |
-| `DELETE` | `/aliases/remove?alias_id=X` | Retract alias |
+| `DELETE` | `/aliases/retract?alias_id=X` | Retract alias |
 
 ### Categories
 
@@ -105,7 +105,7 @@ Categories are a shared concept used by both entities and locations. Common tags
 |--------|------|-------------|
 | `POST` | `/categories/assign?entity_id=X` | Assign category |
 | `GET` | `/categories/entity?entity_id=X` | List entity's categories |
-| `DELETE` | `/categories/remove?entity_id=X&category_key=Y` | Remove category |
+| `DELETE` | `/categories/retract?entity_id=X&category_key=Y` | Remove category |
 | `GET` | `/categories` | List all available categories |
 | `POST` | `/categories` | Create a new category |
 | `GET` | `/categories/entities?category_key=X` | List entities in a category |
@@ -127,7 +127,7 @@ Structured, typed locations attached to entities. Each location has detailed add
 | `GET` | `/locations/get?location_id=X` | Get location by ID (includes type + categories) |
 | `GET` | `/locations/list?entity_id=X` | List locations for entity (optionally include expired) |
 | `PUT` | `/locations/update?location_id=X` | Update location fields |
-| `DELETE` | `/locations/remove?location_id=X` | Soft-remove a location |
+| `DELETE` | `/locations/retract?location_id=X` | Soft-remove a location |
 
 ### Location Categories
 
@@ -137,7 +137,7 @@ Locations can be tagged with the same shared categories used by entities.
 |--------|------|-------------|
 | `POST` | `/locations/categories/assign?location_id=X` | Assign category to a location |
 | `GET` | `/locations/categories/list?location_id=X` | List location's categories |
-| `DELETE` | `/locations/categories/remove?location_id=X&category_key=Y` | Remove category from location |
+| `DELETE` | `/locations/categories/retract?location_id=X&category_key=Y` | Remove category from location |
 
 ### Relationship Types
 
@@ -156,7 +156,7 @@ Typed, directed relationships between entities with optional temporal validity (
 | `GET` | `/relationships/get?relationship_id=X` | Get relationship by ID (includes type info) |
 | `GET` | `/relationships/list?entity_id=X` | List relationships (filter by `direction`: outgoing/incoming/both) |
 | `PUT` | `/relationships/update?relationship_id=X` | Update relationship fields |
-| `DELETE` | `/relationships/remove?relationship_id=X` | Retract a relationship |
+| `DELETE` | `/relationships/retract?relationship_id=X` | Retract a relationship |
 
 ### Same-As Mappings
 

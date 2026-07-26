@@ -15,6 +15,7 @@ from vitalgraph.entity_registry.entity_registry_vector_schema import (
     FTS_ENTITY_TABLE, FTS_LOCATION_TABLE,
 )
 from vitalgraph.vectorization.registry import get_provider
+from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ class EntityRegistrySearch:
             JOIN entity e ON e.entity_id = v.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
             WHERE (v.embedding <=> $1::vector) <= $2
-              AND e.status = 'active'
+              AND e.status = '{ACTIVE}'
               AND {where_clause}
             ORDER BY v.embedding <=> $1::vector
             LIMIT $3
@@ -222,7 +223,7 @@ class EntityRegistrySearch:
             FROM combined c
             JOIN entity e ON e.entity_id = c.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
-            WHERE e.status = 'active'
+            WHERE e.status = '{ACTIVE}'
               AND {where_clause}
             ORDER BY c.hybrid_score DESC
             LIMIT $3
@@ -384,7 +385,7 @@ class EntityRegistrySearch:
             geo_order = "el.location_id"
 
         # Combine FTS filter into where_clause
-        all_where_parts = [geo_where, "el.status = 'active'", "e.status = 'active'", where_clause]
+        all_where_parts = [geo_where, f"el.status = '{ACTIVE}'", f"e.status = '{ACTIVE}'", where_clause]
         if filters_fts:
             all_where_parts.append(filters_fts)
         full_where = " AND ".join(all_where_parts)
@@ -487,7 +488,7 @@ class EntityRegistrySearch:
             FROM closest cl
             JOIN entity e ON e.entity_id = cl.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
-            WHERE e.status = 'active'
+            WHERE e.status = '{ACTIVE}'
               AND {where_clause}
             ORDER BY cl.distance_km
             LIMIT $4
@@ -578,7 +579,7 @@ class EntityRegistrySearch:
             JOIN entity_type et ON et.type_id = e.entity_type_id
             JOIN geo_entities ge ON ge.entity_id = e.entity_id
             WHERE (v.embedding <=> $1::vector) <= $5
-              AND e.status = 'active'
+              AND e.status = '{ACTIVE}'
               AND {where_clause}
             ORDER BY v.embedding <=> $1::vector
             LIMIT $6
@@ -671,7 +672,7 @@ class EntityRegistrySearch:
             JOIN entity e ON e.entity_id = ei.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
             WHERE {where_clause}
-              AND e.status = 'active'
+              AND e.status = '{ACTIVE}'
             ORDER BY e.primary_name
             LIMIT $2
         """

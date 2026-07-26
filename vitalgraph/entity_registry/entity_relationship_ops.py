@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from .entity_status import ACTIVE, RETRACTED
 
 if TYPE_CHECKING:
     import asyncpg
@@ -189,14 +190,14 @@ class RelationshipMixin:
 
                 return await self._get_relationship_response(conn, relationship_id)
 
-    async def remove_relationship(self, relationship_id: int,
-                                  removed_by: Optional[str] = None) -> bool:
-        """Retract a relationship (set status='retracted')."""
+    async def retract_relationship(self, relationship_id: int,
+                                  retracted_by: Optional[str] = None) -> bool:
+        f"""Retract a relationship (set status='{RETRACTED}')."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_relationship SET status = 'retracted', updated_time = $1 "
-                    "WHERE relationship_id = $2 AND status = 'active' "
+                    f"UPDATE entity_relationship SET status = '{RETRACTED}', updated_time = $1 "
+                    f"WHERE relationship_id = $2 AND status = '{ACTIVE}' "
                     "RETURNING entity_source, entity_destination, relationship_type_id",
                     datetime.now(timezone.utc), relationship_id
                 )
@@ -211,7 +212,7 @@ class RelationshipMixin:
                     'relationship_id': relationship_id,
                     'type_key': type_key,
                     'dest_id': row['entity_destination'],
-                }, changed_by=removed_by)
+                }, changed_by=retracted_by)
                 return True
 
     async def list_relationships(

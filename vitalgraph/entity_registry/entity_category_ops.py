@@ -5,6 +5,7 @@ Category operations mixin for the Entity Registry.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from .entity_status import ACTIVE, DELETED, RETRACTED
 
 if TYPE_CHECKING:
     import asyncpg
@@ -69,7 +70,7 @@ class CategoryMixin:
                 row = await conn.fetchrow(
                     "INSERT INTO entity_category_map (entity_id, category_id, created_by, notes) "
                     "VALUES ($1, $2, $3, $4) "
-                    "ON CONFLICT (entity_id, category_id) DO UPDATE SET status = 'active' "
+                    f"ON CONFLICT (entity_id, category_id) DO UPDATE SET status = '{ACTIVE}' "
                     "RETURNING *",
                     entity_id, cat_id, created_by, notes
                 )
@@ -84,9 +85,9 @@ class CategoryMixin:
 
                 return result
 
-    async def remove_entity_category(
+    async def retract_entity_category(
         self, entity_id: str, category_key: str,
-        removed_by: Optional[str] = None,
+        retracted_by: Optional[str] = None,
     ) -> bool:
         """Remove a category from an entity (soft-remove)."""
         async with self.pool.acquire() as conn:
@@ -99,8 +100,8 @@ class CategoryMixin:
                     raise ValueError(f"Category not found: {category_key}")
 
                 result = await conn.execute(
-                    "UPDATE entity_category_map SET status = 'removed' "
-                    "WHERE entity_id = $1 AND category_id = $2 AND status = 'active'",
+                    f"UPDATE entity_category_map SET status = '{RETRACTED}' "
+                    f"WHERE entity_id = $1 AND category_id = $2 AND status = '{ACTIVE}'",
                     entity_id, cat_id
                 )
                 if result == 'UPDATE 0':
@@ -108,7 +109,7 @@ class CategoryMixin:
 
                 await self._log_change(conn, entity_id, 'category_removed', {
                     'category_key': category_key
-                }, changed_by=removed_by)
+                }, changed_by=retracted_by)
 
                 # PG vector/FTS sync (categories changed)
                 await self._pg_sync_entity(entity_id)
@@ -123,7 +124,7 @@ class CategoryMixin:
                 "ecm.created_by, ecm.notes, ec.category_key, ec.category_label, ec.category_description "
                 "FROM entity_category_map ecm "
                 "JOIN category ec ON ecm.category_id = ec.category_id "
-                "WHERE ecm.entity_id = $1 AND ecm.status = 'active' "
+                f"WHERE ecm.entity_id = $1 AND ecm.status = '{ACTIVE}' "
                 "ORDER BY ec.category_key",
                 entity_id
             )
@@ -136,7 +137,7 @@ class CategoryMixin:
                 "SELECT DISTINCT ecm.entity_id FROM entity_category_map ecm "
                 "JOIN category ec ON ecm.category_id = ec.category_id "
                 "JOIN entity e ON ecm.entity_id = e.entity_id "
-                "WHERE ec.category_key = $1 AND ecm.status = 'active' AND e.status != 'deleted'",
+                f"WHERE ec.category_key = $1 AND ecm.status = '{ACTIVE}' AND e.status != '{DELETED}'",
                 category_key
             )
             entities = []

@@ -521,6 +521,35 @@ class LocationSearchResponse(BaseModel):
     results: List[LocationSearchResult]
 
 
+# --- Unified metadata management (all six vocabularies) ---
+
+class MetadataItemResponse(BaseModel):
+    """One metadata value in the normalized key/label/description shape shared by
+    every kind. `inverse_key` is only populated for relationship-types;
+    `usage_count` only when requested."""
+    key: str
+    label: str
+    description: Optional[str] = None
+    inverse_key: Optional[str] = None
+    is_active: bool = True
+    created_time: Optional[datetime] = None
+    usage_count: Optional[int] = None
+
+
+class MetadataCreateRequest(BaseModel):
+    key: str = Field(..., description="Machine key (immutable, e.g. 'SSN')")
+    label: str = Field(..., description="Human label")
+    description: Optional[str] = None
+    inverse_key: Optional[str] = Field(default=None, description="relationship-types only")
+
+
+class MetadataUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    inverse_key: Optional[str] = None
+
+
 # Backward-compat aliases
 EntityTopicSearchResult = EntitySearchResult
 EntityTopicSearchResponse = EntitySearchResponse

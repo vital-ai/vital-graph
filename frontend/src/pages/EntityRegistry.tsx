@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
-  Alert, Badge, Button, Card, Spinner, TextInput,
+  Alert, Badge, Button, Card, Select, Spinner, TextInput,
   Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow,
   Pagination,
 } from 'flowbite-react';
 import { HiSearch, HiPlus, HiEye, HiCollection } from 'react-icons/hi';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useEntityTypes } from '../hooks/useRegistryLookups';
 import TimeAgo from '../components/TimeAgo';
 
 interface RegistryEntity {
@@ -28,7 +29,8 @@ const statusBadge = (status: string) => {
   switch (status) {
     case 'active': return <Badge color="success" size="xs">Active</Badge>;
     case 'inactive': return <Badge color="gray" size="xs">Inactive</Badge>;
-    case 'pending': return <Badge color="warning" size="xs">Pending</Badge>;
+    case 'merged': return <Badge color="warning" size="xs">Merged</Badge>;
+    case 'deleted': return <Badge color="failure" size="xs">Deleted</Badge>;
     default: return <Badge color="gray" size="xs">{status}</Badge>;
   }
 };
@@ -42,24 +44,37 @@ const EntityRegistry: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
+  const { items: entityTypes, error: typesError } = useEntityTypes();
+  const fetchIdRef = useRef(0);
 
   const fetchEntities = useCallback(async () => {
+    // Search refetches on every keystroke, so several requests can be in flight
+    // at once. Without this guard a slow earlier response lands last and
+    // replaces the filtered list with stale results — most visibly, typing a
+    // search reverts to unfiltered page 1.
+    const reqId = ++fetchIdRef.current;
     try {
       setLoading(true);
       setError(null);
       const data = await apiService.listRegistryEntities({
         query: search || undefined,
+        entity_type: typeFilter || undefined,
+        status: statusFilter, // '' means all statuses
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       });
+      if (reqId !== fetchIdRef.current) return;
       setEntities(data.entities || []);
       setTotalCount(data.total_count || 0);
     } catch (err) {
+      if (reqId !== fetchIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load entities');
     } finally {
-      setLoading(false);
+      if (reqId === fetchIdRef.current) setLoading(false);
     }
-  }, [search, page]);
+  }, [search, typeFilter, statusFilter, page]);
 
   useEffect(() => { fetchEntities(); }, [fetchEntities]);
 
@@ -78,7 +93,7 @@ const EntityRegistry: React.FC = () => {
             {totalCount.toLocaleString()} registered entit{totalCount !== 1 ? 'ies' : 'y'}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <div className="w-64">
             <TextInput
               sizing="sm"
@@ -88,6 +103,29 @@ const EntityRegistry: React.FC = () => {
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             />
           </div>
+          <Select
+            sizing="sm"
+            data-testid="entity-type-filter"
+            value={typeFilter}
+            onChange={(e) => { setTypeFilter(e.target.value); setPage(1); }}
+          >
+            <option value="">All types</option>
+            {entityTypes.map((t) => (
+              <option key={t.type_id} value={t.type_key}>{t.type_label || t.type_key}</option>
+            ))}
+          </Select>
+          <Select
+            sizing="sm"
+            data-testid="entity-status-filter"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="merged">Merged</option>
+            <option value="deleted">Deleted</option>
+            <option value="">All statuses</option>
+          </Select>
           <Button size="sm" color="blue" onClick={() => navigate('/entity-registry/new')}>
             <HiPlus className="mr-1.5 h-4 w-4" />New
           </Button>
@@ -95,6 +133,7 @@ const EntityRegistry: React.FC = () => {
       </div>
 
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+      {typesError && <Alert color="warning">Entity types unavailable: {typesError}</Alert>}
 
       {/* Table */}
       {loading ? (

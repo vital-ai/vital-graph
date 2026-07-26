@@ -32,14 +32,28 @@ from .entity_fuzzy_pg import EntityFuzzyIndexPG
 from .entity_fuzzy_ops import FuzzyMixin
 from .entity_identifier_ops import IdentifierMixin
 from .entity_location_ops import LocationMixin
+from .entity_metadata_ops import MetadataMixin
 from .entity_registry_id import generate_entity_id, entity_id_to_uri, uri_to_entity_id
 from .entity_registry_schema import EntityRegistrySchema
 from .entity_relationship_ops import RelationshipMixin
 from .entity_same_as_ops import SameAsMixin
 from .entity_registry_vector_populator import EntityRegistryVectorPopulator
+from .entity_status import ACTIVE, DELETED, RETRACTED, ENTITY_STATUSES
 
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth: vitalgraph/entity_registry/entity_status.py. Both the
+# code validators and the DB CHECK constraints derive from it.
+VALID_ENTITY_STATUSES = ENTITY_STATUSES
+
+
+def _validate_entity_status(status: Optional[str]) -> None:
+    """Reject an unknown entity status. None/'' means 'no filter' and is allowed
+    on read paths; a non-empty unknown value raises."""
+    if status and status not in VALID_ENTITY_STATUSES:
+        raise ValueError(
+            f"Invalid entity status: {status}. Must be one of {VALID_ENTITY_STATUSES}")
 
 
 class EntityRegistryImpl(
@@ -51,6 +65,7 @@ class EntityRegistryImpl(
     RelationshipMixin,
     SameAsMixin,
     FuzzyMixin,
+    MetadataMixin,
 ):
     """
     Core entity registry operations.
@@ -317,7 +332,7 @@ class EntityRegistryImpl(
 
             # Fetch identifiers
             ident_rows = await conn.fetch(
-                "SELECT * FROM entity_identifier WHERE entity_id = $1 AND status != 'retracted' "
+                f"SELECT * FROM entity_identifier WHERE entity_id = $1 AND status != '{RETRACTED}' "
                 "ORDER BY identifier_namespace, identifier_id",
                 entity_id
             )
@@ -325,7 +340,7 @@ class EntityRegistryImpl(
 
             # Fetch aliases
             alias_rows = await conn.fetch(
-                "SELECT * FROM entity_alias WHERE entity_id = $1 AND status != 'retracted' "
+                f"SELECT * FROM entity_alias WHERE entity_id = $1 AND status != '{RETRACTED}' "
                 "ORDER BY alias_type, alias_id",
                 entity_id
             )
@@ -337,7 +352,7 @@ class EntityRegistryImpl(
                 "lt.type_label AS location_type_label "
                 "FROM entity_location_view lv "
                 "JOIN entity_location_type lt ON lv.location_type_id = lt.location_type_id "
-                "WHERE lv.entity_id = $1 AND lv.status = 'active' "
+                f"WHERE lv.entity_id = $1 AND lv.status = '{ACTIVE}' "
                 "ORDER BY lv.is_primary DESC, lv.location_id",
                 entity_id
             )
@@ -348,7 +363,7 @@ class EntityRegistryImpl(
                     "SELECT c.category_key, c.category_label "
                     "FROM entity_location_category_map lcm "
                     "JOIN category c ON lcm.category_id = c.category_id "
-                    "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+                    f"WHERE lcm.location_id = $1 AND lcm.status = '{ACTIVE}' "
                     "ORDER BY c.category_key",
                     loc['location_id']
                 )
@@ -421,9 +436,7 @@ class EntityRegistryImpl(
         if longitude is not None:
             fields['longitude'] = longitude
         if status is not None:
-            valid_statuses = ('active', 'inactive', 'merged', 'deleted')
-            if status not in valid_statuses:
-                raise ValueError(f"Invalid entity status: {status}. Must be one of {valid_statuses}")
+            _validate_entity_status(status)
             fields['status'] = status
         if notes is not None:
             fields['notes'] = notes
@@ -490,8 +503,8 @@ class EntityRegistryImpl(
     @with_db_retry()
     async def delete_entity(self, entity_id: str, deleted_by: Optional[str] = None,
                             comment: Optional[str] = None) -> bool:
-        """
-        Soft-delete an entity (set status='deleted').
+        f"""
+        Soft-delete an entity (set status='{DELETED}').
 
         Returns:
             True if entity was found and deleted, False otherwise.
@@ -499,7 +512,7 @@ class EntityRegistryImpl(
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 result = await conn.execute(
-                    "UPDATE entity SET status = 'deleted', updated_time = $1 WHERE entity_id = $2 AND status != 'deleted'",
+                    f"UPDATE entity SET status = '{DELETED}', updated_time = $1 WHERE entity_id = $2 AND status != '{DELETED}'",
                     datetime.now(timezone.utc), entity_id
                 )
                 if result == 'UPDATE 0':
@@ -602,6 +615,10 @@ class EntityRegistryImpl(
         Returns:
             Tuple of (entities list, total count).
         """
+        # Reject an unknown status rather than silently returning zero rows —
+        # matches update_entity's validation (inconsistency #3).
+        _validate_entity_status(status)
+
         conditions = []
         params = []
         param_idx = 0
@@ -632,7 +649,7 @@ class EntityRegistryImpl(
             conditions.append(
                 f"(e.primary_name ILIKE ${param_idx} OR "
                 f"EXISTS (SELECT 1 FROM entity_alias ea WHERE ea.entity_id = e.entity_id "
-                f"AND ea.status != 'retracted' AND ea.alias_name ILIKE ${param_idx}))"
+                f"AND ea.status != '{RETRACTED}' AND ea.alias_name ILIKE ${param_idx}))"
             )
             params.append(query_param)
 

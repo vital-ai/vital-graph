@@ -36,6 +36,9 @@ from ..model.entity_registry_model import (
     LocationTypeCreateRequest,
     LocationTypeResponse,
     LocationUpdateRequest,
+    MetadataItemResponse,
+    MetadataCreateRequest,
+    MetadataUpdateRequest,
     RelationshipCreateRequest,
     RelationshipResponse,
     RelationshipTypeCreateRequest,
@@ -190,10 +193,13 @@ class EntityRegistryEndpoint:
             page_size: int = Query(20, ge=1, le=100),
             current_user: Dict = Depends(auth),
         ):
-            entities, total = await self.registry.search_entities(
-                query=query, type_key=type_key, country=country, region=region,
-                status=entity_status, page=page, page_size=page_size,
-            )
+            try:
+                entities, total = await self.registry.search_entities(
+                    query=query, type_key=type_key, country=country, region=region,
+                    status=entity_status, page=page, page_size=page_size,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
             return EntityListResponse(
                 success=True, entities=[_entity_to_response(e) for e in entities],
                 total_count=total, page=page, page_size=page_size,
@@ -268,12 +274,12 @@ class EntityRegistryEndpoint:
             idents = await self.registry.list_identifiers(entity_id)
             return [IdentifierResponse(**i) for i in idents]
 
-        @self.router.delete("/identifiers/remove", tags=["Entity Registry"])
-        async def remove_identifier_route(
+        @self.router.delete("/identifiers/retract", tags=["Entity Registry"])
+        async def retract_identifier_route(
             identifier_id: int = Query(..., description="Identifier ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_identifier(identifier_id)
+            removed = await self.registry.retract_identifier(identifier_id)
             if not removed:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Identifier not found: {identifier_id}")
             return {"success": True, "identifier_id": identifier_id}
@@ -316,12 +322,12 @@ class EntityRegistryEndpoint:
             aliases = await self.registry.list_aliases(entity_id)
             return [AliasResponse(**a) for a in aliases]
 
-        @self.router.delete("/aliases/remove", tags=["Entity Registry"])
-        async def remove_alias_route(
+        @self.router.delete("/aliases/retract", tags=["Entity Registry"])
+        async def retract_alias_route(
             alias_id: int = Query(..., description="Alias ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_alias(alias_id)
+            removed = await self.registry.retract_alias(alias_id)
             if not removed:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Alias not found: {alias_id}")
             return {"success": True, "alias_id": alias_id}
@@ -370,14 +376,14 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        @self.router.delete("/categories/remove", tags=["Entity Registry"])
-        async def remove_entity_category_route(
+        @self.router.delete("/categories/retract", tags=["Entity Registry"])
+        async def retract_entity_category_route(
             entity_id: str = Query(..., description="Entity ID"),
             category_key: str = Query(..., description="Category key"),
             current_user: Dict = Depends(auth),
         ):
             try:
-                removed = await self.registry.remove_entity_category(entity_id, category_key)
+                removed = await self.registry.retract_entity_category(entity_id, category_key)
                 if not removed:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                         detail=f"Category mapping not found: {entity_id}/{category_key}")
@@ -470,12 +476,12 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        @self.router.delete("/locations/remove", tags=["Entity Registry"])
-        async def remove_location_route(
+        @self.router.delete("/locations/retract", tags=["Entity Registry"])
+        async def retract_location_route(
             location_id: int = Query(..., description="Location ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_location(location_id)
+            removed = await self.registry.retract_location(location_id)
             if not removed:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                     detail=f"Location not found: {location_id}")
@@ -499,14 +505,14 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        @self.router.delete("/locations/categories/remove", tags=["Entity Registry"])
-        async def remove_location_category_route(
+        @self.router.delete("/locations/categories/retract", tags=["Entity Registry"])
+        async def retract_location_category_route(
             location_id: int = Query(..., description="Location ID"),
             category_key: str = Query(..., description="Category key"),
             current_user: Dict = Depends(auth),
         ):
             try:
-                removed = await self.registry.remove_location_category(location_id, category_key)
+                removed = await self.registry.retract_location_category(location_id, category_key)
                 if not removed:
                     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                         detail=f"Location category mapping not found: {location_id}/{category_key}")
@@ -610,12 +616,12 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-        @self.router.delete("/relationships/remove", tags=["Entity Registry"])
-        async def remove_relationship_route(
+        @self.router.delete("/relationships/retract", tags=["Entity Registry"])
+        async def retract_relationship_route(
             relationship_id: int = Query(..., description="Relationship ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_relationship(relationship_id)
+            removed = await self.registry.retract_relationship(relationship_id)
             if not removed:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                     detail=f"Relationship not found or already retracted: {relationship_id}")
@@ -692,6 +698,102 @@ class EntityRegistryEndpoint:
                     raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                                         detail=f"Entity type already exists: {request.type_key}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+        # -- Unified metadata management (all six vocabularies) --
+        # kind ∈ entity-types | categories | relationship-types | location-types
+        #        | identifier-types | alias-types
+        # Query-param keyed per the no-path-IDs URL convention.
+
+        from vitalgraph.entity_registry.entity_metadata_ops import (
+            MetadataInUseError, UnknownMetadataKindError,
+        )
+
+        def _kind_or_404(kind: str) -> str:
+            from vitalgraph.entity_registry.entity_metadata_ops import METADATA_KINDS
+            if kind not in METADATA_KINDS:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail=f"Unknown metadata kind: {kind}")
+            return kind
+
+        @self.router.get("/metadata/{kind}", response_model=List[MetadataItemResponse],
+                         tags=["Entity Registry"])
+        async def list_metadata_route(
+            kind: str,
+            include_inactive: bool = Query(False, description="Include retired values"),
+            include_usage: bool = Query(False, description="Add usage_count per row"),
+            q: Optional[str] = Query(None, description="Prefix filter on key/label"),
+            current_user: Dict = Depends(auth),
+        ):
+            """Dropdown-friendly list. Active-only and count-free by default."""
+            items = await self.registry.list_metadata(
+                _kind_or_404(kind), include_inactive=include_inactive,
+                include_usage=include_usage, q=q)
+            return [MetadataItemResponse(**i) for i in items]
+
+        @self.router.get("/metadata/{kind}/get", response_model=MetadataItemResponse,
+                         tags=["Entity Registry"])
+        async def get_metadata_route(
+            kind: str, key: str = Query(..., description="Metadata key"),
+            current_user: Dict = Depends(auth),
+        ):
+            item = await self.registry.get_metadata(_kind_or_404(kind), key)
+            if item is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail=f"{kind} not found: {key}")
+            return MetadataItemResponse(**item)
+
+        @self.router.post("/metadata/{kind}", response_model=MetadataItemResponse,
+                          tags=["Entity Registry"])
+        async def create_metadata_route(
+            kind: str, request: MetadataCreateRequest,
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                item = await self.registry.create_metadata(
+                    _kind_or_404(kind), key=request.key, label=request.label,
+                    description=request.description, inverse_key=request.inverse_key)
+                return MetadataItemResponse(**item)
+            except ValueError as e:
+                # duplicate key is a conflict (409); a bad inverse_key is a bad
+                # request (400).
+                code = (status.HTTP_409_CONFLICT if 'already exists' in str(e)
+                        else status.HTTP_400_BAD_REQUEST)
+                raise HTTPException(status_code=code, detail=str(e))
+
+        @self.router.put("/metadata/{kind}/update", response_model=MetadataItemResponse,
+                         tags=["Entity Registry"])
+        async def update_metadata_route(
+            kind: str, request: MetadataUpdateRequest,
+            key: str = Query(..., description="Metadata key (immutable)"),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                item = await self.registry.update_metadata(
+                    _kind_or_404(kind), key, label=request.label,
+                    description=request.description, is_active=request.is_active,
+                    inverse_key=request.inverse_key)
+            except ValueError as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+            if item is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail=f"{kind} not found: {key}")
+            return MetadataItemResponse(**item)
+
+        @self.router.delete("/metadata/{kind}/delete", tags=["Entity Registry"])
+        async def delete_metadata_route(
+            kind: str, key: str = Query(..., description="Metadata key"),
+            current_user: Dict = Depends(auth),
+        ):
+            try:
+                deleted = await self.registry.delete_metadata(_kind_or_404(kind), key)
+            except MetadataInUseError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "in_use", "key": e.key, "usage_count": e.usage_count})
+            if not deleted:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail=f"{kind} not found: {key}")
+            return {"success": True, "kind": kind, "key": key}
 
         # -- Change Log --
 

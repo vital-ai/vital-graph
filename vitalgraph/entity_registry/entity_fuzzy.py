@@ -25,6 +25,7 @@ from datasketch import MinHash, MinHashLSH
 from rapidfuzz import fuzz
 
 from vitalgraph.entity_registry.datasketch_cluster import register_cluster_storage, distribute_lsh_hash_tags
+from .entity_status import DELETED, RETRACTED
 
 logger = logging.getLogger(__name__)
 
@@ -574,8 +575,8 @@ class EntityFuzzyIndex:
                         "FROM entity e "
                         "JOIN entity_type et ON et.type_id = e.entity_type_id "
                         "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                        "AND ea.status != 'retracted' "
-                        "WHERE e.status != 'deleted' AND e.updated_time >= $1 "
+                        f"AND ea.status != '{RETRACTED}' "
+                        f"WHERE e.status != '{DELETED}' AND e.updated_time >= $1 "
                         "AND e.entity_id > $2 "
                         "ORDER BY e.entity_id LIMIT $3"
                     )
@@ -587,8 +588,8 @@ class EntityFuzzyIndex:
                         "FROM entity e "
                         "JOIN entity_type et ON et.type_id = e.entity_type_id "
                         "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                        "AND ea.status != 'retracted' "
-                        "WHERE e.status != 'deleted' AND e.entity_id > $1 "
+                        f"AND ea.status != '{RETRACTED}' "
+                        f"WHERE e.status != '{DELETED}' AND e.entity_id > $1 "
                         "ORDER BY e.entity_id LIMIT $2"
                     )
                     page_args = [last_entity_id, PAGE_SIZE]

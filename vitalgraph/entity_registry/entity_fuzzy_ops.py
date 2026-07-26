@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from .entity_fuzzy import EntityFuzzyIndex
 from .entity_fuzzy_pg import EntityFuzzyIndexPG
+from .entity_status import DELETED, RETRACTED
 
 if TYPE_CHECKING:
     import asyncpg
@@ -98,8 +99,8 @@ class FuzzyMixin:
                 "FROM entity e "
                 "LEFT JOIN entity_type et ON et.type_id = e.entity_type_id "
                 "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-                "AND ea.status != 'retracted' "
-                "WHERE e.entity_id = ANY($1) AND e.status != 'deleted'",
+                f"AND ea.status != '{RETRACTED}' "
+                f"WHERE e.entity_id = ANY($1) AND e.status != '{DELETED}'",
                 entity_ids,
             )
 

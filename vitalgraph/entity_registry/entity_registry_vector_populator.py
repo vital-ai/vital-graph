@@ -24,6 +24,7 @@ from vitalgraph.entity_registry.entity_registry_vector_schema import (
     FTS_ENTITY_TABLE, FTS_LOCATION_TABLE, DIMENSIONS,
 )
 from vitalgraph.vectorization.registry import get_provider
+from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -180,19 +181,19 @@ class EntityRegistryVectorPopulator:
     async def _rebuild_entities(self, stats: PopulateStats):
         """Fetch all active entities with denormalized data and vectorize."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT e.entity_id, e.primary_name, e.description,
                        e.country, e.region, e.locality, e.website,
                        e.latitude, e.longitude, e.status,
                        et.type_key, et.type_label, et.type_description,
                        (SELECT string_agg(a.alias_name, '|')
                         FROM entity_alias a
-                        WHERE a.entity_id = e.entity_id AND a.status = 'active'
+                        WHERE a.entity_id = e.entity_id AND a.status = '{ACTIVE}'
                        ) AS aliases_text,
                        (SELECT string_agg(c.category_label, '|')
                         FROM entity_category_map ecm
                         JOIN category c ON c.category_id = ecm.category_id
-                        WHERE ecm.entity_id = e.entity_id AND ecm.status = 'active'
+                        WHERE ecm.entity_id = e.entity_id AND ecm.status = '{ACTIVE}'
                        ) AS category_labels,
                        (SELECT string_agg(
                            COALESCE(el.location_name, '') || ': ' ||
@@ -200,11 +201,11 @@ class EntityRegistryVectorPopulator:
                            '; '
                         )
                         FROM entity_location el
-                        WHERE el.entity_id = e.entity_id AND el.status = 'active'
+                        WHERE el.entity_id = e.entity_id AND el.status = '{ACTIVE}'
                        ) AS locations_text
                 FROM entity e
                 JOIN entity_type et ON et.type_id = e.entity_type_id
-                WHERE e.status = 'active'
+                WHERE e.status = '{ACTIVE}'
                 ORDER BY e.entity_id
             """)
 
@@ -291,7 +292,7 @@ class EntityRegistryVectorPopulator:
     async def _rebuild_locations(self, stats: PopulateStats):
         """Fetch all active locations and vectorize."""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT el.location_id, el.entity_id, el.location_name, el.description,
                        el.address_line_1, el.address_line_2,
                        el.locality, el.admin_area_1, el.admin_area_2,
@@ -302,7 +303,7 @@ class EntityRegistryVectorPopulator:
                        elt.type_label AS location_type_label
                 FROM entity_location el
                 JOIN entity_location_type elt ON elt.location_type_id = el.location_type_id
-                WHERE el.status = 'active'
+                WHERE el.status = '{ACTIVE}'
                 ORDER BY el.location_id
             """)
 
@@ -394,19 +395,19 @@ class EntityRegistryVectorPopulator:
     async def sync_entity(self, entity_id: str):
         """Re-vectorize a single entity (after create/update)."""
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow("""
+            row = await conn.fetchrow(f"""
                 SELECT e.entity_id, e.primary_name, e.description,
                        e.country, e.region, e.locality, e.website,
                        e.latitude, e.longitude, e.status,
                        et.type_key, et.type_label, et.type_description,
                        (SELECT string_agg(a.alias_name, '|')
                         FROM entity_alias a
-                        WHERE a.entity_id = e.entity_id AND a.status = 'active'
+                        WHERE a.entity_id = e.entity_id AND a.status = '{ACTIVE}'
                        ) AS aliases_text,
                        (SELECT string_agg(c.category_label, '|')
                         FROM entity_category_map ecm
                         JOIN category c ON c.category_id = ecm.category_id
-                        WHERE ecm.entity_id = e.entity_id AND ecm.status = 'active'
+                        WHERE ecm.entity_id = e.entity_id AND ecm.status = '{ACTIVE}'
                        ) AS category_labels,
                        (SELECT string_agg(
                            COALESCE(el.location_name, '') || ': ' ||
@@ -414,7 +415,7 @@ class EntityRegistryVectorPopulator:
                            '; '
                         )
                         FROM entity_location el
-                        WHERE el.entity_id = e.entity_id AND el.status = 'active'
+                        WHERE el.entity_id = e.entity_id AND el.status = '{ACTIVE}'
                        ) AS locations_text
                 FROM entity e
                 JOIN entity_type et ON et.type_id = e.entity_type_id

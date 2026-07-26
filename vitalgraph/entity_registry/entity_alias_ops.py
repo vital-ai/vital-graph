@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .entity_fuzzy import compute_entity_hash, EntityFuzzyIndex
 from .entity_fuzzy_pg import EntityFuzzyIndexPG
+from .entity_status import DELETED, RETRACTED
 
 if TYPE_CHECKING:
     from typing import Union
@@ -37,6 +38,13 @@ class AliasMixin:
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert an alias within an existing connection/transaction."""
+        # Auto-register the alias type in alias_type on first use (see
+        # _insert_identifier for rationale). Idempotent; label defaults to key.
+        await conn.execute(
+            "INSERT INTO alias_type (type_key, type_label) VALUES ($1, $1) "
+            "ON CONFLICT (type_key) DO NOTHING",
+            alias_type
+        )
         row = await conn.fetchrow(
             "INSERT INTO entity_alias (entity_id, alias_name, alias_type, is_primary, created_by, notes) "
             "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
@@ -87,14 +95,14 @@ class AliasMixin:
 
                 return alias
 
-    async def remove_alias(self, alias_id: int,
+    async def retract_alias(self, alias_id: int,
                            retracted_by: Optional[str] = None) -> bool:
         """Retract an alias (soft-remove)."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_alias SET status = 'retracted' "
-                    "WHERE alias_id = $1 AND status != 'retracted' RETURNING entity_id, alias_name",
+                    f"UPDATE entity_alias SET status = '{RETRACTED}' "
+                    f"WHERE alias_id = $1 AND status != '{RETRACTED}' RETURNING entity_id, alias_name",
                     alias_id
                 )
                 if row is None:
@@ -128,7 +136,7 @@ class AliasMixin:
         """List all active aliases for an entity."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM entity_alias WHERE entity_id = $1 AND status != 'retracted' "
+                f"SELECT * FROM entity_alias WHERE entity_id = $1 AND status != '{RETRACTED}' "
                 "ORDER BY alias_type, alias_id",
                 entity_id
             )
@@ -140,7 +148,7 @@ class AliasMixin:
             rows = await conn.fetch(
                 "SELECT DISTINCT ea.entity_id FROM entity_alias ea "
                 "JOIN entity e ON ea.entity_id = e.entity_id "
-                "WHERE ea.alias_name ILIKE $1 AND ea.status != 'retracted' AND e.status != 'deleted'",
+                f"WHERE ea.alias_name ILIKE $1 AND ea.status != '{RETRACTED}' AND e.status != '{DELETED}'",
                 f"%{query}%"
             )
             entities = []

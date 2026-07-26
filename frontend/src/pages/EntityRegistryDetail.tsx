@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiService } from '../services/ApiService';
 import {
-  Alert, Badge, Button, Card, Label, Spinner, TextInput, Textarea,
+  Alert, Badge, Button, Card, Label, Select, Spinner, TextInput, Textarea,
   Breadcrumb, BreadcrumbItem,
   Table, TableBody, TableCell, TableHead, TableHeadCell, TableRow,
 } from 'flowbite-react';
 import {
-  HiHome, HiCollection, HiPencil, HiTrash, HiSave, HiX,
-  HiTag, HiIdentification, HiFolder, HiLocationMarker,
+  HiHome, HiCollection, HiPencil, HiTrash, HiSave, HiX, HiPlus,
+  HiTag, HiIdentification, HiFolder, HiLocationMarker, HiLink,
+  HiArrowRight, HiArrowLeft,
 } from 'react-icons/hi';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -17,7 +18,30 @@ import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { usePageTitle } from '../hooks/usePageTitle';
+import {
+  useEntityTypes, useCategories, useRelationshipTypes,
+  useIdentifierNamespaces, useAliasTypes,
+} from '../hooks/useRegistryLookups';
 import ConfirmDialog from '../components/ConfirmDialog';
+import EntityPicker, { PickedEntity } from '../components/EntityPicker';
+import TagInput from '../components/TagInput';
+
+// Must match update_entity's valid_statuses in entity_registry_impl.py — an
+// unlisted value is rejected with a 400. 'deleted' is omitted deliberately:
+// it is terminal and set via the delete endpoint, not by editing the field.
+const ENTITY_STATUSES = ['active', 'inactive', 'merged'];
+
+interface RelationshipItem {
+  relationship_id: number;
+  entity_source: string;
+  entity_destination: string;
+  relationship_type_key: string;
+  relationship_type_label: string | null;
+  inverse_key: string | null;
+  status: string;
+  is_current: boolean;
+  description: string | null;
+}
 
 // Fix default marker icons for leaflet in bundled apps
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -110,10 +134,33 @@ const EntityRegistryDetail: React.FC = () => {
   const [isEditing, setIsEditing] = useState(isNew);
   const [saving, setSaving] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
-  const [activeTab, setActiveTab] = useState<'aliases' | 'identifiers' | 'categories' | 'locations'>('aliases');
+  const [activeTab, setActiveTab] = useState<'aliases' | 'identifiers' | 'categories' | 'relationships' | 'locations'>('aliases');
 
   // Form
   const [form, setForm] = useState({ primary_name: '', entity_uri: '', type_key: '', description: '', status: 'active' });
+
+  // Lookups
+  const { items: entityTypes, error: typesError } = useEntityTypes();
+  const { items: allCategories } = useCategories();
+  const { items: relationshipTypes } = useRelationshipTypes();
+  const [newCategoryKey, setNewCategoryKey] = useState('');
+  const [categoryBusy, setCategoryBusy] = useState(false);
+
+  // Relationships
+  const [relationships, setRelationships] = useState<RelationshipItem[]>([]);
+  const [relDirection, setRelDirection] = useState<'both' | 'outgoing' | 'incoming'>('both');
+  const [relNames, setRelNames] = useState<Record<string, string>>({});
+  const [newRelType, setNewRelType] = useState('');
+  const [newRelTarget, setNewRelTarget] = useState<PickedEntity | null>(null);
+  const [relBusy, setRelBusy] = useState(false);
+  const relReqIdRef = useRef(0);
+
+  // Identifiers / aliases — tag-style vocabularies, free text with suggestions
+  const { names: namespaceSuggestions } = useIdentifierNamespaces();
+  const { names: aliasTypeSuggestions } = useAliasTypes();
+  const [newIdentifier, setNewIdentifier] = useState({ namespace: '', value: '' });
+  const [newAlias, setNewAlias] = useState({ name: '', type: 'aka' });
+  const [subBusy, setSubBusy] = useState(false);
 
   // Sub-data
   const [aliases, setAliases] = useState<{ alias_id: number; alias_name: string; alias_type: string; is_primary: boolean }[]>([]);
@@ -162,8 +209,43 @@ const EntityRegistryDetail: React.FC = () => {
     }
   }, [entityId, isNew]);
 
+  const fetchRelationships = useCallback(async () => {
+    if (!entityId || isNew) return;
+    // Changing the direction filter starts a new request while the previous one
+    // may still be in flight; without this guard a slow earlier response can
+    // land last and overwrite the filtered result.
+    const reqId = ++relReqIdRef.current;
+    try {
+      const data = await apiService.getEntityRelationships(entityId, relDirection);
+      if (reqId !== relReqIdRef.current) return;
+      const rels: RelationshipItem[] = Array.isArray(data) ? data : data.relationships || [];
+      setRelationships(rels);
+
+      // The relationships endpoint returns endpoint IDs only, so resolve the
+      // counterpart names separately to avoid rendering bare UUIDs.
+      const counterparts = Array.from(new Set(
+        rels.map(r => (r.entity_source === entityId ? r.entity_destination : r.entity_source)),
+      )).filter(id => !(id in relNames));
+      if (counterparts.length > 0) {
+        const fetched = await Promise.allSettled(counterparts.map(id => apiService.getRegistryEntity(id)));
+        const names: Record<string, string> = {};
+        fetched.forEach((res, i) => {
+          if (res.status === 'fulfilled') {
+            const e = res.value.entity || res.value;
+            if (e?.primary_name) names[counterparts[i]] = e.primary_name;
+          }
+        });
+        if (Object.keys(names).length > 0) setRelNames(prev => ({ ...prev, ...names }));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load relationships');
+    }
+    // relNames is read only to skip already-resolved IDs; including it would re-run on every resolve
+  }, [entityId, isNew, relDirection]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => { fetchEntity(); }, [fetchEntity]);
   useEffect(() => { fetchSubData(); }, [fetchSubData]);
+  useEffect(() => { fetchRelationships(); }, [fetchRelationships]);
 
   const handleSave = async () => {
     try {
@@ -181,6 +263,108 @@ const EntityRegistryDetail: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** Wrap a sub-resource mutation with busy state, error capture and refetch. */
+  const runSubMutation = async (action: () => Promise<unknown>, failMessage: string) => {
+    try {
+      setSubBusy(true);
+      setError(null);
+      await action();
+      await fetchSubData();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : failMessage);
+      return false;
+    } finally {
+      setSubBusy(false);
+    }
+  };
+
+  const handleAddIdentifier = async () => {
+    if (!entityId || !newIdentifier.namespace.trim() || !newIdentifier.value.trim()) return;
+    const ok = await runSubMutation(
+      () => apiService.addEntityIdentifier(entityId, {
+        identifier_namespace: newIdentifier.namespace.trim(),
+        identifier_value: newIdentifier.value.trim(),
+      }),
+      'Failed to add identifier',
+    );
+    if (ok) setNewIdentifier({ namespace: '', value: '' });
+  };
+
+  const handleAddAlias = async () => {
+    if (!entityId || !newAlias.name.trim()) return;
+    const ok = await runSubMutation(
+      () => apiService.addEntityAlias(entityId, {
+        alias_name: newAlias.name.trim(),
+        alias_type: newAlias.type.trim() || 'aka',
+      }),
+      'Failed to add alias',
+    );
+    if (ok) setNewAlias({ name: '', type: 'aka' });
+  };
+
+  const handleAddCategory = async () => {
+    if (!entityId || !newCategoryKey) return;
+    try {
+      setCategoryBusy(true);
+      setError(null);
+      await apiService.addEntityCategory(entityId, newCategoryKey);
+      setNewCategoryKey('');
+      await fetchSubData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add category');
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
+
+  const handleRemoveCategory = async (categoryKey: string) => {
+    if (!entityId) return;
+    try {
+      setCategoryBusy(true);
+      setError(null);
+      await apiService.removeEntityCategory(entityId, categoryKey);
+      await fetchSubData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove category');
+    } finally {
+      setCategoryBusy(false);
+    }
+  };
+
+  const handleAddRelationship = async () => {
+    if (!entityId || !newRelType || !newRelTarget) return;
+    try {
+      setRelBusy(true);
+      setError(null);
+      await apiService.createEntityRelationship({
+        entity_source: entityId,
+        entity_destination: newRelTarget.entity_id,
+        relationship_type_key: newRelType,
+      });
+      setNewRelType('');
+      setNewRelTarget(null);
+      await fetchRelationships();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add relationship');
+    } finally {
+      setRelBusy(false);
+    }
+  };
+
+  const handleRemoveRelationship = async (relationshipId: number) => {
+    try {
+      setRelBusy(true);
+      setError(null);
+      await apiService.removeEntityRelationship(relationshipId);
+      await fetchRelationships();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove relationship');
+    } finally {
+      setRelBusy(false);
     }
   };
 
@@ -204,6 +388,9 @@ const EntityRegistryDetail: React.FC = () => {
     );
   }
 
+  const assignedKeys = new Set(categories.map(c => c.category_key));
+  const availableCategories = allCategories.filter(c => !assignedKeys.has(c.category_key));
+
   const tabBtn = (tab: typeof activeTab, icon: React.ReactNode, label: string) => (
     <button
       onClick={() => setActiveTab(tab)}
@@ -226,6 +413,7 @@ const EntityRegistryDetail: React.FC = () => {
       </Breadcrumb>
 
       {error && <Alert color="failure" onDismiss={() => setError(null)}>{error}</Alert>}
+      {typesError && isEditing && <Alert color="warning">Entity types unavailable: {typesError}</Alert>}
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -272,12 +460,36 @@ const EntityRegistryDetail: React.FC = () => {
               <TextInput id="uri" value={form.entity_uri} onChange={(e) => setForm(f => ({ ...f, entity_uri: e.target.value }))} disabled={!isNew} />
             </div>
             <div>
-              <Label htmlFor="type">Type</Label>
-              <TextInput id="type" value={form.type_key} onChange={(e) => setForm(f => ({ ...f, type_key: e.target.value }))} />
+              <Label htmlFor="type">Type *</Label>
+              <Select
+                id="type"
+                data-testid="entity-type-select"
+                value={form.type_key}
+                onChange={(e) => setForm(f => ({ ...f, type_key: e.target.value }))}
+              >
+                <option value="">— Select a type —</option>
+                {entityTypes.map(t => (
+                  <option key={t.type_id} value={t.type_key}>{t.type_label || t.type_key}</option>
+                ))}
+                {/* Preserve a value the registry no longer lists rather than silently rewriting it */}
+                {form.type_key && !entityTypes.some(t => t.type_key === form.type_key) && (
+                  <option value={form.type_key}>{form.type_key} (unregistered)</option>
+                )}
+              </Select>
             </div>
             <div>
               <Label htmlFor="status">Status</Label>
-              <TextInput id="status" value={form.status} onChange={(e) => setForm(f => ({ ...f, status: e.target.value }))} />
+              <Select
+                id="status"
+                data-testid="entity-status-select"
+                value={form.status}
+                onChange={(e) => setForm(f => ({ ...f, status: e.target.value }))}
+              >
+                {ENTITY_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                {form.status && !ENTITY_STATUSES.includes(form.status) && (
+                  <option value={form.status}>{form.status}</option>
+                )}
+              </Select>
             </div>
             <div className="sm:col-span-2">
               <Label htmlFor="desc">Description</Label>
@@ -285,7 +497,7 @@ const EntityRegistryDetail: React.FC = () => {
             </div>
             {isNew && (
               <div className="sm:col-span-2">
-                <Button color="blue" onClick={handleSave} disabled={saving || !form.primary_name}>
+                <Button color="blue" onClick={handleSave} disabled={saving || !form.primary_name || !form.type_key}>
                   {saving ? 'Creating...' : 'Create Entity'}
                 </Button>
               </div>
@@ -310,6 +522,7 @@ const EntityRegistryDetail: React.FC = () => {
               {tabBtn('aliases', <HiTag className="h-4 w-4" />, `Aliases (${aliases.length})`)}
               {tabBtn('identifiers', <HiIdentification className="h-4 w-4" />, `Identifiers (${identifiers.length})`)}
               {tabBtn('categories', <HiFolder className="h-4 w-4" />, `Categories (${categories.length})`)}
+              {tabBtn('relationships', <HiLink className="h-4 w-4" />, `Relationships (${relationships.length})`)}
               {tabBtn('locations', <HiLocationMarker className="h-4 w-4" />, `Locations (${locations.length})`)}
             </nav>
           </div>
@@ -319,34 +532,263 @@ const EntityRegistryDetail: React.FC = () => {
           ) : (
             <Card>
               {activeTab === 'aliases' && (
-                aliases.length === 0 ? <p className="text-sm text-gray-500">No aliases.</p> : (
-                  <Table striped>
-                    <TableHead><TableHeadCell>Name</TableHeadCell><TableHeadCell>Type</TableHeadCell><TableHeadCell>Primary</TableHeadCell></TableHead>
-                    <TableBody>
-                      {aliases.map(a => <TableRow key={a.alias_id}><TableCell>{a.alias_name}</TableCell><TableCell><Badge color="gray" size="xs">{a.alias_type}</Badge></TableCell><TableCell>{a.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell></TableRow>)}
-                    </TableBody>
-                  </Table>
-                )
+                <div className="space-y-4" data-testid="aliases-tab">
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <div className="w-64">
+                      <Label htmlFor="alias-name">Alias name</Label>
+                      <TextInput
+                        id="alias-name"
+                        data-testid="alias-name-input"
+                        value={newAlias.name}
+                        onChange={(e) => setNewAlias(a => ({ ...a, name: e.target.value }))}
+                      />
+                    </div>
+                    <div className="w-48">
+                      <Label htmlFor="alias-type">Type</Label>
+                      <TagInput
+                        id="alias-type"
+                        data-testid="alias-type-input"
+                        value={newAlias.type}
+                        onChange={(v) => setNewAlias(a => ({ ...a, type: v }))}
+                        suggestions={aliasTypeSuggestions}
+                        placeholder="aka"
+                      />
+                    </div>
+                    <Button size="sm" color="blue" data-testid="add-alias-button"
+                            onClick={handleAddAlias} disabled={!newAlias.name.trim() || subBusy}>
+                      <HiPlus className="mr-1.5 h-4 w-4" />Add
+                    </Button>
+                  </div>
+                  {aliases.length === 0 ? <p className="text-sm text-gray-500">No aliases.</p> : (
+                    <Table striped>
+                      <TableHead><TableHeadCell>Name</TableHeadCell><TableHeadCell>Type</TableHeadCell><TableHeadCell>Primary</TableHeadCell><TableHeadCell>Actions</TableHeadCell></TableHead>
+                      <TableBody>
+                        {aliases.map(a => (
+                          <TableRow key={a.alias_id}>
+                            <TableCell>{a.alias_name}</TableCell>
+                            <TableCell><Badge color="gray" size="xs">{a.alias_type}</Badge></TableCell>
+                            <TableCell>{a.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell>
+                            <TableCell>
+                              <Button size="xs" color="light" data-testid="remove-alias-button" disabled={subBusy}
+                                      onClick={() => runSubMutation(() => apiService.removeEntityAlias(a.alias_id), 'Failed to remove alias')}>
+                                <HiTrash className="h-3 w-3" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               )}
               {activeTab === 'identifiers' && (
-                identifiers.length === 0 ? <p className="text-sm text-gray-500">No identifiers.</p> : (
-                  <Table striped>
-                    <TableHead><TableHeadCell>Namespace</TableHeadCell><TableHeadCell>Value</TableHeadCell><TableHeadCell>Primary</TableHeadCell></TableHead>
-                    <TableBody>
-                      {identifiers.map(i => <TableRow key={i.identifier_id}><TableCell><Badge color="info" size="xs">{i.identifier_namespace}</Badge></TableCell><TableCell className="font-mono text-xs">{i.identifier_value}</TableCell><TableCell>{i.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell></TableRow>)}
-                    </TableBody>
-                  </Table>
-                )
+                <div className="space-y-4" data-testid="identifiers-tab">
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <div className="w-56">
+                      <Label htmlFor="ident-ns">Namespace</Label>
+                      <TagInput
+                        id="ident-ns"
+                        data-testid="identifier-namespace-input"
+                        value={newIdentifier.namespace}
+                        onChange={(v) => setNewIdentifier(i => ({ ...i, namespace: v }))}
+                        suggestions={namespaceSuggestions}
+                        placeholder="e.g. EIN, SF_LEAD_ID"
+                      />
+                    </div>
+                    <div className="w-64">
+                      <Label htmlFor="ident-value">Value</Label>
+                      <TextInput
+                        id="ident-value"
+                        data-testid="identifier-value-input"
+                        value={newIdentifier.value}
+                        onChange={(e) => setNewIdentifier(i => ({ ...i, value: e.target.value }))}
+                      />
+                    </div>
+                    <Button size="sm" color="blue" data-testid="add-identifier-button"
+                            onClick={handleAddIdentifier}
+                            disabled={!newIdentifier.namespace.trim() || !newIdentifier.value.trim() || subBusy}>
+                      <HiPlus className="mr-1.5 h-4 w-4" />Add
+                    </Button>
+                  </div>
+                  {identifiers.length === 0 ? <p className="text-sm text-gray-500">No identifiers.</p> : (
+                    <Table striped>
+                      <TableHead><TableHeadCell>Namespace</TableHeadCell><TableHeadCell>Value</TableHeadCell><TableHeadCell>Primary</TableHeadCell><TableHeadCell>Actions</TableHeadCell></TableHead>
+                      <TableBody>
+                        {identifiers.map(i => (
+                          <TableRow key={i.identifier_id}>
+                            <TableCell><Badge color="info" size="xs">{i.identifier_namespace}</Badge></TableCell>
+                            <TableCell className="font-mono text-xs">{i.identifier_value}</TableCell>
+                            <TableCell>{i.is_primary ? <Badge color="success" size="xs">Primary</Badge> : null}</TableCell>
+                            <TableCell>
+                              <Button size="xs" color="light" data-testid="remove-identifier-button" disabled={subBusy}
+                                      onClick={() => runSubMutation(() => apiService.removeEntityIdentifier(i.identifier_id), 'Failed to remove identifier')}>
+                                <HiTrash className="h-3 w-3" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               )}
               {activeTab === 'categories' && (
-                categories.length === 0 ? <p className="text-sm text-gray-500">No categories.</p> : (
-                  <Table striped>
-                    <TableHead><TableHeadCell>Key</TableHeadCell><TableHeadCell>Label</TableHeadCell></TableHead>
-                    <TableBody>
-                      {categories.map(c => <TableRow key={c.entity_category_id}><TableCell className="font-mono text-xs">{c.category_key}</TableCell><TableCell>{c.category_label || '\u2014'}</TableCell></TableRow>)}
-                    </TableBody>
-                  </Table>
-                )
+                <div className="space-y-4">
+                  <div className="flex gap-2 items-end">
+                    <div className="w-72">
+                      <Label htmlFor="add-category">Assign category</Label>
+                      <Select
+                        id="add-category"
+                        data-testid="add-category-select"
+                        value={newCategoryKey}
+                        onChange={(e) => setNewCategoryKey(e.target.value)}
+                      >
+                        <option value="">\u2014 Select a category \u2014</option>
+                        {availableCategories.map(c => (
+                          <option key={c.category_id} value={c.category_key}>{c.category_label || c.category_key}</option>
+                        ))}
+                      </Select>
+                    </div>
+                    <Button size="sm" color="blue" onClick={handleAddCategory} disabled={!newCategoryKey || categoryBusy}>
+                      <HiPlus className="mr-1.5 h-4 w-4" />Add
+                    </Button>
+                  </div>
+                  {categories.length === 0 ? <p className="text-sm text-gray-500">No categories.</p> : (
+                    <Table striped>
+                      <TableHead><TableHeadCell>Key</TableHeadCell><TableHeadCell>Label</TableHeadCell><TableHeadCell>Actions</TableHeadCell></TableHead>
+                      <TableBody>
+                        {categories.map(c => (
+                          <TableRow key={c.entity_category_id}>
+                            <TableCell className="font-mono text-xs">{c.category_key}</TableCell>
+                            <TableCell>{c.category_label || '\u2014'}</TableCell>
+                            <TableCell>
+                              <Button size="xs" color="light" data-testid="remove-category-button" disabled={categoryBusy} onClick={() => handleRemoveCategory(c.category_key)}>
+                                <HiTrash className="h-3 w-3" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
+              )}
+              {activeTab === 'relationships' && (
+                <div className="space-y-4" data-testid="relationships-tab">
+                  {/* Create */}
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <div className="w-64">
+                      <Label htmlFor="rel-type">Relationship type</Label>
+                      <Select
+                        id="rel-type"
+                        data-testid="relationship-type-select"
+                        value={newRelType}
+                        onChange={(e) => setNewRelType(e.target.value)}
+                      >
+                        <option value="">— Select a type —</option>
+                        {relationshipTypes.map(rt => (
+                          <option key={rt.relationship_type_id} value={rt.type_key}>
+                            {rt.type_label || rt.type_key}
+                            {rt.inverse_key ? ` (inverse: ${rt.inverse_key})` : ''}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div className="w-72">
+                      <Label htmlFor="rel-target">Target entity</Label>
+                      <EntityPicker
+                        id="rel-target"
+                        data-testid="relationship-target-picker"
+                        value={newRelTarget}
+                        onChange={setNewRelTarget}
+                        excludeIds={entityId ? [entityId] : []}
+                        placeholder="Search for an entity..."
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      color="blue"
+                      data-testid="add-relationship-button"
+                      onClick={handleAddRelationship}
+                      disabled={!newRelType || !newRelTarget || relBusy}
+                    >
+                      <HiPlus className="mr-1.5 h-4 w-4" />Add
+                    </Button>
+                  </div>
+
+                  {/* Direction filter */}
+                  <div className="w-48">
+                    <Label htmlFor="rel-direction">Direction</Label>
+                    <Select
+                      id="rel-direction"
+                      sizing="sm"
+                      data-testid="relationship-direction-filter"
+                      value={relDirection}
+                      onChange={(e) => setRelDirection(e.target.value as typeof relDirection)}
+                    >
+                      <option value="both">Both</option>
+                      <option value="outgoing">Outgoing</option>
+                      <option value="incoming">Incoming</option>
+                    </Select>
+                  </div>
+
+                  {relationships.length === 0 ? (
+                    <p className="text-sm text-gray-500">No relationships.</p>
+                  ) : (
+                    <Table striped>
+                      <TableHead>
+                        <TableHeadCell>Direction</TableHeadCell>
+                        <TableHeadCell>Type</TableHeadCell>
+                        <TableHeadCell>Related entity</TableHeadCell>
+                        <TableHeadCell>Status</TableHeadCell>
+                        <TableHeadCell>Actions</TableHeadCell>
+                      </TableHead>
+                      <TableBody>
+                        {relationships.map(r => {
+                          const outgoing = r.entity_source === entityId;
+                          const otherId = outgoing ? r.entity_destination : r.entity_source;
+                          // An incoming edge reads as the inverse relation from this
+                          // entity's side, so resolve inverse_key back to its label
+                          // rather than showing the bare key.
+                          const inverseLabel = r.inverse_key
+                            ? relationshipTypes.find(rt => rt.type_key === r.inverse_key)?.type_label || r.inverse_key
+                            : null;
+                          const typeLabel = outgoing
+                            ? (r.relationship_type_label || r.relationship_type_key)
+                            : (inverseLabel || `${r.relationship_type_label || r.relationship_type_key} (inbound)`);
+                          return (
+                            <TableRow key={r.relationship_id}>
+                              <TableCell>
+                                {outgoing
+                                  ? <HiArrowRight className="h-4 w-4 text-blue-500" title="Outgoing" />
+                                  : <HiArrowLeft className="h-4 w-4 text-green-600" title="Incoming" />}
+                              </TableCell>
+                              <TableCell><Badge color="indigo" size="xs">{typeLabel}</Badge></TableCell>
+                              <TableCell>
+                                <button
+                                  className="text-blue-600 hover:underline dark:text-blue-500"
+                                  onClick={() => navigate(`/entity-registry/${otherId}`)}
+                                >
+                                  {relNames[otherId] || otherId}
+                                </button>
+                              </TableCell>
+                              <TableCell>
+                                <Badge color={r.is_current ? 'success' : 'gray'} size="xs">
+                                  {r.is_current ? r.status : `${r.status} (expired)`}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Button size="xs" color="light" data-testid="remove-relationship-button" disabled={relBusy} onClick={() => handleRemoveRelationship(r.relationship_id)}>
+                                  <HiTrash className="h-3 w-3" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
               )}
               {activeTab === 'locations' && (
                 locations.length === 0 ? <p className="text-sm text-gray-500">No locations.</p> : (

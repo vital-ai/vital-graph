@@ -151,7 +151,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Retract an identifier."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/identifiers/remove"),
+            "DELETE", self._url("/identifiers/retract"),
             params={"identifier_id": identifier_id},
         )
         return response.json()
@@ -192,7 +192,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Retract an alias."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/aliases/remove"),
+            "DELETE", self._url("/aliases/retract"),
             params={"alias_id": alias_id},
         )
         return response.json()
@@ -241,7 +241,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Remove a category from an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/categories/remove"),
+            "DELETE", self._url("/categories/retract"),
             params={"entity_id": entity_id, "category_key": category_key},
         )
         return response.json()
@@ -321,7 +321,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Remove a location."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/locations/remove"),
+            "DELETE", self._url("/locations/retract"),
             params={"location_id": location_id},
         )
         return response.json()
@@ -343,7 +343,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Remove a category from a location."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/locations/categories/remove"),
+            "DELETE", self._url("/locations/categories/retract"),
             params={"location_id": location_id, "category_key": category_key},
         )
         return response.json()
@@ -428,7 +428,7 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         """Remove (retract) a relationship."""
         self._check_connection()
         response = await self._make_authenticated_request(
-            "DELETE", self._url("/relationships/remove"),
+            "DELETE", self._url("/relationships/retract"),
             params={"relationship_id": relationship_id},
         )
         return response.json()

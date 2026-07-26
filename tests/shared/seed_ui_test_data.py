@@ -130,6 +130,7 @@ async def seed(server_url: str = "http://localhost:8002") -> None:
         await _seed_entities(client)
         await _seed_frames(client)
         await _seed_kgdocument(client)
+        await _seed_registry_reference_types(client)
         await _seed_entity_registry(client)
         await _seed_agent_registry(client)
         await _seed_fts_index(client)
@@ -246,6 +247,56 @@ async def _seed_kgdocument(client) -> None:
             logger.info("Created KGDocument '%s'", DOCUMENT_URI)
     except Exception as e:
         logger.warning("KGDocument seed skipped: %s", e)
+
+
+async def _seed_registry_reference_types(client) -> None:
+    """Load the canonical entity-registry lookup tables.
+
+    Entity types, categories and relationship types are FK targets for
+    entity/relationship writes, so they must exist before anything else in
+    the registry can be seeded — and before the UI can offer them as
+    selector options.
+
+    Source of truth is the reference JSONL exported from the test RDS
+    (apps/entity_registry/reference/). Creates are idempotent: an existing
+    key returns 409, which is skipped.
+    """
+    import json
+    from pathlib import Path
+
+    from vitalgraph.model.entity_registry_model import (
+        CategoryCreateRequest,
+        EntityTypeCreateRequest,
+        RelationshipTypeCreateRequest,
+    )
+
+    ref_dir = Path(__file__).resolve().parents[2] / "apps" / "entity_registry" / "reference"
+    specs = (
+        ("entity_types.jsonl", EntityTypeCreateRequest, client.entity_registry.create_entity_type),
+        ("categories.jsonl", CategoryCreateRequest, client.entity_registry.create_category),
+        ("relationship_types.jsonl", RelationshipTypeCreateRequest,
+         client.entity_registry.create_relationship_type),
+    )
+
+    for filename, model, create in specs:
+        path = ref_dir / filename
+        if not path.exists():
+            logger.warning("Registry reference file missing, skipped: %s", path)
+            continue
+        created = skipped = 0
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                await create(model(**json.loads(line)))
+                created += 1
+            except Exception:
+                # Already present (409) or otherwise unwritable — reference
+                # data is shared, so never treat a conflict as fatal.
+                skipped += 1
+        logger.info("Registry reference %s: %d created, %d already present",
+                    filename, created, skipped)
 
 
 async def _seed_entity_registry(client) -> None:

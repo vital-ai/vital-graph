@@ -72,11 +72,18 @@ async def _import_reference_file(
     label_field: str,
     desc_field: str,
     extra_fields: Optional[List[str]] = None,
-) -> int:
+    dry_run: bool = False,
+) -> Tuple[int, Set[str]]:
     """Import a small reference-type JSONL file into the database.
 
     Uses ON CONFLICT DO NOTHING so it is idempotent.
-    Returns number of rows inserted.
+
+    Returns (number of rows that were/would be inserted, all keys in the file).
+    The key set is returned so a dry run can validate entities against types
+    the file would create, without writing them.
+
+    With dry_run=True nothing is written: the would-be-inserted count is
+    computed by diffing the file's keys against the keys already present.
     """
     items = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -87,56 +94,77 @@ async def _import_reference_file(
             items.append(json.loads(line))
 
     if not items:
-        return 0
+        return 0, set()
+
+    file_keys = {item[key_field] for item in items}
+
+    if dry_run:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(f"SELECT {key_field} AS k FROM {table}")
+        existing = {r['k'] for r in rows}
+        return len(file_keys - existing), file_keys
 
     inserted = 0
+    # One transaction around the whole file. relationship_type has a DEFERRABLE
+    # self-FK on inverse_key, and inverse pairs (owner_of/owned_by) reference each
+    # other — inserting per-row with autocommit would fail on the first side.
+    # Batching into one transaction lets the deferred check run at commit, when
+    # both sides are present.
     async with pool.acquire() as conn:
-        for item in items:
-            key = item[key_field]
-            label = item[label_field]
-            desc = item.get(desc_field)
+        async with conn.transaction():
+            for item in items:
+                key = item[key_field]
+                label = item[label_field]
+                desc = item.get(desc_field)
 
-            cols = [key_field, label_field, desc_field]
-            vals = [key, label, desc]
+                cols = [key_field, label_field, desc_field]
+                vals = [key, label, desc]
 
-            if extra_fields:
-                for ef in extra_fields:
-                    cols.append(ef)
-                    vals.append(item.get(ef))
+                if extra_fields:
+                    for ef in extra_fields:
+                        cols.append(ef)
+                        vals.append(item.get(ef))
 
-            placeholders = ', '.join(f'${i}' for i in range(1, len(vals) + 1))
-            col_str = ', '.join(cols)
+                placeholders = ', '.join(f'${i}' for i in range(1, len(vals) + 1))
+                col_str = ', '.join(cols)
 
-            result = await conn.execute(
-                f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) "
-                f"ON CONFLICT ({key_field}) DO NOTHING",
-                *vals,
-            )
-            if result == 'INSERT 0 1':
-                inserted += 1
+                result = await conn.execute(
+                    f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) "
+                    f"ON CONFLICT ({key_field}) DO NOTHING",
+                    *vals,
+                )
+                if result == 'INSERT 0 1':
+                    inserted += 1
 
-    return inserted
+    return inserted, file_keys
 
 
-async def import_entity_types(pool: asyncpg.Pool, path: str) -> int:
+async def import_entity_types(pool: asyncpg.Pool, path: str,
+                              dry_run: bool = False) -> Tuple[int, Set[str]]:
     return await _import_reference_file(
-        pool, path, 'entity_type', 'type_key', 'type_label', 'type_description')
+        pool, path, 'entity_type', 'type_key', 'type_label', 'type_description',
+        dry_run=dry_run)
 
 
-async def import_categories(pool: asyncpg.Pool, path: str) -> int:
+async def import_categories(pool: asyncpg.Pool, path: str,
+                            dry_run: bool = False) -> Tuple[int, Set[str]]:
     return await _import_reference_file(
-        pool, path, 'category', 'category_key', 'category_label', 'category_description')
+        pool, path, 'category', 'category_key', 'category_label', 'category_description',
+        dry_run=dry_run)
 
 
-async def import_location_types(pool: asyncpg.Pool, path: str) -> int:
+async def import_location_types(pool: asyncpg.Pool, path: str,
+                                dry_run: bool = False) -> Tuple[int, Set[str]]:
     return await _import_reference_file(
-        pool, path, 'entity_location_type', 'type_key', 'type_label', 'type_description')
+        pool, path, 'entity_location_type', 'type_key', 'type_label', 'type_description',
+        dry_run=dry_run)
 
 
-async def import_relationship_types(pool: asyncpg.Pool, path: str) -> int:
+async def import_relationship_types(pool: asyncpg.Pool, path: str,
+                                    dry_run: bool = False) -> Tuple[int, Set[str]]:
     return await _import_reference_file(
         pool, path, 'relationship_type', 'type_key', 'type_label', 'type_description',
-        extra_fields=['inverse_key'])
+        extra_fields=['inverse_key'], dry_run=dry_run)
 
 
 # ===================================================================
@@ -686,26 +714,40 @@ async def run_import(args):
         # ---------------------------------------------------------------
         # Step 0: Import reference type files (if provided)
         # ---------------------------------------------------------------
+        # Under --dry-run these write nothing; each returns the count that
+        # *would* be inserted plus the file's full key set, which is merged
+        # into the reference sets below so validation still sees the types the
+        # run would have created.
+        verb = "Would import" if args.dry_run else "Imported"
+        pending_refs: Dict[str, Set[str]] = {}
+
         if args.entity_types:
-            n = await import_entity_types(pool, args.entity_types)
-            logger.info(f"Imported {n} new entity types from {args.entity_types}")
+            n, keys = await import_entity_types(pool, args.entity_types, dry_run=args.dry_run)
+            pending_refs['entity_types'] = keys
+            logger.info(f"{verb} {n} new entity types from {args.entity_types}")
 
         if args.categories:
-            n = await import_categories(pool, args.categories)
-            logger.info(f"Imported {n} new categories from {args.categories}")
+            n, keys = await import_categories(pool, args.categories, dry_run=args.dry_run)
+            pending_refs['categories'] = keys
+            logger.info(f"{verb} {n} new categories from {args.categories}")
 
         if args.location_types:
-            n = await import_location_types(pool, args.location_types)
-            logger.info(f"Imported {n} new location types from {args.location_types}")
+            n, keys = await import_location_types(pool, args.location_types, dry_run=args.dry_run)
+            pending_refs['location_types'] = keys
+            logger.info(f"{verb} {n} new location types from {args.location_types}")
 
         if args.relationship_types:
-            n = await import_relationship_types(pool, args.relationship_types)
-            logger.info(f"Imported {n} new relationship types from {args.relationship_types}")
+            n, keys = await import_relationship_types(pool, args.relationship_types,
+                                                      dry_run=args.dry_run)
+            pending_refs['relationship_types'] = keys
+            logger.info(f"{verb} {n} new relationship types from {args.relationship_types}")
 
         # ---------------------------------------------------------------
         # Step 1: Load reference sets (DB + any newly imported types)
         # ---------------------------------------------------------------
         refs = await _load_reference_sets(pool)
+        for name, keys in pending_refs.items():
+            refs[name] |= keys
         logger.info(
             f"Reference types loaded: "
             f"{len(refs['entity_types'])} entity types, "
@@ -751,7 +793,8 @@ async def run_import(args):
             elapsed = time.time() - t0
             logger.info(
                 f"Dry run complete in {elapsed:.1f}s. "
-                f"{entity_count:,} entities, {rel_count:,} relationships validated."
+                f"{entity_count:,} entities, {rel_count:,} relationships validated. "
+                f"Nothing was written."
             )
             await pool.close()
             return
@@ -831,7 +874,8 @@ def main():
     parser.add_argument('--batch-size', type=int, default=100,
                         help='Records per INSERT batch (default: 100)')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Run validation only (Pass 1), no writes')
+                        help='Validate only — no writes at all, including '
+                             'reference type files')
     parser.add_argument('--error-log',
                         help='Path to write validation errors (JSONL)')
     parser.add_argument('--verbose', '-v', action='store_true',
