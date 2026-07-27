@@ -72,9 +72,12 @@ export interface GeoPoint {
 }
 
 export interface GeoPointsResponse {
+  success: boolean;
+  status: string;
+  message: string;
   points: GeoPoint[];
   total_count: number;
-  limit: number;
+  page_size: number;
   offset: number;
 }
 

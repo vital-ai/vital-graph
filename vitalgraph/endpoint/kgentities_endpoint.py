@@ -8,7 +8,7 @@ KG entities represent knowledge graph entities with their associated triples and
 import asyncio
 import logging
 from typing import Dict, List, Literal, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends, Request, Response, Body
+from fastapi import APIRouter, Query, Depends, Request, Response, Body, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
 
@@ -22,9 +22,13 @@ from ..model.kgentities_model import (
     EntityGraphResponse,
     EntityQueryRequest,
     EntityQueryResponse,
-    EntitiesGraphResponse
+    EntitiesGraphResponse,
+    EntityCountResponse,
+    EntityLabelCount,
+    EntityCountsResponse,
 )
 from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse
+from ..model.result_status import OperationStatus
 # Import VitalSigns integration patterns from mock
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
 from ..sparql.graph_validation import EntityGraphValidator
@@ -226,7 +230,7 @@ class KGEntitiesEndpoint:
                 provenance_type=provenance_type,
             )
         
-        @self.router.post("/kgentities", response_model=Union[EntityCreateResponse, EntityUpdateResponse], tags=["KG Entities"])
+        @self.router.post("/kgentities", response_model=None, tags=["KG Entities"])
         async def create_or_update_entities(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -264,12 +268,13 @@ class KGEntitiesEndpoint:
             else:
                 from ..model.kgentities_model import EntityDeleteResponse
                 return EntityDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="Either 'uri' or 'uri_list' parameter is required",
                     deleted_count=0,
                     deleted_uris=[]
                 )
         
-        @self.router.get("/kgentities/count", tags=["KG Entities"])
+        @self.router.get("/kgentities/count", response_model=EntityCountResponse, tags=["KG Entities"])
         async def count_entities(
             space_id: str = Query(..., description="Space ID"),
             graph_id: Optional[str] = Query(None, description="Graph ID"),
@@ -312,7 +317,7 @@ class KGEntitiesEndpoint:
             graph_id: Optional[str] = Field(None, description="Graph ID")
             count_requests: List[_CountRequest] = Field(..., description="List of count requests")
         
-        @self.router.post("/kgentities/counts", tags=["KG Entities"])
+        @self.router.post("/kgentities/counts", response_model=EntityCountsResponse, tags=["KG Entities"])
         async def batch_count_entities(
             body: _BatchCountRequest = Body(...),
             current_user: Dict = Depends(self.auth_dependency),
@@ -321,7 +326,7 @@ class KGEntitiesEndpoint:
             require_space_read(current_user, body.space_id)
             return await self._batch_count_entities(body)
         
-        @self.router.get("/kgentities/kgframes", response_model=Union[QuadResponse, FrameGraphsResponse], response_model_by_alias=True, tags=["KG Entities"])
+        @self.router.get("/kgentities/kgframes", response_model=None, tags=["KG Entities"])
         async def get_entity_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -354,7 +359,7 @@ class KGEntitiesEndpoint:
             require_space_read(current_user, space_id)
             return await self._get_kgentity_frames(space_id, graph_id, entity_uri, frame_uris, page_size, offset, search, current_user, parent_frame_uri)
         
-        @self.router.post("/kgentities/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Entities"])
+        @self.router.post("/kgentities/kgframes", response_model=None, tags=["KG Entities"])
         async def create_or_update_entity_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -419,13 +424,13 @@ class KGEntitiesEndpoint:
             # Backend setup
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
             t_setup = _time.monotonic()
             
@@ -476,11 +481,13 @@ class KGEntitiesEndpoint:
                 n_ent, n_quads, include_entity_graph,
             )
             return resp
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error listing KGEntities: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-    
+            raise HTTPException(status_code=500, detail=f"Error listing KGEntities: {e}")
+
     async def _count_entities(self, space_id: str, graph_id: Optional[str],
                               entity_type_uri: Optional[str], search: Optional[str],
                               sort_by: Optional[str],
@@ -508,36 +515,52 @@ class KGEntitiesEndpoint:
             qhash = _count_cache.query_hash(count_sparql)
             cached = _count_cache.get(space_id, _effective_graph, qhash)
             if cached is not None:
-                return {"count": cached}
-            
+                return EntityCountResponse(
+                    status=OperationStatus.FOUND if cached else OperationStatus.EMPTY,
+                    count=cached,
+                )
+
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return {"count": 0}
+                return EntityCountResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space {space_id} not found",
+                    count=0,
+                )
             backend = space_record.space_impl.get_db_space_impl()
             if not backend:
-                return {"count": 0}
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend_adapter = create_backend_adapter(backend)
-            
+
             from ..kg_impl.kgentity_list_impl import _extract_bindings
             result = await backend_adapter.execute_sparql_query(space_id, count_sparql)
             bindings = _extract_bindings(result)
             count = int(bindings[0]['count']['value']) if bindings and 'count' in bindings[0] else 0
-            
+
             _count_cache.put(space_id, _effective_graph, qhash, count)
-            return {"count": count}
+            return EntityCountResponse(
+                status=OperationStatus.FOUND if count else OperationStatus.EMPTY,
+                count=count,
+            )
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error counting entities: {e}")
-            return {"count": 0}
+            raise HTTPException(status_code=500, detail=f"Error counting entities: {e}")
     
     async def _batch_count_entities(self, body):
         """Execute multiple count queries concurrently and return results."""
         try:
             space_record = await self.space_manager.get_space_or_load(body.space_id)
             if not space_record:
-                return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
+                return EntityCountsResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space {body.space_id} not found",
+                    counts=[EntityLabelCount(label=cr.label, count=0) for cr in body.count_requests],
+                )
             backend = space_record.space_impl.get_db_space_impl()
             if not backend:
-                return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend_adapter = create_backend_adapter(backend)
             
             list_processor = KGEntityListProcessor(logger=self.logger)
@@ -571,10 +594,17 @@ class KGEntitiesEndpoint:
                     return {"label": cr.label, "count": 0}
             
             counts = await asyncio.gather(*[_run_count(cr) for cr in body.count_requests])
-            return {"counts": list(counts)}
+            count_items = [EntityLabelCount(label=c["label"], count=c["count"]) for c in counts]
+            _any = any(ci.count for ci in count_items)
+            return EntityCountsResponse(
+                status=OperationStatus.FOUND if _any else OperationStatus.EMPTY,
+                counts=count_items,
+            )
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in batch count: {e}")
-            return {"counts": [{"label": cr.label, "count": 0} for cr in body.count_requests]}
+            raise HTTPException(status_code=500, detail=f"Error in batch count: {e}")
     
     async def _get_entity_by_uri(self, space_id: str, graph_id: Optional[str], uri: Optional[str], include_entity_graph: bool, current_user: Dict, reference_id: Optional[str] = None):
         """Get single entity by URI or reference ID."""
@@ -603,13 +633,13 @@ class KGEntitiesEndpoint:
             # Get backend implementation
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResultsResponse(results=[], total_count=0)
-            
+                return QuadResultsResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResultsResponse(results=[], total_count=0)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Use backend adapter for consistent retrieval
             backend_adapter = create_backend_adapter(backend)
             t_setup = _time.monotonic()
@@ -655,11 +685,13 @@ class KGEntitiesEndpoint:
                 n_obj, n_quads, include_entity_graph,
             )
             return resp
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting KGEntity: {e}")
-            return QuadResultsResponse(results=[], total_count=0)
-    
+            raise HTTPException(status_code=500, detail=f"Error getting KGEntity: {e}")
+
     async def _get_entities_by_uris(self, space_id: str, graph_id: Optional[str], uris: Optional[List[str]], include_entity_graph: bool, current_user: Dict, reference_ids: Optional[List[str]] = None):
         """Get multiple entities by URI list or reference ID list using initialized processors."""
         try:
@@ -677,12 +709,12 @@ class KGEntitiesEndpoint:
             # Get backend
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=len(identifiers), offset=0)
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=len(identifiers), offset=0)
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=len(identifiers), offset=0)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
             get_processor = KGEntityGetProcessor(logger=self.logger)
             
@@ -734,11 +766,13 @@ class KGEntitiesEndpoint:
                 page_size=len(identifiers),
                 offset=0,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting KGEntities: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
-    
+            raise HTTPException(status_code=500, detail=f"Error getting KGEntities: {e}")
+
     async def _create_or_update_entities(
         self, space_id: str, graph_id: str,
         quads: List[Quad],
@@ -756,37 +790,34 @@ class KGEntitiesEndpoint:
             if not graph_id:
                 msg = "graph_id is required for entity creation/update"
                 if operation_mode == OperationMode.CREATE:
-                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
-                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+                    return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, updated_uri="", updated_count=0)
 
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 msg = f"Space {space_id} not found"
                 if operation_mode == OperationMode.CREATE:
-                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
-                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+                    return EntityCreateResponse(status=OperationStatus.NOT_FOUND, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(status=OperationStatus.NOT_FOUND, message=msg, updated_uri="", updated_count=0)
 
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                msg = "Backend implementation not available"
-                if operation_mode == OperationMode.CREATE:
-                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
-                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
 
             if not vitalsigns_objects:
                 msg = "No valid objects found in request"
                 if operation_mode == OperationMode.CREATE:
-                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
-                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+                    return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, updated_uri="", updated_count=0)
 
             # Validate that at least one KGEntity instance is present
             entity_objects = [obj for obj in vitalsigns_objects if isinstance(obj, KGEntity)]
             if not entity_objects:
                 msg = "No valid KGEntity objects found in request"
                 if operation_mode == OperationMode.CREATE:
-                    return EntityCreateResponse(success=False, message=msg, created_count=0, created_uris=[])
-                return EntityUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+                    return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, created_count=0, created_uris=[])
+                return EntityUpdateResponse(status=OperationStatus.INVALID_REQUEST, message=msg, updated_uri="", updated_count=0)
 
             backend_adapter = create_backend_adapter(backend_impl)
 
@@ -844,11 +875,11 @@ class KGEntitiesEndpoint:
 
             return _result
 
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error processing entities (new format): {e}")
-            if operation_mode == OperationMode.CREATE:
-                return EntityCreateResponse(success=False, message=f"Failed to process entities: {e}", created_count=0, created_uris=[])
-            return EntityUpdateResponse(success=False, message=f"Failed to process entities: {e}", updated_uri="", updated_count=0)
+            raise HTTPException(status_code=500, detail=f"Failed to process entities: {e}")
         finally:
             for _euri, _lctx in reversed(_lock_ctxs):
                 try:
@@ -870,14 +901,16 @@ class KGEntitiesEndpoint:
             updated_objects = vitalsigns_objects
             if not updated_objects:
                 return EntityUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid objects found in update data",
                     updated_uri=""
                 )
-            
+
             # Extract entity URIs from the objects
             entity_uris = self._extract_entity_uris(updated_objects)
             if not entity_uris:
                 return EntityUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No entity URIs found in update data",
                     updated_uri=""
                 )
@@ -897,6 +930,7 @@ class KGEntitiesEndpoint:
                     backend_adapter, space_id, graph_id, entity_uris[0])
                 if _props is None:
                     return EntityUpdateResponse(
+                        status=OperationStatus.NOT_FOUND,
                         message=f"Entity {entity_uris[0]} does not exist. Use CREATE mode to create new entities.",
                         updated_uri=""
                     )
@@ -907,6 +941,7 @@ class KGEntitiesEndpoint:
                 for _eu in entity_uris:
                     if _eu not in _props_map:
                         return EntityUpdateResponse(
+                            status=OperationStatus.NOT_FOUND,
                             message=f"Entity {_eu} does not exist. Use CREATE mode to create new entities.",
                             updated_uri=""
                         )
@@ -932,6 +967,7 @@ class KGEntitiesEndpoint:
             )
             if not ownership_result.valid:
                 return EntityUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message=f"Ownership conflict: {ownership_result.message}",
                     updated_uri="",
                     updated_count=0
@@ -980,13 +1016,12 @@ class KGEntitiesEndpoint:
                 self._schedule_auto_sync(_bi, space_id, graph_id, _sync_uris)
 
             return result
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in UPDATE mode handling: {e}")
-            return EntityUpdateResponse(
-                message=f"Error updating entities: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Error updating entities: {str(e)}")
 
     async def _handle_entity_only_update(self, backend_adapter, space_id: str, graph_id: str,
                                           vitalsigns_objects: List[GraphObject], current_user: Dict) -> EntityUpdateResponse:
@@ -998,7 +1033,7 @@ class KGEntitiesEndpoint:
             non_entity = [obj for obj in vitalsigns_objects if not isinstance(obj, KGEntity)]
             if non_entity:
                 return EntityUpdateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="entity_only mode only accepts KGEntity objects, not frames/slots/edges",
                     updated_uri=""
                 )
@@ -1006,7 +1041,7 @@ class KGEntitiesEndpoint:
             # Single entity per request
             if len(vitalsigns_objects) != 1:
                 return EntityUpdateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="entity_only mode accepts exactly one KGEntity per request",
                     updated_uri=""
                 )
@@ -1022,7 +1057,7 @@ class KGEntitiesEndpoint:
             _props = await fetch_entity_server_props(backend_adapter, space_id, graph_id, entity_uri)
             if _props is None:
                 return EntityUpdateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Entity {entity_uri} does not exist. Use CREATE mode to create new entities.",
                     updated_uri=""
                 )
@@ -1055,24 +1090,22 @@ class KGEntitiesEndpoint:
                 if _bi:
                     self._schedule_auto_sync(_bi, space_id, graph_id, [entity_uri])
                 return EntityUpdateResponse(
-                    success=True,
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated entity (entity_only): {entity_uri}",
                     updated_uri=entity_uri
                 )
             else:
                 return EntityUpdateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update entity (entity_only): {entity_uri}",
                     updated_uri=""
                 )
 
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in ENTITY_ONLY mode handling: {e}")
-            return EntityUpdateResponse(
-                success=False,
-                message=f"Error in entity_only update: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Error in entity_only update: {str(e)}")
 
     def _extract_entity_uris(self, graph_objects: List[GraphObject]) -> List[str]:
         """
@@ -1120,34 +1153,32 @@ class KGEntitiesEndpoint:
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
                 return EntityDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="graph_id is required for entity deletion",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             # Backend setup (following established pattern)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return EntityDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return EntityDeleteResponse(
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend_impl)
-            
+
             # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
-            
+
             # Check if entity exists before deletion (skip check for entity graph deletion)
             entity_exists = True
             if not delete_entity_graph:
@@ -1155,6 +1186,7 @@ class KGEntitiesEndpoint:
                 if not entity_exists:
                     # Return graceful response for non-existent entity instead of HTTP exception
                     return EntityDeleteResponse(
+                        status=OperationStatus.NO_OP,
                         message=f"Entity {uri} not found - no deletion performed",
                         deleted_count=0,
                         deleted_uris=[]
@@ -1186,18 +1218,17 @@ class KGEntitiesEndpoint:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, [uri], "delete")
             
             return EntityDeleteResponse(
+                status=OperationStatus.DELETED if success else OperationStatus.STORE_FAILED,
                 message=f"Successfully deleted KG {deletion_type} '{str(uri)}' from graph '{graph_id}' in space '{space_id}' ({deleted_count} objects)" if success else f"Failed to delete KGEntity '{str(uri)}'",
                 deleted_count=deleted_count,
                 deleted_uris=[str(uri)] if success else []
             )
-                
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting KG entity: {e}")
-            return EntityDeleteResponse(
-                message=f"Error deleting KG entity: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Error deleting KG entity: {str(e)}")
         finally:
             if _lock_ctx is not None:
                 try:
@@ -1215,31 +1246,29 @@ class KGEntitiesEndpoint:
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
                 return EntityDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="graph_id is required for entity deletion",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             # Backend setup (following established pattern)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return EntityDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return EntityDeleteResponse(
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend_impl)
-            
+
             # Use KGEntityDeleteProcessor
             delete_processor = KGEntityDeleteProcessor()
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
@@ -1293,19 +1322,18 @@ class KGEntitiesEndpoint:
             self.logger.debug(f"Successfully deleted {deleted_count} KG entities")
             
             return EntityDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {deleted_count} KG entities from graph '{graph_id}' in space '{space_id}'",
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris_list
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting KG entities: {e}")
-            return EntityDeleteResponse(
-                message=f"Error deleting KG entities: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
-    
+            raise HTTPException(status_code=500, detail=f"Error deleting KG entities: {str(e)}")
+
     async def _get_kgentity_frames(self, space_id: str, graph_id: str, entity_uri: Optional[str], frame_uris: Optional[List[str]], page_size: int, offset: int, search: Optional[str], current_user: Dict, parent_frame_uri: Optional[str] = None):
         """Get frames associated with KGEntities using SPARQL query processor."""
         try:
@@ -1313,19 +1341,19 @@ class KGEntitiesEndpoint:
             
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            
+
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-            
+
             # Check if specific frame URIs are requested (enhanced functionality)
             self.logger.info(f"📋 GET_FRAMES_BRANCH frame_uris={frame_uris}, entity_uri={entity_uri}, type(frame_uris)={type(frame_uris)}")
             if frame_uris and entity_uri:
@@ -1357,11 +1385,13 @@ class KGEntitiesEndpoint:
                 page_size=page_size,
                 offset=offset,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting KGEntity frames: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-    
+            raise HTTPException(status_code=500, detail=f"Error getting KGEntity frames: {e}")
+
     async def _get_individual_frame(self, space_id: str, graph_id: str, frame_uri: str, include_frame_graph: bool = False, current_user: Dict = None):
         """Get an individual frame by URI using SPARQL query processor."""
         try:
@@ -1426,34 +1456,28 @@ class KGEntitiesEndpoint:
             if not entity_uri:
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="entity_uri is required for KGEntities frame operations",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             self.logger.debug(f"Creating/updating frames for entity {entity_uri} in space {space_id}, graph {graph_id}")
-            
+
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                from ..model.kgframes_model import FrameCreateResponse
-                return FrameCreateResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    created_count=0,
-                    created_uris=[]
-                )
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             # Acquire entity-level advisory lock
             if entity_uri:
@@ -1471,12 +1495,12 @@ class KGEntitiesEndpoint:
             if not graph_objects:
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid objects found in request",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             # Use KGEntityFrameCreateProcessor to handle frame creation
             frame_processor = KGEntityFrameCreateProcessor()
             
@@ -1523,7 +1547,7 @@ class KGEntitiesEndpoint:
                 
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message=f"Successfully created {len(result.created_uris)} frames",
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
@@ -1532,21 +1556,17 @@ class KGEntitiesEndpoint:
                 # Handle processor failure
                 from ..model.kgframes_model import FrameCreateResponse
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=result.message,
                     created_count=0,
                     created_uris=[],
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error creating/updating frames: {e}")
-            from ..model.kgframes_model import FrameCreateResponse
-            return FrameCreateResponse(
-                success=False,
-                message=f"Failed to create/update frames: {str(e)}",
-                created_count=0,
-                created_uris=[],
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to create/update frames: {str(e)}")
         finally:
             if _lock_ctx is not None:
                 try:
@@ -1565,30 +1585,24 @@ class KGEntitiesEndpoint:
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                from ..model.kgframes_model import FrameDeleteResponse
-                return FrameDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Create backend adapter and SPARQL processor
             from ..kg_impl.kg_backend_utils import create_backend_adapter
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
-            
+
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-            
+
             # Look up owning entity via kGGraphURI and lock it
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
             if _lm:
@@ -1620,22 +1634,18 @@ class KGEntitiesEndpoint:
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
             
             # Return response in expected format
-            class FrameDeleteResponse:
-                def __init__(self, deleted_count):
-                    self.deleted_count = deleted_count
-                    self.message = f"Successfully deleted frame and {deleted_count} related objects"
-            
-            return FrameDeleteResponse(delete_result['deleted_count'])
-            
-        except Exception as e:
-            self.logger.error(f"Error deleting frame: {e}")
             from ..model.kgframes_model import FrameDeleteResponse
             return FrameDeleteResponse(
-                success=False,
-                message=f"Failed to delete frame: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
+                status=OperationStatus.DELETED,
+                deleted_count=delete_result['deleted_count'],
+                message="Successfully deleted frame",
             )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error deleting frame: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to delete frame: {str(e)}")
         finally:
             if _lock_ctx is not None:
                 try:
@@ -1656,22 +1666,17 @@ class KGEntitiesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return FrameCreateResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    created_count=0,
-                    created_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Acquire entity-level advisory lock
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
             try:
@@ -1689,7 +1694,7 @@ class KGEntitiesEndpoint:
                     frame_uri = graph_obj.URI
                     if not frame_uri:
                         return FrameCreateResponse(
-                            success=False,
+                            status=OperationStatus.INVALID_REQUEST,
                             message="KGFrame missing URI - required for processing",
                             created_count=0,
                             created_uris=[]
@@ -1736,7 +1741,7 @@ class KGEntitiesEndpoint:
                 parent_frame_valid = await hierarchical_processor.validate_parent_frame(space_id, graph_id, entity_uri, parent_frame_uri)
                 if not parent_frame_valid:
                     return FrameCreateResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Parent frame validation failed: {parent_frame_uri} does not exist or does not belong to entity {entity_uri}",
                         created_count=0,
                         created_uris=[]
@@ -1789,7 +1794,7 @@ class KGEntitiesEndpoint:
                 # Invalidate entity graph cache (frame creation changes the entity graph)
                 await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
                 return FrameCreateResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message=result.message,
                     created_count=len(result.created_uris),
                     created_uris=result.created_uris,
@@ -1797,22 +1802,18 @@ class KGEntitiesEndpoint:
                 )
             else:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=result.message,
                     created_count=0,
                     created_uris=[],
                     slots_created=0,
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error processing entity frames: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Failed to process entity frames: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                slots_created=0
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to process entity frames: {str(e)}")
         finally:
             if _lock_ctx is not None:
                 try:
@@ -1841,20 +1842,20 @@ class KGEntitiesEndpoint:
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return FrameUpdateResponse(message=f"Space {space_id} not found", updated_uri="", updated_count=0)
-            
+                return FrameUpdateResponse(status=OperationStatus.NOT_FOUND, message=f"Space {space_id} not found", updated_uri="", updated_count=0)
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return FrameUpdateResponse(message="Backend implementation not available", updated_uri="", updated_count=0)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend_impl)
-            
+
             # Extract KGFrame objects from the replacement graph (for re-creation)
             from ai_haley_kg_domain.model.KGFrame import KGFrame
             replacement_frame_uris = [str(obj.URI) for obj in graph_objects if isinstance(obj, KGFrame) and hasattr(obj, 'URI')]
             if not replacement_frame_uris:
-                return FrameUpdateResponse(message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
+                return FrameUpdateResponse(status=OperationStatus.INVALID_REQUEST, message="No KGFrame objects found in replacement graph", updated_uri="", updated_count=0)
             
             # Phase 1: Determine delete scope from EXISTING frames in the DB
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
@@ -1986,27 +1987,28 @@ class KGEntitiesEndpoint:
             
             if not result.success:
                 return FrameUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Replace failed during re-creation: {result.message}",
                     updated_uri="", updated_count=0
                 )
-            
+
             created_uris = result.created_uris
-            
+
             # Invalidate entity graph cache
             await self._invalidate_entity_cache(space_id, graph_id, entity_uri)
-            
+
             return FrameUpdateResponse(
+                status=OperationStatus.UPDATED,
                 message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
                 updated_uri=entity_uri,
                 updated_count=len(created_uris),
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in _replace_entity_frames: {e}")
-            return FrameUpdateResponse(
-                message=f"Replace operation failed: {str(e)}",
-                updated_uri="", updated_count=0
-            )
+            raise HTTPException(status_code=500, detail=f"Replace operation failed: {str(e)}")
     
     async def _delete_entity_frames(self, space_id: str, graph_id: str, entity_uri: str, frame_uris: List[str], current_user: Dict, parent_frame_uri: Optional[str] = None, recursive: bool = False):
         """Delete frames within entity context using Edge_hasEntityKGFrame relationships.
@@ -2024,23 +2026,17 @@ class KGEntitiesEndpoint:
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                from ..model.kgframes_model import FrameDeleteResponse
-                return FrameDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Acquire entity-level advisory lock
             _lm = getattr(space_impl.backend, 'entity_lock_manager', None)
             try:
@@ -2050,7 +2046,7 @@ class KGEntitiesEndpoint:
             except Exception as _le:
                 self.logger.warning(f"⚠️ Could not acquire entity lock for {entity_uri}: {_le}")
                 _lock_ctx = None
-            
+
             # Get the proper space-specific graph URI
             if hasattr(backend, '_get_space_graph_uri'):
                 full_graph_uri = backend._get_space_graph_uri(space_id, graph_id)
@@ -2075,7 +2071,7 @@ class KGEntitiesEndpoint:
                 if invalid_frames:
                     from ..model.kgframes_model import FrameDeleteResponse
                     return FrameDeleteResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Frames are not children of parent {parent_frame_uri}: {', '.join(invalid_frames)}",
                         deleted_count=0,
                         deleted_uris=[]
@@ -2097,7 +2093,7 @@ class KGEntitiesEndpoint:
                     )
                     from ..model.kgframes_model import FrameDeleteResponse
                     return FrameDeleteResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
                         deleted_count=0,
                         deleted_uris=[]
@@ -2135,20 +2131,17 @@ class KGEntitiesEndpoint:
             from ..model.kgframes_model import FrameDeleteResponse
             
             return FrameDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
                 deleted_uris=result.deleted_frame_uris,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting entity frames: {e}")
-            from ..model.kgframes_model import FrameDeleteResponse
-            return FrameDeleteResponse(
-                success=False,
-                message=f"Failed to delete entity frames: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to delete entity frames: {str(e)}")
         finally:
             if _lock_ctx is not None:
                 try:
@@ -2174,21 +2167,17 @@ class KGEntitiesEndpoint:
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     updated_uri="",
                     updated_count=0
                 )
-            
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                from ..model.kgframes_model import FrameUpdateResponse
-                return FrameUpdateResponse(
-                    message="Backend implementation not available",
-                    updated_uri="",
-                    updated_count=0
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             _u1 = _time.time()
             self.logger.info(f"⏱️ UPDATE_ENDPOINT get_backend: {_u1-_u0:.3f}s")
             
@@ -2241,6 +2230,7 @@ class KGEntitiesEndpoint:
                     if not frame_uri:
                         from ..model.kgframes_model import FrameUpdateResponse
                         return FrameUpdateResponse(
+                            status=OperationStatus.INVALID_REQUEST,
                             message="KGFrame missing URI - required for processing",
                             updated_uri="",
                             updated_count=0
@@ -2318,6 +2308,7 @@ class KGEntitiesEndpoint:
                 if invalid_frames:
                     from ..model.kgframes_model import FrameUpdateResponse
                     return FrameUpdateResponse(
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Frames are not children of parent {parent_frame_uri}: {', '.join(invalid_frames)}",
                         updated_uri="",
                         updated_count=0
@@ -2342,6 +2333,7 @@ class KGEntitiesEndpoint:
             if not frame_groups:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid frames found for update",
                     updated_uri="",
                     updated_count=0
@@ -2420,6 +2412,7 @@ class KGEntitiesEndpoint:
                 
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=message,
                     updated_uri=entity_uri,
                     updated_count=len(successful_updates),
@@ -2428,19 +2421,17 @@ class KGEntitiesEndpoint:
                 error_messages = [r.message for r in failed_updates]
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"All frame updates failed: {'; '.join(error_messages)}",
                     updated_uri="",
                     updated_count=0,
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error updating entity frames: {e}")
-            from ..model.kgframes_model import FrameUpdateResponse
-            return FrameUpdateResponse(
-                message=f"Failed to update entity frames: {str(e)}",
-                updated_uri="",
-                updated_count=0
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to update entity frames: {str(e)}")
         finally:
             # Release entity advisory lock
             if _lock_ctx is not None:
@@ -2476,16 +2467,16 @@ class KGEntitiesEndpoint:
             
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=0, offset=0)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
             sparql_processor = KGSparqlQueryProcessor(backend_adapter, self.logger)
-            
+
             query_results = await sparql_processor.execute_entity_query(space_id, graph_id, query_request)
             
             entity_uris = query_results['entity_uris']
@@ -2520,11 +2511,13 @@ class KGEntitiesEndpoint:
                 page_size=query_results['page_size'],
                 offset=query_results['offset'],
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error querying KGEntities: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=0, offset=0)
-    
+            raise HTTPException(status_code=500, detail=f"Error querying KGEntities: {e}")
+
     def _convert_query_criteria_to_sparql(self, criteria):
         """Convert Pydantic EntityQueryCriteria to SPARQL dataclass format."""
         from ..sparql.kg_query_builder import (
@@ -2708,12 +2701,14 @@ class KGEntitiesEndpoint:
                 # Convert VitalSigns property objects to strings
                 created_uris_str = [str(uri) for uri in result.created_uris]
                 return FrameCreateResponse(
+                    status=OperationStatus.CREATED,
                     message=result.message,
                     created_count=len(result.created_uris),
                     created_uris=created_uris_str
                 )
             else:
                 return FrameCreateResponse(
+                    status=OperationStatus.CREATED,
                     message="Frame creation completed",
                     created_count=0,
                     created_uris=[]
@@ -2750,27 +2745,24 @@ class KGEntitiesEndpoint:
             if not space_record:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     updated_uri="",
                     updated_count=0
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                from ..model.kgframes_model import FrameUpdateResponse
-                return FrameUpdateResponse(
-                    message="Backend implementation not available",
-                    updated_uri="",
-                    updated_count=0
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend_impl)
-            
+
             if not graph_objects:
                 from ..model.kgframes_model import FrameUpdateResponse
                 return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid objects found in request",
                     updated_uri="",
                     updated_count=0
@@ -2795,16 +2787,20 @@ class KGEntitiesEndpoint:
             if result.success:
                 self.logger.debug(f"✅ Frame update successful for entity {entity_uri}")
                 return FrameUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=result.message,
                     updated_uri=entity_uri,
                 )
             else:
                 self.logger.warning(f"⚠️ Frame update failed for entity {entity_uri}: {result.message}")
                 return FrameUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Frame update failed: {result.message}",
                     updated_uri=entity_uri,
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error updating entity frames: {e}")
             raise Exception(f"Failed to update entity frames: {str(e)}")
@@ -2819,23 +2815,17 @@ class KGEntitiesEndpoint:
             if not space_record:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                from ..model.kgframes_model import FrameDeleteResponse
-                return FrameDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Create backend adapter
             from vitalgraph.kg_impl.kg_backend_utils import create_backend_adapter
             backend_adapter = create_backend_adapter(backend_impl)
@@ -2857,11 +2847,14 @@ class KGEntitiesEndpoint:
             from ..model.kgframes_model import FrameDeleteResponse
             
             return FrameDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=result.message,
                 deleted_count=len(result.deleted_frame_uris),
                 deleted_uris=result.deleted_frame_uris,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting entity frames: {e}")
             raise Exception(f"Failed to delete entity frames: {str(e)}")

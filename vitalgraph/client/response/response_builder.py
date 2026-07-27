@@ -12,6 +12,7 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 from .client_response import (
+    _SUCCESS_STATUS_VALUES,
     VitalGraphResponse,
     GraphObjectResponse,
     PaginatedGraphObjectResponse,
@@ -87,18 +88,22 @@ def build_success_response(
     objects: Optional[Any] = None,
     status_code: int = 200,
     message: Optional[str] = None,
+    status: Optional[str] = None,
     **kwargs
 ) -> T:
     """
     Build a success response.
-    
+
     Args:
         response_class: Response class to instantiate
         objects: Response objects (type depends on response class)
         status_code: HTTP status code
         message: Optional success message
+        status: Optional server domain outcome (OperationStatus value). When the
+            server body carries a `status`, pass it so is_success/raise_for_error
+            reflect the domain outcome (e.g. already_exists is NOT a success).
         **kwargs: Additional fields for the response class
-        
+
     Returns:
         Response instance
     """
@@ -107,11 +112,63 @@ def build_success_response(
         'error_message': None,
         'status_code': status_code,
         'message': message,
+        'status': status,
         'objects': objects,
         **kwargs
     }
-    
+
     return response_class(**response_data)
+
+
+def build_response_from_server(
+    response_class: Type[T],
+    response_data: Dict[str, Any],
+    status_code: int = 200,
+    objects: Optional[Any] = None,
+    **kwargs
+) -> T:
+    """
+    Build a client response from a server response body that follows the unified
+    result-status contract (success / status / message in the body).
+
+    Reads `status`, `success`, and `message` from the server body and derives the
+    client `error_code` (0 when the domain outcome succeeded, non-zero otherwise)
+    so is_success / raise_for_error reflect the DOMAIN outcome rather than the HTTP
+    code (which is 200 for every domain outcome).
+
+    Args:
+        response_class: Client response class to instantiate
+        response_data: Parsed server JSON body
+        status_code: HTTP status code of the response
+        objects: Optional deserialized objects payload
+        **kwargs: Additional fields for the response class
+
+    Returns:
+        Response instance
+    """
+    server_status = response_data.get('status')
+    server_success = response_data.get('success')
+    message = response_data.get('message')
+
+    if server_status is not None:
+        succeeded = server_status in _SUCCESS_STATUS_VALUES
+    elif server_success is not None:
+        succeeded = bool(server_success)
+    else:
+        succeeded = True
+
+    data = {
+        'error_code': 0 if succeeded else 1,
+        'error_message': None if succeeded else message,
+        'status_code': status_code,
+        'message': message,
+        'status': server_status,
+        **kwargs,
+    }
+    if objects is not None or hasattr(response_class, 'objects'):
+        data['objects'] = objects
+
+    return response_class(**data)
 
 
 def build_error_response(

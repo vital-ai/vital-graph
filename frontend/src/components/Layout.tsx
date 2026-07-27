@@ -25,6 +25,7 @@ import {
   HiDatabase,
   HiSearch,
   HiCollection,
+  HiTag,
   HiUserGroup,
   HiDocumentDuplicate,
   HiDocumentText,
@@ -264,6 +265,11 @@ const Layout: React.FC = () => {
               <Link to="/entity-registry" style={{display: 'block'}}>
                 <SidebarItem icon={HiCollection} active={location.pathname.startsWith('/entity-registry')} as="div">
                   Entity Registry
+                </SidebarItem>
+              </Link>
+              <Link to="/registry-metadata" style={{display: 'block'}}>
+                <SidebarItem icon={HiTag} active={location.pathname.startsWith('/registry-metadata')} as="div">
+                  Registry Metadata
                 </SidebarItem>
               </Link>
               <Link to="/agent-registry" style={{display: 'block'}}>

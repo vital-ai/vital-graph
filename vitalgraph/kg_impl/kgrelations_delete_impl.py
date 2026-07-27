@@ -10,6 +10,7 @@ from typing import List, Dict, Any
 
 # Model imports
 from ..model.kgrelations_model import RelationDeleteResponse
+from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
@@ -45,6 +46,7 @@ class KGRelationsDeleteProcessor:
             
             if not relation_uris:
                 return RelationDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No relation URIs provided for deletion",
                     deleted_count=0,
                     deleted_uris=[]
@@ -78,6 +80,7 @@ class KGRelationsDeleteProcessor:
                     # Continue with other deletions
             
             return RelationDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {len(deleted_uris)} KG relations",
                 deleted_count=len(deleted_uris),
                 deleted_uris=deleted_uris
@@ -86,6 +89,7 @@ class KGRelationsDeleteProcessor:
         except Exception as e:
             self.logger.error(f"❌ Error deleting KG Relations: {e}")
             return RelationDeleteResponse(
+                status=OperationStatus.ERROR,
                 message=f"Failed to delete relations: {str(e)}",
                 deleted_count=0,
                 deleted_uris=[]

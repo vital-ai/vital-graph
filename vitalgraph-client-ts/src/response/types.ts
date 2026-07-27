@@ -1,4 +1,44 @@
 import type { VitalSignsObject } from '@vital-ai/vital-model-utils';
+import { VitalGraphClientError } from '../utils/errors.js';
+
+// ============================================================================
+// Result-status contract
+// ============================================================================
+
+/**
+ * Machine-readable domain outcome discriminator returned by the server (mirror of
+ * the server-side OperationStatus enum). HTTP is 200 for every domain outcome, so
+ * success/failure is read from `status` (or `success`) in the body — never the HTTP
+ * status code. A non-200 means a server-level internal error.
+ */
+export enum OperationStatus {
+  OK = 'ok',
+  CREATED = 'created',
+  UPDATED = 'updated',
+  UPSERTED = 'upserted',
+  DELETED = 'deleted',
+  FOUND = 'found',
+  EMPTY = 'empty',
+  NO_OP = 'no_op',
+  ALREADY_EXISTS = 'already_exists',
+  NOT_FOUND = 'not_found',
+  PARTIAL = 'partial',
+  INVALID_REQUEST = 'invalid_request',
+  STORE_FAILED = 'store_failed',
+  ERROR = 'error',
+}
+
+/** OperationStatus values that mean "the expected thing happened". */
+export const SUCCESS_STATUSES: ReadonlySet<string> = new Set<string>([
+  OperationStatus.OK,
+  OperationStatus.CREATED,
+  OperationStatus.UPDATED,
+  OperationStatus.UPSERTED,
+  OperationStatus.DELETED,
+  OperationStatus.FOUND,
+  OperationStatus.EMPTY,
+  OperationStatus.NO_OP,
+]);
 
 // ============================================================================
 // Base Response
@@ -9,7 +49,36 @@ export interface VitalGraphResponse {
   error_message?: string;
   status_code: number;
   message?: string;
+  /** Server domain outcome (OperationStatus value); authoritative for success. */
+  status?: string;
+  /** Raw server success flag (derived from status server-side), when present. */
+  success?: boolean;
   metadata: Record<string, unknown>;
+}
+
+/**
+ * Whether the expected operation happened. Reads the domain `status` when present
+ * (an HTTP 200 with status=already_exists is NOT a success); otherwise falls back
+ * to `success`, then the legacy `error_code`.
+ */
+export function isSuccess(resp: VitalGraphResponse): boolean {
+  if (resp.status != null) return SUCCESS_STATUSES.has(resp.status);
+  if (resp.success != null) return resp.success;
+  return resp.error_code === 0;
+}
+
+/** Inverse of isSuccess. */
+export function isError(resp: VitalGraphResponse): boolean {
+  return !isSuccess(resp);
+}
+
+/** Throw VitalGraphClientError if the response is a non-success domain outcome. */
+export function assertSuccess(resp: VitalGraphResponse): void {
+  if (isError(resp)) {
+    const detail = resp.error_message ?? resp.message ?? resp.status ?? 'unknown error';
+    const code = resp.status ?? resp.error_code;
+    throw new VitalGraphClientError(`Error ${code}: ${detail}`, resp.status_code);
+  }
 }
 
 // ============================================================================
@@ -640,5 +709,37 @@ export function buildErrorResponse<T extends VitalGraphResponse>(
     error_message: errorMessage,
     status_code: statusCode,
     metadata: {},
+  } as T;
+}
+
+/**
+ * Build a client response from a server body that follows the result-status
+ * contract (success / status / message in the body). Derives `error_code` from the
+ * domain outcome so isSuccess/assertSuccess reflect the DOMAIN result, not the HTTP
+ * code (which is 200 for every domain outcome).
+ */
+export function buildResponseFromServer<T extends VitalGraphResponse>(
+  body: Record<string, unknown>,
+  statusCode = 200,
+  extra: Partial<T> = {},
+): T {
+  const status = body['status'] as string | undefined;
+  const success = body['success'] as boolean | undefined;
+  const message = body['message'] as string | undefined;
+
+  let succeeded: boolean;
+  if (status != null) succeeded = SUCCESS_STATUSES.has(status);
+  else if (success != null) succeeded = success;
+  else succeeded = true;
+
+  return {
+    error_code: succeeded ? 0 : 1,
+    error_message: succeeded ? undefined : message,
+    status_code: statusCode,
+    message,
+    status,
+    success,
+    metadata: {},
+    ...extra,
   } as T;
 }

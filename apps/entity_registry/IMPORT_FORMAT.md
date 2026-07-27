@@ -118,7 +118,11 @@ Validation FAILED — 5 errors. No data was written.
 Errors written to: errors.jsonl
 ```
 
-The `--dry-run` flag runs only Pass 1 and exits.
+The `--dry-run` flag runs only Pass 1 and exits. **Nothing is written** — that
+includes the reference type files, which are diffed against the database rather
+than inserted. Their keys are still merged into the reference sets in memory, so
+entities referencing a type defined only in a reference file validate correctly
+under a dry run.
 
 ### Why Reference Types Are Separate Files
 
@@ -546,7 +550,7 @@ python entity_registry/entity_import_jsonl.py \
 | `--location-types` | — | Path to location types JSONL file |
 | `--relationship-types` | — | Path to relationship types JSONL file |
 | `--batch-size` | 100 | Number of records per INSERT batch |
-| `--dry-run` | — | Run Pass 1 validation only, no writes |
+| `--dry-run` | — | Validate only — no writes at all, including reference types |
 | `--error-log` | — | Path to write validation errors (JSONL) |
 
 The script does **not** trigger dedup or Weaviate index rebuilds. Use the

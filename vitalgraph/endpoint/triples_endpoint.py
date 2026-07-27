@@ -17,6 +17,7 @@ from ..model.triples_model import (
     TripleListResponse,
     TripleOperationResponse
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
 
 
@@ -118,13 +119,17 @@ class TriplesEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return TripleListResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    total_count=0,
+                    page_size=page_size,
+                    offset=offset,
+                    results=[],
                 )
-            
+
             space_impl = space_record.space_impl
-            
+
             # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
@@ -132,7 +137,7 @@ class TriplesEndpoint:
                     status_code=500,
                     detail="Database-specific space implementation not available"
                 )
-            
+
             # Use SPARQL queries via hybrid backend
             try:
                 import time
@@ -182,6 +187,7 @@ class TriplesEndpoint:
             current_page = (offset // page_size) + 1
             
             return TripleListResponse(
+                status=OperationStatus.FOUND if quad_results else OperationStatus.EMPTY,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
@@ -239,13 +245,14 @@ class TriplesEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return TripleOperationResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    affected_count=0
                 )
-            
+
             space_impl = space_record.space_impl
-            
+
             # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
@@ -253,27 +260,29 @@ class TriplesEndpoint:
                     status_code=500,
                     detail="Database-specific space implementation not available"
                 )
-            
+
             # Convert Quad models directly to RDF quads — no GraphObject validation
             quads = self._quad_request_to_rdf_quads(quad_request, graph_id)
-            
+
             if not quads:
                 return TripleOperationResponse(
-                    success=True,
+                    status=OperationStatus.OK,
                     message=f"No triples found in request for graph '{graph_id}' in space '{space_id}'",
                     affected_count=0
                 )
-            
+
             # Pass RDFLib objects directly to preserve type information
             # The backend will handle proper formatting for each storage system
             success = await db_space_impl.add_rdf_quads_batch(space_id, quads)
             added_count = len(quads) if success else 0
-            
+
             self.logger.info(f"Successfully added {added_count} triples to graph '{graph_id}' in space '{space_id}'")
-            
+
             return TripleOperationResponse(
-                success=True,
-                message=f"Successfully added {added_count} triples to graph '{graph_id}' in space '{space_id}'",
+                status=OperationStatus.CREATED if success else OperationStatus.STORE_FAILED,
+                message=f"Successfully added {added_count} triples to graph '{graph_id}' in space '{space_id}'"
+                        if success else
+                        f"Failed to add triples to graph '{graph_id}' in space '{space_id}'",
                 affected_count=added_count
             )
         
@@ -308,13 +317,14 @@ class TriplesEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return TripleOperationResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    affected_count=0
                 )
-            
+
             space_impl = space_record.space_impl
-            
+
             # Get the hybrid backend implementation
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
@@ -322,13 +332,13 @@ class TriplesEndpoint:
                     status_code=500,
                     detail="Database-specific space implementation not available"
                 )
-            
+
             # Convert Quad models directly to RDF quads — no GraphObject validation
             quads = self._quad_request_to_rdf_quads(quad_request, graph_id)
-            
+
             if not quads:
                 return TripleOperationResponse(
-                    success=True,
+                    status=OperationStatus.OK,
                     message=f"No triples found in request for graph '{graph_id}' in space '{space_id}'",
                     affected_count=0
                 )
@@ -345,10 +355,12 @@ class TriplesEndpoint:
             removed_count = len(quad_tuples) if success else 0
             
             self.logger.info(f"Successfully removed {removed_count} triples from graph '{graph_id}' in space '{space_id}'")
-            
+
             return TripleOperationResponse(
-                success=True,
-                message=f"Successfully removed {removed_count} triples from graph '{graph_id}' in space '{space_id}'",
+                status=OperationStatus.DELETED if success else OperationStatus.STORE_FAILED,
+                message=f"Successfully removed {removed_count} triples from graph '{graph_id}' in space '{space_id}'"
+                        if success else
+                        f"Failed to remove triples from graph '{graph_id}' in space '{space_id}'",
                 affected_count=removed_count
             )
         

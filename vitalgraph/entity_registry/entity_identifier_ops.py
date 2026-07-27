@@ -5,6 +5,7 @@ Identifier operations mixin for the Entity Registry.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from .entity_status import ACTIVE, DELETED, RETRACTED
 
 if TYPE_CHECKING:
     import asyncpg
@@ -28,6 +29,14 @@ class IdentifierMixin:
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert an identifier within an existing connection/transaction."""
+        # Auto-register the namespace in identifier_type on first use, preserving
+        # the old free-text "new type appears by being used" behavior now that a
+        # managed table exists. Idempotent; label defaults to the key.
+        await conn.execute(
+            "INSERT INTO identifier_type (type_key, type_label) VALUES ($1, $1) "
+            "ON CONFLICT (type_key) DO NOTHING",
+            identifier_namespace
+        )
         row = await conn.fetchrow(
             "INSERT INTO entity_identifier (entity_id, identifier_namespace, identifier_value, "
             "is_primary, created_by, notes) "
@@ -60,14 +69,14 @@ class IdentifierMixin:
                     is_primary, created_by, notes
                 )
 
-    async def remove_identifier(self, identifier_id: int,
+    async def retract_identifier(self, identifier_id: int,
                                 retracted_by: Optional[str] = None) -> bool:
         """Retract an identifier (soft-remove)."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_identifier SET status = 'retracted' "
-                    "WHERE identifier_id = $1 AND status != 'retracted' "
+                    f"UPDATE entity_identifier SET status = '{RETRACTED}' "
+                    f"WHERE identifier_id = $1 AND status != '{RETRACTED}' "
                     "RETURNING entity_id, identifier_namespace, identifier_value",
                     identifier_id
                 )
@@ -85,7 +94,7 @@ class IdentifierMixin:
         """List all active identifiers for an entity."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM entity_identifier WHERE entity_id = $1 AND status != 'retracted' "
+                f"SELECT * FROM entity_identifier WHERE entity_id = $1 AND status != '{RETRACTED}' "
                 "ORDER BY identifier_namespace, identifier_id",
                 entity_id
             )
@@ -103,7 +112,7 @@ class IdentifierMixin:
                 "SELECT DISTINCT ei.entity_id FROM entity_identifier ei "
                 "JOIN entity e ON ei.entity_id = e.entity_id "
                 "WHERE ei.identifier_namespace = $1 AND ei.identifier_value = $2 "
-                "AND ei.status = 'active' AND e.status != 'deleted'",
+                f"AND ei.status = '{ACTIVE}' AND e.status != '{DELETED}'",
                 namespace, value
             )
             entities = []
@@ -120,7 +129,7 @@ class IdentifierMixin:
                 "SELECT DISTINCT ei.entity_id FROM entity_identifier ei "
                 "JOIN entity e ON ei.entity_id = e.entity_id "
                 "WHERE ei.identifier_value = $1 "
-                "AND ei.status = 'active' AND e.status != 'deleted'",
+                f"AND ei.status = '{ACTIVE}' AND e.status != '{DELETED}'",
                 value
             )
             entities = []

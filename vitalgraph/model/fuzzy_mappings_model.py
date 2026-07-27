@@ -5,8 +5,14 @@ Pydantic request/response models for Fuzzy Mappings endpoints.
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
 
-class FuzzyMappingPropertyOut(BaseModel):
+
+class FuzzyMappingPropertyOut(ResultStatus):
+    """A child property within a fuzzy mapping (also the add-property response)."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/...)"
+    )
     property_id: int
     mapping_id: int
     property_uri: str
@@ -14,7 +20,10 @@ class FuzzyMappingPropertyOut(BaseModel):
     ordinal: int = 0
 
 
-class FuzzyMappingOut(BaseModel):
+class FuzzyMappingOut(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/UPDATED/...)"
+    )
     mapping_id: int
     mapping_type: str
     type_uri: Optional[str] = None
@@ -28,7 +37,10 @@ class FuzzyMappingOut(BaseModel):
     properties: List[FuzzyMappingPropertyOut] = []
 
 
-class FuzzyMappingListResponse(BaseModel):
+class FuzzyMappingListResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     mappings: List[FuzzyMappingOut]
     total_count: int
 
@@ -52,11 +64,30 @@ class UpdateFuzzyMappingRequest(BaseModel):
     phonetic_bonus: Optional[float] = Field(None, ge=0.0, le=50.0)
 
 
-class FuzzyMappingStatsResponse(BaseModel):
+class FuzzyMappingStatsResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/NOT_FOUND/...)"
+    )
     mapping_id: int
     band_count: int = 0
     entity_count: int = 0
     phonetic_band_count: int = 0
+
+
+class DeleteResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NOT_FOUND/NO_OP/...)"
+    )
+    mapping_id: Optional[int] = None
+    property_id: Optional[int] = None
+
+
+class PopulateResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.OK, description="Outcome discriminator (OK/NOT_FOUND/...)"
+    )
+    mapping_id: int
+    entities_indexed: int = 0
 
 
 class AddFuzzyPropertyRequest(BaseModel):

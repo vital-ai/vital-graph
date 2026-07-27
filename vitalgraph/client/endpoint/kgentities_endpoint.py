@@ -207,6 +207,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     MultiEntityGraphResponse,
                     graph_list=entity_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(entity_graphs)} entity graphs",
                     space_id=space_id, graph_id=graph_id,
                     metadata={'total_graphs': len(entity_graphs)}
@@ -216,6 +217,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     PaginatedGraphObjectResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(objects)} entities",
                     space_id=space_id, graph_id=graph_id,
                     entity_type_uri=entity_type_uri, search=search,
@@ -318,6 +320,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     EntityGraphResponse,
                     objects=entity_graph,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved entity graph with {len(objects)} objects",
                     space_id=space_id, graph_id=graph_id,
                     requested_uri=uri, requested_reference_id=reference_id,
@@ -328,6 +331,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     EntityResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved entity",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -404,6 +408,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     MultiEntityGraphResponse,
                     graph_list=entity_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(entity_graphs)} entity graphs",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -418,6 +423,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     PaginatedGraphObjectResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(objects)} entities",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -494,6 +500,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     MultiEntityGraphResponse,
                     graph_list=entity_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(entity_graphs)} entity graphs",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -504,6 +511,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     PaginatedGraphObjectResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(objects)} entities",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -571,6 +579,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 CreateEntityResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Created {created_count} entities"),
                 created_count=created_count,
                 created_uris=created_uris
@@ -636,6 +645,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 UpdateEntityResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Updated entities'),
                 updated_uri=updated_uri
             )
@@ -709,6 +719,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 UpdateEntityResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Updated entity (entity_only)'),
                 updated_uri=updated_uri
             )
@@ -770,6 +781,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Deleted {deleted_count} items",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -834,6 +846,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Deleted {deleted_count} entities",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -944,6 +957,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                         FrameGraphResponse,
                         frame_graph=frame_graph,
                         status_code=response.status_code,
+                        status=response_data.get('status'),
                         message=f"Retrieved frame graph with {len(objects)} objects",
                         space_id=space_id,
                         graph_id=graph_id,
@@ -976,6 +990,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                         MultiFrameGraphResponse,
                         frame_graph_list=frame_graphs,
                         status_code=response.status_code,
+                        status=response_data.get('status'),
                         message=f"Retrieved {len(frame_graphs)} frame graphs",
                         space_id=space_id,
                         graph_id=graph_id,
@@ -991,6 +1006,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                     FrameResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(objects)} frames",
                     space_id=space_id,
                     graph_id=graph_id,
@@ -1067,6 +1083,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 FrameResponse,
                 objects=created_objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Created {len(created_objects)} frames",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -1149,6 +1166,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 FrameResponse,
                 objects=updated_objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Updated {len(updated_objects)} frames",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -1232,6 +1250,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Deleted {deleted_count} frames",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -1309,6 +1328,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 QueryResponse,
                 objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Query returned {len(objects)} results",
                 space_id=space_id,
                 graph_id=graph_id,

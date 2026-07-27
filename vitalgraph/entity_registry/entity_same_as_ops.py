@@ -4,6 +4,7 @@ Same-As operations mixin for the Entity Registry.
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from .entity_status import ACTIVE, MERGED, RETRACTED
 
 MAX_RESOLVE_DEPTH = 10
 
@@ -61,6 +62,16 @@ class SameAsMixin:
                     'relationship_type': relationship_type,
                 }, changed_by=created_by)
 
+                # The source is the duplicate being merged into the canonical
+                # target (resolve_entity follows source -> target). Reflect that on
+                # the entity: active -> merged. Leave 'deleted' (terminal) and an
+                # already-'merged' source untouched.
+                await conn.execute(
+                    f"UPDATE entity SET status = '{MERGED}', updated_time = $1 "
+                    f"WHERE entity_id = $2 AND status = '{ACTIVE}'",
+                    datetime.now(timezone.utc), source_entity_id
+                )
+
                 return dict(row)
 
     async def _would_create_cycle(self, conn, source_id: str, target_id: str) -> bool:
@@ -73,7 +84,7 @@ class SameAsMixin:
             visited.add(current)
             next_id = await conn.fetchval(
                 "SELECT target_entity_id FROM entity_same_as "
-                "WHERE source_entity_id = $1 AND status = 'active' LIMIT 1",
+                f"WHERE source_entity_id = $1 AND status = '{ACTIVE}' LIMIT 1",
                 current
             )
             if next_id is None:
@@ -91,9 +102,9 @@ class SameAsMixin:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_same_as SET status = 'retracted', "
+                    f"UPDATE entity_same_as SET status = '{RETRACTED}', "
                     "retracted_time = $1, retracted_by = $2 "
-                    "WHERE same_as_id = $3 AND status = 'active' "
+                    f"WHERE same_as_id = $3 AND status = '{ACTIVE}' "
                     "RETURNING source_entity_id, target_entity_id",
                     datetime.now(timezone.utc), retracted_by, same_as_id
                 )
@@ -104,6 +115,21 @@ class SameAsMixin:
                     'same_as_id': same_as_id,
                     'target_entity_id': row['target_entity_id'],
                 }, changed_by=retracted_by, comment=reason)
+
+                # Un-merge the source only if it is no longer a duplicate of
+                # anything (no other active same-as as source). Guarded to
+                # 'merged' so a 'deleted'/'inactive' source is left alone.
+                still_duplicate = await conn.fetchval(
+                    "SELECT 1 FROM entity_same_as "
+                    f"WHERE source_entity_id = $1 AND status = '{ACTIVE}' LIMIT 1",
+                    row['source_entity_id']
+                )
+                if not still_duplicate:
+                    await conn.execute(
+                        f"UPDATE entity SET status = '{ACTIVE}', updated_time = $1 "
+                        f"WHERE entity_id = $2 AND status = '{MERGED}'",
+                        datetime.now(timezone.utc), row['source_entity_id']
+                    )
                 return True
 
     async def get_same_as(self, entity_id: str) -> List[Dict[str, Any]]:
@@ -111,7 +137,7 @@ class SameAsMixin:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT * FROM entity_same_as "
-                "WHERE (source_entity_id = $1 OR target_entity_id = $1) AND status = 'active' "
+                f"WHERE (source_entity_id = $1 OR target_entity_id = $1) AND status = '{ACTIVE}' "
                 "ORDER BY created_time",
                 entity_id
             )
@@ -138,7 +164,7 @@ class SameAsMixin:
 
                 next_id = await conn.fetchval(
                     "SELECT target_entity_id FROM entity_same_as "
-                    "WHERE source_entity_id = $1 AND status = 'active' LIMIT 1",
+                    f"WHERE source_entity_id = $1 AND status = '{ACTIVE}' LIMIT 1",
                     current_id
                 )
                 if next_id is None:

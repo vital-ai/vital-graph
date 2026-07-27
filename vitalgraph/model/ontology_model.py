@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import List, Optional
 from pydantic import BaseModel
 
+from .result_status import ResultStatus, OperationStatus
+
 
 class OntologyProperty(BaseModel):
     uri: str
@@ -13,11 +15,13 @@ class OntologyProperty(BaseModel):
     property_class: Optional[str] = None
 
 
-class OntologyPropertiesResponse(BaseModel):
+class OntologyPropertiesResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     class_uri: str
     properties: List[OntologyProperty]
     total_count: int
 
 
-class OntologyClassesResponse(BaseModel):
+class OntologyClassesResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     classes: List[str]

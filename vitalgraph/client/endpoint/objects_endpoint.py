@@ -74,6 +74,7 @@ class ObjectsEndpoint(BaseEndpoint):
             return build_success_response(
                 ObjectsListResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} objects",
                 objects=graph_objects,
                 count=pagination.get('total_count', len(graph_objects)),
@@ -130,6 +131,7 @@ class ObjectsEndpoint(BaseEndpoint):
                 return build_success_response(
                     ObjectResponse,
                     status_code=200,
+                    status=response_data.get('status'),
                     message=f"Retrieved object: {uri}",
                     object=graph_objects[0]
                 )
@@ -189,6 +191,7 @@ class ObjectsEndpoint(BaseEndpoint):
             return build_success_response(
                 ObjectCreateResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Created {created_count} objects",
                 created=True,
                 created_count=created_count,
@@ -243,6 +246,7 @@ class ObjectsEndpoint(BaseEndpoint):
             return build_success_response(
                 ObjectUpdateResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Updated {len(updated_uris)} objects",
                 updated=True,
                 updated_count=len(updated_uris),
@@ -295,6 +299,7 @@ class ObjectsEndpoint(BaseEndpoint):
             return build_success_response(
                 ObjectDeleteResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Deleted object: {uri}",
                 deleted=True,
                 deleted_count=1,
@@ -352,6 +357,7 @@ class ObjectsEndpoint(BaseEndpoint):
             return build_success_response(
                 ObjectDeleteResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Deleted {deleted_count} objects",
                 deleted=True,
                 deleted_count=deleted_count,

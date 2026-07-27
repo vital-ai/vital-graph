@@ -3,10 +3,11 @@
 Pydantic models for user management operations.
 """
 
-from typing import Optional, List
+from typing import Any, Optional, List
 from pydantic import BaseModel, Field
 
 from .api_model import BasePaginatedResponse, BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BaseOperationResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 class User(BaseModel):
@@ -123,7 +124,27 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(..., min_length=8, description="New password (minimum 8 characters)")
 
 
-class PasswordChangeResponse(BaseModel):
-    """Response model for self-service password change."""
-    message: str = "Password changed successfully"
-    tokens_invalidated: bool = True
+class PasswordChangeResponse(ResultStatus):
+    """Response model for self-service password change.
+
+    Inherits the unified success/status/message contract from ResultStatus;
+    ``status`` defaults to UPDATED for a successful change. ``success`` is derived.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.UPDATED, description="Outcome discriminator (UPDATED/INVALID_REQUEST/NOT_FOUND/...)"
+    )
+    changed: bool = Field(True, description="Whether the password was actually changed")
+    tokens_invalidated: bool = Field(True, description="Whether existing tokens were invalidated")
+
+
+class UserSpaceAccessResponse(ResultStatus):
+    """Response model for user space-access operations (get/grant/revoke).
+
+    Inherits the unified success/status/message contract from ResultStatus.
+    ``status`` reports the outcome (FOUND/UPDATED/DELETED/NO_OP/NOT_FOUND/
+    INVALID_REQUEST). ``success`` is derived.
+    """
+    username: Optional[str] = Field(None, description="Username the access applies to")
+    space_id: Optional[str] = Field(None, description="Space ID the access applies to (grant/revoke)")
+    access_level: Optional[str] = Field(None, description="Access level granted ('rw' or 'r')")
+    spaces: Optional[Any] = Field(None, description="Space access map for the user (get)")

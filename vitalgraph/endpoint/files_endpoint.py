@@ -25,6 +25,7 @@ from ..model.files_model import (
     FileDeleteResponse,
     FileUploadResponse
 )
+from ..model.result_status import OperationStatus
 from ..storage.s3_file_manager import S3FileManager, create_s3_file_manager_from_config
 from vital_ai_domain.model.FileNode import FileNode
 from .files_streaming_impl import stream_upload_to_s3, stream_download_from_s3
@@ -157,6 +158,7 @@ class FilesEndpoint:
             
             # Neither uri nor uri_list provided
             return FileDeleteResponse(
+                status=OperationStatus.INVALID_REQUEST,
                 message="Either uri or uri_list must be provided",
                 deleted_count=0,
                 deleted_uris=[]
@@ -235,12 +237,13 @@ class FilesEndpoint:
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
+                status=OperationStatus.FOUND if total_count else OperationStatus.EMPTY,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
                 results=quads,
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error listing files: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
@@ -256,12 +259,19 @@ class FilesEndpoint:
             
             quads = (await asyncio.to_thread(graphobjects_to_quad_list, [graph_object], graph_id)) if graph_object else []
             return QuadResultsResponse(
+                status=OperationStatus.FOUND if graph_object else OperationStatus.NOT_FOUND,
+                message="" if graph_object else f"File not found: {uri}",
                 total_count=1 if graph_object else 0,
                 results=quads,
             )
-            
+
         except ValueError as e:
-            raise HTTPException(status_code=404, detail=f"File not found: {uri}")
+            return QuadResultsResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"File not found: {uri}",
+                total_count=0,
+                results=[],
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error retrieving file: {str(e)}")
     
@@ -276,10 +286,11 @@ class FilesEndpoint:
             
             quads = (await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)) if graph_objects else []
             return QuadResultsResponse(
+                status=OperationStatus.FOUND if graph_objects else OperationStatus.EMPTY,
                 total_count=len(graph_objects) if graph_objects else 0,
                 results=quads,
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error getting files by URIs: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to get files: {str(e)}")
@@ -290,26 +301,29 @@ class FilesEndpoint:
         validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileCreateResponse(
+                status=OperationStatus.INVALID_REQUEST,
                 message=f"Validation error: {validation_error}",
                 created_count=0,
                 created_uris=[]
             )
-        
+
         try:
             created_uris = await self.files_impl.create_files(
                 space_id=space_id,
                 graph_objects=graph_objects,
                 graph_id=graph_id
             )
-            
+
             return FileCreateResponse(
+                status=OperationStatus.CREATED,
                 message=f"Successfully created {len(created_uris)} file nodes",
                 created_count=len(created_uris),
                 created_uris=created_uris
             )
-            
+
         except Exception as e:
             return FileCreateResponse(
+                status=OperationStatus.STORE_FAILED,
                 message=f"Error creating file nodes: {str(e)}",
                 created_count=0,
                 created_uris=[]
@@ -321,26 +335,32 @@ class FilesEndpoint:
         validation_error = self._validate_file_node_types(graph_objects)
         if validation_error:
             return FileUpdateResponse(
+                status=OperationStatus.INVALID_REQUEST,
                 message=f"Validation error: {validation_error}",
                 updated_uri=None
             )
-        
+
         try:
             updated_uris = await self.files_impl.update_files(
                 space_id=space_id,
                 file_nodes=graph_objects,
                 graph_id=graph_id
             )
-            
+
             updated_uri = str(graph_objects[0].URI) if graph_objects else "unknown"
-            
+            _uris = [str(u) for u in (updated_uris or [])]
+
             return FileUpdateResponse(
+                status=OperationStatus.UPDATED,
                 message=f"Successfully updated {len(updated_uris)} file nodes",
-                updated_uri=updated_uri
+                updated_uri=updated_uri,
+                updated_uris=_uris,
+                updated_count=len(_uris),
             )
-            
+
         except Exception as e:
             return FileUpdateResponse(
+                status=OperationStatus.STORE_FAILED,
                 message=f"Error updating file metadata: {str(e)}",
                 updated_uri=None
             )
@@ -372,12 +392,14 @@ class FilesEndpoint:
             
             if deleted_count > 0:
                 return FileDeleteResponse(
+                    status=OperationStatus.DELETED,
                     message=f"Successfully deleted file node and storage",
                     deleted_count=deleted_count,
                     deleted_uris=[uri]
                 )
             else:
                 return FileDeleteResponse(
+                    status=OperationStatus.NO_OP,
                     message=f"File node not found - no deletion needed",
                     deleted_count=0,
                     deleted_uris=[]
@@ -385,6 +407,7 @@ class FilesEndpoint:
         except Exception as e:
             logger.error(f"Error deleting file node: {e}")
             return FileDeleteResponse(
+                status=OperationStatus.STORE_FAILED,
                 message=f"Error deleting file node: {str(e)}",
                 deleted_count=0,
                 deleted_uris=[]
@@ -420,12 +443,14 @@ class FilesEndpoint:
                 message += f" (some storage cleanup warnings: {len(storage_errors)} files)"
             
             return FileDeleteResponse(
+                status=OperationStatus.DELETED if deleted_count > 0 else OperationStatus.NO_OP,
                 message=message,
                 deleted_count=deleted_count,
                 deleted_uris=uris[:deleted_count]
             )
         except Exception as e:
             return FileDeleteResponse(
+                status=OperationStatus.STORE_FAILED,
                 message=f"Error deleting file nodes: {str(e)}",
                 deleted_count=0,
                 deleted_uris=[]
@@ -489,6 +514,7 @@ class FilesEndpoint:
                     # Continue anyway - file was uploaded successfully
                 
                 return FileUploadResponse(
+                    status=OperationStatus.CREATED,
                     message=f"Successfully uploaded file content to MinIO",
                     file_uri=uri,
                     file_size=file_size,
@@ -497,6 +523,7 @@ class FilesEndpoint:
                 )
             except Exception as e:
                 return FileUploadResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Error uploading to MinIO: {str(e)}",
                     file_uri=uri,
                     file_size=file_size,
@@ -505,6 +532,7 @@ class FilesEndpoint:
         else:
             # Fallback: simulate upload without storage
             return FileUploadResponse(
+                status=OperationStatus.CREATED,
                 message=f"Successfully uploaded file content (no storage configured)",
                 file_uri=uri,
                 file_size=file_size,
@@ -619,6 +647,7 @@ class FilesEndpoint:
                     self.logger.error(f"Failed to update FileNode properties: {update_error}")
                 
                 return FileUploadResponse(
+                    status=OperationStatus.CREATED,
                     message=f"Successfully streamed file upload to MinIO",
                     file_uri=uri,
                     file_size=0,  # Size unknown in streaming mode
@@ -627,6 +656,7 @@ class FilesEndpoint:
                 )
             except Exception as e:
                 return FileUploadResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Error streaming upload to MinIO: {str(e)}",
                     file_uri=uri,
                     file_size=0,
@@ -634,6 +664,7 @@ class FilesEndpoint:
                 )
         else:
             return FileUploadResponse(
+                status=OperationStatus.CREATED,
                 message=f"Successfully streamed file upload (no storage configured)",
                 file_uri=uri,
                 file_size=0,

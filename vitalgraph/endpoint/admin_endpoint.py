@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..model.admin_model import ResyncResponse, AuditLogEntry, AuditLogResponse
+from ..model.result_status import OperationStatus
 
 
 class AdminEndpoint:
@@ -41,9 +42,16 @@ class AdminEndpoint:
             Use after bulk loads, disaster recovery, or manual DB edits.
             """
             # Get backend implementation
+            def _empty_resync(status_value, message):
+                return ResyncResponse(
+                    status=status_value, message=message,
+                    space_id=space_id, edge_rows=0, frame_entity_rows=0,
+                    pred_stats_rows=0, quad_stats_rows=0, elapsed_ms=0.0,
+                )
+
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
+                return _empty_resync(OperationStatus.NOT_FOUND, f"Space {space_id} not found")
 
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
@@ -53,9 +61,9 @@ class AdminEndpoint:
             # Check that this is the sparql_sql backend
             db_impl = getattr(backend, 'db_impl', None)
             if not db_impl:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Resync is only available for the sparql_sql backend"
+                return _empty_resync(
+                    OperationStatus.INVALID_REQUEST,
+                    "Resync is only available for the sparql_sql backend",
                 )
 
             pool = getattr(db_impl, 'connection_pool', None)
@@ -79,6 +87,7 @@ class AdminEndpoint:
                 )
 
                 return ResyncResponse(
+                    status=OperationStatus.OK,
                     space_id=space_id,
                     edge_rows=result['edge_rows'],
                     frame_entity_rows=result['frame_entity_rows'],
@@ -120,6 +129,12 @@ class AdminEndpoint:
             if not pool:
                 raise HTTPException(status_code=503, detail="Database pool not available")
 
+            def _empty_audit(status_value, message):
+                return AuditLogResponse(
+                    status=status_value, message=message,
+                    entries=[], total_count=0, page_size=limit, offset=offset,
+                )
+
             conditions = []
             params = []
             idx = 1
@@ -143,7 +158,7 @@ class AdminEndpoint:
                 try:
                     value = int(duration_str[:-1])
                 except (ValueError, IndexError):
-                    raise HTTPException(status_code=400, detail=f"Invalid duration: {last}")
+                    return _empty_audit(OperationStatus.INVALID_REQUEST, f"Invalid duration: {last}")
                 if unit == 'h':
                     delta = timedelta(hours=value)
                 elif unit == 'd':
@@ -151,7 +166,7 @@ class AdminEndpoint:
                 elif unit == 'm':
                     delta = timedelta(minutes=value)
                 else:
-                    raise HTTPException(status_code=400, detail=f"Unknown duration unit: {unit}")
+                    return _empty_audit(OperationStatus.INVALID_REQUEST, f"Unknown duration unit: {unit}")
                 cutoff = datetime.now(timezone.utc) - delta
                 conditions.append(f"timestamp >= ${idx}")
                 params.append(cutoff)
@@ -198,9 +213,10 @@ class AdminEndpoint:
                     ))
 
                 return AuditLogResponse(
+                    status=OperationStatus.FOUND if entries else OperationStatus.EMPTY,
                     entries=entries,
                     total_count=total_count or 0,
-                    limit=limit,
+                    page_size=limit,
                     offset=offset,
                 )
             except HTTPException:

@@ -24,8 +24,9 @@ from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
 from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+from ..model.result_status import OperationStatus
 from ..model.vector_indexes_model import (
-    VectorIndexOut, VectorIndexListResponse,
+    VectorIndexOut, VectorIndexListResponse, VectorIndexDeleteResponse,
     CreateVectorIndexRequest, ReindexRequest, ReindexResponse,
     VectorEntry, VectorUpsertRequest, VectorUpsertResponse,
     VectorGetOut, VectorGetResponse,
@@ -116,7 +117,11 @@ class VectorIndexesEndpoint:
                     created_time=str(row["created_time"]) if row.get("created_time") else None,
                     embedding_count=count,
                 ))
-            return VectorIndexListResponse(indexes=indexes, total_count=len(indexes))
+            return VectorIndexListResponse(
+                indexes=indexes,
+                total_count=len(indexes),
+                status=OperationStatus.FOUND if indexes else OperationStatus.EMPTY,
+            )
         finally:
             await self._release(conn)
 
@@ -126,25 +131,39 @@ class VectorIndexesEndpoint:
         require_space_write(current_user, space_id)
 
         if body.distance_metric not in VALID_DISTANCE_METRICS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid distance_metric '{body.distance_metric}'. "
-                       f"Must be one of: {', '.join(sorted(VALID_DISTANCE_METRICS))}",
+            return VectorIndexOut(
+                index_id=0,
+                index_name=body.index_name,
+                dimensions=body.dimensions,
+                distance_metric=body.distance_metric,
+                provider=body.provider,
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Invalid distance_metric '{body.distance_metric}'. "
+                        f"Must be one of: {', '.join(sorted(VALID_DISTANCE_METRICS))}",
             )
 
         conn = await self._acquire()
         try:
             table = f"{space_id}_vector_index"
 
-            # Check for duplicate
+            # Check for duplicate → ALREADY_EXISTS (HTTP 200)
             existing = await conn.fetchrow(
-                f"SELECT index_id FROM {table} WHERE index_name = $1",
+                f"SELECT * FROM {table} WHERE index_name = $1",
                 body.index_name,
             )
             if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Vector index '{body.index_name}' already exists",
+                return VectorIndexOut(
+                    index_id=existing["index_id"],
+                    index_name=existing["index_name"],
+                    dimensions=existing["dimensions"],
+                    distance_metric=existing["distance_metric"],
+                    provider=existing["provider"],
+                    model_name=existing.get("model_name"),
+                    provider_config=_parse_provider_config(existing.get("provider_config")),
+                    description=existing.get("description"),
+                    created_time=str(existing["created_time"]) if existing.get("created_time") else None,
+                    status=OperationStatus.ALREADY_EXISTS,
+                    message=f"Vector index '{body.index_name}' already exists",
                 )
 
             # Insert registry row
@@ -194,6 +213,8 @@ class VectorIndexesEndpoint:
                 description=row.get("description"),
                 created_time=str(row["created_time"]) if row.get("created_time") else None,
                 embedding_count=0,
+                status=OperationStatus.CREATED,
+                message=f"Vector index '{body.index_name}' created",
             )
         finally:
             await self._release(conn)
@@ -208,7 +229,13 @@ class VectorIndexesEndpoint:
                 index_name,
             )
             if row is None:
-                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+                return VectorIndexOut(
+                    index_id=0,
+                    index_name=index_name,
+                    dimensions=0,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Vector index '{index_name}' not found",
+                )
 
             vec_table = self.schema.vec_table_name(space_id, index_name)
             try:
@@ -228,6 +255,7 @@ class VectorIndexesEndpoint:
                 description=row.get("description"),
                 created_time=str(row["created_time"]) if row.get("created_time") else None,
                 embedding_count=count,
+                status=OperationStatus.FOUND,
             )
         finally:
             await self._release(conn)
@@ -244,7 +272,11 @@ class VectorIndexesEndpoint:
                 index_name,
             )
             if row is None:
-                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+                return VectorIndexDeleteResponse(
+                    index_name=index_name,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Vector index '{index_name}' not found",
+                )
 
             # Drop backing data table first
             drop_stmts = self.schema.drop_vector_data_table_sql(space_id, index_name)
@@ -282,7 +314,11 @@ class VectorIndexesEndpoint:
 
             logger.info("Deleted vector index '%s' for space '%s'", index_name, space_id)
 
-            return {"message": "Vector index deleted", "index_name": index_name}
+            return VectorIndexDeleteResponse(
+                index_name=index_name,
+                status=OperationStatus.DELETED,
+                message="Vector index deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -303,7 +339,11 @@ class VectorIndexesEndpoint:
                 f"SELECT dimensions FROM {table} WHERE index_name = $1", index_name,
             )
             if idx_row is None:
-                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+                return VectorUpsertResponse(
+                    upserted=0,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Vector index '{index_name}' not found",
+                )
 
             expected_dims = idx_row["dimensions"]
             vec_table = self.schema.vec_table_name(space_id, index_name)
@@ -350,10 +390,18 @@ class VectorIndexesEndpoint:
                 except Exception as e:
                     errors.append(f"{entry.subject_uri}: {e}")
 
+            if errors and upserted:
+                upsert_status = OperationStatus.PARTIAL
+            elif errors:
+                upsert_status = OperationStatus.STORE_FAILED
+            else:
+                upsert_status = OperationStatus.UPSERTED
+
             return VectorUpsertResponse(
                 message=f"Upserted {upserted} vector(s)",
                 upserted=upserted,
                 errors=errors[:20],
+                status=upsert_status,
             )
         finally:
             await self._release(conn)
@@ -373,7 +421,11 @@ class VectorIndexesEndpoint:
                 f"SELECT index_name FROM {table} WHERE index_name = $1", index_name,
             )
             if idx_row is None:
-                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+                return VectorGetResponse(
+                    vectors=[], total_count=0, page_size=page_size, offset=offset,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Vector index '{index_name}' not found",
+                )
 
             vec_table = self.schema.vec_table_name(space_id, index_name)
             term_table = f"{space_id}_term"
@@ -396,9 +448,10 @@ class VectorIndexesEndpoint:
                 param_idx += 1
 
             if not conditions:
-                raise HTTPException(
-                    status_code=400,
-                    detail="At least one of subject_uri or graph_uri is required",
+                return VectorGetResponse(
+                    vectors=[], total_count=0, page_size=page_size, offset=offset,
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="At least one of subject_uri or graph_uri is required",
                 )
 
             where = " AND ".join(conditions)
@@ -440,6 +493,7 @@ class VectorIndexesEndpoint:
             return VectorGetResponse(
                 vectors=vectors, total_count=true_total,
                 page_size=page_size, offset=offset,
+                status=OperationStatus.FOUND if vectors else OperationStatus.EMPTY,
             )
         finally:
             await self._release(conn)
@@ -458,7 +512,11 @@ class VectorIndexesEndpoint:
                 index_name,
             )
             if idx_row is None:
-                raise HTTPException(status_code=404, detail=f"Vector index '{index_name}' not found")
+                return ReindexResponse(
+                    index_name=index_name,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Vector index '{index_name}' not found",
+                )
 
             provider_name = idx_row["provider"]
             provider_config = _parse_provider_config(idx_row.get("provider_config"))
@@ -493,6 +551,7 @@ class VectorIndexesEndpoint:
             message=f"Reindex started (job_id={job_id})",
             index_name=index_name,
             job_id=job_id,
+            status=OperationStatus.OK,
         )
 
     async def get_reindex_status(
@@ -511,7 +570,11 @@ class VectorIndexesEndpoint:
             if index_name and js.index_name != index_name:
                 continue
             jobs.append(js)
-        return ReindexJobListResponse(jobs=jobs, total_count=len(jobs))
+        return ReindexJobListResponse(
+            jobs=jobs,
+            total_count=len(jobs),
+            status=OperationStatus.FOUND if jobs else OperationStatus.EMPTY,
+        )
 
     async def _run_reindex(
         self, job_id: str, space_id: str, index_name: str, context_uuid,
@@ -577,13 +640,19 @@ class VectorIndexesEndpoint:
         ):
             if index_name:
                 idx = await self.get_index(space_id, index_name, current_user)
-                return VectorIndexListResponse(indexes=[idx], total_count=1)
+                if idx.status == OperationStatus.NOT_FOUND:
+                    return VectorIndexListResponse(
+                        indexes=[], total_count=0,
+                        status=OperationStatus.NOT_FOUND, message=idx.message,
+                    )
+                return VectorIndexListResponse(
+                    indexes=[idx], total_count=1, status=OperationStatus.FOUND,
+                )
             return await self.list_indexes(space_id, current_user)
 
         @self.router.post(
             "/vector-indexes",
             response_model=VectorIndexOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Vector Indexes"],
             summary="Create Vector Index",
             description="Register a new vector index and create its backing data table",
@@ -597,6 +666,7 @@ class VectorIndexesEndpoint:
 
         @self.router.delete(
             "/vector-indexes",
+            response_model=VectorIndexDeleteResponse,
             tags=["Vector Indexes"],
             summary="Delete Vector Index",
             description="Delete a vector index, its data table, and all dependent mappings",

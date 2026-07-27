@@ -7,6 +7,8 @@ with unique identifiers, aliases, external identifiers, and same-as mappings.
 
 from typing import Dict, List
 
+from .entity_status import STATUS_SETS
+
 
 class EntityRegistrySchema:
     """
@@ -21,6 +23,38 @@ class EntityRegistrySchema:
                 type_key VARCHAR(50) UNIQUE NOT NULL,
                 type_label VARCHAR(255) NOT NULL,
                 type_description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''',
+
+        # Metadata table for identifier namespaces (EIN, SSN, EMAIL, SF_LEAD_ID, ...).
+        # type_key holds what entity_identifier.identifier_namespace stores.
+        # VARCHAR(255) to match that column. No hard FK yet (Phase 2) — the write
+        # path upserts here so new namespaces auto-register, preserving today's
+        # free-text ingest behavior.
+        'identifier_type': '''
+            CREATE TABLE IF NOT EXISTS identifier_type (
+                identifier_type_id SERIAL PRIMARY KEY,
+                type_key VARCHAR(255) UNIQUE NOT NULL,
+                type_label VARCHAR(255) NOT NULL,
+                type_description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''',
+
+        # Metadata table for alias types (aka, dba, legal, ...).
+        # type_key holds what entity_alias.alias_type stores; VARCHAR(50) to match.
+        'alias_type': '''
+            CREATE TABLE IF NOT EXISTS alias_type (
+                alias_type_id SERIAL PRIMARY KEY,
+                type_key VARCHAR(50) UNIQUE NOT NULL,
+                type_label VARCHAR(255) NOT NULL,
+                type_description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
@@ -99,6 +133,7 @@ class EntityRegistrySchema:
                 category_key VARCHAR(50) UNIQUE NOT NULL,
                 category_label VARCHAR(255) NOT NULL,
                 category_description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
@@ -135,6 +170,7 @@ class EntityRegistrySchema:
                 type_key VARCHAR(50) UNIQUE NOT NULL,
                 type_label VARCHAR(255) NOT NULL,
                 type_description TEXT,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
@@ -192,8 +228,14 @@ class EntityRegistrySchema:
                 type_label VARCHAR(255) NOT NULL,
                 type_description TEXT,
                 inverse_key VARCHAR(50),
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                updated_time TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                -- inverse_key points at another (or the same) relationship type.
+                -- DEFERRABLE INITIALLY DEFERRED so mutual pairs (owner_of/owned_by)
+                -- can be inserted in one transaction and checked at commit.
+                CONSTRAINT fk_relationship_inverse FOREIGN KEY (inverse_key)
+                    REFERENCES relationship_type(type_key) DEFERRABLE INITIALLY DEFERRED
             )
         ''',
 
@@ -371,6 +413,53 @@ class EntityRegistrySchema:
         "ALTER TABLE entity_location ADD COLUMN IF NOT EXISTS external_location_id VARCHAR(50)",
         # Fuzzy hash: MD5 of fuzzy-relevant fields for fast PG ↔ MemoryDB comparison
         "ALTER TABLE entity ADD COLUMN IF NOT EXISTS fuzzy_hash VARCHAR(32)",
+
+        # --- Metadata management refactor (Phase 1) ---
+        # is_active on the four existing lookup tables so a value can be retired
+        # from dropdowns without deleting rows that reference it.
+        "ALTER TABLE entity_type ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE category ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE relationship_type ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        "ALTER TABLE entity_location_type ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+        # Backfill the two new metadata tables from the free-text values already in
+        # use. Idempotent (ON CONFLICT); label defaults to the key and can be
+        # renamed later via the management API. Tables are created in the CREATE
+        # step, which runs before migrations.
+        "INSERT INTO identifier_type (type_key, type_label) "
+        "SELECT DISTINCT identifier_namespace, identifier_namespace FROM entity_identifier "
+        "WHERE identifier_namespace IS NOT NULL ON CONFLICT (type_key) DO NOTHING",
+        "INSERT INTO alias_type (type_key, type_label) "
+        "SELECT DISTINCT alias_type, alias_type FROM entity_alias "
+        "WHERE alias_type IS NOT NULL ON CONFLICT (type_key) DO NOTHING",
+
+        # --- Metadata management (Phase 2): hard FKs on the promoted columns ---
+        # Re-backfill immediately before adding each FK so any value written since
+        # the initial backfill is covered (the add would fail on an orphan).
+        # The write paths (_insert_identifier / _insert_alias) upsert the parent
+        # row in the same transaction, so ingest stays FK-safe. RESTRICT (default)
+        # also blocks a direct DELETE of an in-use type at the DB level, backing
+        # up the app-layer delete guard.
+        "INSERT INTO identifier_type (type_key, type_label) "
+        "SELECT DISTINCT identifier_namespace, identifier_namespace FROM entity_identifier "
+        "WHERE identifier_namespace IS NOT NULL ON CONFLICT (type_key) DO NOTHING",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_identifier_namespace_type') "
+        "THEN ALTER TABLE entity_identifier ADD CONSTRAINT fk_identifier_namespace_type "
+        "FOREIGN KEY (identifier_namespace) REFERENCES identifier_type(type_key); END IF; END $$",
+
+        "INSERT INTO alias_type (type_key, type_label) "
+        "SELECT DISTINCT alias_type, alias_type FROM entity_alias "
+        "WHERE alias_type IS NOT NULL ON CONFLICT (type_key) DO NOTHING",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_alias_type_type') "
+        "THEN ALTER TABLE entity_alias ADD CONSTRAINT fk_alias_type_type "
+        "FOREIGN KEY (alias_type) REFERENCES alias_type(type_key); END IF; END $$",
+
+        # Self-FK on relationship_type.inverse_key. DEFERRABLE INITIALLY DEFERRED
+        # because inverse pairs are mutually referential (owner_of <-> owned_by):
+        # both sides can be inserted in one transaction and validated at commit.
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_relationship_inverse') "
+        "THEN ALTER TABLE relationship_type ADD CONSTRAINT fk_relationship_inverse "
+        "FOREIGN KEY (inverse_key) REFERENCES relationship_type(type_key) "
+        "DEFERRABLE INITIALLY DEFERRED; END IF; END $$",
     ]
 
     VIEWS = [
@@ -392,7 +481,32 @@ class EntityRegistrySchema:
 
     def migrations_sql(self) -> List[str]:
         """Get SQL statements for schema migrations (safe to re-run)."""
-        return list(self.MIGRATIONS)
+        return list(self.MIGRATIONS) + self._status_standardization_sql()
+
+    @staticmethod
+    def _status_standardization_sql() -> List[str]:
+        """status vocabulary standardization (all migrations idempotent):
+
+        1. Unify the binary 'gone' word: 'removed' -> 'retracted' on the three
+           tables that used it. Runs before the CHECK constraints so no row
+           violates them.
+        2. A CHECK constraint per table encoding its allowed status set from
+           entity_status.STATUS_SETS, so a fourth word can never be inserted.
+        """
+        stmts: List[str] = [
+            "UPDATE entity_category_map          SET status = 'retracted' WHERE status = 'removed'",
+            "UPDATE entity_location              SET status = 'retracted' WHERE status = 'removed'",
+            "UPDATE entity_location_category_map SET status = 'retracted' WHERE status = 'removed'",
+        ]
+        for table, allowed in STATUS_SETS.items():
+            in_list = ', '.join(f"'{s}'" for s in allowed)
+            cname = f"chk_{table}_status"
+            stmts.append(
+                f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{cname}') "
+                f"THEN ALTER TABLE {table} ADD CONSTRAINT {cname} "
+                f"CHECK (status IN ({in_list})); END IF; END $$"
+            )
+        return stmts
 
     def create_indexes_sql(self) -> List[str]:
         """Get SQL statements to create all indexes."""

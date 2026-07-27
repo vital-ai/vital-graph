@@ -10,6 +10,7 @@ from datetime import datetime
 
 from .api_model import BasePaginatedResponse
 from .import_model import JobStatus, FileFormat
+from .result_status import ResultStatus, OperationStatus
 
 
 # Re-export for backward compatibility
@@ -54,27 +55,28 @@ class ExportJobsResponse(BasePaginatedResponse):
     jobs: List[ExportJob]
 
 
-class ExportJobResponse(BaseModel):
+class ExportJobResponse(ResultStatus):
     """Response model for single export job."""
-    job: ExportJob
+    status: OperationStatus = OperationStatus.FOUND
+    job: Optional[ExportJob] = None
 
 
-class ExportCreateResponse(BaseModel):
+class ExportCreateResponse(ResultStatus):
     """Response model for export job creation."""
-    message: str
+    status: OperationStatus = OperationStatus.CREATED
     job_id: str
     job: ExportJob
 
 
-class ExportDeleteResponse(BaseModel):
+class ExportDeleteResponse(ResultStatus):
     """Response model for export job deletion."""
-    message: str
+    status: OperationStatus = OperationStatus.DELETED
     job_id: str
 
 
-class ExportExecuteResponse(BaseModel):
+class ExportExecuteResponse(ResultStatus):
     """Response model for export job execution."""
-    message: str
+    status: OperationStatus = OperationStatus.OK
     job_id: str
     execution_started: bool
 

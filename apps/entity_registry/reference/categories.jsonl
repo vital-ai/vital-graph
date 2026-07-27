@@ -1,0 +1,23 @@
+{"category_key" : "customer", "category_label" : "Customer", "category_description" : "A customer or client"}
+{"category_key" : "partner", "category_label" : "Partner", "category_description" : "A business partner or affiliate"}
+{"category_key" : "vendor", "category_label" : "Vendor", "category_description" : "A vendor or supplier"}
+{"category_key" : "competitor", "category_label" : "Competitor", "category_description" : "A competitor"}
+{"category_key" : "prospect", "category_label" : "Prospect", "category_description" : "A prospective customer or lead"}
+{"category_key" : "investor", "category_label" : "Investor", "category_description" : "An investor or shareholder"}
+{"category_key" : "regulator", "category_label" : "Regulator", "category_description" : "A regulatory or oversight body"}
+{"category_key" : "business_owner", "category_label" : "Business Owner", "category_description" : "Business Owner"}
+{"category_key" : "c_corporation", "category_label" : "C Corporation", "category_description" : "C Corporation"}
+{"category_key" : "corporation", "category_label" : "Corporation", "category_description" : "Corporation"}
+{"category_key" : "lead_disqualified", "category_label" : "Lead - Disqualified", "category_description" : "Lead - Disqualified"}
+{"category_key" : "lead_incomplete", "category_label" : "Lead - Incomplete", "category_description" : "Lead - Incomplete"}
+{"category_key" : "lead_new", "category_label" : "Lead - New", "category_description" : "Lead - New"}
+{"category_key" : "lead_nurture", "category_label" : "Lead - Nurture", "category_description" : "Lead - Nurture"}
+{"category_key" : "lead_qualified", "category_label" : "Lead - Qualified", "category_description" : "Lead - Qualified"}
+{"category_key" : "lead_working", "category_label" : "Lead - Working", "category_description" : "Lead - Working"}
+{"category_key" : "llc", "category_label" : "LLC", "category_description" : "LLC"}
+{"category_key" : "non_profit", "category_label" : "Non-Profit", "category_description" : "Non-Profit"}
+{"category_key" : "not_qualified", "category_label" : "Not Qualified", "category_description" : "Not Qualified"}
+{"category_key" : "partnership", "category_label" : "Partnership", "category_description" : "Partnership"}
+{"category_key" : "personal_guarantor", "category_label" : "Personal Guarantor", "category_description" : "Personal Guarantor"}
+{"category_key" : "s_corporation", "category_label" : "S Corporation", "category_description" : "S Corporation"}
+{"category_key" : "sole_proprietorship", "category_label" : "Sole Proprietorship", "category_description" : "Sole Proprietorship"}

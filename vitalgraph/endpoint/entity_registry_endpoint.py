@@ -7,10 +7,11 @@ same-as mappings, entity types, and change logs.
 
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from ..model.result_status import OperationStatus
 from ..model.entity_registry_model import (
     AliasCreateRequest,
     AliasResponse,
@@ -36,6 +37,9 @@ from ..model.entity_registry_model import (
     LocationTypeCreateRequest,
     LocationTypeResponse,
     LocationUpdateRequest,
+    MetadataItemResponse,
+    MetadataCreateRequest,
+    MetadataUpdateRequest,
     RelationshipCreateRequest,
     RelationshipResponse,
     RelationshipTypeCreateRequest,
@@ -51,6 +55,17 @@ from ..model.entity_registry_model import (
     EntitySearchLocationResult,
     LocationSearchResponse,
     LocationSearchResult,
+    RegistryWriteResponse,
+    EntityEnvelope,
+    IdentifierEnvelope,
+    AliasEnvelope,
+    LocationEnvelope,
+    RelationshipEnvelope,
+    EntityCategoryEnvelope,
+    LocationCategoryEnvelope,
+    SameAsEnvelope,
+    EntityLookupResponse,
+    MetadataListResponse,
 )
 from ..entity_registry.entity_registry_id import entity_id_to_uri
 from ..entity_registry.entity_registry_search import EntityRegistrySearch
@@ -170,11 +185,13 @@ class EntityRegistryEndpoint:
                 )
                 full = await self.registry.get_entity(entity['entity_id'])
                 return EntityCreateResponse(
-                    success=True, entity_id=entity['entity_id'],
+                    status=OperationStatus.CREATED, entity_id=entity['entity_id'],
                     entity_uri=entity['entity_uri'], entity=_entity_to_response(full),
                 )
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return EntityCreateResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
+            except HTTPException:
+                raise
             except Exception as e:
                 self.logger.error(f"Error creating entity: {e}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -190,26 +207,33 @@ class EntityRegistryEndpoint:
             page_size: int = Query(20, ge=1, le=100),
             current_user: Dict = Depends(auth),
         ):
-            entities, total = await self.registry.search_entities(
-                query=query, type_key=type_key, country=country, region=region,
-                status=entity_status, page=page, page_size=page_size,
-            )
+            try:
+                entities, total = await self.registry.search_entities(
+                    query=query, type_key=type_key, country=country, region=region,
+                    status=entity_status, page=page, page_size=page_size,
+                )
+            except ValueError as e:
+                return EntityListResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e),
+                    entities=[], total_count=0, page=page, page_size=page_size,
+                )
             return EntityListResponse(
-                success=True, entities=[_entity_to_response(e) for e in entities],
+                status=OperationStatus.FOUND if entities else OperationStatus.EMPTY,
+                entities=[_entity_to_response(e) for e in entities],
                 total_count=total, page=page, page_size=page_size,
             )
 
-        @self.router.get("/entities/get", response_model=EntityResponse, tags=["Entity Registry"])
+        @self.router.get("/entities/get", response_model=EntityEnvelope, tags=["Entity Registry"])
         async def get_entity_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             entity = await self.registry.get_entity(entity_id)
             if entity is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Entity not found: {entity_id}")
-            return _entity_to_response(entity)
+                return EntityEnvelope(status=OperationStatus.NOT_FOUND, message=f"Entity not found: {entity_id}", entity=None)
+            return EntityEnvelope(status=OperationStatus.FOUND, entity=_entity_to_response(entity))
 
-        @self.router.put("/entities/update", response_model=EntityResponse, tags=["Entity Registry"])
+        @self.router.put("/entities/update", response_model=EntityEnvelope, tags=["Entity Registry"])
         async def update_entity_route(
             request: EntityUpdateRequest,
             entity_id: str = Query(..., description="Entity ID"),
@@ -227,24 +251,24 @@ class EntityRegistryEndpoint:
                     updated_by=request.updated_by, notes=request.notes,
                 )
                 if entity is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Entity not found: {entity_id}")
-                return _entity_to_response(entity)
+                    return EntityEnvelope(status=OperationStatus.NOT_FOUND, message=f"Entity not found: {entity_id}", entity=None)
+                return EntityEnvelope(status=OperationStatus.UPDATED, entity=_entity_to_response(entity))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return EntityEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), entity=None)
 
-        @self.router.delete("/entities/delete", tags=["Entity Registry"])
+        @self.router.delete("/entities/delete", response_model=RegistryWriteResponse, tags=["Entity Registry"])
         async def delete_entity_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             deleted = await self.registry.delete_entity(entity_id)
             if not deleted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Entity not found: {entity_id}")
-            return {"success": True, "entity_id": entity_id}
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND, message=f"Entity not found: {entity_id}", entity_id=entity_id)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, entity_id=entity_id)
 
         # -- Identifiers --
 
-        @self.router.post("/identifiers/add", response_model=IdentifierResponse, tags=["Entity Registry"])
+        @self.router.post("/identifiers/add", response_model=IdentifierEnvelope, tags=["Entity Registry"])
         async def add_identifier_route(
             request: IdentifierCreateRequest,
             entity_id: str = Query(..., description="Entity ID"),
@@ -256,9 +280,9 @@ class EntityRegistryEndpoint:
                     identifier_value=request.identifier_value, is_primary=request.is_primary,
                     created_by=request.created_by, notes=request.notes,
                 )
-                return IdentifierResponse(**ident)
+                return IdentifierEnvelope(status=OperationStatus.CREATED, identifier=IdentifierResponse(**ident))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return IdentifierEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), identifier=None)
 
         @self.router.get("/identifiers/list", tags=["Entity Registry"])
         async def list_identifiers_route(
@@ -268,17 +292,17 @@ class EntityRegistryEndpoint:
             idents = await self.registry.list_identifiers(entity_id)
             return [IdentifierResponse(**i) for i in idents]
 
-        @self.router.delete("/identifiers/remove", tags=["Entity Registry"])
-        async def remove_identifier_route(
+        @self.router.delete("/identifiers/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_identifier_route(
             identifier_id: int = Query(..., description="Identifier ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_identifier(identifier_id)
+            removed = await self.registry.retract_identifier(identifier_id)
             if not removed:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Identifier not found: {identifier_id}")
-            return {"success": True, "identifier_id": identifier_id}
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND, message=f"Identifier not found: {identifier_id}", identifier_id=identifier_id)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, identifier_id=identifier_id)
 
-        @self.router.get("/identifiers/lookup", response_model=List[EntityResponse], tags=["Entity Registry"])
+        @self.router.get("/identifiers/lookup", response_model=EntityLookupResponse, tags=["Entity Registry"])
         async def lookup_by_identifier_route(
             namespace: str = Query(..., description="Identifier namespace"),
             value: str = Query(..., description="Identifier value"),
@@ -286,13 +310,14 @@ class EntityRegistryEndpoint:
         ):
             entities = await self.registry.lookup_by_identifier(namespace, value)
             if not entities:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"No entity found for {namespace}:{value}")
-            return [_entity_to_response(e) for e in entities]
+                return EntityLookupResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"No entity found for {namespace}:{value}", entities=[])
+            return EntityLookupResponse(status=OperationStatus.FOUND,
+                                        entities=[_entity_to_response(e) for e in entities])
 
         # -- Aliases --
 
-        @self.router.post("/aliases/add", response_model=AliasResponse, tags=["Entity Registry"])
+        @self.router.post("/aliases/add", response_model=AliasEnvelope, tags=["Entity Registry"])
         async def add_alias_route(
             request: AliasCreateRequest,
             entity_id: str = Query(..., description="Entity ID"),
@@ -304,9 +329,9 @@ class EntityRegistryEndpoint:
                     alias_type=request.alias_type, is_primary=request.is_primary,
                     created_by=request.created_by, notes=request.notes,
                 )
-                return AliasResponse(**alias)
+                return AliasEnvelope(status=OperationStatus.CREATED, alias=AliasResponse(**alias))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return AliasEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), alias=None)
 
         @self.router.get("/aliases/list", tags=["Entity Registry"])
         async def list_aliases_route(
@@ -316,15 +341,15 @@ class EntityRegistryEndpoint:
             aliases = await self.registry.list_aliases(entity_id)
             return [AliasResponse(**a) for a in aliases]
 
-        @self.router.delete("/aliases/remove", tags=["Entity Registry"])
-        async def remove_alias_route(
+        @self.router.delete("/aliases/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_alias_route(
             alias_id: int = Query(..., description="Alias ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_alias(alias_id)
+            removed = await self.registry.retract_alias(alias_id)
             if not removed:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Alias not found: {alias_id}")
-            return {"success": True, "alias_id": alias_id}
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND, message=f"Alias not found: {alias_id}", alias_id=alias_id)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, alias_id=alias_id)
 
         # -- Categories --
 
@@ -341,9 +366,11 @@ class EntityRegistryEndpoint:
                     category_label=request.category_label,
                     category_description=request.category_description,
                 )
-                return CategoryResponse(**category)
+                return CategoryResponse(status=OperationStatus.CREATED, **category)
+            except HTTPException:
+                raise
             except Exception as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return CategoryResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
 
         @self.router.get("/categories/entity", response_model=List[EntityCategoryResponse],
                          tags=["Entity Registry"])
@@ -354,7 +381,7 @@ class EntityRegistryEndpoint:
             cats = await self.registry.list_entity_categories(entity_id)
             return [EntityCategoryResponse(**c) for c in cats]
 
-        @self.router.post("/categories/assign", response_model=EntityCategoryResponse,
+        @self.router.post("/categories/assign", response_model=EntityCategoryEnvelope,
                           tags=["Entity Registry"])
         async def add_entity_category_route(
             request: EntityCategoryRequest,
@@ -366,24 +393,26 @@ class EntityRegistryEndpoint:
                     entity_id=entity_id, category_key=request.category_key,
                     created_by=request.created_by, notes=request.notes,
                 )
-                return EntityCategoryResponse(**result)
+                return EntityCategoryEnvelope(status=OperationStatus.CREATED, entity_category=EntityCategoryResponse(**result))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return EntityCategoryEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), entity_category=None)
 
-        @self.router.delete("/categories/remove", tags=["Entity Registry"])
-        async def remove_entity_category_route(
+        @self.router.delete("/categories/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_entity_category_route(
             entity_id: str = Query(..., description="Entity ID"),
             category_key: str = Query(..., description="Category key"),
             current_user: Dict = Depends(auth),
         ):
             try:
-                removed = await self.registry.remove_entity_category(entity_id, category_key)
+                removed = await self.registry.retract_entity_category(entity_id, category_key)
                 if not removed:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                        detail=f"Category mapping not found: {entity_id}/{category_key}")
-                return {"success": True, "entity_id": entity_id, "category_key": category_key}
+                    return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                                 message=f"Category mapping not found: {entity_id}/{category_key}",
+                                                 entity_id=entity_id, category_key=category_key)
+                return RegistryWriteResponse(status=OperationStatus.DELETED, entity_id=entity_id, category_key=category_key)
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return RegistryWriteResponse(status=OperationStatus.INVALID_REQUEST, message=str(e),
+                                             entity_id=entity_id, category_key=category_key)
 
         @self.router.get("/categories/entities", response_model=List[EntityResponse],
                          tags=["Entity Registry"])
@@ -408,16 +437,18 @@ class EntityRegistryEndpoint:
                     type_key=request.type_key, type_label=request.type_label,
                     type_description=request.type_description,
                 )
-                return LocationTypeResponse(**lt)
+                return LocationTypeResponse(status=OperationStatus.CREATED, **lt)
+            except HTTPException:
+                raise
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                        detail=f"Location type already exists: {request.type_key}")
+                    return LocationTypeResponse(status=OperationStatus.ALREADY_EXISTS,
+                                                message=f"Location type already exists: {request.type_key}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         # -- Locations --
 
-        @self.router.post("/locations/add", response_model=LocationResponse, tags=["Entity Registry"])
+        @self.router.post("/locations/add", response_model=LocationEnvelope, tags=["Entity Registry"])
         async def create_location_route(
             request: LocationCreateRequest,
             entity_id: str = Query(..., description="Entity ID"),
@@ -428,20 +459,20 @@ class EntityRegistryEndpoint:
                     entity_id=entity_id, location_type_key=request.location_type_key,
                     created_by=None, **request.model_dump(exclude={'location_type_key'}),
                 )
-                return LocationResponse(**loc)
+                return LocationEnvelope(status=OperationStatus.CREATED, location=LocationResponse(**loc))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return LocationEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), location=None)
 
-        @self.router.get("/locations/get", response_model=LocationResponse, tags=["Entity Registry"])
+        @self.router.get("/locations/get", response_model=LocationEnvelope, tags=["Entity Registry"])
         async def get_location_route(
             location_id: int = Query(..., description="Location ID"),
             current_user: Dict = Depends(auth),
         ):
             loc = await self.registry.get_location(location_id)
             if loc is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"Location not found: {location_id}")
-            return LocationResponse(**loc)
+                return LocationEnvelope(status=OperationStatus.NOT_FOUND,
+                                        message=f"Location not found: {location_id}", location=None)
+            return LocationEnvelope(status=OperationStatus.FOUND, location=LocationResponse(**loc))
 
         @self.router.get("/locations/list", tags=["Entity Registry"])
         async def list_locations_route(
@@ -452,7 +483,7 @@ class EntityRegistryEndpoint:
             locs = await self.registry.list_locations(entity_id, include_expired=include_expired)
             return [LocationResponse(**loc) for loc in locs]
 
-        @self.router.put("/locations/update", response_model=LocationResponse, tags=["Entity Registry"])
+        @self.router.put("/locations/update", response_model=LocationEnvelope, tags=["Entity Registry"])
         async def update_location_route(
             request: LocationUpdateRequest,
             location_id: int = Query(..., description="Location ID"),
@@ -464,26 +495,26 @@ class EntityRegistryEndpoint:
                     **request.model_dump(exclude={'updated_by'}, exclude_none=True),
                 )
                 if loc is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                        detail=f"Location not found: {location_id}")
-                return LocationResponse(**loc)
+                    return LocationEnvelope(status=OperationStatus.NOT_FOUND,
+                                            message=f"Location not found: {location_id}", location=None)
+                return LocationEnvelope(status=OperationStatus.UPDATED, location=LocationResponse(**loc))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return LocationEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), location=None)
 
-        @self.router.delete("/locations/remove", tags=["Entity Registry"])
-        async def remove_location_route(
+        @self.router.delete("/locations/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_location_route(
             location_id: int = Query(..., description="Location ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_location(location_id)
+            removed = await self.registry.retract_location(location_id)
             if not removed:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"Location not found: {location_id}")
-            return {"success": True, "location_id": location_id}
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                             message=f"Location not found: {location_id}", location_id=location_id)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, location_id=location_id)
 
         # -- Location Categories --
 
-        @self.router.post("/locations/categories/assign", response_model=LocationCategoryResponse,
+        @self.router.post("/locations/categories/assign", response_model=LocationCategoryEnvelope,
                           tags=["Entity Registry"])
         async def add_location_category_route(
             request: LocationCategoryRequest,
@@ -495,24 +526,26 @@ class EntityRegistryEndpoint:
                     location_id=location_id, category_key=request.category_key,
                     created_by=request.created_by, notes=request.notes,
                 )
-                return LocationCategoryResponse(**result)
+                return LocationCategoryEnvelope(status=OperationStatus.CREATED, location_category=LocationCategoryResponse(**result))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return LocationCategoryEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), location_category=None)
 
-        @self.router.delete("/locations/categories/remove", tags=["Entity Registry"])
-        async def remove_location_category_route(
+        @self.router.delete("/locations/categories/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_location_category_route(
             location_id: int = Query(..., description="Location ID"),
             category_key: str = Query(..., description="Category key"),
             current_user: Dict = Depends(auth),
         ):
             try:
-                removed = await self.registry.remove_location_category(location_id, category_key)
+                removed = await self.registry.retract_location_category(location_id, category_key)
                 if not removed:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                        detail=f"Location category mapping not found: {location_id}/{category_key}")
-                return {"success": True, "location_id": location_id, "category_key": category_key}
+                    return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                                 message=f"Location category mapping not found: {location_id}/{category_key}",
+                                                 location_id=location_id, category_key=category_key)
+                return RegistryWriteResponse(status=OperationStatus.DELETED, location_id=location_id, category_key=category_key)
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return RegistryWriteResponse(status=OperationStatus.INVALID_REQUEST, message=str(e),
+                                             location_id=location_id, category_key=category_key)
 
         @self.router.get("/locations/categories/list", tags=["Entity Registry"])
         async def list_location_categories_route(
@@ -540,16 +573,18 @@ class EntityRegistryEndpoint:
                     type_description=request.type_description,
                     inverse_key=request.inverse_key,
                 )
-                return RelationshipTypeResponse(**rt)
+                return RelationshipTypeResponse(status=OperationStatus.CREATED, **rt)
+            except HTTPException:
+                raise
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                        detail=f"Relationship type already exists: {request.type_key}")
+                    return RelationshipTypeResponse(status=OperationStatus.ALREADY_EXISTS,
+                                                    message=f"Relationship type already exists: {request.type_key}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
         # -- Relationships --
 
-        @self.router.post("/relationships", response_model=RelationshipResponse, tags=["Entity Registry"])
+        @self.router.post("/relationships", response_model=RelationshipEnvelope, tags=["Entity Registry"])
         async def create_relationship_route(
             request: RelationshipCreateRequest, current_user: Dict = Depends(auth),
         ):
@@ -564,20 +599,20 @@ class EntityRegistryEndpoint:
                     created_by=request.created_by,
                     notes=request.notes,
                 )
-                return RelationshipResponse(**rel)
+                return RelationshipEnvelope(status=OperationStatus.CREATED, relationship=RelationshipResponse(**rel))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return RelationshipEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), relationship=None)
 
-        @self.router.get("/relationships/get", response_model=RelationshipResponse, tags=["Entity Registry"])
+        @self.router.get("/relationships/get", response_model=RelationshipEnvelope, tags=["Entity Registry"])
         async def get_relationship_route(
             relationship_id: int = Query(..., description="Relationship ID"),
             current_user: Dict = Depends(auth),
         ):
             rel = await self.registry.get_relationship(relationship_id)
             if rel is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"Relationship not found: {relationship_id}")
-            return RelationshipResponse(**rel)
+                return RelationshipEnvelope(status=OperationStatus.NOT_FOUND,
+                                            message=f"Relationship not found: {relationship_id}", relationship=None)
+            return RelationshipEnvelope(status=OperationStatus.FOUND, relationship=RelationshipResponse(**rel))
 
         @self.router.get("/relationships/list", tags=["Entity Registry"])
         async def list_relationships_route(
@@ -591,7 +626,7 @@ class EntityRegistryEndpoint:
             )
             return [RelationshipResponse(**r) for r in rels]
 
-        @self.router.put("/relationships/update", response_model=RelationshipResponse,
+        @self.router.put("/relationships/update", response_model=RelationshipEnvelope,
                          tags=["Entity Registry"])
         async def update_relationship_route(
             request: RelationshipUpdateRequest,
@@ -604,26 +639,27 @@ class EntityRegistryEndpoint:
                     **request.model_dump(exclude={'updated_by'}, exclude_none=True),
                 )
                 if rel is None:
-                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                        detail=f"Relationship not found: {relationship_id}")
-                return RelationshipResponse(**rel)
+                    return RelationshipEnvelope(status=OperationStatus.NOT_FOUND,
+                                                message=f"Relationship not found: {relationship_id}", relationship=None)
+                return RelationshipEnvelope(status=OperationStatus.UPDATED, relationship=RelationshipResponse(**rel))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return RelationshipEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), relationship=None)
 
-        @self.router.delete("/relationships/remove", tags=["Entity Registry"])
-        async def remove_relationship_route(
+        @self.router.delete("/relationships/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def retract_relationship_route(
             relationship_id: int = Query(..., description="Relationship ID"),
             current_user: Dict = Depends(auth),
         ):
-            removed = await self.registry.remove_relationship(relationship_id)
+            removed = await self.registry.retract_relationship(relationship_id)
             if not removed:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"Relationship not found or already retracted: {relationship_id}")
-            return {"success": True, "relationship_id": relationship_id}
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                             message=f"Relationship not found or already retracted: {relationship_id}",
+                                             relationship_id=relationship_id)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, relationship_id=relationship_id)
 
         # -- Same-As --
 
-        @self.router.post("/sameas", response_model=SameAsResponse, tags=["Entity Registry"])
+        @self.router.post("/sameas", response_model=SameAsEnvelope, tags=["Entity Registry"])
         async def create_same_as_route(request: SameAsCreateRequest, current_user: Dict = Depends(auth)):
             try:
                 mapping = await self.registry.create_same_as(
@@ -633,9 +669,9 @@ class EntityRegistryEndpoint:
                     confidence=request.confidence, reason=request.reason,
                     created_by=request.created_by, notes=request.notes,
                 )
-                return SameAsResponse(**mapping)
+                return SameAsEnvelope(status=OperationStatus.CREATED, same_as=SameAsResponse(**mapping))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return SameAsEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), same_as=None)
 
         @self.router.get("/sameas/list", tags=["Entity Registry"])
         async def get_same_as_route(
@@ -645,7 +681,7 @@ class EntityRegistryEndpoint:
             mappings = await self.registry.get_same_as(entity_id)
             return [SameAsResponse(**m) for m in mappings]
 
-        @self.router.put("/sameas/retract", response_model=SameAsResponse, tags=["Entity Registry"])
+        @self.router.put("/sameas/retract", response_model=SameAsEnvelope, tags=["Entity Registry"])
         async def retract_same_as_route(
             request: SameAsRetractRequest,
             same_as_id: int = Query(..., description="Same-as mapping ID"),
@@ -655,22 +691,22 @@ class EntityRegistryEndpoint:
                 same_as_id=same_as_id, retracted_by=request.retracted_by, reason=request.reason,
             )
             if not retracted:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                    detail=f"Same-as mapping not found or already retracted: {same_as_id}")
+                return SameAsEnvelope(status=OperationStatus.NOT_FOUND,
+                                      message=f"Same-as mapping not found or already retracted: {same_as_id}", same_as=None)
             async with self.registry.pool.acquire() as conn:
                 row = await conn.fetchrow("SELECT * FROM entity_same_as WHERE same_as_id = $1", same_as_id)
-                return SameAsResponse(**dict(row))
+                return SameAsEnvelope(status=OperationStatus.UPDATED, same_as=SameAsResponse(**dict(row)))
 
-        @self.router.get("/sameas/resolve", response_model=EntityResponse, tags=["Entity Registry"])
+        @self.router.get("/sameas/resolve", response_model=EntityEnvelope, tags=["Entity Registry"])
         async def resolve_entity_route(
             entity_id: str = Query(..., description="Entity ID to resolve"),
             current_user: Dict = Depends(auth),
         ):
             try:
                 entity = await self.registry.resolve_entity(entity_id)
-                return _entity_to_response(entity)
+                return EntityEnvelope(status=OperationStatus.FOUND, entity=_entity_to_response(entity))
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+                return EntityEnvelope(status=OperationStatus.NOT_FOUND, message=str(e), entity=None)
 
         # -- Entity Types --
 
@@ -686,12 +722,125 @@ class EntityRegistryEndpoint:
                     type_key=request.type_key, type_label=request.type_label,
                     type_description=request.type_description,
                 )
-                return EntityTypeResponse(**et)
+                return EntityTypeResponse(status=OperationStatus.CREATED, **et)
+            except HTTPException:
+                raise
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                                        detail=f"Entity type already exists: {request.type_key}")
+                    return EntityTypeResponse(status=OperationStatus.ALREADY_EXISTS,
+                                              message=f"Entity type already exists: {request.type_key}")
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+        # -- Unified metadata management (all six vocabularies) --
+        # kind ∈ entity-types | categories | relationship-types | location-types
+        #        | identifier-types | alias-types
+        # Query-param keyed per the no-path-IDs URL convention.
+
+        from vitalgraph.entity_registry.entity_metadata_ops import (
+            MetadataInUseError, UnknownMetadataKindError,
+        )
+
+        def _kind_ok(kind: str) -> bool:
+            from vitalgraph.entity_registry.entity_metadata_ops import METADATA_KINDS
+            return kind in METADATA_KINDS
+
+        @self.router.get("/metadata/{kind}", response_model=MetadataListResponse,
+                         tags=["Entity Registry"])
+        async def list_metadata_route(
+            kind: str,
+            include_inactive: bool = Query(False, description="Include retired values"),
+            include_usage: bool = Query(False, description="Add usage_count per row"),
+            q: Optional[str] = Query(None, description="Prefix filter on key/label"),
+            current_user: Dict = Depends(auth),
+        ):
+            """Dropdown-friendly list. Active-only and count-free by default."""
+            if not _kind_ok(kind):
+                return MetadataListResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"Unknown metadata kind: {kind}", items=[])
+            items = await self.registry.list_metadata(
+                kind, include_inactive=include_inactive,
+                include_usage=include_usage, q=q)
+            return MetadataListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                items=[MetadataItemResponse(**i) for i in items])
+
+        @self.router.get("/metadata/{kind}/get", response_model=MetadataItemResponse,
+                         tags=["Entity Registry"])
+        async def get_metadata_route(
+            kind: str, key: str = Query(..., description="Metadata key"),
+            current_user: Dict = Depends(auth),
+        ):
+            if not _kind_ok(kind):
+                return MetadataItemResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"Unknown metadata kind: {kind}")
+            item = await self.registry.get_metadata(kind, key)
+            if item is None:
+                return MetadataItemResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"{kind} not found: {key}")
+            return MetadataItemResponse(status=OperationStatus.FOUND, **item)
+
+        @self.router.post("/metadata/{kind}", response_model=MetadataItemResponse,
+                          tags=["Entity Registry"])
+        async def create_metadata_route(
+            kind: str, request: MetadataCreateRequest,
+            current_user: Dict = Depends(auth),
+        ):
+            if not _kind_ok(kind):
+                return MetadataItemResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"Unknown metadata kind: {kind}")
+            try:
+                item = await self.registry.create_metadata(
+                    kind, key=request.key, label=request.label,
+                    description=request.description, inverse_key=request.inverse_key)
+                return MetadataItemResponse(status=OperationStatus.CREATED, **item)
+            except ValueError as e:
+                # duplicate key is a conflict (already-exists); a bad inverse_key is
+                # an invalid request.
+                op = (OperationStatus.ALREADY_EXISTS if 'already exists' in str(e)
+                      else OperationStatus.INVALID_REQUEST)
+                return MetadataItemResponse(status=op, message=str(e))
+
+        @self.router.put("/metadata/{kind}/update", response_model=MetadataItemResponse,
+                         tags=["Entity Registry"])
+        async def update_metadata_route(
+            kind: str, request: MetadataUpdateRequest,
+            key: str = Query(..., description="Metadata key (immutable)"),
+            current_user: Dict = Depends(auth),
+        ):
+            if not _kind_ok(kind):
+                return MetadataItemResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"Unknown metadata kind: {kind}")
+            try:
+                item = await self.registry.update_metadata(
+                    kind, key, label=request.label,
+                    description=request.description, is_active=request.is_active,
+                    inverse_key=request.inverse_key)
+            except ValueError as e:
+                return MetadataItemResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
+            if item is None:
+                return MetadataItemResponse(status=OperationStatus.NOT_FOUND,
+                                            message=f"{kind} not found: {key}")
+            return MetadataItemResponse(status=OperationStatus.UPDATED, **item)
+
+        @self.router.delete("/metadata/{kind}/delete", response_model=RegistryWriteResponse, tags=["Entity Registry"])
+        async def delete_metadata_route(
+            kind: str, key: str = Query(..., description="Metadata key"),
+            current_user: Dict = Depends(auth),
+        ):
+            if not _kind_ok(kind):
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                             message=f"Unknown metadata kind: {kind}", kind=kind, key=key)
+            try:
+                deleted = await self.registry.delete_metadata(kind, key)
+            except MetadataInUseError as e:
+                return RegistryWriteResponse(
+                    status=OperationStatus.ALREADY_EXISTS,
+                    message=f"Metadata in use: {e.key} (usage_count={e.usage_count})",
+                    kind=kind, key=e.key)
+            if not deleted:
+                return RegistryWriteResponse(status=OperationStatus.NOT_FOUND,
+                                             message=f"{kind} not found: {key}", kind=kind, key=key)
+            return RegistryWriteResponse(status=OperationStatus.DELETED, kind=kind, key=key)
 
         # -- Change Log --
 
@@ -707,7 +856,8 @@ class EntityRegistryEndpoint:
                 entity_id=entity_id, change_type=change_type, limit=limit, offset=offset,
             )
             return ChangeLogResponse(
-                success=True, entries=[ChangeLogEntry(**e) for e in entries], total_count=total,
+                status=OperationStatus.FOUND if entries else OperationStatus.EMPTY,
+                entries=[ChangeLogEntry(**e) for e in entries], total_count=total,
             )
 
         @self.router.get("/changelog", response_model=ChangeLogResponse, tags=["Entity Registry"])
@@ -718,7 +868,8 @@ class EntityRegistryEndpoint:
         ):
             entries = await self.registry.get_recent_changes(limit=limit, change_type=change_type)
             return ChangeLogResponse(
-                success=True, entries=[ChangeLogEntry(**e) for e in entries], total_count=len(entries),
+                status=OperationStatus.FOUND if entries else OperationStatus.EMPTY,
+                entries=[ChangeLogEntry(**e) for e in entries], total_count=len(entries),
             )
 
         # -- Admin: Index Rebuild --
@@ -800,7 +951,7 @@ class EntityRegistryEndpoint:
                 type_key=type_key, limit=limit, min_score=min_score,
             )
             return SimilarEntityResponse(
-                success=True,
+                status=OperationStatus.FOUND if candidates else OperationStatus.EMPTY,
                 candidates=[SimilarEntityResult(**c) for c in candidates],
             )
 
@@ -830,10 +981,11 @@ class EntityRegistryEndpoint:
             has_identifier = identifier_value is not None and identifier_value.strip()
 
             if not has_query and not has_geo and not has_identifier:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Must provide 'q' (semantic), geo params (latitude/longitude/radius_km), "
-                           "identifier_value, or a combination",
+                return EntitySearchResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="Must provide 'q' (semantic), geo params (latitude/longitude/radius_km), "
+                            "identifier_value, or a combination",
+                    query=None, filters={}, results=[],
                 )
 
             filters = {}
@@ -899,7 +1051,7 @@ class EntityRegistryEndpoint:
                 results = [EntitySearchResult(**r) for r in raw]
 
             return EntitySearchResponse(
-                success=True,
+                status=OperationStatus.FOUND if results else OperationStatus.EMPTY,
                 query=q if has_query else None,
                 filters=filters,
                 results=results,
@@ -934,10 +1086,11 @@ class EntityRegistryEndpoint:
             has_external_id = external_location_id is not None and external_location_id.strip()
 
             if not has_geo and not has_semantic and not has_address and not has_external_id:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Must provide at least one of: external_location_id, "
-                           "geo params (latitude/longitude/radius_km), q (semantic), or address (BM25)",
+                return LocationSearchResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="Must provide at least one of: external_location_id, "
+                            "geo params (latitude/longitude/radius_km), q (semantic), or address (BM25)",
+                    results=[],
                 )
 
             # PostgreSQL path: external_location_id without geo/semantic/address
@@ -949,7 +1102,7 @@ class EntityRegistryEndpoint:
                     include_expired=include_expired,
                 )
                 return LocationSearchResponse(
-                    success=True,
+                    status=OperationStatus.FOUND if rows else OperationStatus.EMPTY,
                     results=[LocationSearchResult(**r) for r in rows],
                 )
 
@@ -967,7 +1120,7 @@ class EntityRegistryEndpoint:
                 limit=limit,
             )
             return LocationSearchResponse(
-                success=True,
+                status=OperationStatus.FOUND if raw else OperationStatus.EMPTY,
                 results=[LocationSearchResult(**r) for r in raw],
             )
 

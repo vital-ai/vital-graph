@@ -21,6 +21,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.role_dependencies import require_space_read, require_space_write
+from ..model.result_status import OperationStatus
 from ..model.fts_index_model import (
     FtsIndexOut, FtsIndexListResponse, FtsIndexStatsResponse,
     CreateFtsIndexRequest, UpdateFtsLanguagesRequest,
@@ -80,7 +81,11 @@ class FtsIndexesEndpoint:
                 )
                 for r in rows
             ]
-            return FtsIndexListResponse(indexes=indexes, total_count=len(indexes))
+            return FtsIndexListResponse(
+                indexes=indexes,
+                total_count=len(indexes),
+                status=OperationStatus.FOUND if indexes else OperationStatus.EMPTY,
+            )
         finally:
             await self._release(conn)
 
@@ -90,12 +95,16 @@ class FtsIndexesEndpoint:
         require_space_write(current_user, space_id)
         conn = await self._acquire()
         try:
-            # Check if already exists → 409
+            # Check if already exists → ALREADY_EXISTS (HTTP 200)
             existing = await get_fts_index(conn, space_id, body.index_name)
             if existing is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"FTS index '{body.index_name}' already exists",
+                return FtsIndexOut(
+                    index_id=existing["index_id"],
+                    index_name=existing["index_name"],
+                    languages=existing["languages"],
+                    created_time=existing.get("created_time"),
+                    status=OperationStatus.ALREADY_EXISTS,
+                    message=f"FTS index '{body.index_name}' already exists",
                 )
 
             ok = await ensure_fts_index(
@@ -117,6 +126,8 @@ class FtsIndexesEndpoint:
                 index_name=info["index_name"],
                 languages=info["languages"],
                 created_time=info.get("created_time"),
+                status=OperationStatus.CREATED,
+                message=f"FTS index '{body.index_name}' created",
             )
         finally:
             await self._release(conn)
@@ -129,14 +140,22 @@ class FtsIndexesEndpoint:
         try:
             info = await get_fts_index(conn, space_id, index_name)
             if info is None:
-                raise HTTPException(status_code=404, detail="FTS index not found")
+                return DeleteResponse(
+                    deleted=False,
+                    status=OperationStatus.NOT_FOUND,
+                    message="FTS index not found",
+                )
             ok = await teardown_fts_index(conn, space_id, index_name)
             if not ok:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to delete FTS index",
                 )
-            return DeleteResponse(message=f"FTS index '{index_name}' deleted", deleted=True)
+            return DeleteResponse(
+                deleted=True,
+                status=OperationStatus.DELETED,
+                message=f"FTS index '{index_name}' deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -146,13 +165,18 @@ class FtsIndexesEndpoint:
         try:
             info = await get_fts_index(conn, space_id, index_name)
             if info is None:
-                raise HTTPException(status_code=404, detail="FTS index not found")
+                return FtsIndexStatsResponse(
+                    index_name=index_name,
+                    status=OperationStatus.NOT_FOUND,
+                    message="FTS index not found",
+                )
             s = await get_fts_stats(conn, space_id, index_name)
             return FtsIndexStatsResponse(
                 index_name=index_name,
                 row_count=s["row_count"],
                 distinct_entity_count=s["distinct_entity_count"],
                 has_tsv_count=s["has_tsv_count"],
+                status=OperationStatus.FOUND,
             )
         finally:
             await self._release(conn)
@@ -169,9 +193,12 @@ class FtsIndexesEndpoint:
                 refresh_tsv=body.refresh_tsv,
             )
             if not ok:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"FTS index '{index_name}' not found",
+                return FtsIndexOut(
+                    index_id=0,
+                    index_name=index_name,
+                    languages=body.languages,
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"FTS index '{index_name}' not found",
                 )
             info = await get_fts_index(conn, space_id, index_name)
             return FtsIndexOut(
@@ -179,6 +206,8 @@ class FtsIndexesEndpoint:
                 index_name=info["index_name"],
                 languages=info["languages"],
                 created_time=info.get("created_time"),
+                status=OperationStatus.UPDATED,
+                message=f"FTS index '{index_name}' languages updated",
             )
         finally:
             await self._release(conn)
@@ -193,7 +222,11 @@ class FtsIndexesEndpoint:
         try:
             info = await get_fts_index(conn, space_id, index_name)
             if info is None:
-                raise HTTPException(status_code=404, detail="FTS index not found")
+                return PopulateFtsResponse(
+                    index_name=index_name,
+                    status=OperationStatus.NOT_FOUND,
+                    message="FTS index not found",
+                )
         finally:
             await self._release(conn)
 
@@ -212,6 +245,7 @@ class FtsIndexesEndpoint:
             rows_populated=0,
             elapsed_seconds=0.0,
             errors=[],
+            status=OperationStatus.OK,
         )
 
     async def _run_populate(
@@ -260,7 +294,6 @@ class FtsIndexesEndpoint:
         @self.router.post(
             "/fts-indexes",
             response_model=FtsIndexOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["FTS Indexes"],
             summary="Create FTS Index",
         )

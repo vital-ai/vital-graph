@@ -16,9 +16,11 @@ from ..model.api_key_model import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
     ApiKeyDeleteResponse,
+    ApiKeyGetResponse,
     ApiKeyInfo,
     ApiKeyListResponse,
 )
+from ..model.result_status import OperationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ class ApiKeysEndpoint:
         ):
             return await self._list_keys(current_user, username)
 
-        @self.router.get("/key", response_model=ApiKeyInfo)
+        @self.router.get("/key", response_model=ApiKeyGetResponse)
         async def get_key(
             key_id: str = Query(..., description="API Key ID"),
             current_user: Dict = Depends(self.auth_dependency),
@@ -82,17 +84,19 @@ class ApiKeysEndpoint:
         # Resolve target user
         target_user = await self.api.db.get_user_by_username(target_username)
         if not target_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{target_username}' not found",
+            return ApiKeyCreateResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"User '{target_username}' not found",
+                key_id="", key="", prefix="", name=request.name, username=target_username,
             )
 
         # Enforce max keys
         count = await self.api.db.count_user_api_keys(target_user['user_id'])
         if count >= MAX_KEYS_PER_USER:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Maximum API keys ({MAX_KEYS_PER_USER}) reached for this user",
+            return ApiKeyCreateResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Maximum API keys ({MAX_KEYS_PER_USER}) reached for this user",
+                key_id="", key="", prefix="", name=request.name, username=target_username,
             )
 
         # Generate key
@@ -119,6 +123,8 @@ class ApiKeysEndpoint:
                          key_prefix=prefix)
 
         return ApiKeyCreateResponse(
+            status=OperationStatus.CREATED,
+            message="API key created. Save the key — it cannot be retrieved again.",
             key_id=str(record['key_id']),
             key=full_key,
             prefix=f"vg_{prefix}...",
@@ -146,7 +152,10 @@ class ApiKeysEndpoint:
             if user:
                 user_id = user['user_id']
             else:
-                return ApiKeyListResponse(keys=[], total_count=0)
+                return ApiKeyListResponse(
+                    status=OperationStatus.EMPTY,
+                    keys=[], total_count=0, page_size=0, offset=0,
+                )
 
         rows = await self.api.db.list_api_keys(user_id=user_id)
 
@@ -164,15 +173,25 @@ class ApiKeysEndpoint:
             for row in rows
         ]
 
-        return ApiKeyListResponse(keys=keys, total_count=len(keys))
+        return ApiKeyListResponse(
+            status=OperationStatus.FOUND if keys else OperationStatus.EMPTY,
+            keys=keys,
+            total_count=len(keys),
+            page_size=len(keys),
+            offset=0,
+        )
 
-    async def _get_key(self, key_id: str, current_user: Dict) -> ApiKeyInfo:
+    async def _get_key(self, key_id: str, current_user: Dict) -> ApiKeyGetResponse:
         if not self.api.db:
             raise HTTPException(status_code=500, detail="Database not configured")
 
         key = await self.api.db.get_api_key_by_id(key_id)
         if not key:
-            raise HTTPException(status_code=404, detail="API key not found")
+            return ApiKeyGetResponse(
+                status=OperationStatus.NOT_FOUND,
+                message="API key not found",
+                key=None,
+            )
 
         # Check ownership or admin
         actor = current_user.get("username", "unknown")
@@ -182,15 +201,18 @@ class ApiKeysEndpoint:
                 detail="Access denied",
             )
 
-        return ApiKeyInfo(
-            key_id=str(key['key_id']),
-            prefix=f"vg_{key['key_prefix']}...",
-            name=key['name'],
-            username=key['username'],
-            is_active=key['is_active'],
-            created_time=key['created_time'].isoformat() if key.get('created_time') else None,
-            last_used=key['last_used'].isoformat() if key.get('last_used') else None,
-            expires_at=key['expires_at'].isoformat() if key.get('expires_at') else None,
+        return ApiKeyGetResponse(
+            status=OperationStatus.FOUND,
+            key=ApiKeyInfo(
+                key_id=str(key['key_id']),
+                prefix=f"vg_{key['key_prefix']}...",
+                name=key['name'],
+                username=key['username'],
+                is_active=key['is_active'],
+                created_time=key['created_time'].isoformat() if key.get('created_time') else None,
+                last_used=key['last_used'].isoformat() if key.get('last_used') else None,
+                expires_at=key['expires_at'].isoformat() if key.get('expires_at') else None,
+            ),
         )
 
     async def _revoke_key(self, key_id: str, current_user: Dict) -> ApiKeyDeleteResponse:
@@ -199,7 +221,11 @@ class ApiKeysEndpoint:
 
         key = await self.api.db.get_api_key_by_id(key_id)
         if not key:
-            raise HTTPException(status_code=404, detail="API key not found")
+            return ApiKeyDeleteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message="API key not found",
+                key_id=key_id,
+            )
 
         actor = current_user.get("username", "unknown")
         if key['username'] != actor and current_user.get("role") != "admin":
@@ -215,6 +241,7 @@ class ApiKeysEndpoint:
                          key_id=key_id, key_name=key['name'])
 
         return ApiKeyDeleteResponse(
+            status=OperationStatus.DELETED,
             message=f"API key '{key['name']}' revoked",
             key_id=key_id,
         )

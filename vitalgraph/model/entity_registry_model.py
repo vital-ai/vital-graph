@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+
 
 # ------------------------------------------------------------------
 # Request Models
@@ -270,10 +272,11 @@ class RelationshipResponse(BaseModel):
         from_attributes = True
 
 
-class RelationshipTypeResponse(BaseModel):
-    relationship_type_id: int
-    type_key: str
-    type_label: str
+class RelationshipTypeResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    relationship_type_id: Optional[int] = None
+    type_key: Optional[str] = None
+    type_label: Optional[str] = None
     type_description: Optional[str] = None
     inverse_key: Optional[str] = None
     created_time: Optional[datetime] = None
@@ -283,10 +286,11 @@ class RelationshipTypeResponse(BaseModel):
         from_attributes = True
 
 
-class LocationTypeResponse(BaseModel):
-    location_type_id: int
-    type_key: str
-    type_label: str
+class LocationTypeResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    location_type_id: Optional[int] = None
+    type_key: Optional[str] = None
+    type_label: Optional[str] = None
     type_description: Optional[str] = None
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
@@ -341,15 +345,15 @@ class EntityResponse(BaseModel):
         from_attributes = True
 
 
-class EntityCreateResponse(BaseModel):
-    success: bool
-    entity_id: str
-    entity_uri: str
-    entity: EntityResponse
+class EntityCreateResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.CREATED
+    entity_id: Optional[str] = None
+    entity_uri: Optional[str] = None
+    entity: Optional[EntityResponse] = None
 
 
-class EntityListResponse(BaseModel):
-    success: bool
+class EntityListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     entities: List[EntityResponse]
     total_count: int
     page: int
@@ -374,10 +378,11 @@ class SameAsResponse(BaseModel):
         from_attributes = True
 
 
-class EntityTypeResponse(BaseModel):
-    type_id: int
-    type_key: str
-    type_label: str
+class EntityTypeResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    type_id: Optional[int] = None
+    type_key: Optional[str] = None
+    type_label: Optional[str] = None
     type_description: Optional[str] = None
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
@@ -386,10 +391,11 @@ class EntityTypeResponse(BaseModel):
         from_attributes = True
 
 
-class CategoryResponse(BaseModel):
-    category_id: int
-    category_key: str
-    category_label: str
+class CategoryResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    category_id: Optional[int] = None
+    category_key: Optional[str] = None
+    category_label: Optional[str] = None
     category_description: Optional[str] = None
     created_time: Optional[datetime] = None
     updated_time: Optional[datetime] = None
@@ -426,8 +432,8 @@ class ChangeLogEntry(BaseModel):
         from_attributes = True
 
 
-class ChangeLogResponse(BaseModel):
-    success: bool
+class ChangeLogResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     entries: List[ChangeLogEntry]
     total_count: int
 
@@ -445,8 +451,8 @@ class SimilarEntityResult(BaseModel):
     score_detail: Dict[str, float] = Field(default_factory=dict)
 
 
-class SimilarEntityResponse(BaseModel):
-    success: bool
+class SimilarEntityResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     candidates: List[SimilarEntityResult]
 
 
@@ -487,8 +493,8 @@ class EntitySearchResult(BaseModel):
     locations: List[EntitySearchLocationResult] = Field(default_factory=list)
 
 
-class EntitySearchResponse(BaseModel):
-    success: bool
+class EntitySearchResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     query: Optional[str] = None
     filters: Dict[str, Any] = Field(default_factory=dict)
     results: List[EntitySearchResult]
@@ -516,9 +522,126 @@ class LocationSearchResult(BaseModel):
     is_primary: bool = False
 
 
-class LocationSearchResponse(BaseModel):
-    success: bool
+class LocationSearchResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
     results: List[LocationSearchResult]
+
+
+# --- Unified metadata management (all six vocabularies) ---
+
+class MetadataItemResponse(ResultStatus):
+    """One metadata value in the normalized key/label/description shape shared by
+    every kind. `inverse_key` is only populated for relationship-types;
+    `usage_count` only when requested."""
+    status: OperationStatus = OperationStatus.FOUND
+    key: Optional[str] = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    inverse_key: Optional[str] = None
+    is_active: bool = True
+    created_time: Optional[datetime] = None
+    usage_count: Optional[int] = None
+
+
+class MetadataCreateRequest(BaseModel):
+    key: str = Field(..., description="Machine key (immutable, e.g. 'SSN')")
+    label: str = Field(..., description="Human label")
+    description: Optional[str] = None
+    inverse_key: Optional[str] = Field(default=None, description="relationship-types only")
+
+
+class MetadataUpdateRequest(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+    inverse_key: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# Shared enveloped outcome responses
+# ------------------------------------------------------------------
+# Routes whose primary/success body is a bare data model that carries a domain
+# `status: str` field (EntityResponse, LocationResponse, RelationshipResponse,
+# SameAsResponse, IdentifierResponse, AliasResponse, EntityCategoryResponse,
+# LocationCategoryResponse) cannot themselves carry the OperationStatus contract.
+# Rather than a fragile response_model=Union[<DataModel>, RegistryErrorResponse]
+# (where a success body can silently serialize as the error envelope and drop
+# fields), each such route uses a single concrete NESTED ENVELOPE below: the
+# ResultStatus contract lives on the envelope, and the data model is nested in a
+# named Optional field (None on not-found / invalid-request). HTTP stays 200.
+
+class EntityEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    entity: Optional[EntityResponse] = None
+
+
+class IdentifierEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    identifier: Optional[IdentifierResponse] = None
+
+
+class AliasEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    alias: Optional[AliasResponse] = None
+
+
+class LocationEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    location: Optional[LocationResponse] = None
+
+
+class RelationshipEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    relationship: Optional[RelationshipResponse] = None
+
+
+class EntityCategoryEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    entity_category: Optional[EntityCategoryResponse] = None
+
+
+class LocationCategoryEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    location_category: Optional[LocationCategoryResponse] = None
+
+
+class SameAsEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    same_as: Optional[SameAsResponse] = None
+
+
+class EntityLookupResponse(ResultStatus):
+    """Enveloped list outcome for GET /identifiers/lookup."""
+    status: OperationStatus = OperationStatus.FOUND
+    entities: List[EntityResponse] = []
+
+
+class MetadataListResponse(ResultStatus):
+    """Enveloped list outcome for GET /metadata/{kind}."""
+    status: OperationStatus = OperationStatus.FOUND
+    items: List[MetadataItemResponse] = []
+
+
+class RegistryErrorResponse(ResultStatus):
+    """Deprecated. Retained for backward-compat imports only; no route references it
+    now that every domain outcome is carried by a single concrete envelope model."""
+    status: OperationStatus = OperationStatus.NOT_FOUND
+
+
+class RegistryWriteResponse(ResultStatus):
+    """Enveloped outcome for delete/retract routes (and other simple mutations) that
+    previously returned an ad-hoc ``{"success": True, "<id>": ...}`` dict. Echoes the
+    affected resource identifier(s); only the relevant field(s) are populated."""
+    status: OperationStatus = OperationStatus.DELETED
+    entity_id: Optional[str] = None
+    identifier_id: Optional[int] = None
+    alias_id: Optional[int] = None
+    location_id: Optional[int] = None
+    relationship_id: Optional[int] = None
+    same_as_id: Optional[int] = None
+    category_key: Optional[str] = None
+    kind: Optional[str] = None
+    key: Optional[str] = None
 
 
 # Backward-compat aliases

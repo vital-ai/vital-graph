@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read
 from ..model.geo_model import GeoPointOut, GeoPointsResponse
+from ..model.result_status import OperationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -70,15 +71,19 @@ class GeoPointsEndpoint:
         # Validate spatial params: all-or-none
         spatial_params = [near_lat, near_lon, radius_km]
         has_spatial = any(p is not None for p in spatial_params)
-        if has_spatial and not all(p is not None for p in spatial_params):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Spatial query requires all of: near_lat, near_lon, radius_km",
-            )
-
         # Clamp limit
         limit = max(1, min(limit, 1000))
         offset = max(0, offset)
+
+        if has_spatial and not all(p is not None for p in spatial_params):
+            return GeoPointsResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message="Spatial query requires all of: near_lat, near_lon, radius_km",
+                points=[],
+                total_count=0,
+                page_size=limit,
+                offset=offset,
+            )
 
         conn = await self._acquire_conn()
         try:
@@ -92,9 +97,13 @@ class GeoPointsEndpoint:
                 geo_table,
             )
             if not exists:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Space '{space_id}' geo table not found",
+                return GeoPointsResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' geo table not found",
+                    points=[],
+                    total_count=0,
+                    page_size=limit,
+                    offset=offset,
                 )
 
             # Build query
@@ -170,9 +179,10 @@ class GeoPointsEndpoint:
             ]
 
             return GeoPointsResponse(
+                status=OperationStatus.FOUND if points else OperationStatus.EMPTY,
                 points=points,
                 total_count=total_count or 0,
-                limit=limit,
+                page_size=limit,
                 offset=offset,
             )
 

@@ -55,7 +55,9 @@ test.describe('Entity Registry CRUD', () => {
     // Fill in the create form
     await page.locator('#name').fill(CRUD_ENTITY_NAME);
     await page.locator('#uri').fill(CRUD_ENTITY_URI);
-    await page.locator('#type').fill(CRUD_ENTITY_TYPE);
+    // Type is a lookup-backed <select>, not free text — the value must be a
+    // registered entity_type.type_key or entity creation fails on the FK.
+    await page.locator('#type').selectOption(CRUD_ENTITY_TYPE);
     await page.locator('#desc').fill('Initial description');
 
     // Click Create Entity
@@ -69,16 +71,23 @@ test.describe('Entity Registry CRUD', () => {
     await page.goto('/entity-registry');
     await expect(page.locator('[data-testid="entity-registry-page"]')).toBeVisible({ timeout: 10_000 });
 
+    // Search first — the list paginates at 25 rows, so on a well-populated
+    // registry a newly created entity is not on page 1.
+    await page.getByPlaceholder('Search entities...').fill(CRUD_ENTITY_NAME);
+
     // Verify entity name appears in the table
-    await expect(page.getByText(CRUD_ENTITY_NAME)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(CRUD_ENTITY_NAME).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('update the entity via the UI', async ({ page }) => {
     await page.goto('/entity-registry');
     await expect(page.locator('[data-testid="entity-registry-page"]')).toBeVisible({ timeout: 10_000 });
 
+    // Search first — the list paginates at 25 rows
+    await page.getByPlaceholder('Search entities...').fill(CRUD_ENTITY_NAME);
+
     // Click on the entity row to navigate to detail
-    await page.getByText(CRUD_ENTITY_NAME).click();
+    await page.getByText(CRUD_ENTITY_NAME).first().click();
 
     // Wait for detail page
     await expect(page.locator('[data-testid="entity-registry-detail-page"]')).toBeVisible({ timeout: 10_000 });
@@ -100,8 +109,11 @@ test.describe('Entity Registry CRUD', () => {
     await page.goto('/entity-registry');
     await expect(page.locator('[data-testid="entity-registry-page"]')).toBeVisible({ timeout: 10_000 });
 
+    // Search first — the list paginates at 25 rows
+    await page.getByPlaceholder('Search entities...').fill(CRUD_ENTITY_NAME);
+
     // Click on the entity row
-    await page.getByText(CRUD_ENTITY_NAME).click();
+    await page.getByText(CRUD_ENTITY_NAME).first().click();
 
     // Wait for detail page
     await expect(page.locator('[data-testid="entity-registry-detail-page"]')).toBeVisible({ timeout: 10_000 });
@@ -120,7 +132,10 @@ test.describe('Entity Registry CRUD', () => {
     // Should redirect back to the registry list
     await expect(page).toHaveURL(/\/entity-registry$/, { timeout: 10_000 });
 
-    // Entity should no longer appear
-    await expect(page.getByText(CRUD_ENTITY_NAME)).not.toBeVisible({ timeout: 5_000 });
+    // Entity should no longer appear in the list. Scope to the table — a bare
+    // getByText also matches the detail page's breadcrumb and heading while
+    // the route is still tearing down.
+    await page.getByPlaceholder('Search entities...').fill(CRUD_ENTITY_NAME);
+    await expect(page.locator('tbody').getByText(CRUD_ENTITY_NAME)).toHaveCount(0, { timeout: 10_000 });
   });
 });

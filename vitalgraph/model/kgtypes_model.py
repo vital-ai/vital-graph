@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, validator
 
 from .quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from .api_model import BasePaginatedResponse, BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 class KGTypeFilter(BaseModel):
@@ -56,10 +57,8 @@ class KGTypeListRequest(BaseModel):
     filter: Optional[str] = Field(None, description="Filter criteria for KGTypes")
 
 
-class KGTypeResponse(BaseModel):
+class KGTypeResponse(ResultStatus):
     """Base response model for KGType operations."""
-    success: bool = Field(..., description="Operation success status")
-    message: str = Field(..., description="Human-readable status message")
     data: Optional[QuadResultsResponse] = Field(None, description="Response data as quad results")
     errors: Optional[List[str]] = Field(None, description="Error messages if any")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
@@ -67,18 +66,21 @@ class KGTypeResponse(BaseModel):
 
 class KGTypeCreateResponse(KGTypeResponse):
     """Response model for KGType creation operations."""
+    status: OperationStatus = Field(OperationStatus.CREATED, description="Outcome discriminator")
     created_count: Optional[int] = Field(None, description="Number of KGTypes created")
     created_uris: Optional[List[str]] = Field(None, description="URIs of created KGTypes")
 
 
 class KGTypeUpdateResponse(KGTypeResponse):
     """Response model for KGType update operations."""
+    status: OperationStatus = Field(OperationStatus.UPDATED, description="Outcome discriminator")
     updated_count: Optional[int] = Field(None, description="Number of KGTypes updated")
     updated_uris: Optional[List[str]] = Field(None, description="URIs of updated KGTypes")
 
 
 class KGTypeDeleteResponse(KGTypeResponse):
     """Response model for KGType deletion operations."""
+    status: OperationStatus = Field(OperationStatus.DELETED, description="Outcome discriminator")
     deleted_count: Optional[int] = Field(None, description="Number of KGTypes deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of deleted KGTypes")
 
@@ -99,10 +101,8 @@ class KGTypeRelationshipType(BaseModel):
     vitaltype: str = Field(..., description="vitaltype URI of the connected type")
 
 
-class KGTypeRelationshipsResponse(BaseModel):
+class KGTypeRelationshipsResponse(ResultStatus):
     """Response model for GET /api/graphs/kgtypes/relationships."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
     source_type: KGTypeRelationshipType = Field(..., description="The queried type")
     edges: List[KGTypeRelationshipEdge] = Field(default_factory=list, description="Type-level edges")
     connected_types: List[KGTypeRelationshipType] = Field(default_factory=list, description="Connected types")
@@ -114,20 +114,18 @@ class KGTypeRelationshipCreateRequest(BaseModel):
     target_uri: str = Field(..., description="URI of the target type to link to")
 
 
-class KGTypeRelationshipCreateResponse(BaseModel):
+class KGTypeRelationshipCreateResponse(ResultStatus):
     """Response model for POST /api/graphs/kgtypes/relationships."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
+    status: OperationStatus = Field(OperationStatus.CREATED, description="Outcome discriminator")
     edge_uri: str = Field("", description="URI of the created edge")
     edge_type: str = Field("", description="Edge vitaltype URI")
     source_uri: str = Field("", description="Source type URI")
     destination_uri: str = Field("", description="Destination type URI")
 
 
-class KGTypeRelationshipDeleteResponse(BaseModel):
+class KGTypeRelationshipDeleteResponse(ResultStatus):
     """Response model for DELETE /api/graphs/kgtypes/relationships."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
+    status: OperationStatus = Field(OperationStatus.DELETED, description="Outcome discriminator")
     deleted: bool = Field(False, description="Whether the edge was deleted")
     edge_uri: str = Field("", description="URI of the deleted edge")
 
@@ -137,37 +135,31 @@ class KGTypeDocumentationRequest(BaseModel):
     content: str = Field(..., description="Markdown documentation content")
 
 
-class KGTypeDocumentationResponse(BaseModel):
+class KGTypeDocumentationResponse(ResultStatus):
     """Response model for GET /api/graphs/kgtypes/documentation."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
     type_uri: str = Field("", description="Type URI")
     content: Optional[str] = Field(None, description="Markdown documentation content")
     document_uri: Optional[str] = Field(None, description="KGDocument URI")
     has_documentation: bool = Field(False, description="Whether documentation exists")
 
 
-class KGTypeDocumentationUpdateResponse(BaseModel):
+class KGTypeDocumentationUpdateResponse(ResultStatus):
     """Response model for PUT /api/graphs/kgtypes/documentation."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
+    status: OperationStatus = Field(OperationStatus.UPDATED, description="Outcome discriminator")
     type_uri: str = Field("", description="Type URI")
     document_uri: str = Field("", description="KGDocument URI")
     created: bool = Field(False, description="Whether a new document was created (vs updated)")
 
 
-class KGTypeDocumentationDeleteResponse(BaseModel):
+class KGTypeDocumentationDeleteResponse(ResultStatus):
     """Response model for DELETE /api/graphs/kgtypes/documentation."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
+    status: OperationStatus = Field(OperationStatus.DELETED, description="Outcome discriminator")
     type_uri: str = Field("", description="Type URI")
     deleted: bool = Field(False, description="Whether the documentation was deleted")
 
 
-class KGTypeSearchResponse(BaseModel):
+class KGTypeSearchResponse(ResultStatus):
     """Response model for GET /api/graphs/kgtypes/search."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
     types: List[Dict[str, Any]] = Field(default_factory=list, description="Matching types")
     count: int = Field(0, description="Number of results on this page")
     total_count: int = Field(0, description="Total matching results across all pages")
@@ -177,7 +169,7 @@ class KGTypeSearchResponse(BaseModel):
     query: str = Field("", description="Original search query")
 
 
-class KGTypeDescriptionResponse(BaseModel):
+class KGTypeDescriptionResponse(ResultStatus):
     """Response model for GET /api/graphs/kgtypes/description."""
     type_uri: str = Field(..., description="The KGType URI queried")
     mapping_type: str = Field("kgentity", description="Mapping type used")

@@ -8,10 +8,19 @@ from typing import Dict, List, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from .quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from .result_status import ResultStatus, OperationStatus
 
 
-class BasePaginatedResponse(BaseModel):
-    """Base model for paginated responses."""
+class BasePaginatedResponse(ResultStatus):
+    """Base model for paginated responses.
+
+    Carries the unified success/status/message contract so query/list responses can
+    report outcome in-body. ``status`` defaults to FOUND; set EMPTY when nothing
+    matches. ``success`` is derived from ``status``.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     total_count: int = Field(..., description="Total number of items available")
     page_size: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
@@ -23,33 +32,53 @@ class BaseQuadListResponse(QuadResponse):
     meta: Optional[Dict[str, Any]] = Field(None, description="Response metadata")
 
 
-class BaseCreateResponse(BaseModel):
-    """Base model for creation responses."""
-    success: bool = Field(True, description="Whether the operation was successful")
-    message: str = Field(..., description="Success message describing the creation operation")
+class BaseCreateResponse(ResultStatus):
+    """Base model for creation responses.
+
+    success/status/message come from ResultStatus (``success`` derived). ``status``
+    defaults to CREATED; set explicitly (CREATED / ALREADY_EXISTS / STORE_FAILED /
+    PARTIAL / INVALID_REQUEST) at each real outcome branch. ``message`` is now
+    optional (defaults "") — it was previously required.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.CREATED, description="Outcome discriminator (CREATED/ALREADY_EXISTS/...)"
+    )
     created_count: int = Field(..., description="Number of items created")
     created_uris: List[str] = Field(..., description="URIs of the created items")
 
 
-class BaseUpdateResponse(BaseModel):
-    """Base model for update responses."""
-    success: bool = Field(True, description="Whether the operation was successful")
-    message: str = Field(..., description="Success message describing the update operation")
-    updated_uri: Optional[str] = Field(None, description="URI of the updated item (None on error)")
+class BaseUpdateResponse(ResultStatus):
+    """Base model for update responses.
+
+    ``status`` defaults to UPDATED; set NOT_FOUND when the target URI does not exist,
+    STORE_FAILED on a describable write failure. Update is potentially a batch
+    operation, so the canonical identity fields are ``updated_count`` +
+    ``updated_uris`` (§6.1); ``updated_uri`` (singular) is retained for
+    backward-compatibility with existing single-item callers.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.UPDATED, description="Outcome discriminator (UPDATED/NOT_FOUND/...)"
+    )
+    updated_count: int = Field(0, description="Number of items updated")
+    updated_uris: Optional[List[str]] = Field(None, description="URIs of the updated items")
+    updated_uri: Optional[str] = Field(None, description="URI of the updated item (singular, back-compat; None on error)")
 
 
-class BaseDeleteResponse(BaseModel):
-    """Base model for deletion responses."""
-    success: bool = Field(True, description="Whether the operation was successful")
-    message: str = Field(..., description="Success message describing the deletion operation")
+class BaseDeleteResponse(ResultStatus):
+    """Base model for deletion responses.
+
+    ``status`` defaults to DELETED; use NO_OP when the URI was already absent,
+    STORE_FAILED on a describable write failure.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NO_OP/...)"
+    )
     deleted_count: int = Field(..., description="Number of items deleted")
     deleted_uris: Optional[List[str]] = Field(None, description="URIs of the deleted items (when available)")
 
 
-class BaseOperationResponse(BaseModel):
+class BaseOperationResponse(ResultStatus):
     """Base model for general operation responses."""
-    success: bool = Field(..., description="Whether the operation was successful")
-    message: str = Field(..., description="Operation result message")
     affected_count: Optional[int] = Field(None, description="Number of items affected by the operation")
 
 

@@ -53,6 +53,7 @@ const Admin = lazy(() => import('./pages/Admin'));
 const AuditLog = lazy(() => import('./pages/AuditLog'));
 const EntityRegistry = lazy(() => import('./pages/EntityRegistry'));
 const EntityRegistryDetail = lazy(() => import('./pages/EntityRegistryDetail'));
+const RegistryMetadata = lazy(() => import('./pages/RegistryMetadata'));
 const AgentRegistry = lazy(() => import('./pages/AgentRegistry'));
 const AgentRegistryDetail = lazy(() => import('./pages/AgentRegistryDetail'));
 const KGRelations = lazy(() => import('./pages/KGRelations'));
@@ -145,6 +146,7 @@ export default function App() {
               <Route path="/audit-log" element={<AuditLog />} />
               <Route path="/entity-registry" element={<EntityRegistry />} />
               <Route path="/entity-registry/:entityId" element={<EntityRegistryDetail />} />
+              <Route path="/registry-metadata" element={<RegistryMetadata />} />
               <Route path="/agent-registry" element={<AgentRegistry />} />
               <Route path="/agent-registry/:agentId" element={<AgentRegistryDetail />} />
               

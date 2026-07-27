@@ -19,10 +19,12 @@ from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.role_dependencies import require_space_write, require_space_read
+from ..model.result_status import OperationStatus
 from ..vectorization.search_mapping_manager import SearchMappingManager
 from ..model.vector_mappings_model import (
     MappingPropertyOut, MappingOut, MappingListResponse,
     CreateMappingRequest, UpdateMappingRequest, AddPropertyRequest,
+    DeleteResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,9 +72,10 @@ class VectorMappingsEndpoint:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _dto_to_out(dto) -> MappingOut:
+    def _dto_to_out(dto, status: OperationStatus = OperationStatus.FOUND) -> MappingOut:
         """Convert SearchMappingDTO to the vector MappingOut model."""
         return MappingOut(
+            status=status,
             mapping_id=dto.mapping_id,
             mapping_type=dto.mapping_type,
             type_uri=dto.type_uri,
@@ -115,7 +118,10 @@ class VectorMappingsEndpoint:
                 enabled=enabled,
             )
             mappings = [self._dto_to_out(d) for d in dtos]
-            return MappingListResponse(mappings=mappings, total_count=len(mappings))
+            return MappingListResponse(
+                mappings=mappings, total_count=len(mappings),
+                status=OperationStatus.FOUND if mappings else OperationStatus.EMPTY,
+            )
         finally:
             await self._release(conn)
 
@@ -133,7 +139,7 @@ class VectorMappingsEndpoint:
                 include_pred_name=body.include_pred_name,
             )
             dto = await manager.get_mapping(mapping_id)
-            return self._dto_to_out(dto)
+            return self._dto_to_out(dto, status=OperationStatus.CREATED)
         finally:
             await self._release(conn)
 
@@ -143,7 +149,10 @@ class VectorMappingsEndpoint:
         try:
             dto = await manager.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
+                return MappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
             return self._dto_to_out(dto)
         finally:
             await self._release(conn)
@@ -156,8 +165,11 @@ class VectorMappingsEndpoint:
         try:
             dto = await manager.update_mapping(mapping_id, **body.model_dump(exclude_none=True))
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
-            return self._dto_to_out(dto)
+                return MappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
+            return self._dto_to_out(dto, status=OperationStatus.UPDATED)
         finally:
             await self._release(conn)
 
@@ -167,8 +179,14 @@ class VectorMappingsEndpoint:
         try:
             deleted = await manager.delete_mapping(mapping_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Mapping not found")
-            return {"message": "Mapping deleted", "mapping_id": mapping_id}
+                return DeleteResponse(
+                    mapping_id=mapping_id, status=OperationStatus.NOT_FOUND,
+                    message="Mapping not found",
+                )
+            return DeleteResponse(
+                mapping_id=mapping_id, status=OperationStatus.DELETED,
+                message="Mapping deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -190,6 +208,7 @@ class VectorMappingsEndpoint:
                 property_uri=body.property_uri,
                 property_role=body.property_role,
                 ordinal=body.ordinal,
+                status=OperationStatus.CREATED,
             )
         finally:
             await self._release(conn)
@@ -202,8 +221,14 @@ class VectorMappingsEndpoint:
         try:
             deleted = await manager.remove_property(property_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Property not found")
-            return {"message": "Property removed", "property_id": property_id}
+                return DeleteResponse(
+                    property_id=property_id, status=OperationStatus.NOT_FOUND,
+                    message="Property not found",
+                )
+            return DeleteResponse(
+                property_id=property_id, status=OperationStatus.DELETED,
+                message="Property removed",
+            )
         finally:
             await self._release(conn)
 
@@ -236,7 +261,6 @@ class VectorMappingsEndpoint:
         @self.router.post(
             "/vector-mappings",
             response_model=MappingOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Vector Mappings"],
             summary="Create Vector Mapping",
         )
@@ -263,6 +287,7 @@ class VectorMappingsEndpoint:
 
         @self.router.delete(
             "/vector-mappings",
+            response_model=DeleteResponse,
             tags=["Vector Mappings"],
             summary="Delete Vector Mapping",
         )
@@ -276,7 +301,6 @@ class VectorMappingsEndpoint:
         @self.router.post(
             "/vector-mappings/properties",
             response_model=MappingPropertyOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Vector Mappings"],
             summary="Add Mapping Property",
         )
@@ -290,6 +314,7 @@ class VectorMappingsEndpoint:
 
         @self.router.delete(
             "/vector-mappings/properties",
+            response_model=DeleteResponse,
             tags=["Vector Mappings"],
             summary="Remove Mapping Property",
         )

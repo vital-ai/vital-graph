@@ -725,24 +725,28 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             s, p, o, g = quad
             t = self.schema.get_table_names(space_id)
             async with self._db._pool.acquire() as conn:
-                s_uuid = await self._ensure_term(conn, t, s)
-                p_uuid = await self._ensure_term(conn, t, p)
-                o_uuid = await self._ensure_term(conn, t, o)
-                g_uuid = await self._ensure_term(conn, t, g)
-                await conn.execute(
-                    f"INSERT INTO {t['rdf_quad']} "
-                    f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
-                    f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-                    s_uuid, p_uuid, o_uuid, g_uuid,
-                )
-                # Keep {space}_edge in sync — this path bypasses the bulk sync,
-                # so edge quads inserted here would otherwise never reach the
-                # edge table (see edge_table_integrity_bug). Cheap + idempotent.
-                # frame_entity is derived from the edge table, so sync it after.
-                from .sync_edge_table import sync_edge_table_after_insert
-                await sync_edge_table_after_insert(conn, space_id, [s_uuid])
-                from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
-                await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
+                # Atomic: term + quad + edge/frame sync run in one transaction so
+                # a raise on any statement rolls back cleanly rather than leaving
+                # the pooled connection in an aborted state (issue 019 hardening).
+                async with conn.transaction():
+                    s_uuid = await self._ensure_term(conn, t, s)
+                    p_uuid = await self._ensure_term(conn, t, p)
+                    o_uuid = await self._ensure_term(conn, t, o)
+                    g_uuid = await self._ensure_term(conn, t, g)
+                    await conn.execute(
+                        f"INSERT INTO {t['rdf_quad']} "
+                        f"(subject_uuid, predicate_uuid, object_uuid, context_uuid) "
+                        f"VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                        s_uuid, p_uuid, o_uuid, g_uuid,
+                    )
+                    # Keep {space}_edge in sync — this path bypasses the bulk sync,
+                    # so edge quads inserted here would otherwise never reach the
+                    # edge table (see edge_table_integrity_bug). Cheap + idempotent.
+                    # frame_entity is derived from the edge table, so sync it after.
+                    from .sync_edge_table import sync_edge_table_after_insert
+                    await sync_edge_table_after_insert(conn, space_id, [s_uuid])
+                    from .sync_frame_entity_table import sync_frame_entity_after_edge_insert
+                    await sync_frame_entity_after_edge_insert(conn, space_id, [s_uuid])
             return True
         except Exception as e:
             logger.error("add_rdf_quad(%s) failed: %s", space_id, e)
@@ -844,10 +848,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     await sync_frame_entity_after_edge_insert(conn, space_id, list(subjects))
 
             if connection:
+                # Caller owns the connection/transaction — don't open a nested one.
                 await _do(connection)
             else:
+                # We own the connection: run the whole batch (terms + quads +
+                # edge/frame sync) atomically so a raise on any statement rolls
+                # back cleanly instead of poisoning the pooled connection.
                 async with self._db._pool.acquire() as conn:
-                    await _do(conn)
+                    async with conn.transaction():
+                        await _do(conn)
 
             return inserted
         except Exception as e:
@@ -1256,6 +1265,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
             t = self.schema.get_table_names(space_id)
             removed = 0
             async with self._db._pool.acquire() as conn:
+              # Atomic: run the multi-statement delete loop in one transaction so
+              # a raise mid-loop rolls back cleanly rather than leaving the pooled
+              # connection in an aborted state (issue 019 hardening).
+              async with conn.transaction():
                 for s, p, o, g in quads:
                     s_uuid = _generate_term_uuid(str(s), 'U')
                     p_uuid = _generate_term_uuid(str(p), 'U')
@@ -1511,7 +1524,15 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                 gen = await generate_sql(cr, space_id, conn=conn)
                 sql = gen.sql
                 if sql:
-                    await conn.execute(sql)
+                    # Atomic write: run the generated (multi-statement) update
+                    # inside an explicit transaction so that if ANY statement
+                    # raises (e.g. a duplicate-key under concurrency), the whole
+                    # batch rolls back cleanly and the pooled connection is
+                    # returned in a clean state — never left in an aborted
+                    # implicit transaction that stalls conn.reset() and bleeds
+                    # the pool (issue 019 defense-in-depth).
+                    async with conn.transaction():
+                        await conn.execute(sql)
 
                     # Keep {space}_edge in sync — this write path bypasses the
                     # bulk sync. For every concrete subject the update touched:
@@ -1519,6 +1540,10 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                     # deletes. Subjects bound only by a WHERE clause (variables)
                     # can't be enumerated here; those are covered by the
                     # background edge self-heal (MaintenanceJob._run_edge_integrity).
+                    # This is best-effort: run it in its OWN transaction inside
+                    # the try/except so a sync failure rolls back cleanly (leaving
+                    # the committed quads intact) instead of poisoning the pooled
+                    # connection. Background self-heal reconciles anything skipped.
                     try:
                         subj_uris = _concrete_subjects_from_update_ops(cr.update_ops)
                         if subj_uris:
@@ -1527,8 +1552,6 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 cleanup_orphan_edges_for_subjects,
                             )
                             subj_uuids = [_generate_term_uuid(u, 'U') for u in subj_uris]
-                            await sync_edge_table_after_insert(conn, space_id, subj_uuids)
-                            await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
                             # frame_entity is derived from the edge table — reconcile
                             # the touched frames: drop then re-derive so a frame that
                             # gained/lost an entity slot is corrected. WHERE-bound
@@ -1537,8 +1560,11 @@ class SparqlSQLSpaceImpl(SpaceBackendInterface, SparqlBackendInterface):
                                 sync_frame_entity_after_edge_insert,
                                 sync_frame_entity_before_delete,
                             )
-                            await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
-                            await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
+                            async with conn.transaction():
+                                await sync_edge_table_after_insert(conn, space_id, subj_uuids)
+                                await cleanup_orphan_edges_for_subjects(conn, space_id, subj_uuids)
+                                await sync_frame_entity_before_delete(conn, space_id, subj_uuids)
+                                await sync_frame_entity_after_edge_insert(conn, space_id, subj_uuids)
                     except Exception as ee:
                         logger.debug("edge sync after SPARQL UPDATE failed (non-critical): %s", ee)
 

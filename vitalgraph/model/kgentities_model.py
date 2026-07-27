@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 class EntityCreateResponse(BaseCreateResponse):
@@ -30,7 +31,7 @@ class EntityFramesResponse(QuadResponse):
     frame_uris: Optional[List[str]] = Field(None, description="List of frame URIs for simple responses")
 
 
-class EntityFramesMultiResponse(BaseModel):
+class EntityFramesMultiResponse(ResultStatus):
     """Response model for entity frames - multi URI case returns map of entity URI -> frame URI list."""
     entity_frame_map: Dict[str, List[str]]
 
@@ -287,6 +288,22 @@ class EntityQueryRequest(BaseModel):
 class EntityQueryResponse(BasePaginatedResponse):
     """Response model for entity queries."""
     entity_uris: List[str] = Field(..., description="List of matching entity subject URIs")
+
+
+class EntityCountResponse(ResultStatus):
+    """Response model for a single entity count query (status FOUND / EMPTY)."""
+    count: int = Field(0, description="Number of matching entities")
+
+
+class EntityLabelCount(BaseModel):
+    """One labeled count within a batch count response."""
+    label: str = Field(..., description="Caller-supplied label for this count request")
+    count: int = Field(0, description="Number of matching entities for this request")
+
+
+class EntityCountsResponse(ResultStatus):
+    """Response model for a batch of entity count queries (status FOUND / EMPTY)."""
+    counts: List[EntityLabelCount] = Field(default_factory=list, description="Per-request labeled counts")
 
 
 class EntityGraphResponse(QuadResultsResponse):

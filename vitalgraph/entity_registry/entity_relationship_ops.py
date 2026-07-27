@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from .entity_status import ACTIVE, RETRACTED
 
 if TYPE_CHECKING:
     import asyncpg
@@ -41,17 +42,65 @@ class RelationshipMixin:
         type_description: Optional[str] = None,
         inverse_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new relationship type."""
+        """Create a new relationship type.
+
+        Reciprocal pairs (e.g. ``owned_by`` <-> ``owner_of``) are mutually
+        referential through ``inverse_key``, which is FK-constrained to
+        ``relationship_type.type_key``. The first side of a pair cannot
+        reference the second before the second exists, so a naive single insert
+        of the first side hits ``fk_relationship_inverse`` and (previously) blew
+        up with an HTTP 500. This create resolves the chicken-and-egg so any
+        client can create a reciprocal pair with two ordinary calls, in either
+        order:
+
+          * if ``inverse_key`` names a type that does not exist yet, the row is
+            created with ``inverse_key`` left unset (NULL); the link is completed
+            when the partner is created;
+          * when a type is created whose declared inverse already exists, the
+            partner's ``inverse_key`` is backfilled to point back here — but only
+            if it is still unset, so an existing deliberate link is never
+            clobbered.
+
+        A duplicate ``type_key`` still raises ``asyncpg.UniqueViolationError``,
+        which the endpoint maps to ALREADY_EXISTS (contract unchanged).
+        """
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "INSERT INTO relationship_type (type_key, type_label, type_description, inverse_key) "
-                "VALUES ($1, $2, $3, $4) RETURNING *",
-                type_key, type_label, type_description, inverse_key
-            )
-            await self._log_change(conn, None, 'relationship_type_created', {
-                'type_key': type_key, 'type_label': type_label
-            })
-            return dict(row)
+            async with conn.transaction():
+                # Decide whether we can link the inverse now. A self-referential
+                # (symmetric) type — inverse_key == type_key — is always fine
+                # once this row exists, so it is linked immediately.
+                link_now = inverse_key
+                if inverse_key is not None and inverse_key != type_key:
+                    inverse_exists = await conn.fetchval(
+                        "SELECT 1 FROM relationship_type WHERE type_key = $1",
+                        inverse_key,
+                    )
+                    if not inverse_exists:
+                        # Partner not created yet: defer the link (store NULL),
+                        # to be backfilled when the partner is created.
+                        link_now = None
+
+                row = await conn.fetchrow(
+                    "INSERT INTO relationship_type "
+                    "(type_key, type_label, type_description, inverse_key) "
+                    "VALUES ($1, $2, $3, $4) RETURNING *",
+                    type_key, type_label, type_description, link_now,
+                )
+
+                # Complete the reciprocal: our declared inverse already exists,
+                # so point it back at us if it has no inverse of its own yet.
+                if link_now is not None and inverse_key != type_key:
+                    await conn.execute(
+                        "UPDATE relationship_type "
+                        "SET inverse_key = $1, updated_time = CURRENT_TIMESTAMP "
+                        "WHERE type_key = $2 AND inverse_key IS NULL",
+                        type_key, inverse_key,
+                    )
+
+                await self._log_change(conn, None, 'relationship_type_created', {
+                    'type_key': type_key, 'type_label': type_label
+                })
+                return dict(row)
 
     async def _get_relationship_type_id(self, conn, type_key: str) -> Optional[int]:
         """Resolve relationship type_key to relationship_type_id."""
@@ -189,14 +238,14 @@ class RelationshipMixin:
 
                 return await self._get_relationship_response(conn, relationship_id)
 
-    async def remove_relationship(self, relationship_id: int,
-                                  removed_by: Optional[str] = None) -> bool:
-        """Retract a relationship (set status='retracted')."""
+    async def retract_relationship(self, relationship_id: int,
+                                  retracted_by: Optional[str] = None) -> bool:
+        f"""Retract a relationship (set status='{RETRACTED}')."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_relationship SET status = 'retracted', updated_time = $1 "
-                    "WHERE relationship_id = $2 AND status = 'active' "
+                    f"UPDATE entity_relationship SET status = '{RETRACTED}', updated_time = $1 "
+                    f"WHERE relationship_id = $2 AND status = '{ACTIVE}' "
                     "RETURNING entity_source, entity_destination, relationship_type_id",
                     datetime.now(timezone.utc), relationship_id
                 )
@@ -211,7 +260,7 @@ class RelationshipMixin:
                     'relationship_id': relationship_id,
                     'type_key': type_key,
                     'dest_id': row['entity_destination'],
-                }, changed_by=removed_by)
+                }, changed_by=retracted_by)
                 return True
 
     async def list_relationships(

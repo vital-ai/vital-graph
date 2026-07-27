@@ -5,18 +5,32 @@ Pydantic request/response models for Geo Config and Geo Points endpoints.
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from .api_model import BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
+
 
 # ---------------------------------------------------------------------------
 # Geo Config models
 # ---------------------------------------------------------------------------
 
-class GeoConfigOut(BaseModel):
-    config_id: int
+class GeoConfigOut(ResultStatus):
+    config_id: Optional[int] = None
     enabled: bool = False
     auto_sync: bool = False
     lat_predicates: List[str] = Field(default_factory=list)
     lon_predicates: List[str] = Field(default_factory=list)
     updated_time: Optional[str] = None
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/UPDATED/...)"
+    )
+
+
+class GeoConfigResetResponse(ResultStatus):
+    """Response for resetting (deleting) a space's geo config row."""
+    space_id: str
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/...)"
+    )
 
 
 class UpdateGeoConfigRequest(BaseModel):
@@ -40,8 +54,5 @@ class GeoPointOut(BaseModel):
     updated_time: Optional[str] = None
 
 
-class GeoPointsResponse(BaseModel):
+class GeoPointsResponse(BasePaginatedResponse):
     points: List[GeoPointOut]
-    total_count: int
-    limit: int
-    offset: int

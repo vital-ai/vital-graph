@@ -11,6 +11,7 @@ import logging
 import time
 from typing import List, Optional, Dict, Any, Union
 from ..model.kgentities_model import EntityUpdateResponse
+from ..model.result_status import OperationStatus
 
 # VitalSigns imports for proper integration
 import vital_ai_vitalsigns as vitalsigns
@@ -80,12 +81,14 @@ class KGEntityUpdateProcessor:
             
             if success:
                 return EntityUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated entity: {entity_uri}",
                     updated_uri=entity_uri
                 )
             else:
                 self.logger.error(f"❌ Atomic entity update failed: {entity_uri}")
                 return EntityUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update entity atomically: {entity_uri}",
                     updated_uri=""
                 )
@@ -93,10 +96,11 @@ class KGEntityUpdateProcessor:
         except Exception as e:
             self.logger.error(f"Error in atomic entity update {entity_uri}: {e}")
             return EntityUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error updating entity: {str(e)}",
                 updated_uri=""
             )
-    
+
     async def update_entities_batch(self, backend, space_id: str, graph_id: str, 
                                    entity_updates: Dict[str, List[GraphObject]]) -> EntityUpdateResponse:
         """
@@ -136,18 +140,21 @@ class KGEntityUpdateProcessor:
             if len(updated_uris) == len(entity_updates):
                 self.logger.debug(f"Successfully updated all {len(updated_uris)} entities")
                 return EntityUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated {len(updated_uris)} entities",
                     updated_uri=",".join(updated_uris)
                 )
             elif len(updated_uris) > 0:
                 self.logger.warning(f"Partial success: updated {len(updated_uris)}/{len(entity_updates)} entities")
                 return EntityUpdateResponse(
+                    status=OperationStatus.PARTIAL,
                     message=f"Partial success: updated {len(updated_uris)}/{len(entity_updates)} entities. Failed: {failed_uris}",
                     updated_uri=",".join(updated_uris)
                 )
             else:
                 self.logger.error(f"Failed to update any entities")
                 return EntityUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update any entities. All {len(failed_uris)} updates failed.",
                     updated_uri=""
                 )
@@ -155,6 +162,7 @@ class KGEntityUpdateProcessor:
         except Exception as e:
             self.logger.error(f"Error in batch update operation: {e}")
             return EntityUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error in batch update: {str(e)}",
                 updated_uri=""
             )

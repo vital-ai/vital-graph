@@ -20,8 +20,12 @@ import os
 import sys
 from pathlib import Path
 
-# Add project root to Python path
-project_root = Path(__file__).parent.parent
+# Add the repo root to the FRONT of sys.path so the local `vitalgraph` source
+# wins over any stale copy installed in site-packages. This file lives at
+# apps/entity_registry/migrate.py, so the repo root is three parents up — NOT
+# parent.parent (which is apps/). Inserting at 0 also beats the script-dir entry
+# Python prepends when run as `python apps/entity_registry/migrate.py`.
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv

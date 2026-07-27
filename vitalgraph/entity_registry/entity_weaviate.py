@@ -33,6 +33,7 @@ from .entity_weaviate_schema import (
     get_collection_config,
     get_location_collection_config,
 )
+from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
 
@@ -688,9 +689,9 @@ class EntityWeaviateIndex:
             "FROM entity e "
             "JOIN entity_type et ON e.entity_type_id = et.type_id "
             "LEFT JOIN entity_alias ea ON ea.entity_id = e.entity_id "
-            "AND ea.status = 'active' "
+            f"AND ea.status = '{ACTIVE}' "
             "LEFT JOIN entity_category_map ecm ON ecm.entity_id = e.entity_id "
-            "AND ecm.status = 'active' "
+            f"AND ecm.status = '{ACTIVE}' "
             "LEFT JOIN category ec ON ec.category_id = ecm.category_id "
             "WHERE e.entity_id = ANY($1) "
             "ORDER BY e.entity_id"
@@ -720,7 +721,7 @@ class EntityWeaviateIndex:
                 "SELECT el.entity_id, el.location_name, el.formatted_address, "
                 "el.locality, el.admin_area_1, el.country "
                 "FROM entity_location el "
-                "WHERE el.entity_id = ANY($1) AND el.status = 'active' "
+                f"WHERE el.entity_id = ANY($1) AND el.status = '{ACTIVE}' "
                 "ORDER BY el.entity_id, el.is_primary DESC, el.location_id",
                 eids
             )
@@ -739,7 +740,7 @@ class EntityWeaviateIndex:
             id_rows = await conn.fetch(
                 "SELECT entity_id, identifier_namespace, identifier_value "
                 "FROM entity_identifier "
-                "WHERE entity_id = ANY($1) AND status = 'active' "
+                f"WHERE entity_id = ANY($1) AND status = '{ACTIVE}' "
                 "ORDER BY entity_id",
                 eids
             )
@@ -802,14 +803,14 @@ class EntityWeaviateIndex:
             async with pool.acquire() as conn:
                 if since is not None:
                     id_rows = await conn.fetch(
-                        "SELECT entity_id FROM entity WHERE status = 'active' "
+                        f"SELECT entity_id FROM entity WHERE status = '{ACTIVE}' "
                         "AND updated_time >= $1 AND entity_id > $2 "
                         "ORDER BY entity_id LIMIT $3",
                         since, last_entity_id, chunk_size
                     )
                 else:
                     id_rows = await conn.fetch(
-                        "SELECT entity_id FROM entity WHERE status = 'active' "
+                        f"SELECT entity_id FROM entity WHERE status = '{ACTIVE}' "
                         "AND entity_id > $1 ORDER BY entity_id LIMIT $2",
                         last_entity_id, chunk_size
                     )
@@ -951,7 +952,7 @@ class EntityWeaviateIndex:
             "elt.type_key AS location_type_key, elt.type_label AS location_type_label "
             "FROM entity_location el "
             "JOIN entity_location_type elt ON el.location_type_id = elt.location_type_id "
-            "WHERE el.status = 'active' "
+            f"WHERE el.status = '{ACTIVE}' "
         )
 
         pg_loc_ids = set()
@@ -1131,7 +1132,7 @@ class EntityWeaviateIndex:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
                     "SELECT entity_id, location_id FROM entity_location "
-                    "WHERE status = 'active' AND location_id > $1 "
+                    f"WHERE status = '{ACTIVE}' AND location_id > $1 "
                     "ORDER BY location_id LIMIT $2",
                     last_location_id, 5000
                 )

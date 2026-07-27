@@ -158,6 +158,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 PaginatedGraphObjectResponse,
                 objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} frames",
                 space_id=space_id, graph_id=graph_id,
                 **pagination,
@@ -211,6 +212,7 @@ class KGFramesEndpoint(BaseEndpoint):
                 FrameGraphResponse,
                 frame_graph=frame_graph,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved frame with {len(objects)} objects",
                 space_id=space_id, graph_id=graph_id,
                 requested_frame_uri=uri,
@@ -274,6 +276,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     MultiFrameGraphResponse,
                     frame_graph_list=frame_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(frame_graphs)} frame graphs",
                     space_id=space_id, graph_id=graph_id,
                     metadata={'total_graphs': len(frame_graphs)}
@@ -283,6 +286,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     PaginatedGraphObjectResponse,
                     objects=objects,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(objects)} frames",
                     space_id=space_id, graph_id=graph_id,
                     **pagination,
@@ -353,6 +357,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 CreateEntityResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Created {created_count} frames"),
                 created_count=created_count,
                 created_uris=created_uris
@@ -416,6 +421,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 UpdateEntityResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Frames updated'),
                 updated_uri=updated_uri
             )
@@ -473,6 +479,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Deleted {deleted_count} frames"),
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
@@ -533,6 +540,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 DeleteResponse,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Deleted {deleted_count} frames"),
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
@@ -588,6 +596,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 PaginatedGraphObjectResponse, objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} frame slots",
                 space_id=space_id, graph_id=graph_id, **pagination,
                 metadata={'object_types': count_object_types(objects)}
@@ -637,6 +646,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 CreateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Created {created_count} frames with slots"),
                 created_count=created_count, created_uris=created_uris
             )
@@ -681,6 +691,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Frames with slots updated'),
                 updated_uri=updated_uri
             )
@@ -767,6 +778,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 CreateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Created {created_count} slots"),
                 created_count=created_count, created_uris=created_uris
             )
@@ -811,6 +823,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Slots updated'),
                 updated_uri=updated_uri
             )
@@ -853,6 +866,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 DeleteResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Deleted {deleted_count} slots"),
                 deleted_count=deleted_count, deleted_uris=deleted_uris,
                 space_id=space_id, graph_id=graph_id, requested_uris=slot_uris
@@ -907,6 +921,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 PaginatedGraphObjectResponse, objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} slots",
                 space_id=space_id, graph_id=graph_id, **pagination,
                 metadata={'object_types': count_object_types(objects)}
@@ -953,6 +968,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 CreateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', f"Created {created_count} child frames"),
                 created_count=created_count, created_uris=created_uris
             )
@@ -996,6 +1012,7 @@ class KGFramesEndpoint(BaseEndpoint):
             
             return build_success_response(
                 UpdateEntityResponse, status_code=response.status_code,
+                status=response_data.get('status'),
                 message=response_data.get('message', 'Child frames updated'),
                 updated_uri=updated_uri
             )
@@ -1059,6 +1076,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 PaginatedGraphObjectResponse, objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} child frames",
                 space_id=space_id, graph_id=graph_id, **pagination,
                 metadata={'object_types': count_object_types(objects)}
@@ -1109,6 +1127,7 @@ class KGFramesEndpoint(BaseEndpoint):
             return build_success_response(
                 PaginatedGraphObjectResponse, objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} child frames",
                 space_id=space_id, graph_id=graph_id, **pagination,
                 metadata={'object_types': count_object_types(objects)}
@@ -1190,6 +1209,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     MultiFrameGraphResponse,
                     frame_graph_list=frame_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(frame_graphs)} frame graphs",
                     space_id=space_id, graph_id=graph_id,
                     metadata={'total_graphs': len(frame_graphs)}
@@ -1205,6 +1225,7 @@ class KGFramesEndpoint(BaseEndpoint):
                     MultiFrameGraphResponse,
                     frame_graph_list=frame_graphs,
                     status_code=response.status_code,
+                    status=response_data.get('status'),
                     message=f"Retrieved {len(frame_graphs)} frames",
                     space_id=space_id, graph_id=graph_id,
                     metadata={'total_frames': len(frame_graphs)}

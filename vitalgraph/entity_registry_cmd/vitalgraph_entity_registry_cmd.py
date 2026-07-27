@@ -419,7 +419,7 @@ class EntityRegistryCLI:
             return True
         alias_id = int(args[0])
         try:
-            success = _run_async(self.registry.remove_alias(alias_id))
+            success = _run_async(self.registry.retract_alias(alias_id))
             if success:
                 print(f"✅ Alias {alias_id} retracted")
             else:
@@ -546,7 +546,7 @@ class EntityRegistryCLI:
             return True
         entity_id, category_key = args[0], args[1]
         try:
-            result = _run_async(self.registry.remove_entity_category(entity_id, category_key))
+            result = _run_async(self.registry.retract_entity_category(entity_id, category_key))
             if result:
                 print(f"✅ Removed category '{category_key}' from {entity_id}")
             else:

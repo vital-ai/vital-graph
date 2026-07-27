@@ -467,6 +467,100 @@ export class ApiService {
     return vgClient.entityRegistry.listLocations(entityId);
   }
 
+  async addEntityIdentifier(entityId: string, data: { identifier_namespace: string; identifier_value: string; is_primary?: boolean }): Promise<any> {
+    return vgClient.entityRegistry.addIdentifier(entityId, data);
+  }
+
+  async removeEntityIdentifier(identifierId: number): Promise<any> {
+    return vgClient.entityRegistry.removeIdentifier(identifierId);
+  }
+
+  async addEntityAlias(entityId: string, data: { alias_name: string; alias_type?: string; is_primary?: boolean }): Promise<any> {
+    return vgClient.entityRegistry.addAlias(entityId, data);
+  }
+
+  async removeEntityAlias(aliasId: number): Promise<any> {
+    return vgClient.entityRegistry.removeAlias(aliasId);
+  }
+
+  async addEntityCategory(entityId: string, categoryKey: string): Promise<any> {
+    return vgClient.entityRegistry.addEntityCategory(entityId, { category_key: categoryKey });
+  }
+
+  async removeEntityCategory(entityId: string, categoryKey: string): Promise<any> {
+    return vgClient.entityRegistry.removeEntityCategory(entityId, categoryKey);
+  }
+
+  async getEntityRelationships(entityId: string, direction: 'both' | 'outgoing' | 'incoming' = 'both', includeExpired = false): Promise<any> {
+    return vgClient.entityRegistry.listRelationships(entityId, direction, includeExpired);
+  }
+
+  async createEntityRelationship(data: { entity_source: string; entity_destination: string; relationship_type_key: string; description?: string }): Promise<any> {
+    return vgClient.entityRegistry.createRelationship(data);
+  }
+
+  async removeEntityRelationship(relationshipId: number): Promise<any> {
+    return vgClient.entityRegistry.removeRelationship(relationshipId);
+  }
+
+  // ─── Entity Registry lookups ───────────────────────────────────────
+
+  async listRegistryEntityTypes(): Promise<any[]> {
+    return vgClient.entityRegistry.listEntityTypes() as any;
+  }
+
+  async listRegistryCategories(): Promise<any[]> {
+    return vgClient.entityRegistry.listCategories() as any;
+  }
+
+  async listRegistryRelationshipTypes(): Promise<any[]> {
+    return vgClient.entityRegistry.listRelationshipTypes() as any;
+  }
+
+  async listRegistryLocationTypes(): Promise<any[]> {
+    return vgClient.entityRegistry.listLocationTypes() as any;
+  }
+
+  // ─── Unified metadata management (per-kind) ────────────────────────
+  // kind ∈ entity-types | categories | relationship-types | location-types
+  //        | identifier-types | alias-types
+
+  async listRegistryMetadata(kind: string, opts: { includeInactive?: boolean; includeUsage?: boolean; q?: string } = {}): Promise<any[]> {
+    return vgClient.entityRegistry.listMetadata(kind, opts) as any;
+  }
+
+  async getRegistryMetadataItem(kind: string, key: string): Promise<any> {
+    return vgClient.entityRegistry.getMetadata(kind, key);
+  }
+
+  async createRegistryMetadata(kind: string, data: { key: string; label: string; description?: string; inverse_key?: string }): Promise<any> {
+    return vgClient.entityRegistry.createMetadata(kind, data);
+  }
+
+  async updateRegistryMetadata(kind: string, key: string, data: { label?: string; description?: string; is_active?: boolean; inverse_key?: string }): Promise<any> {
+    return vgClient.entityRegistry.updateMetadata(kind, key, data);
+  }
+
+  async deleteRegistryMetadata(kind: string, key: string): Promise<any> {
+    return vgClient.entityRegistry.deleteMetadata(kind, key);
+  }
+
+  async createRegistryEntityType(data: { type_key: string; type_label: string; type_description?: string }): Promise<any> {
+    return vgClient.entityRegistry.createEntityType(data);
+  }
+
+  async createRegistryCategory(data: { category_key: string; category_label: string; category_description?: string }): Promise<any> {
+    return vgClient.entityRegistry.createCategory(data);
+  }
+
+  async createRegistryRelationshipType(data: { type_key: string; type_label: string; type_description?: string; inverse_key?: string }): Promise<any> {
+    return vgClient.entityRegistry.createRelationshipType(data);
+  }
+
+  async createRegistryLocationType(data: { type_key: string; type_label: string; type_description?: string }): Promise<any> {
+    return vgClient.entityRegistry.createLocationType(data);
+  }
+
   async findSimilarEntities(options: { name: string; type_key?: string; limit?: number; min_score?: number }): Promise<any> {
     return vgClient.entityRegistry.findSimilar({
       name: options.name,

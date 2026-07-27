@@ -135,6 +135,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 PaginatedGraphObjectResponse,
                 objects=relations,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(relations)} relations",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -199,6 +200,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 EntityResponse,
                 objects=relations,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(relations)} relation(s)" if relations else "Relation not found",
                 space_id=space_id,
                 graph_id=graph_id
@@ -263,6 +265,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 created_uris=created_uris,
                 created_count=created_count,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Created {created_count} relation(s)",
                 space_id=space_id,
                 graph_id=graph_id
@@ -325,6 +328,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 updated_uri=updated_uris[0] if updated_uris else None,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Updated {updated_count} relation(s)",
                 space_id=space_id,
                 graph_id=graph_id
@@ -387,6 +391,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 UpdateEntityResponse,
                 updated_uri=upserted_uris[0] if upserted_uris else None,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Upserted {upserted_count} relation(s)",
                 space_id=space_id,
                 graph_id=graph_id
@@ -452,6 +457,7 @@ class KGRelationsEndpoint(BaseEndpoint):
                 deleted_count=deleted_count,
                 deleted_uris=deleted_uris,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Deleted {deleted_count} relation(s)",
                 space_id=space_id,
                 graph_id=graph_id

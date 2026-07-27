@@ -11,6 +11,7 @@ Follows the same pattern as KGEntityUpdateProcessor for consistency.
 import logging
 from typing import List, Optional, Dict, Any, Union
 from ..model.kgframes_model import SlotUpdateResponse
+from ..model.result_status import OperationStatus
 
 # VitalSigns imports for proper integration
 import vital_ai_vitalsigns as vitalsigns
@@ -74,12 +75,14 @@ class KGSlotUpdateProcessor:
             if success:
                 self.logger.info(f"✅ Successfully updated slot atomically: {slot_uri}")
                 return SlotUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated slot: {slot_uri}",
                     updated_uri=slot_uri
                 )
             else:
                 self.logger.error(f"❌ Atomic slot update failed: {slot_uri}")
                 return SlotUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update slot atomically: {slot_uri}",
                     updated_uri=""
                 )
@@ -87,10 +90,11 @@ class KGSlotUpdateProcessor:
         except Exception as e:
             self.logger.error(f"Error in atomic slot update {slot_uri}: {e}")
             return SlotUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error updating slot: {str(e)}",
                 updated_uri=""
             )
-    
+
     async def update_slots_batch(self, backend, space_id: str, graph_id: str, 
                                 slot_updates: Dict[str, List[GraphObject]]) -> SlotUpdateResponse:
         """
@@ -130,18 +134,21 @@ class KGSlotUpdateProcessor:
             if len(updated_uris) == len(slot_updates):
                 self.logger.info(f"Successfully updated all {len(updated_uris)} slots")
                 return SlotUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated {len(updated_uris)} slots",
                     updated_uri=",".join(updated_uris)
                 )
             elif len(updated_uris) > 0:
                 self.logger.warning(f"Partial success: updated {len(updated_uris)}/{len(slot_updates)} slots")
                 return SlotUpdateResponse(
+                    status=OperationStatus.PARTIAL,
                     message=f"Partial success: updated {len(updated_uris)}/{len(slot_updates)} slots. Failed: {failed_uris}",
                     updated_uri=",".join(updated_uris)
                 )
             else:
                 self.logger.error(f"Failed to update any slots")
                 return SlotUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update any slots. All {len(failed_uris)} updates failed.",
                     updated_uri=""
                 )
@@ -149,6 +156,7 @@ class KGSlotUpdateProcessor:
         except Exception as e:
             self.logger.error(f"Error in batch update operation: {e}")
             return SlotUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error in batch update: {str(e)}",
                 updated_uri=""
             )

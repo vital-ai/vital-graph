@@ -5,9 +5,13 @@ Pydantic request/response models for Admin endpoints.
 from typing import Dict, List, Optional
 from pydantic import BaseModel
 
+from .api_model import BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
 
-class ResyncResponse(BaseModel):
+
+class ResyncResponse(ResultStatus):
     """Response model for resync operation."""
+    status: OperationStatus = OperationStatus.OK
     space_id: str
     edge_rows: int
     frame_entity_rows: int
@@ -29,9 +33,6 @@ class AuditLogEntry(BaseModel):
     level: str = "INFO"
 
 
-class AuditLogResponse(BaseModel):
+class AuditLogResponse(BasePaginatedResponse):
     """Paginated audit log response."""
     entries: List[AuditLogEntry]
-    total_count: int
-    limit: int
-    offset: int

@@ -8,13 +8,18 @@ search index.  They are shared by both FTS and vector indexes.
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+
 
 # ---------------------------------------------------------------------------
 # Output / response models
 # ---------------------------------------------------------------------------
 
-class SearchMappingPropertyOut(BaseModel):
-    """A child property within a search mapping."""
+class SearchMappingPropertyOut(ResultStatus):
+    """A child property within a search mapping (also the add-property response)."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/...)"
+    )
     property_id: int
     mapping_id: int
     property_uri: str
@@ -22,8 +27,11 @@ class SearchMappingPropertyOut(BaseModel):
     ordinal: int = 0
 
 
-class SearchMappingIndexOut(BaseModel):
-    """An index association (junction row) within a search mapping."""
+class SearchMappingIndexOut(ResultStatus):
+    """An index association (junction row) within a search mapping (also the add-index response)."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/...)"
+    )
     id: int
     mapping_id: int
     index_type: str  # 'vector' or 'fts'
@@ -31,8 +39,11 @@ class SearchMappingIndexOut(BaseModel):
     created_time: Optional[str] = None
 
 
-class SearchMappingOut(BaseModel):
+class SearchMappingOut(ResultStatus):
     """A search mapping with its child properties and index associations."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/UPDATED/...)"
+    )
     mapping_id: int
     mapping_type: str
     type_uri: Optional[str] = None
@@ -46,8 +57,20 @@ class SearchMappingOut(BaseModel):
     indexes: List[SearchMappingIndexOut] = []
 
 
-class SearchMappingListResponse(BaseModel):
+class SearchMappingListResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     mappings: List[SearchMappingOut]
+    total_count: int
+
+
+class SearchMappingIndexListResponse(ResultStatus):
+    """List of index associations for a mapping."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
+    indexes: List[SearchMappingIndexOut]
     total_count: int
 
 
@@ -96,6 +119,8 @@ class AddPropertyRequest(BaseModel):
     ordinal: int = Field(0, description="Sort order")
 
 
-class DeleteResponse(BaseModel):
-    message: str
+class DeleteResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NOT_FOUND/...)"
+    )
     deleted: bool = False

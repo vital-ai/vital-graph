@@ -14,6 +14,7 @@ from ..model.spaces_model import (
     EntityAnalytics, FrameAnalytics, RelationAnalytics, PropertyAnalytics,
     TypeCount, ConnectedEntity, PredicateCount,
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write, require_admin, get_space_access
 
 
@@ -44,6 +45,7 @@ class SpacesEndpoint:
             spaces = self._filter_accessible_spaces(spaces, current_user)
             
             response = SpacesListResponse(
+                status=OperationStatus.FOUND if spaces else OperationStatus.EMPTY,
                 spaces=spaces,
                 total_count=len(spaces),
                 page_size=len(spaces),  # No pagination implemented yet
@@ -68,6 +70,7 @@ class SpacesEndpoint:
         space_obj = Space(**created_space) if created_space else None
         
         return SpaceCreateResponse(
+            status=OperationStatus.CREATED,
             message="Space created successfully",
             created_count=1,
             created_uris=[str(space_id)],
@@ -79,15 +82,15 @@ class SpacesEndpoint:
         try:
             space = await self.api.get_space_by_id(space_id, current_user)
             return SpaceResponse(
-                success=True,
+                status=OperationStatus.FOUND,
                 message="Space retrieved successfully",
                 space=space
             )
         except Exception as e:
-            # Return error response instead of raising HTTP exception
+            # Return domain not-found response (HTTP 200) instead of raising
             self.logger.warning(f"Space not found: {space_id} - {e}")
             return SpaceResponse(
-                success=False,
+                status=OperationStatus.NOT_FOUND,
                 message=f"Space not found: {space_id}",
                 space=None
             )
@@ -109,17 +112,17 @@ class SpacesEndpoint:
             quad_dump = info.get('quad_dump') if info else None
             
             return SpaceInfoResponse(
-                success=True,
+                status=OperationStatus.FOUND,
                 message="Space info retrieved successfully",
                 space=space,
                 statistics=statistics,
                 quad_dump=quad_dump
             )
         except Exception as e:
-            # Return error response instead of raising HTTP exception
+            # Return domain not-found response (HTTP 200) instead of raising
             self.logger.warning(f"Failed to get space info: {space_id} - {e}")
             return SpaceInfoResponse(
-                success=False,
+                status=OperationStatus.NOT_FOUND,
                 message=f"Failed to get space info: {space_id}",
                 space=None,
                 statistics=None,
@@ -147,7 +150,7 @@ class SpacesEndpoint:
 
             if not pool:
                 return SpaceAnalyticsResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message="Database pool not available for analytics"
                 )
 
@@ -170,7 +173,7 @@ class SpacesEndpoint:
                         property_analytics=PropertyAnalytics(**(data.get("property_analytics", {}))),
                     )
                     return SpaceAnalyticsResponse(
-                        success=True,
+                        status=OperationStatus.FOUND,
                         message=f"Analytics computed for graph: {graph_uri}",
                         analytics=analytics
                     )
@@ -188,7 +191,7 @@ class SpacesEndpoint:
 
             if not row:
                 return SpaceAnalyticsResponse(
-                    success=True,
+                    status=OperationStatus.EMPTY,
                     message="No analytics computed yet for this space",
                     analytics=None
                 )
@@ -217,7 +220,7 @@ class SpacesEndpoint:
             )
 
             return SpaceAnalyticsResponse(
-                success=True,
+                status=OperationStatus.FOUND,
                 message="Analytics retrieved successfully",
                 analytics=analytics
             )
@@ -225,28 +228,36 @@ class SpacesEndpoint:
         except Exception as e:
             self.logger.warning(f"Failed to get space analytics: {space_id} - {e}")
             return SpaceAnalyticsResponse(
-                success=False,
+                status=OperationStatus.STORE_FAILED,
                 message=f"Failed to get space analytics: {e}"
             )
 
     async def update_space(self, space_id: str, space: Space, current_user: Dict):
         """Update an existing space."""
         updated_space = await self.api.update_space(space_id, space.dict(), current_user)
+        _uri = str(updated_space.get('id', space_id))
         return SpaceUpdateResponse(
+            status=OperationStatus.UPDATED,
             message="Space updated successfully",
-            updated_uri=str(updated_space.get('id', space_id))
+            updated_uri=_uri,
+            updated_uris=[_uri],
+            updated_count=1,
         )
     
     async def delete_space(self, space_id: str, current_user: Dict):
         """Delete a space."""
         from vitalgraph.constants import PROTECTED_SPACES
         if space_id in PROTECTED_SPACES:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Cannot delete system space '{space_id}'",
+            # Domain outcome (HTTP 200): system spaces cannot be deleted
+            return SpaceDeleteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Cannot delete system space '{space_id}'",
+                deleted_count=0,
+                deleted_uris=[],
             )
         result = await self.api.delete_space(space_id, current_user)
         return SpaceDeleteResponse(
+            status=OperationStatus.DELETED,
             message="Space deleted successfully",
             deleted_count=1,
             deleted_uris=[space_id]
@@ -258,12 +269,13 @@ class SpacesEndpoint:
         # Filter to only spaces the user has access to
         spaces = self._filter_accessible_spaces(spaces, current_user)
         return SpacesListResponse(
+            status=OperationStatus.FOUND if spaces else OperationStatus.EMPTY,
             spaces=spaces,
             total_count=len(spaces),
             page_size=len(spaces),  # No pagination implemented yet
             offset=0
         )
-    
+
     def _filter_accessible_spaces(self, spaces: list, current_user: Dict) -> list:
         """Return only spaces the user has at least read access to.
         

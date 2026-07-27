@@ -313,8 +313,8 @@ test.describe('KG Documents — Segmentation & Search', () => {
         description: 'E2E test — ONNX segment vectors',
       },
     });
-    // Index may already exist from a previous test run — 409 is acceptable
-    expect([201, 409]).toContain(createResp.status());
+    // Contract: create is HTTP 200 (already-exists is 200 + status=already_exists in body, not 409)
+    expect(createResp.status()).toBe(200);
 
     // Create a search mapping for kgdocument_segment → our ONNX index
     // First check if one already exists (from a previous test run)
@@ -336,7 +336,7 @@ test.describe('KG Documents — Segmentation & Search', () => {
           source_type: 'default',
         },
       });
-      expect(mappingResp.status()).toBe(201);
+      expect(mappingResp.status()).toBe(200);
       const mapping = await mappingResp.json();
       mappingId = mapping.mapping_id;
 

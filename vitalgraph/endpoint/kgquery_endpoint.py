@@ -26,6 +26,7 @@ from ..model.kgqueries_model import (
 )
 from ..cache.entity_graph_cache import _entity_graph_cache
 from ..cache.count_cache import _count_cache
+from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read
 
 
@@ -113,26 +114,41 @@ class KGQueriesEndpoint:
             
             # Validate query type
             if query_type not in ["relation", "frame", "entity", "frame_query", "document"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', 'frame_query', or 'document'"
+                return KGQueryResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=f"Invalid query_type: {query_type}. Must be 'relation', 'frame', 'entity', 'frame_query', or 'document'",
+                    query_type=str(query_type),
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
                 )
-            
+
             # Guard against runaway pagination — reject absurd offsets
             if query_request.offset > self._MAX_QUERY_OFFSET:
                 self.logger.warning(
                     f"Offset {query_request.offset} exceeds max {self._MAX_QUERY_OFFSET} — "
                     f"possible runaway pagination (space={space_id}, query_type={query_type})")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Offset {query_request.offset} exceeds maximum allowed ({self._MAX_QUERY_OFFSET})"
+                return KGQueryResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=f"Offset {query_request.offset} exceeds maximum allowed ({self._MAX_QUERY_OFFSET})",
+                    query_type=query_type,
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
                 )
-            
+
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-            
+                return KGQueryResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space {space_id} not found",
+                    query_type=query_type,
+                    total_count=0,
+                    page_size=query_request.page_size,
+                    offset=query_request.offset,
+                )
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
@@ -225,6 +241,7 @@ class KGQueriesEndpoint:
                     _count_cache.put(space_id, graph_id, _qh, total_count)
                 self.logger.info(f"Relation count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
+                    status=OperationStatus.EMPTY,
                     query_type="relation",
                     relation_connections=[],
                     frame_connections=None,
@@ -245,6 +262,7 @@ class KGQueriesEndpoint:
                         f"Relation query short-circuit: offset {query_request.offset} >= total {total_count}, "
                         f"{(t_query - t0)*1000:.0f}ms (count only)")
                     return KGQueryResponse(
+                        status=OperationStatus.EMPTY,
                         query_type="relation",
                         relation_connections=[],
                         frame_connections=None,
@@ -467,6 +485,7 @@ class KGQueriesEndpoint:
                     _count_cache.put(space_id, graph_id, _qh, total_count)
                 self.logger.info(f"Entity count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
+                    status=OperationStatus.EMPTY,
                     query_type="entity",
                     entity_uris=[],
                     total_count=total_count,
@@ -486,6 +505,7 @@ class KGQueriesEndpoint:
                         f"Entity query short-circuit: offset {query_request.offset} >= total {total_count}, "
                         f"{(t_query - t0)*1000:.0f}ms (count only)")
                     return KGQueryResponse(
+                        status=OperationStatus.EMPTY,
                         query_type="entity",
                         entity_uris=[],
                         total_count=total_count,
@@ -628,6 +648,7 @@ class KGQueriesEndpoint:
                     _count_cache.put(space_id, graph_id, _qh, total_count)
                 self.logger.info(f"Frame count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
+                    status=OperationStatus.EMPTY,
                     query_type="frame",
                     relation_connections=None,
                     frame_connections=[],
@@ -648,6 +669,7 @@ class KGQueriesEndpoint:
                         f"Frame query short-circuit: offset {query_request.offset} >= total {total_count}, "
                         f"{(t_query - t0)*1000:.0f}ms (count only)")
                     return KGQueryResponse(
+                        status=OperationStatus.EMPTY,
                         query_type="frame",
                         relation_connections=None,
                         frame_connections=[],
@@ -780,6 +802,7 @@ class KGQueriesEndpoint:
                     _count_cache.put(space_id, graph_id, _qh, total_count)
                 self.logger.info(f"Frame_query count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
+                    status=OperationStatus.EMPTY,
                     query_type="frame_query",
                     frame_results=[],
                     total_count=total_count,
@@ -799,6 +822,7 @@ class KGQueriesEndpoint:
                         f"Frame_query short-circuit: offset {query_request.offset} >= total {total_count}, "
                         f"{(t_query - t0)*1000:.0f}ms (count only)")
                     return KGQueryResponse(
+                        status=OperationStatus.EMPTY,
                         query_type="frame_query",
                         frame_results=[],
                         total_count=total_count,
@@ -1210,6 +1234,7 @@ class KGQueriesEndpoint:
                     _count_cache.put(space_id, graph_id, _qh, total_count)
                 self.logger.info(f"Document count_only: {total_count}, {(_time.monotonic() - t0)*1000:.0f}ms")
                 return KGQueryResponse(
+                    status=OperationStatus.EMPTY,
                     query_type="document",
                     document_uris=[],
                     total_count=total_count,
@@ -1227,6 +1252,7 @@ class KGQueriesEndpoint:
                         f"Document query short-circuit: offset {query_request.offset} >= total {total_count}, "
                         f"{(t_query - t0)*1000:.0f}ms (count only)")
                     return KGQueryResponse(
+                        status=OperationStatus.EMPTY,
                         query_type="document",
                         document_uris=[],
                         total_count=total_count,

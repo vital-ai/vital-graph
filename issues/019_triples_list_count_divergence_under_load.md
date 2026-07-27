@@ -68,3 +68,38 @@ than plain pool saturation.
 - Consider whether `conn.reset()` stalling on a poisoned connection warrants a
   pool-level `command_timeout`/reset-timeout hardening so a single bad statement
   can never bleed the pool — defense in depth beyond this specific race.
+
+## Residual flake — RESOLVED (a second, distinct root cause)
+
+After the term-race fix, `triples-crud.spec.ts:64` still flaked ~1/253 under full
+E2E concurrency (read returns 0). Reproduced through the real code paths with a
+small pool + concurrent SPARQL-UPDATE writers + `add_rdf_quads_batch` REST writers
++ `query_quads` readers + INSERT/DELETE deleters. Symptom was NOT a poison —
+**writer failures = 0, read-after-write misses = 0** — the pool simply bled out and
+reads hung.
+
+**Real root cause: a connection-pool double-acquire deadlock.** `generate_sql()`
+is called *while the caller already holds a pooled connection*; it invokes
+`ensure_edge_table` / `ensure_frame_entity_table`, and when the edge/frame table was
+empty those helpers did `async with db.get_connection()` — acquiring a **second**
+pool connection. Under N concurrent callers each holding one and blocking to acquire
+a second, a small pool deadlocks; unrelated reads stall on `pool.acquire()`.
+(`db.execute_query(conn=conn)` correctly reuses the caller's connection;
+`db.get_connection()` always acquired a fresh one — that asymmetry was the bug.)
+
+**Fix:**
+- `ensure_edge_table.py` / `ensure_frame_entity_table.py`: new `_acquire_conn(conn,
+  conn_params)` context manager that **reuses the caller's connection** when provided
+  and only acquires from the pool when there is none. Applied to the CREATE-table and
+  populate blocks. This eliminates the deadlock.
+- Defense-in-depth write-path atomicity in `sparql_sql_space_impl.py`:
+  `execute_sparql_update` main write + edge/frame sync each wrapped in their own
+  `conn.transaction()`; `add_rdf_quad`, owned-connection `add_rdf_quads_batch`, and
+  `remove_rdf_quads_batch` wrapped in transactions (externally-passed connections left
+  to the caller's transaction). So no failing statement can leave an aborted pooled
+  connection.
+
+**Verified:** repro `tests/integration/_repro_019_poison.py` → `REPRODUCED
+POISON/STALL: False` (0 stalls/misses/failures, stable across runs; was hanging to
+the 240s timeout with 33 stalls). Regression test still 2 passed; +29 API and +73
+integration tests pass. E2E re-run confirms `triples-crud` stable.

@@ -29,7 +29,7 @@ class TestAdmin:
         resp = await vg_client.admin.audit_log(limit=10)
         assert resp.total_count >= 0
         assert isinstance(resp.entries, list)
-        assert resp.limit == 10
+        assert resp.page_size == 10
 
     async def test_audit_log_filter_by_actor(self, vg_client):
         """Filter audit log by admin actor."""

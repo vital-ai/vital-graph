@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional
 from pydantic import BaseModel, Field
 
 from .api_model import BaseOperationResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 # SPARQL Graph Models
@@ -30,28 +31,31 @@ class GraphInfo(BaseModel):
     )
 
 
-class GraphInfoResponse(BaseModel):
-    """Response model for graph info requests."""
-    success: bool = Field(
-        ...,
-        description="Whether the operation was successful"
+class GraphInfoResponse(ResultStatus):
+    """Response model for graph info requests.
+
+    Carries the unified success/status/message contract (``success`` derived from
+    ``status``). ``status`` defaults to FOUND; set NOT_FOUND when the graph does
+    not exist.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/NOT_FOUND/...)"
     )
     graph_info: Optional[GraphInfo] = Field(
         None,
         description="Graph information (None if graph not found)"
     )
-    error: Optional[str] = Field(
-        None,
-        description="Error message if operation failed"
-    )
-    message: Optional[str] = Field(
-        None,
-        description="Response message"
-    )
 
 
-class GraphCountsResponse(BaseModel):
-    """Response model for graph object counts."""
+class GraphCountsResponse(ResultStatus):
+    """Response model for graph object counts.
+
+    Carries the unified success/status/message contract (``success`` derived from
+    ``status``). ``status`` defaults to FOUND.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/...)"
+    )
     entity_count: int = Field(0, description="Number of entities in the graph")
     frame_count: int = Field(0, description="Number of frames in the graph")
     relation_count: int = Field(0, description="Number of relations in the graph")

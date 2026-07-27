@@ -20,10 +20,11 @@ from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.role_dependencies import require_space_write, require_space_read
+from ..model.result_status import OperationStatus
 from ..vectorization.fuzzy_mapping_manager import FuzzyMappingManager
 from ..model.fuzzy_mappings_model import (
     FuzzyMappingPropertyOut, FuzzyMappingOut, FuzzyMappingListResponse,
-    FuzzyMappingStatsResponse,
+    FuzzyMappingStatsResponse, DeleteResponse, PopulateResponse,
     CreateFuzzyMappingRequest, UpdateFuzzyMappingRequest, AddFuzzyPropertyRequest,
 )
 
@@ -88,7 +89,10 @@ class FuzzyMappingsEndpoint:
                 enabled=enabled,
             )
             mappings = [FuzzyMappingOut(**d.to_dict()) for d in dtos]
-            return FuzzyMappingListResponse(mappings=mappings, total_count=len(mappings))
+            return FuzzyMappingListResponse(
+                mappings=mappings, total_count=len(mappings),
+                status=OperationStatus.FOUND if mappings else OperationStatus.EMPTY,
+            )
         finally:
             await self._release(conn)
 
@@ -107,7 +111,7 @@ class FuzzyMappingsEndpoint:
                 phonetic_bonus=body.phonetic_bonus,
             )
             dto = await manager.get_mapping(mapping_id)
-            return FuzzyMappingOut(**dto.to_dict())
+            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.CREATED)
         finally:
             await self._release(conn)
 
@@ -117,7 +121,10 @@ class FuzzyMappingsEndpoint:
         try:
             dto = await manager.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
+                return FuzzyMappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Fuzzy mapping not found",
+                )
             return FuzzyMappingOut(**dto.to_dict())
         finally:
             await self._release(conn)
@@ -130,8 +137,11 @@ class FuzzyMappingsEndpoint:
         try:
             dto = await manager.update_mapping(mapping_id, **body.dict(exclude_none=True))
             if dto is None:
-                raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
-            return FuzzyMappingOut(**dto.to_dict())
+                return FuzzyMappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Fuzzy mapping not found",
+                )
+            return FuzzyMappingOut(**dto.to_dict(), status=OperationStatus.UPDATED)
         finally:
             await self._release(conn)
 
@@ -141,8 +151,14 @@ class FuzzyMappingsEndpoint:
         try:
             deleted = await manager.delete_mapping(mapping_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
-            return {"message": "Fuzzy mapping deleted", "mapping_id": mapping_id}
+                return DeleteResponse(
+                    mapping_id=mapping_id, status=OperationStatus.NOT_FOUND,
+                    message="Fuzzy mapping not found",
+                )
+            return DeleteResponse(
+                mapping_id=mapping_id, status=OperationStatus.DELETED,
+                message="Fuzzy mapping deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -164,6 +180,7 @@ class FuzzyMappingsEndpoint:
                 property_uri=body.property_uri,
                 property_role=body.property_role,
                 ordinal=body.ordinal,
+                status=OperationStatus.CREATED,
             )
         finally:
             await self._release(conn)
@@ -176,8 +193,14 @@ class FuzzyMappingsEndpoint:
         try:
             deleted = await manager.remove_property(property_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Property not found")
-            return {"message": "Property removed", "property_id": property_id}
+                return DeleteResponse(
+                    property_id=property_id, status=OperationStatus.NOT_FOUND,
+                    message="Property not found",
+                )
+            return DeleteResponse(
+                property_id=property_id, status=OperationStatus.DELETED,
+                message="Property removed",
+            )
         finally:
             await self._release(conn)
 
@@ -197,7 +220,10 @@ class FuzzyMappingsEndpoint:
         try:
             dto = await manager.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
+                return PopulateResponse(
+                    mapping_id=mapping_id, entities_indexed=0,
+                    status=OperationStatus.NOT_FOUND, message="Fuzzy mapping not found",
+                )
             index_name = dto.index_name
         finally:
             await self._release(conn)
@@ -205,11 +231,11 @@ class FuzzyMappingsEndpoint:
         # Spawn background task (acquires its own connection)
         asyncio.ensure_future(self._run_populate(space_id, mapping_id, index_name))
 
-        return {
-            "message": f"Fuzzy population started for mapping {mapping_id}",
-            "mapping_id": mapping_id,
-            "entities_indexed": 0,
-        }
+        return PopulateResponse(
+            mapping_id=mapping_id, entities_indexed=0,
+            status=OperationStatus.OK,
+            message=f"Fuzzy population started for mapping {mapping_id}",
+        )
 
     async def _run_populate(
         self, space_id: str, mapping_id: int, index_name: str,
@@ -243,7 +269,10 @@ class FuzzyMappingsEndpoint:
         try:
             stats = await manager.get_stats(mapping_id)
             if stats is None:
-                raise HTTPException(status_code=404, detail="Fuzzy mapping not found")
+                return FuzzyMappingStatsResponse(
+                    mapping_id=mapping_id, status=OperationStatus.NOT_FOUND,
+                    message="Fuzzy mapping not found",
+                )
             return FuzzyMappingStatsResponse(**stats)
         finally:
             await self._release(conn)
@@ -277,7 +306,6 @@ class FuzzyMappingsEndpoint:
         @self.router.post(
             "/fuzzy-mappings",
             response_model=FuzzyMappingOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Fuzzy Mappings"],
             summary="Create Fuzzy Mapping",
         )
@@ -304,6 +332,7 @@ class FuzzyMappingsEndpoint:
 
         @self.router.delete(
             "/fuzzy-mappings",
+            response_model=DeleteResponse,
             tags=["Fuzzy Mappings"],
             summary="Delete Fuzzy Mapping",
         )
@@ -317,7 +346,6 @@ class FuzzyMappingsEndpoint:
         @self.router.post(
             "/fuzzy-mappings/properties",
             response_model=FuzzyMappingPropertyOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Fuzzy Mappings"],
             summary="Add Fuzzy Mapping Property",
         )
@@ -331,6 +359,7 @@ class FuzzyMappingsEndpoint:
 
         @self.router.delete(
             "/fuzzy-mappings/properties",
+            response_model=DeleteResponse,
             tags=["Fuzzy Mappings"],
             summary="Remove Fuzzy Mapping Property",
         )

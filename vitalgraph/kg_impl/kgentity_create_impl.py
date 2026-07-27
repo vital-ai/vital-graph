@@ -19,6 +19,7 @@ from ai_haley_kg_domain.model.Edge_hasEntityKGFrame import Edge_hasEntityKGFrame
 
 # Model imports
 from ..model.kgentities_model import EntityCreateResponse, EntityUpdateResponse
+from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
@@ -196,6 +197,7 @@ class KGEntityCreateProcessor:
                 if existing_entities:
                     self.logger.warning(f"❌ Entity {existing_entities[0]} already exists - returning early")
                     return EntityCreateResponse(
+                        status=OperationStatus.ALREADY_EXISTS,
                         message=f"Entity {existing_entities[0]} already exists - cannot create in 'create' mode",
                         created_count=0,
                         created_uris=[]
@@ -204,6 +206,7 @@ class KGEntityCreateProcessor:
                 if existing_subs:
                     self.logger.warning(f"❌ Sub-object conflict: {len(existing_subs)} URIs already exist")
                     return EntityCreateResponse(
+                        status=OperationStatus.ALREADY_EXISTS,
                         message=f"Cannot create entity graph: {len(existing_subs)} sub-object URIs already exist",
                         created_count=0,
                         created_uris=[]
@@ -220,12 +223,14 @@ class KGEntityCreateProcessor:
             if result.success:
                 entity_uris = [str(entity.URI) for entity in entities]
                 return EntityCreateResponse(
+                    status=OperationStatus.CREATED,
                     message=f"Successfully created {len(entities)} entities",
                     created_count=len(entities),
                     created_uris=entity_uris
                 )
             else:
                 return EntityCreateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to store entities: {result.message}",
                     created_count=0,
                     created_uris=[]
@@ -234,6 +239,7 @@ class KGEntityCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in create mode: {e}")
             return EntityCreateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error creating entities: {str(e)}",
                 created_count=0,
                 created_uris=[]
@@ -248,6 +254,7 @@ class KGEntityCreateProcessor:
                 entity_uri = str(entity.URI)
                 if not await self.backend.object_exists(space_id, graph_id, entity_uri):
                     return EntityUpdateResponse(
+                        status=OperationStatus.NOT_FOUND,
                         message=f"Entity {entity_uri} not found - cannot update in 'update' mode",
                         updated_uri=""
                     )
@@ -263,11 +270,13 @@ class KGEntityCreateProcessor:
             if result.success:
                 entity_uri = str(entities[0].URI)
                 return EntityUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated entity: {entity_uri}",
                     updated_uri=entity_uri
                 )
             else:
                 return EntityUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update entity: {result.message}",
                     updated_uri=""
                 )
@@ -275,10 +284,11 @@ class KGEntityCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in update mode: {e}")
             return EntityUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error updating entity: {str(e)}",
                 updated_uri=""
             )
-    
+
     async def _handle_upsert_mode(self, space_id: str, graph_id: str,
                                 entities: List[KGEntity], objects: List[GraphObject]) -> EntityUpdateResponse:
         """Handle UPSERT mode: create if not exists, update if exists."""
@@ -306,11 +316,13 @@ class KGEntityCreateProcessor:
                 entity_uri = str(entities[0].URI)
                 action = "updated" if existing_entities else "created"
                 return EntityUpdateResponse(
+                    status=OperationStatus.UPSERTED,
                     message=f"Successfully {action} entity: {entity_uri}",
                     updated_uri=entity_uri
                 )
             else:
                 return EntityUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to upsert entity: {result.message}",
                     updated_uri=""
                 )
@@ -318,6 +330,7 @@ class KGEntityCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in upsert mode: {e}")
             return EntityUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error upserting entity: {str(e)}",
                 updated_uri=""
             )
@@ -360,12 +373,14 @@ class KGEntityCreateProcessor:
         """Create appropriate error response based on operation mode."""
         if operation_mode == OperationMode.CREATE:
             return EntityCreateResponse(
+                status=OperationStatus.ERROR,
                 message=message,
                 created_count=0,
                 created_uris=[]
             )
         else:  # UPDATE or UPSERT
             return EntityUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=message,
                 updated_uri=""
             )

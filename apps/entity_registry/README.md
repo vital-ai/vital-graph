@@ -2,8 +2,6 @@
 
 Admin and migration scripts for the Entity Registry. Run from the project root.
 
-For full documentation, see [docs/entity_registry.md](../docs/entity_registry.md).
-
 ## Scripts
 
 | Script | Purpose |

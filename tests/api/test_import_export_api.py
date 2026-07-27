@@ -246,10 +246,10 @@ class TestImportExecution:
         )
         create_resp = await vg_client.imports.create_import_job(req)
 
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.imports.execute_import_job(create_resp.job_id)
-        # Should be a 400 error (no file uploaded)
-        assert "400" in str(exc_info.value) or "No file" in str(exc_info.value)
+        # Contract: no file uploaded is a domain outcome → HTTP 200, success=False.
+        resp = await vg_client.imports.execute_import_job(create_resp.job_id)
+        assert resp.success is False
+        assert resp.status == "invalid_request"
 
         # Cleanup
         await vg_client.imports.delete_import_job(create_resp.job_id)
@@ -375,40 +375,40 @@ class TestImportExportErrors:
     """Error handling for import/export endpoints."""
 
     async def test_get_nonexistent_import_job(self, vg_client):
-        """Getting a non-existent import job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.imports.get_import_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Getting a non-existent import job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.imports.get_import_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_get_nonexistent_export_job(self, vg_client):
-        """Getting a non-existent export job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.exports.get_export_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Getting a non-existent export job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.exports.get_export_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_delete_nonexistent_import_job(self, vg_client):
-        """Deleting a non-existent import job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.imports.delete_import_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Deleting a non-existent import job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.imports.delete_import_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_delete_nonexistent_export_job(self, vg_client):
-        """Deleting a non-existent export job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.exports.delete_export_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Deleting a non-existent export job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.exports.delete_export_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_execute_nonexistent_import_job(self, vg_client):
-        """Executing a non-existent import job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.imports.execute_import_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Executing a non-existent import job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.imports.execute_import_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_execute_nonexistent_export_job(self, vg_client):
-        """Executing a non-existent export job returns 404."""
-        with pytest.raises(Exception) as exc_info:
-            await vg_client.exports.execute_export_job("00000000-0000-0000-0000-000000000000")
-        assert "404" in str(exc_info.value)
+        """Executing a non-existent export job → HTTP 200, success=False, status=not_found."""
+        resp = await vg_client.exports.execute_export_job("00000000-0000-0000-0000-000000000000")
+        assert resp.success is False
+        assert resp.status == "not_found"
 
     async def test_list_import_jobs_filter_by_status(self, vg_client, test_space, test_graph):
         """Filter import jobs by status should work."""

@@ -6,6 +6,7 @@ Includes location types, location CRUD, and location category operations.
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from .entity_status import ACTIVE, RETRACTED
 
 
 class LocationMixin:
@@ -146,7 +147,7 @@ class LocationMixin:
             "SELECT c.category_key, c.category_label "
             "FROM entity_location_category_map lcm "
             "JOIN category c ON lcm.category_id = c.category_id "
-            "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+            f"WHERE lcm.location_id = $1 AND lcm.status = '{ACTIVE}' "
             "ORDER BY c.category_key",
             location_id
         )
@@ -213,14 +214,14 @@ class LocationMixin:
             await self._pg_sync_location(location_id)
         return result
 
-    async def remove_location(self, location_id: int,
-                              removed_by: Optional[str] = None) -> bool:
-        """Soft-remove a location (set status='removed')."""
+    async def retract_location(self, location_id: int,
+                              retracted_by: Optional[str] = None) -> bool:
+        f"""Soft-remove a location (set status='{RETRACTED}')."""
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
-                    "UPDATE entity_location SET status = 'removed', updated_time = $1 "
-                    "WHERE location_id = $2 AND status != 'removed' "
+                    f"UPDATE entity_location SET status = '{RETRACTED}', updated_time = $1 "
+                    f"WHERE location_id = $2 AND status != '{RETRACTED}' "
                     "RETURNING entity_id, location_name",
                     datetime.now(timezone.utc), location_id
                 )
@@ -230,7 +231,7 @@ class LocationMixin:
                 await self._log_change(conn, row['entity_id'], 'location_removed', {
                     'location_id': location_id,
                     'location_name': row['location_name'],
-                }, changed_by=removed_by)
+                }, changed_by=retracted_by)
 
         # PG vector/FTS/geo sync (outside transaction)
         await self._pg_delete_location(location_id)
@@ -245,7 +246,7 @@ class LocationMixin:
                     "SELECT lv.*, lt.type_key AS location_type_key, lt.type_label AS location_type_label "
                     "FROM entity_location_view lv "
                     "JOIN entity_location_type lt ON lv.location_type_id = lt.location_type_id "
-                    "WHERE lv.entity_id = $1 AND lv.status = 'active' "
+                    f"WHERE lv.entity_id = $1 AND lv.status = '{ACTIVE}' "
                     "ORDER BY lv.is_primary DESC, lv.location_id"
                 )
             else:
@@ -253,7 +254,7 @@ class LocationMixin:
                     "SELECT lv.*, lt.type_key AS location_type_key, lt.type_label AS location_type_label "
                     "FROM entity_location_view lv "
                     "JOIN entity_location_type lt ON lv.location_type_id = lt.location_type_id "
-                    "WHERE lv.entity_id = $1 AND lv.status = 'active' AND lv.is_active = TRUE "
+                    f"WHERE lv.entity_id = $1 AND lv.status = '{ACTIVE}' AND lv.is_active = TRUE "
                     "ORDER BY lv.is_primary DESC, lv.location_id"
                 )
             rows = await conn.fetch(sql, entity_id)
@@ -264,7 +265,7 @@ class LocationMixin:
                     "SELECT c.category_key, c.category_label "
                     "FROM entity_location_category_map lcm "
                     "JOIN category c ON lcm.category_id = c.category_id "
-                    "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+                    f"WHERE lcm.location_id = $1 AND lcm.status = '{ACTIVE}' "
                     "ORDER BY c.category_key",
                     loc['location_id']
                 )
@@ -300,7 +301,7 @@ class LocationMixin:
                     "INSERT INTO entity_location_category_map "
                     "(location_id, category_id, created_by, notes) "
                     "VALUES ($1, $2, $3, $4) "
-                    "ON CONFLICT (location_id, category_id) DO UPDATE SET status = 'active' "
+                    f"ON CONFLICT (location_id, category_id) DO UPDATE SET status = '{ACTIVE}' "
                     "RETURNING *",
                     location_id, cat_id, created_by, notes
                 )
@@ -311,9 +312,9 @@ class LocationMixin:
                 result['category_key'] = category_key
                 return result
 
-    async def remove_location_category(
+    async def retract_location_category(
         self, location_id: int, category_key: str,
-        removed_by: Optional[str] = None,
+        retracted_by: Optional[str] = None,
     ) -> bool:
         """Remove a category from a location."""
         async with self.pool.acquire() as conn:
@@ -332,8 +333,8 @@ class LocationMixin:
                     raise ValueError(f"Category not found: {category_key}")
 
                 result = await conn.execute(
-                    "UPDATE entity_location_category_map SET status = 'removed' "
-                    "WHERE location_id = $1 AND category_id = $2 AND status = 'active'",
+                    f"UPDATE entity_location_category_map SET status = '{RETRACTED}' "
+                    f"WHERE location_id = $1 AND category_id = $2 AND status = '{ACTIVE}'",
                     location_id, cat_id
                 )
                 if result == 'UPDATE 0':
@@ -341,7 +342,7 @@ class LocationMixin:
 
                 await self._log_change(conn, loc_row['entity_id'], 'location_category_removed', {
                     'location_id': location_id, 'category_key': category_key,
-                }, changed_by=removed_by)
+                }, changed_by=retracted_by)
                 return True
 
     async def search_locations_by_external_id(
@@ -361,7 +362,7 @@ class LocationMixin:
         """
         async with self.pool.acquire() as conn:
             conditions = [
-                "lv.status = 'active'",
+                f"lv.status = '{ACTIVE}'",
                 "lv.external_location_id = $1",
             ]
             params: list = [external_location_id]
@@ -391,7 +392,7 @@ class LocationMixin:
                     "SELECT c.category_key, c.category_label "
                     "FROM entity_location_category_map lcm "
                     "JOIN category c ON lcm.category_id = c.category_id "
-                    "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+                    f"WHERE lcm.location_id = $1 AND lcm.status = '{ACTIVE}' "
                     "ORDER BY c.category_key",
                     loc['location_id']
                 )
@@ -408,7 +409,7 @@ class LocationMixin:
                 "c.category_key, c.category_label, c.category_description "
                 "FROM entity_location_category_map lcm "
                 "JOIN category c ON lcm.category_id = c.category_id "
-                "WHERE lcm.location_id = $1 AND lcm.status = 'active' "
+                f"WHERE lcm.location_id = $1 AND lcm.status = '{ACTIVE}' "
                 "ORDER BY c.category_key",
                 location_id
             )

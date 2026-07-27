@@ -5,6 +5,9 @@ Pydantic request/response models for API key management endpoints.
 from typing import List, Optional
 from pydantic import BaseModel
 
+from .api_model import BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
+
 
 class ApiKeyCreateRequest(BaseModel):
     username: Optional[str] = None  # target user (admin-only; omit for self)
@@ -12,14 +15,14 @@ class ApiKeyCreateRequest(BaseModel):
     expires_in_days: Optional[int] = None  # None = no expiry
 
 
-class ApiKeyCreateResponse(BaseModel):
+class ApiKeyCreateResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.CREATED
     key_id: str
     key: str                    # full key (shown ONCE)
     prefix: str                 # vg_<prefix>...
     name: str
     username: str
     expires_at: Optional[str] = None
-    message: str = "API key created. Save the key — it cannot be retrieved again."
 
 
 class ApiKeyInfo(BaseModel):
@@ -33,11 +36,16 @@ class ApiKeyInfo(BaseModel):
     expires_at: Optional[str] = None
 
 
-class ApiKeyListResponse(BaseModel):
+class ApiKeyGetResponse(ResultStatus):
+    """Envelope for a single API key lookup."""
+    status: OperationStatus = OperationStatus.FOUND
+    key: Optional[ApiKeyInfo] = None
+
+
+class ApiKeyListResponse(BasePaginatedResponse):
     keys: List[ApiKeyInfo]
-    total_count: int
 
 
-class ApiKeyDeleteResponse(BaseModel):
-    message: str
+class ApiKeyDeleteResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.DELETED
     key_id: str

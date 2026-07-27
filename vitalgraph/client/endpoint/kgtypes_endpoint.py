@@ -83,6 +83,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypesListResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} KGTypes",
                 types=graph_objects,
                 count=pagination.get('total_count', len(graph_objects)),
@@ -137,6 +138,7 @@ class KGTypesEndpoint(BaseEndpoint):
                 return build_success_response(
                     KGTypeResponse,
                     status_code=200,
+                    status=response_data.get('status'),
                     message=f"Retrieved KGType: {uri}",
                     type=graph_objects[0]
                 )
@@ -194,6 +196,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypesListResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} KGTypes",
                 types=graph_objects,
                 count=len(graph_objects)
@@ -253,6 +256,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeCreateResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Created {created_count} KGTypes",
                 created=True,
                 created_count=created_count,
@@ -312,6 +316,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeUpdateResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Updated {updated_count} KGTypes",
                 updated=True,
                 updated_count=updated_count,
@@ -368,6 +373,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeDeleteResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Deleted KGType: {uri}",
                 deleted=deleted,
                 deleted_count=deleted_count,
@@ -423,6 +429,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeDeleteResponse,
                 status_code=200,
+                status=getattr(server_response, 'status', None),
                 message=f"Deleted {deleted_count} KGTypes",
                 deleted=True,
                 deleted_count=deleted_count,
@@ -469,6 +476,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeRelationshipsResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'OK'),
                 source_type=data.get('source_type', {}),
                 edges=data.get('edges', []),
@@ -505,6 +513,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeRelationshipCreateResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'Created'),
                 edge_uri=data.get('edge_uri', ''),
                 edge_type=data.get('edge_type', ''),
@@ -540,6 +549,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeRelationshipDeleteResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'Deleted'),
                 deleted=data.get('deleted', True),
                 edge_uri=data.get('edge_uri', edge_uri),
@@ -574,6 +584,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeDocumentationResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'OK'),
                 type_uri=data.get('type_uri', type_uri),
                 content=data.get('content'),
@@ -610,6 +621,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeDocumentationUpdateResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'Updated'),
                 type_uri=data.get('type_uri', type_uri),
                 document_uri=data.get('document_uri', ''),
@@ -643,6 +655,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeDocumentationDeleteResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'Deleted'),
                 type_uri=data.get('type_uri', type_uri),
                 deleted=data.get('deleted', False),
@@ -682,6 +695,7 @@ class KGTypesEndpoint(BaseEndpoint):
             return build_success_response(
                 KGTypeSearchResponse,
                 status_code=200,
+                status=data.get('status'),
                 message=data.get('message', 'OK'),
                 types=data.get('types', []),
                 count=data.get('count', 0),

@@ -13,6 +13,8 @@ Term encoding follows standard N-Quads rules:
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+
 
 class Quad(BaseModel):
     """A single RDF quad with N-Quads term encoding in each field."""
@@ -27,10 +29,16 @@ class QuadRequest(BaseModel):
     quads: List[Quad] = Field(description="List of RDF quads to send")
 
 
-class QuadResultsResponse(BaseModel):
-    """JSON Quads response envelope — non-paginated (get-by-URI)."""
-    success: bool = Field(True, description="Operation success status")
-    message: str = Field("", description="Human-readable status message")
+class QuadResultsResponse(ResultStatus):
+    """JSON Quads response envelope — non-paginated (get-by-URI).
+
+    Inherits the unified success/status/message contract from ResultStatus;
+    ``status`` defaults to FOUND (reads), set to EMPTY at runtime when no results
+    match, or NOT_FOUND for a get on a specific missing URI. ``success`` is derived.
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/NOT_FOUND/...)"
+    )
     total_count: int = Field(description="Total number of matching quads/objects")
     results: List[Quad] = Field(description="List of RDF quads")
 
