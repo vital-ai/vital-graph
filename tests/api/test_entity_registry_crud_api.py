@@ -73,10 +73,12 @@ class TestEntityCrud:
         assert entity_id, "test_create_entity must run first"
 
         resp = await vg_client.entity_registry.get_entity(entity_id)
-        assert resp.entity_id == entity_id
-        assert resp.primary_name == f"{PREFIX}_create_entity"
-        assert resp.type_key == "business"
-        assert resp.country == "US"
+        assert resp.status == "found"
+        assert resp.entity is not None
+        assert resp.entity.entity_id == entity_id
+        assert resp.entity.primary_name == f"{PREFIX}_create_entity"
+        assert resp.entity.type_key == "business"
+        assert resp.entity.country == "US"
 
     async def test_list_entities(self, vg_client):
         """List entities and verify our entity appears."""
@@ -95,8 +97,9 @@ class TestEntityCrud:
             description="Updated description",
         )
         resp = await vg_client.entity_registry.update_entity(entity_id, req)
-        assert resp.primary_name == f"{PREFIX}_updated_entity"
-        assert resp.description == "Updated description"
+        assert resp.entity is not None
+        assert resp.entity.primary_name == f"{PREFIX}_updated_entity"
+        assert resp.entity.description == "Updated description"
 
     async def test_delete_entity(self, vg_client):
         """Delete entity and verify it's gone from listing."""
@@ -141,9 +144,11 @@ class TestIdentifiers:
             is_primary=True,
         )
         resp = await vg_client.entity_registry.add_identifier(entity_id, req)
-        assert resp.entity_id == entity_id
-        assert resp.identifier_namespace == "DUNS"
-        TestIdentifiers._id = resp.identifier_id
+        assert resp.success is True
+        assert resp.identifier is not None
+        assert resp.identifier.entity_id == entity_id
+        assert resp.identifier.identifier_namespace == "DUNS"
+        TestIdentifiers._id = resp.identifier.identifier_id
         TestIdentifiers._value = req.identifier_value
 
     async def test_list_identifiers(self, vg_client):
@@ -155,11 +160,11 @@ class TestIdentifiers:
 
     async def test_lookup_by_identifier(self, vg_client):
         """Lookup entity by namespace + value."""
-        results = await vg_client.entity_registry.lookup_by_identifier(
+        resp = await vg_client.entity_registry.lookup_by_identifier(
             namespace="DUNS", value=TestIdentifiers._value,
         )
-        assert isinstance(results, list)
-        assert any(e.entity_id == TestEntityCrud._shared_id for e in results)
+        assert isinstance(resp.entities, list)
+        assert any(e.entity_id == TestEntityCrud._shared_id for e in resp.entities)
 
     async def test_remove_identifier(self, vg_client):
         """Remove the identifier and verify it's gone."""
@@ -186,9 +191,10 @@ class TestAliases:
             is_primary=False,
         )
         resp = await vg_client.entity_registry.add_alias(entity_id, req)
-        assert resp.entity_id == entity_id
-        assert resp.alias_name == f"{PREFIX}_alias"
-        TestAliases._id = resp.alias_id
+        assert resp.alias is not None
+        assert resp.alias.entity_id == entity_id
+        assert resp.alias.alias_name == f"{PREFIX}_alias"
+        TestAliases._id = resp.alias.alias_id
 
     async def test_list_aliases(self, vg_client):
         """List aliases for the shared entity."""
@@ -234,8 +240,9 @@ class TestCategories:
         entity_id = TestEntityCrud._shared_id
         req = EntityCategoryRequest(category_key=TestCategories._key)
         resp = await vg_client.entity_registry.add_entity_category(entity_id, req)
-        assert resp.entity_id == entity_id
-        assert resp.category_key == TestCategories._key
+        assert resp.entity_category is not None
+        assert resp.entity_category.entity_id == entity_id
+        assert resp.entity_category.category_key == TestCategories._key
 
     async def test_list_entity_categories(self, vg_client):
         """List categories for the shared entity."""
@@ -305,10 +312,11 @@ class TestLocations:
             longitude=-74.0060,
         )
         resp = await vg_client.entity_registry.create_location(entity_id, req)
-        assert resp.entity_id == entity_id
-        assert resp.location_name == "Test HQ"
-        assert resp.locality == "Testville"
-        TestLocations._loc_id = resp.location_id
+        assert resp.location is not None
+        assert resp.location.entity_id == entity_id
+        assert resp.location.location_name == "Test HQ"
+        assert resp.location.locality == "Testville"
+        TestLocations._loc_id = resp.location.location_id
 
     async def test_list_locations(self, vg_client):
         """List locations for the shared entity."""
@@ -325,8 +333,9 @@ class TestLocations:
         resp = await vg_client.entity_registry.update_location(
             TestLocations._loc_id, req,
         )
-        assert resp.location_name == "Updated HQ"
-        assert resp.locality == "NewTestville"
+        assert resp.location is not None
+        assert resp.location.location_name == "Updated HQ"
+        assert resp.location.locality == "NewTestville"
 
     async def test_remove_location(self, vg_client):
         """Remove location and verify it's gone."""

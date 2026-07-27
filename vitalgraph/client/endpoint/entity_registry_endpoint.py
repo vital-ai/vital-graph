@@ -80,14 +80,19 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
             json=request.model_dump(exclude_none=True),
         )
 
-    async def get_entity(self, entity_id: str) -> Optional[EntityResponse]:
-        """Get entity by ID. Returns None if not found."""
+    async def get_entity(self, entity_id: str) -> EntityEnvelope:
+        """Get entity by ID.
+
+        Returns:
+            The full EntityEnvelope. The nested ``.entity`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "GET", self._url("/entities/get"), EntityEnvelope,
             params={"entity_id": entity_id},
         )
-        return resp.entity
+        return resp
 
     async def search_entities(
         self,
@@ -116,15 +121,20 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
             "GET", self._url("/entities"), EntityListResponse, params=params,
         )
 
-    async def update_entity(self, entity_id: str, request: EntityUpdateRequest) -> Optional[EntityResponse]:
-        """Update an entity. Returns None if not found."""
+    async def update_entity(self, entity_id: str, request: EntityUpdateRequest) -> EntityEnvelope:
+        """Update an entity.
+
+        Returns:
+            The full EntityEnvelope. The nested ``.entity`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "PUT", self._url("/entities/update"), EntityEnvelope,
             params={"entity_id": entity_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.entity
+        return resp
 
     async def delete_entity(self, entity_id: str) -> Dict[str, Any]:
         """Soft-delete an entity."""
@@ -139,15 +149,20 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Identifiers
     # ------------------------------------------------------------------
 
-    async def add_identifier(self, entity_id: str, request: IdentifierCreateRequest) -> Optional[IdentifierResponse]:
-        """Add an external identifier to an entity."""
+    async def add_identifier(self, entity_id: str, request: IdentifierCreateRequest) -> IdentifierEnvelope:
+        """Add an external identifier to an entity.
+
+        Returns:
+            The full IdentifierEnvelope. The nested ``.identifier`` is None when
+            not created; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/identifiers/add"), IdentifierEnvelope,
             params={"entity_id": entity_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.identifier
+        return resp
 
     async def list_identifiers(self, entity_id: str) -> List[IdentifierResponse]:
         """List all active identifiers for an entity."""
@@ -168,28 +183,39 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return response.json()
 
-    async def lookup_by_identifier(self, namespace: str, value: str) -> List[EntityResponse]:
-        """Lookup entities by external identifier. Returns a list since identifiers are not unique."""
+    async def lookup_by_identifier(self, namespace: str, value: str) -> EntityLookupResponse:
+        """Lookup entities by external identifier (identifiers are not unique).
+
+        Returns:
+            The full EntityLookupResponse. The nested ``.entities`` is an
+            (possibly empty) list of matches; ``.status``/``.success``/
+            ``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "GET", self._url("/identifiers/lookup"), EntityLookupResponse,
             params={"namespace": namespace, "value": value},
         )
-        return resp.entities
+        return resp
 
     # ------------------------------------------------------------------
     # Aliases
     # ------------------------------------------------------------------
 
-    async def add_alias(self, entity_id: str, request: AliasCreateRequest) -> Optional[AliasResponse]:
-        """Add an alias to an entity."""
+    async def add_alias(self, entity_id: str, request: AliasCreateRequest) -> AliasEnvelope:
+        """Add an alias to an entity.
+
+        Returns:
+            The full AliasEnvelope. The nested ``.alias`` is None when not
+            created; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/aliases/add"), AliasEnvelope,
             params={"entity_id": entity_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.alias
+        return resp
 
     async def list_aliases(self, entity_id: str) -> List[AliasResponse]:
         """List all active aliases for an entity."""
@@ -241,15 +267,21 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         data = response.json()
         return [EntityCategoryResponse.model_validate(c) for c in data]
 
-    async def add_entity_category(self, entity_id: str, request: EntityCategoryRequest) -> Optional[EntityCategoryResponse]:
-        """Assign a category to an entity."""
+    async def add_entity_category(self, entity_id: str, request: EntityCategoryRequest) -> EntityCategoryEnvelope:
+        """Assign a category to an entity.
+
+        Returns:
+            The full EntityCategoryEnvelope. The nested ``.entity_category`` is
+            None when not assigned; ``.status``/``.success``/``.message`` carry
+            the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/categories/assign"), EntityCategoryEnvelope,
             params={"entity_id": entity_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.entity_category
+        return resp
 
     async def remove_entity_category(self, entity_id: str, category_key: str) -> Dict[str, Any]:
         """Remove a category from an entity."""
@@ -295,24 +327,34 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Locations
     # ------------------------------------------------------------------
 
-    async def create_location(self, entity_id: str, request: LocationCreateRequest) -> Optional[LocationResponse]:
-        """Add a location to an entity."""
+    async def create_location(self, entity_id: str, request: LocationCreateRequest) -> LocationEnvelope:
+        """Add a location to an entity.
+
+        Returns:
+            The full LocationEnvelope. The nested ``.location`` is None when not
+            created; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/locations/add"), LocationEnvelope,
             params={"entity_id": entity_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.location
+        return resp
 
-    async def get_location(self, location_id: int) -> Optional[LocationResponse]:
-        """Get a location by ID. Returns None if not found."""
+    async def get_location(self, location_id: int) -> LocationEnvelope:
+        """Get a location by ID.
+
+        Returns:
+            The full LocationEnvelope. The nested ``.location`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "GET", self._url("/locations/get"), LocationEnvelope,
             params={"location_id": location_id},
         )
-        return resp.location
+        return resp
 
     async def list_locations(self, entity_id: str, include_expired: bool = False) -> List[LocationResponse]:
         """List locations for an entity."""
@@ -324,15 +366,20 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         data = response.json()
         return [LocationResponse.model_validate(loc) for loc in data]
 
-    async def update_location(self, location_id: int, request: LocationUpdateRequest) -> Optional[LocationResponse]:
-        """Update a location. Returns None if not found."""
+    async def update_location(self, location_id: int, request: LocationUpdateRequest) -> LocationEnvelope:
+        """Update a location.
+
+        Returns:
+            The full LocationEnvelope. The nested ``.location`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "PUT", self._url("/locations/update"), LocationEnvelope,
             params={"location_id": location_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.location
+        return resp
 
     async def remove_location(self, location_id: int) -> Dict[str, Any]:
         """Remove a location."""
@@ -347,15 +394,21 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Location Categories
     # ------------------------------------------------------------------
 
-    async def add_location_category(self, location_id: int, request: LocationCategoryRequest) -> Optional[LocationCategoryResponse]:
-        """Assign a category to a location."""
+    async def add_location_category(self, location_id: int, request: LocationCategoryRequest) -> LocationCategoryEnvelope:
+        """Assign a category to a location.
+
+        Returns:
+            The full LocationCategoryEnvelope. The nested ``.location_category``
+            is None when not assigned; ``.status``/``.success``/``.message``
+            carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/locations/categories/assign"), LocationCategoryEnvelope,
             params={"location_id": location_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.location_category
+        return resp
 
     async def remove_location_category(self, location_id: int, category_key: str) -> Dict[str, Any]:
         """Remove a category from a location."""
@@ -401,27 +454,38 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Relationships
     # ------------------------------------------------------------------
 
-    async def create_relationship(self, request: RelationshipCreateRequest) -> Optional[RelationshipResponse]:
+    async def create_relationship(self, request: RelationshipCreateRequest) -> RelationshipEnvelope:
         """Create a relationship between two entities, or return the existing one.
 
         The server handles duplicates idempotently — if the relationship
         already exists it returns the existing one directly.
+
+        Returns:
+            The full RelationshipEnvelope. The nested ``.relationship`` is None
+            when not created; ``.status``/``.success``/``.message`` carry the
+            outcome.
         """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/relationships"), RelationshipEnvelope,
             json=request.model_dump(exclude_none=True),
         )
-        return resp.relationship
+        return resp
 
-    async def get_relationship(self, relationship_id: int) -> Optional[RelationshipResponse]:
-        """Get a relationship by ID. Returns None if not found."""
+    async def get_relationship(self, relationship_id: int) -> RelationshipEnvelope:
+        """Get a relationship by ID.
+
+        Returns:
+            The full RelationshipEnvelope. The nested ``.relationship`` is None
+            when not found; ``.status``/``.success``/``.message`` carry the
+            outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "GET", self._url("/relationships/get"), RelationshipEnvelope,
             params={"relationship_id": relationship_id},
         )
-        return resp.relationship
+        return resp
 
     async def list_relationships(
         self, entity_id: str, direction: str = 'both', include_expired: bool = False,
@@ -435,15 +499,21 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         data = response.json()
         return [RelationshipResponse.model_validate(r) for r in data]
 
-    async def update_relationship(self, relationship_id: int, request: RelationshipUpdateRequest) -> Optional[RelationshipResponse]:
-        """Update a relationship. Returns None if not found."""
+    async def update_relationship(self, relationship_id: int, request: RelationshipUpdateRequest) -> RelationshipEnvelope:
+        """Update a relationship.
+
+        Returns:
+            The full RelationshipEnvelope. The nested ``.relationship`` is None
+            when not found; ``.status``/``.success``/``.message`` carry the
+            outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "PUT", self._url("/relationships/update"), RelationshipEnvelope,
             params={"relationship_id": relationship_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.relationship
+        return resp
 
     async def remove_relationship(self, relationship_id: int) -> Dict[str, Any]:
         """Remove (retract) a relationship."""
@@ -458,14 +528,19 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Same-As
     # ------------------------------------------------------------------
 
-    async def create_same_as(self, request: SameAsCreateRequest) -> Optional[SameAsResponse]:
-        """Create a same-as mapping between two entities."""
+    async def create_same_as(self, request: SameAsCreateRequest) -> SameAsEnvelope:
+        """Create a same-as mapping between two entities.
+
+        Returns:
+            The full SameAsEnvelope. The nested ``.same_as`` is None when not
+            created; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "POST", self._url("/sameas"), SameAsEnvelope,
             json=request.model_dump(exclude_none=True),
         )
-        return resp.same_as
+        return resp
 
     async def get_same_as(self, entity_id: str) -> List[SameAsResponse]:
         """Get all active same-as mappings for an entity."""
@@ -477,24 +552,34 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         data = response.json()
         return [SameAsResponse.model_validate(m) for m in data]
 
-    async def retract_same_as(self, same_as_id: int, request: SameAsRetractRequest) -> Optional[SameAsResponse]:
-        """Retract a same-as mapping. Returns None if not found."""
+    async def retract_same_as(self, same_as_id: int, request: SameAsRetractRequest) -> SameAsEnvelope:
+        """Retract a same-as mapping.
+
+        Returns:
+            The full SameAsEnvelope. The nested ``.same_as`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "PUT", self._url("/sameas/retract"), SameAsEnvelope,
             params={"same_as_id": same_as_id},
             json=request.model_dump(exclude_none=True),
         )
-        return resp.same_as
+        return resp
 
-    async def resolve_entity(self, entity_id: str) -> Optional[EntityResponse]:
-        """Resolve entity to canonical ID via transitive same-as chain. Returns None if not found."""
+    async def resolve_entity(self, entity_id: str) -> EntityEnvelope:
+        """Resolve entity to canonical ID via transitive same-as chain.
+
+        Returns:
+            The full EntityEnvelope. The nested ``.entity`` is None when not
+            found; ``.status``/``.success``/``.message`` carry the outcome.
+        """
         self._check_connection()
         resp = await self._make_typed_request(
             "GET", self._url("/sameas/resolve"), EntityEnvelope,
             params={"entity_id": entity_id},
         )
-        return resp.entity
+        return resp
 
     # ------------------------------------------------------------------
     # Entity Types
