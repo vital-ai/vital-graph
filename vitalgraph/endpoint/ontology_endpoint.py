@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 
 from ..model.ontology_model import OntologyProperty, OntologyPropertiesResponse, OntologyClassesResponse
+from ..model.result_status import OperationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ def create_ontology_router(auth_dependency) -> APIRouter:
     ):
         properties = _get_properties_for_class(class_uri)
         return OntologyPropertiesResponse(
+            status=OperationStatus.FOUND if properties else OperationStatus.EMPTY,
             class_uri=class_uri,
             properties=[OntologyProperty(**p) for p in properties],
             total_count=len(properties),
@@ -120,6 +122,10 @@ def create_ontology_router(auth_dependency) -> APIRouter:
     async def list_ontology_classes(
         current_user: Dict = Depends(auth_dependency),
     ):
-        return OntologyClassesResponse(classes=list(_CLASS_MAP.keys()))
+        classes = list(_CLASS_MAP.keys())
+        return OntologyClassesResponse(
+            status=OperationStatus.FOUND if classes else OperationStatus.EMPTY,
+            classes=classes,
+        )
 
     return router

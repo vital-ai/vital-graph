@@ -14,7 +14,16 @@ export { deserializeGraphObjects, extractPagination, isJsonQuadsResponse } from 
 
 // Response types
 export type * from './response/types.js';
-export { buildSuccessResponse, buildErrorResponse } from './response/types.js';
+export {
+  buildSuccessResponse,
+  buildErrorResponse,
+  buildResponseFromServer,
+  OperationStatus,
+  SUCCESS_STATUSES,
+  isSuccess,
+  isError,
+  assertSuccess,
+} from './response/types.js';
 
 // Endpoint classes (for advanced usage / type narrowing)
 export { BaseEndpoint } from './endpoint/BaseEndpoint.js';

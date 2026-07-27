@@ -15,6 +15,7 @@ from ..endpoint.impl.objects_impl import ObjectsImpl
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
 from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from vitalgraph.model.objects_model import ObjectCreateResponse, ObjectUpdateResponse, ObjectDeleteResponse
+from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
 
 
@@ -120,7 +121,12 @@ class GraphObjectsEndpoint:
             uris = [u.strip() for u in uri_list.split(',') if u.strip()]
             return await self._delete_objects_by_uris(space_id, graph_id, uris, current_user)
         else:
-            raise HTTPException(status_code=400, detail="Either 'uri' or 'uri_list' parameter is required")
+            return ObjectDeleteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message="Either 'uri' or 'uri_list' parameter is required",
+                deleted_count=0,
+                deleted_uris=[],
+            )
     
     async def _list_objects(self, space_id: str, graph_id: Optional[str], page_size: int, offset: int, 
                            vitaltype_filter: Optional[str], search: Optional[str], current_user: Dict) -> QuadResponse:
@@ -191,11 +197,21 @@ class GraphObjectsEndpoint:
         """Create objects from quads."""
         try:
             if not graph_id:
-                raise HTTPException(status_code=400, detail="graph_id is required for object creation")
+                return ObjectCreateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="graph_id is required for object creation",
+                    created_count=0,
+                    created_uris=[],
+                )
             graph_objects = quad_list_to_graphobjects(quads)
             if not graph_objects:
-                raise HTTPException(status_code=400, detail="No valid objects found in request")
-            
+                return ObjectCreateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid objects found in request",
+                    created_count=0,
+                    created_uris=[],
+                )
+
             created_uris = await self.object_impl.create_objects_batch(
                 space_id=space_id,
                 graph_objects=graph_objects,
@@ -216,11 +232,21 @@ class GraphObjectsEndpoint:
         """Update objects from quads."""
         try:
             if not graph_id:
-                raise HTTPException(status_code=400, detail="graph_id is required for object update")
+                return ObjectUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="graph_id is required for object update",
+                    updated_count=0,
+                    updated_uri=None,
+                )
             graph_objects = quad_list_to_graphobjects(quads)
             if not graph_objects:
-                raise HTTPException(status_code=400, detail="No valid objects found in request")
-            
+                return ObjectUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid objects found in request",
+                    updated_count=0,
+                    updated_uri=None,
+                )
+
             updated_uris = await self.object_impl.update_objects_batch(
                 space_id=space_id,
                 graph_objects=graph_objects,
@@ -246,11 +272,13 @@ class GraphObjectsEndpoint:
             
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="graph_id is required for object deletion"
+                return ObjectDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="graph_id is required for object deletion",
+                    deleted_count=0,
+                    deleted_uris=[],
                 )
-            
+
             # Delete single object by URI
             deleted_count = await self.object_impl.delete_objects(
                 space_id=space_id,
@@ -266,9 +294,9 @@ class GraphObjectsEndpoint:
                     deleted_uris=[uri]
                 )
             else:
-                # Return empty response instead of 404 - service should never return 404 for valid requests
+                # Idempotent no-op: URI already absent — return 200, never 404
                 return ObjectDeleteResponse(
-                    success=True,
+                    status=OperationStatus.NO_OP,
                     message=f"Graph object '{uri}' not found - no deletion needed",
                     deleted_count=0,
                     deleted_uris=[]
@@ -290,11 +318,13 @@ class GraphObjectsEndpoint:
             
             # Validate graph_id is provided (required for CRUD operations)
             if not graph_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="graph_id is required for object deletion"
+                return ObjectDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="graph_id is required for object deletion",
+                    deleted_count=0,
+                    deleted_uris=[],
                 )
-            
+
             # Delete multiple objects by URI list
             deleted_count = await self.object_impl.delete_objects(
                 space_id=space_id,

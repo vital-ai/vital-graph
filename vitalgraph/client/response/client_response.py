@@ -10,6 +10,12 @@ from pydantic import BaseModel, Field
 
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vitalgraph.model.spaces_model import Space
+from vitalgraph.model.result_status import OperationStatus, _SUCCESS_STATUSES
+
+# String values of the OperationStatus members that mean "the expected thing happened".
+# Used to derive is_success from the server's domain `status` (HTTP is 200 for all
+# domain outcomes, so success/failure must be read from the body, not the HTTP code).
+_SUCCESS_STATUS_VALUES = frozenset(s.value for s in _SUCCESS_STATUSES)
 
 
 class VitalGraphResponse(BaseModel):
@@ -36,25 +42,40 @@ class VitalGraphResponse(BaseModel):
     error_message: Optional[str] = Field(default=None, description="Error message if error_code != 0")
     status_code: int = Field(description="HTTP status code")
     message: Optional[str] = Field(default=None, description="Human-readable status message")
-    
+
+    # Domain outcome from the server body (the OperationStatus enum value, e.g.
+    # "created", "already_exists", "not_found", "empty", "store_failed"). HTTP is
+    # 200 for every domain outcome, so success/failure is read from this — NOT the
+    # HTTP status code. None for legacy/plain responses that don't carry it.
+    status: Optional[str] = Field(default=None, description="Server domain outcome (OperationStatus value)")
+
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Response metadata")
-    
+
     @property
     def is_success(self) -> bool:
-        """Check if operation succeeded (error_code == 0)."""
+        """Whether the expected operation happened.
+
+        When the server supplied a domain `status`, that is authoritative (an HTTP
+        200 with status=already_exists is NOT a success). Otherwise falls back to
+        the legacy error_code check.
+        """
+        if self.status is not None:
+            return self.status in _SUCCESS_STATUS_VALUES
         return self.error_code == 0
-    
+
     @property
     def is_error(self) -> bool:
-        """Check if operation failed (error_code != 0)."""
-        return self.error_code != 0
-    
+        """Whether the operation did not succeed (inverse of is_success)."""
+        return not self.is_success
+
     def raise_for_error(self):
-        """Raise exception if response indicates error."""
+        """Raise VitalGraphClientError if the response indicates a non-success outcome."""
         if self.is_error:
             from ..utils.client_utils import VitalGraphClientError
+            detail = self.error_message or self.message or (self.status or "unknown error")
+            code = self.status or self.error_code
             raise VitalGraphClientError(
-                f"Error {self.error_code}: {self.error_message or self.message}",
+                f"Error {code}: {detail}",
                 status_code=self.status_code
             )
 

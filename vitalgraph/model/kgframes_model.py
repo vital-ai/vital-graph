@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .quad_model import QuadResponse, QuadResultsResponse
 from .api_model import BaseCreateResponse, BaseUpdateResponse, BaseDeleteResponse, BasePaginatedResponse, BaseOperationResponse
+from .result_status import ResultStatus, OperationStatus
 from .kgentities_model import SlotCriteria, SortCriteria
 
 
@@ -187,7 +188,7 @@ class FrameErrorInfo(BaseModel):
     entity_uri: str = Field(..., description="The entity URI that was being accessed")
 
 
-class FrameGraphsResponse(BaseModel):
+class FrameGraphsResponse(ResultStatus):
     """Enhanced response model for specific frame graph retrieval with frame_uris parameter."""
     frame_graphs: Dict[str, Union[QuadResultsResponse, FrameErrorInfo]] = Field(
         ..., 

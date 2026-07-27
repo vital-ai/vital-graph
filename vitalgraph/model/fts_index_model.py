@@ -8,13 +8,18 @@ multi-language tsvector triggers.
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+
 
 # ---------------------------------------------------------------------------
 # Output / response models
 # ---------------------------------------------------------------------------
 
-class FtsIndexOut(BaseModel):
-    """An FTS index entry."""
+class FtsIndexOut(ResultStatus):
+    """An FTS index entry (also serves as the create/update response envelope)."""
+    status: OperationStatus = Field(
+        OperationStatus.CREATED, description="Outcome discriminator (CREATED/UPDATED/...)"
+    )
     index_id: int
     index_name: str
     languages: List[str] = ["english"]
@@ -22,12 +27,18 @@ class FtsIndexOut(BaseModel):
     row_count: Optional[int] = None
 
 
-class FtsIndexListResponse(BaseModel):
+class FtsIndexListResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     indexes: List[FtsIndexOut]
     total_count: int
 
 
-class FtsIndexStatsResponse(BaseModel):
+class FtsIndexStatsResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/NOT_FOUND/...)"
+    )
     index_name: str
     row_count: int = 0
     distinct_entity_count: int = 0
@@ -78,14 +89,18 @@ class PopulateFtsRequest(BaseModel):
     batch_size: int = Field(100, ge=1, le=1000, description="Batch size")
 
 
-class PopulateFtsResponse(BaseModel):
-    message: str
+class PopulateFtsResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.OK, description="Outcome discriminator (OK/NOT_FOUND/...)"
+    )
     index_name: str
     rows_populated: int = 0
     elapsed_seconds: float = 0.0
     errors: List[str] = []
 
 
-class DeleteResponse(BaseModel):
-    message: str
+class DeleteResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NOT_FOUND/...)"
+    )
     deleted: bool = False

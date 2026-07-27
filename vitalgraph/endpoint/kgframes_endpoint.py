@@ -15,11 +15,12 @@ Follows MockKGFramesEndpoint patterns with proper VitalSigns integration:
 import asyncio
 import logging
 from typing import Dict, List, Literal, Optional, Union, Any
-from fastapi import APIRouter, Query, Depends, Request, Response, Body
+from fastapi import APIRouter, Query, Depends, Request, Response, Body, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter
 from enum import Enum
 
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.model.result_status import OperationStatus
 from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from ..model.kgframes_model import (
     FrameGraphResponse,
@@ -160,30 +161,30 @@ class KGFramesEndpoint:
         except ValueError:
             op_mode = OperationMode.CREATE
 
-        def _fail_create(msg):
-            return FrameCreateResponse(success=False, message=msg, created_count=0, created_uris=[], slots_created=0)
+        def _fail_create(msg, status=OperationStatus.ERROR):
+            return FrameCreateResponse(status=status, message=msg, created_count=0, created_uris=[], slots_created=0)
 
-        def _fail_update(msg):
-            return FrameUpdateResponse(success=False, message=msg, updated_uri="", updated_count=0)
+        def _fail_update(msg, status=OperationStatus.ERROR):
+            return FrameUpdateResponse(status=status, message=msg, updated_uri="", updated_count=0)
 
-        def _fail(msg):
-            return _fail_update(msg) if op_mode == OperationMode.UPDATE else _fail_create(msg)
+        def _fail(msg, status=OperationStatus.ERROR):
+            return _fail_update(msg, status) if op_mode == OperationMode.UPDATE else _fail_create(msg, status)
 
         try:
             # --- backend ---
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return _fail(f"Space {space_id} not found")
+                return _fail(f"Space {space_id} not found", OperationStatus.NOT_FOUND)
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return _fail("Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
 
             # --- type filtering ---
             frames = [obj for obj in vitalsigns_objects if isinstance(obj, KGFrame)]
             if not frames:
-                return _fail("No valid KGFrame objects found in request")
+                return _fail("No valid KGFrame objects found in request", OperationStatus.INVALID_REQUEST)
 
             # --- grouping URIs ---
             # Standalone frames use only frameGraphURI (no kGGraphURI, no entity_uri)
@@ -192,7 +193,7 @@ class KGFramesEndpoint:
             # --- structure validation ---
             validation_result = self._validate_frame_structure(vitalsigns_objects)
             if not validation_result.get("valid", False):
-                return _fail(f"Frame validation failed: {validation_result.get('error')}")
+                return _fail(f"Frame validation failed: {validation_result.get('error')}", OperationStatus.INVALID_REQUEST)
 
             # --- parent / entity relationships ---
             enhanced_objects = await self._handle_parent_relationships(
@@ -209,7 +210,7 @@ class KGFramesEndpoint:
             elif op_mode == OperationMode.REPLACE:
                 _result = await self._handle_replace_mode(backend, space_id, graph_id, frames, enhanced_objects, parent_uri)
             else:
-                return _fail(f"Invalid operation_mode: {op_mode}")
+                return _fail(f"Invalid operation_mode: {op_mode}", OperationStatus.INVALID_REQUEST)
 
             # Auto-sync vector/geo data for changed subjects
             _sync_uris = [str(o.URI) for o in enhanced_objects if hasattr(o, 'URI') and o.URI]
@@ -217,9 +218,11 @@ class KGFramesEndpoint:
 
             return _result
 
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Frame operation from objects failed: {e}")
-            return _fail(f"Frame operation failed: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Frame operation failed: {e}")
 
     async def _create_standalone_frames(self, backend_adapter, space_id: str, graph_id: str, frame_objects: List, operation_mode: str):
         """Create standalone frames without entity dependencies."""
@@ -235,7 +238,7 @@ class KGFramesEndpoint:
                 frame_uris = [str(obj.URI) for obj in frame_objects if hasattr(obj, 'URI')]
                 
                 return FrameCreateResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message=f"Successfully created {len(frame_uris)} standalone frames",
                     created_count=len(frame_uris),
                     created_uris=frame_uris,
@@ -243,22 +246,16 @@ class KGFramesEndpoint:
                 )
             else:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message="Failed to create standalone frames",
                     created_count=0,
                     created_uris=[],
                     slots_created=0
                 )
-                
+
         except Exception as e:
             self.logger.error(f"Standalone frame creation failed: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Standalone frame creation failed: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                slots_created=0
-            )
+            raise HTTPException(status_code=500, detail=f"Standalone frame creation failed: {e}")
     
     async def _update_frames(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str):
         """Update frames using direct backend storage - no entity dependencies."""
@@ -268,28 +265,33 @@ class KGFramesEndpoint:
             # Update frames using backend storage
             frames = [obj for obj in vitalsigns_objects if hasattr(obj, 'URI') and 'KGFrame' in str(type(obj))]
             if not frames:
-                raise ValueError("No frames found in update request")
-            
+                return FrameUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No frames found in update request",
+                    updated_uri=""
+                )
+
             # Update frames directly using backend adapter
             result = await backend_adapter.store_objects(space_id, graph_id, vitalsigns_objects)
-            
+
             if result and hasattr(result, 'success') and result.success:
                 return FrameUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated frame {frames[0].URI}",
                     updated_uri=str(frames[0].URI)
                 )
             else:
                 return FrameUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message="Failed to update frame",
                     updated_uri=""
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Frame update failed: {e}")
-            return FrameUpdateResponse(
-                message=f"Frame update failed: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Frame update failed: {e}")
     
     async def _delete_frames(self, space_id: str, graph_id: str, frame_uris: List[str]):
         """Delete frames using direct backend storage - no entity dependencies."""
@@ -309,18 +311,17 @@ class KGFramesEndpoint:
                     self.logger.warning(f"Failed to delete frame {frame_uri}: {e}")
             
             return FrameDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {deleted_count} frames",
                 deleted_count=deleted_count,
                 deleted_uris=frame_uris[:deleted_count]
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Frame deletion failed: {e}")
-            return FrameDeleteResponse(
-                message=f"Frame deletion failed: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Frame deletion failed: {e}")
     
     async def _get_frames(self, space_id: str, graph_id: str, current_user: Dict, page_size: int = 10, offset: int = 0):
         """Get frames with pagination - wrapper for _list_frames."""
@@ -331,17 +332,17 @@ class KGFramesEndpoint:
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             sparql_query = f"""
             PREFIX haley: <{self.haley_prefix}>
             PREFIX vital: <{self.vital_prefix}>
-            
+
             SELECT DISTINCT ?frame WHERE {{
                 GRAPH <{graph_id}> {{
                     ?frame a haley:KGFrame .
@@ -351,16 +352,20 @@ class KGFramesEndpoint:
             LIMIT {page_size}
             OFFSET {offset}
             """
-            
+
             results = await backend.execute_sparql_query(space_id, sparql_query)
             frames = await self._sparql_results_to_frames(backend, graph_id, results, space_id)
-            
+
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
-            return QuadResponse(results=quads, total_count=len(frames), page_size=page_size, offset=offset)
-            
+            return QuadResponse(
+                status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
+                results=quads, total_count=len(frames), page_size=page_size, offset=offset)
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Entity frame retrieval failed: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+            raise HTTPException(status_code=500, detail=f"Entity frame retrieval failed: {e}")
     
     async def _delete_entities(self, space_id: str, graph_id: str, entity_uris: List[str]):
         """Delegate entity deletion (for test compatibility)."""
@@ -399,7 +404,7 @@ class KGFramesEndpoint:
                 created_count = 1 if hasattr(result, 'updated_uri') and result.updated_uri else 0
                 created_uris = [str(result.updated_uri)] if hasattr(result, 'updated_uri') and result.updated_uri else []
                 return SlotCreateResponse(
-                    success=True,
+                    status=OperationStatus.UPSERTED,
                     message=result.message,
                     created_count=created_count,
                     created_uris=created_uris,
@@ -409,22 +414,18 @@ class KGFramesEndpoint:
                 # For CREATE mode, use normal response handling
                 created_count = getattr(result, 'created_count', 0)
                 return SlotCreateResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message=result.message,
                     created_count=created_count,
                     created_uris=[str(uri) for uri in getattr(result, 'created_uris', [])],
                     slots_created=created_count
                 )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Slot creation failed: {e}")
-            return SlotCreateResponse(
-                success=False,
-                message=f"Slot creation failed: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                slots_created=0
-            )
+            raise HTTPException(status_code=500, detail=f"Slot creation failed: {e}")
     
     async def _update_slots(self, space_id: str, graph_id: str, vitalsigns_objects: List, operation_mode: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
         """Delegate slot updates to KGSlotUpdateProcessor."""
@@ -443,26 +444,27 @@ class KGFramesEndpoint:
             slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
             if not slots:
                 return SlotUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No slots found in request",
                     updated_uri=""
                 )
-            
+
             # Delegate to slot processor
             result = await self.slot_update_processor.update_slot(
                 backend_adapter, space_id, graph_id, str(slots[0].URI), vitalsigns_objects
             )
-            
+
             return SlotUpdateResponse(
+                status=OperationStatus.UPDATED,
                 message=result.message,
                 updated_uri=result.updated_uri
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Slot update failed: {e}")
-            return SlotUpdateResponse(
-                message=f"Slot update failed: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Slot update failed: {e}")
     
     async def _delete_slots(self, space_id: str, graph_id: str, slot_uris: List[str]):
         """Delegate slot deletion to KGSlotDeleteProcessor."""
@@ -476,18 +478,17 @@ class KGFramesEndpoint:
             )
             
             return SlotDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {deleted_count} slots",
                 deleted_count=deleted_count,
                 deleted_uris=slot_uris[:deleted_count]
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Slot deletion failed: {e}")
-            return SlotDeleteResponse(
-                message=f"Slot deletion failed: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Slot deletion failed: {e}")
     
     async def _list_slots(self, space_id: str, graph_id: str, frame_uri: str = None, page_size: int = 10, offset: int = 0):
         """List slots with optional frame filtering."""
@@ -529,11 +530,15 @@ class KGFramesEndpoint:
             self.logger.info(f"Listed {len(slot_objects)} slots (total: {total_count}) in graph '{graph_id}' in space '{space_id}'")
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, slot_objects, graph_id)
-            return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
-            
+            return QuadResponse(
+                status=OperationStatus.FOUND if slot_objects else OperationStatus.EMPTY,
+                results=quads, total_count=total_count, page_size=page_size, offset=offset)
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Slot listing failed: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+            raise HTTPException(status_code=500, detail=f"Slot listing failed: {e}")
     
     async def _get_slot_by_uri(self, space_id: str, graph_id: str, slot_uri: str, parent_uri: Optional[str] = None, entity_uri: Optional[str] = None):
         """Get single slot by URI."""
@@ -541,13 +546,15 @@ class KGFramesEndpoint:
             backend_adapter = await self._get_backend_adapter(space_id)
             
             if await backend_adapter.object_exists(space_id, graph_id, slot_uri):
-                return QuadResultsResponse(results=[], total_count=1)
+                return QuadResultsResponse(status=OperationStatus.FOUND, results=[], total_count=1)
             else:
-                return QuadResultsResponse(results=[], total_count=0)
-            
+                return QuadResultsResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0)
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Slot retrieval failed: {e}")
-            return QuadResultsResponse(results=[], total_count=0)
+            raise HTTPException(status_code=500, detail=f"Slot retrieval failed: {e}")
     
     def _setup_routes(self):
         """Setup FastAPI routes for KG frames management."""
@@ -644,7 +651,7 @@ class KGFramesEndpoint:
                 modified_after=modified_after, modified_before=modified_before,
             )
 
-        @self.router.post("/kgframes", response_model=Union[FrameCreateResponse, FrameUpdateResponse], tags=["KG Frames"])
+        @self.router.post("/kgframes", response_model=None, tags=["KG Frames"])
         async def create_or_update_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -709,7 +716,7 @@ class KGFramesEndpoint:
             else:
                 from ..model.kgframes_model import FrameDeleteResponse
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="Either 'uri' or 'uri_list' parameter is required",
                     deleted_count=0,
                     deleted_uris=[]
@@ -736,7 +743,7 @@ class KGFramesEndpoint:
             require_space_read(current_user, space_id)
             return await self._get_kgframes_with_slots(space_id, graph_id, frame_uri, page_size, offset, entity_uri, parent_uri, search, kGSlotType, current_user)
         
-        @self.router.post("/kgframes/kgslots", response_model=Union[SlotCreateResponse, SlotUpdateResponse], tags=["KG Frame Slots"])
+        @self.router.post("/kgframes/kgslots", response_model=None, tags=["KG Frame Slots"])
         async def create_or_update_frame_slots(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -789,15 +796,15 @@ class KGFramesEndpoint:
         """List KG frames with pagination using backend interface."""
         try:
             self.logger.info(f"Listing KGFrames in space {space_id}, graph {graph_id}")
-            
+
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
 
             # --- Fast default path: page frames by subject_uuid (vitaltype=KGFrame),
             # like KGEntities. Avoids the ORDER BY ?frame full-URI resolution.
@@ -828,6 +835,7 @@ class KGFramesEndpoint:
                 total_count = fc if fc is not None else len(frames)
                 quads = await asyncio.to_thread(graphobjects_to_quad_list, frames, graph_id)
                 return QuadResponse(
+                    status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
                     results=quads, total_count=total_count,
                     page_size=page_size, offset=offset)
 
@@ -858,15 +866,18 @@ class KGFramesEndpoint:
             total_count = self._extract_count_from_results(count_results)
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
             return QuadResponse(
+                status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
                 results=quads,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error listing KGFrames: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+            raise HTTPException(status_code=500, detail=f"Error listing KGFrames: {e}")
     
     async def _get_frame_by_uri(self, space_id: str, graph_id: str, uri: str, include_frame_graph: bool, current_user: Dict) -> QuadResultsResponse:
         """Get single frame by URI with optional complete graph."""
@@ -877,13 +888,13 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 self.logger.warning(f"❌ Space not found: {space_id}")
-                return QuadResultsResponse(results=[], total_count=0)
-            
+                return QuadResultsResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
                 self.logger.warning(f"❌ Backend not found for space: {space_id}")
-                return QuadResultsResponse(results=[], total_count=0)
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             # Build SPARQL query for getting specific frame using grouping URI pattern
             self.logger.debug(f"🔧 Building SPARQL query for frame {uri}")
@@ -913,15 +924,18 @@ class KGFramesEndpoint:
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResultsResponse(
+                status=OperationStatus.FOUND if all_objects else OperationStatus.NOT_FOUND,
                 results=quads,
                 total_count=len(all_objects),
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"❌ Error getting KGFrame {uri}: {e}")
             import traceback
             self.logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            return QuadResultsResponse(results=[], total_count=0)
+            raise HTTPException(status_code=500, detail=f"Error getting KGFrame {uri}: {e}")
     
     async def _get_kgframes_with_slots(self, space_id: str, graph_id: str, frame_uri: Optional[str], page_size: int, offset: int, entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], current_user: Dict):
         """Get frames with their associated slots using pagination."""
@@ -930,27 +944,31 @@ class KGFramesEndpoint:
             
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                return QuadResponse(status=OperationStatus.NOT_FOUND, results=[], total_count=0, page_size=page_size, offset=offset)
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             sparql_query = self._build_frames_with_slots_query(backend, space_id, graph_id, frame_uri, entity_uri, parent_uri, search, kGSlotType, page_size, offset)
             results = await backend.execute_sparql_query(space_id, sparql_query)
             frames = await self._sparql_results_to_frames_with_slots(backend, graph_id, results, space_id)
-            
+
             count_query = self._build_count_frames_with_slots_query(backend, space_id, graph_id, frame_uri, entity_uri, parent_uri, search, kGSlotType)
             count_results = await backend.execute_sparql_query(space_id, count_query)
             total_count = self._extract_count_from_results(count_results)
-            
+
             quads = await asyncio.to_thread(graphobjects_to_quad_list, frames or [], graph_id)
-            return QuadResponse(results=quads, total_count=total_count, page_size=page_size, offset=offset)
-            
+            return QuadResponse(
+                status=OperationStatus.FOUND if frames else OperationStatus.EMPTY,
+                results=quads, total_count=total_count, page_size=page_size, offset=offset)
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting KGFrames with slots: {e}")
-            return QuadResponse(results=[], total_count=0, page_size=page_size, offset=offset)
+            raise HTTPException(status_code=500, detail=f"Error getting KGFrames with slots: {e}")
     
     def _build_frames_with_slots_query(self, backend, space_id: str, graph_id: str, frame_uri: Optional[str], entity_uri: Optional[str], parent_uri: Optional[str], search: Optional[str], kGSlotType: Optional[str], page_size: int, offset: int) -> str:
         """Build SPARQL query for frames with slots.
@@ -1098,20 +1116,18 @@ class KGFramesEndpoint:
             
             quads = await asyncio.to_thread(graphobjects_to_quad_list, all_objects, graph_id)
             return QuadResponse(
+                status=OperationStatus.FOUND if all_objects else OperationStatus.EMPTY,
                 results=quads,
                 total_count=len(all_objects),
                 page_size=len(frame_uris),
                 offset=0,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Frame retrieval by URIs failed: {e}")
-            return QuadResponse(
-                results=[],
-                total_count=0,
-                page_size=len(frame_uris) if frame_uris else 0,
-                offset=0,
-            )
+            raise HTTPException(status_code=500, detail=f"Frame retrieval by URIs failed: {e}")
     
     async def _query_frames(self, space_id: str, graph_id: str, query_request: FrameQueryRequest, current_user: Dict) -> FrameQueryResponse:
         """Query frames using enhanced criteria-based search with sorting support."""
@@ -1123,23 +1139,18 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameQueryResponse(
+                    status=OperationStatus.NOT_FOUND,
                     frame_uris=[],
                     total_count=0,
                     page_size=query_request.page_size,
                     offset=query_request.offset,
                     has_more=False
                 )
-            
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                return FrameQueryResponse(
-                    frame_uris=[],
-                    total_count=0,
-                    page_size=query_request.page_size,
-                    offset=query_request.offset,
-                    has_more=False
-                )
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             # Build SPARQL query based on criteria
             sparql_query = self._build_frame_query_sparql(graph_id, query_request)
@@ -1168,22 +1179,19 @@ class KGFramesEndpoint:
             frame_uris = [str(frame.URI) for frame in paginated_frames]
             
             return FrameQueryResponse(
+                status=OperationStatus.FOUND if frame_uris else OperationStatus.EMPTY,
                 frame_uris=frame_uris,
                 total_count=len(frames),
                 page_size=query_request.page_size,
                 offset=query_request.offset,
                 has_more=len(frames) > (query_request.offset + query_request.page_size)
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error querying frames: {e}")
-            return FrameQueryResponse(
-                frame_uris=[],
-                total_count=0,
-                page_size=query_request.page_size,
-                offset=query_request.offset,
-                has_more=False
-            )
+            raise HTTPException(status_code=500, detail=f"Error querying frames: {e}")
     
     async def _delete_frame_by_uri(self, space_id: str, graph_id: str, uri: str, current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
         """Delete single frame by URI.
@@ -1201,44 +1209,39 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return FrameDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Wrap backend with adapter for consistency
             backend = create_backend_adapter(backend_impl)
-            
+
             # Check if frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, uri):
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Frame {uri} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             # Check for child frames and handle recursive vs fail mode
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
             children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
-            
+
             uris_to_delete = [uri]
             if children:
                 if not recursive:
                     return FrameDeleteResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Cannot delete frame with children (use recursive=true to cascade): {uri} has {len(children)} child(ren)",
                         deleted_count=0,
                         deleted_uris=[]
@@ -1261,19 +1264,17 @@ class KGFramesEndpoint:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
 
             return FrameDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {len(deleted_uris)} frame(s)",
                 deleted_count=len(deleted_uris),
                 deleted_uris=deleted_uris
             )
-                
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting frame: {e}")
-            return FrameDeleteResponse(
-                success=False,
-                message=f"Failed to delete frame: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to delete frame: {e}")
     
     async def _delete_frames_by_uris(self, space_id: str, graph_id: str, uris: List[str], current_user: Dict, recursive: bool = False) -> FrameDeleteResponse:
         """Delete multiple frames by URI list.
@@ -1291,29 +1292,24 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return FrameDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return FrameDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             # Wrap backend with adapter for consistency
             backend = create_backend_adapter(backend_impl)
-            
+
             # Check for child frames and handle recursive vs fail mode
             from ..kg_impl.kg_sparql_query import KGSparqlQueryProcessor
             sparql_processor = KGSparqlQueryProcessor(backend, self.logger)
-            
+
             frames_with_children = {}
             for uri in uris:
                 children = await sparql_processor.find_child_frames(space_id, graph_id, uri)
@@ -1327,7 +1323,7 @@ class KGFramesEndpoint:
                         for uri, kids in frames_with_children.items()
                     )
                     return FrameDeleteResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Cannot delete frames with children (use recursive=true to cascade): {child_summary}",
                         deleted_count=0,
                         deleted_uris=[]
@@ -1354,19 +1350,17 @@ class KGFramesEndpoint:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, deleted_uris, "delete")
 
             return FrameDeleteResponse(
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {len(deleted_uris)} frame(s)",
                 deleted_count=len(deleted_uris),
                 deleted_uris=deleted_uris
             )
-                
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting frames: {e}")
-            return FrameDeleteResponse(
-                success=False,
-                message=f"Failed to delete frames: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to delete frames: {e}")
     
     # Frame-slot sub-endpoint implementations
     
@@ -1405,36 +1399,31 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotCreateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return SlotCreateResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    created_count=0,
-                    created_uris=[]
-                )
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
-            
+
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotCreateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Frame {frame_uri} not found",
                     created_count=0,
                     created_uris=[]
                 )
-            
+
             # Extract slots and validate
             slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
             if not slots:
                 return SlotCreateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid KGSlot objects found in request",
                     created_count=0,
                     created_uris=[]
@@ -1453,7 +1442,7 @@ class KGFramesEndpoint:
                     slot_uri = str(slot.URI)
                     if await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
                         return SlotCreateResponse(
-                            success=False,
+                            status=OperationStatus.ALREADY_EXISTS,
                             message=f"Slot {slot_uri} already exists",
                             created_count=0,
                             created_uris=[]
@@ -1467,20 +1456,17 @@ class KGFramesEndpoint:
             self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
 
             return SlotCreateResponse(
-                success=True,
+                status=OperationStatus.CREATED,
                 message=f"Successfully created {len(created_uris)} slots for frame {frame_uri}",
                 created_count=len(created_uris),
                 created_uris=created_uris
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error creating frame slots: {e}")
-            return SlotCreateResponse(
-                success=False,
-                message=f"Failed to create frame slots: {str(e)}",
-                created_count=0,
-                created_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to create frame slots: {e}")
     
     async def _update_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, quads: List[Quad], current_user: Dict) -> SlotUpdateResponse:
         """Update slots for a specific frame from quads."""
@@ -1493,47 +1479,42 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotUpdateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     updated_count=0,
                     updated_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return SlotUpdateResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    updated_count=0,
-                    updated_uris=[]
-                )
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
-            
+
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotUpdateResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Frame {frame_uri} not found",
                     updated_count=0,
                     updated_uris=[]
                 )
-            
+
             # Extract slots and validate
             slots = [obj for obj in vitalsigns_objects if isinstance(obj, KGSlot)]
             if not slots:
                 return SlotUpdateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No valid KGSlot objects found in request",
                     updated_count=0,
                     updated_uris=[]
                 )
-            
+
             # Validate all slots exist before updating
             for slot in slots:
                 slot_uri = str(slot.URI)
                 if not await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
                     return SlotUpdateResponse(
-                        success=False,
+                        status=OperationStatus.NOT_FOUND,
                         message=f"Slot {slot_uri} not found",
                         updated_count=0,
                         updated_uris=[]
@@ -1550,19 +1531,17 @@ class KGFramesEndpoint:
             self._schedule_auto_sync(backend_impl, space_id, graph_id, _sync_uris)
 
             return SlotUpdateResponse(
+                status=OperationStatus.UPDATED,
                 message=f"Successfully updated {len(updated_uris)} slots for frame {frame_uri}",
                 updated_count=len(updated_uris),
                 updated_uris=updated_uris
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error updating frame slots: {e}")
-            return SlotUpdateResponse(
-                success=False,
-                message=f"Failed to update frame slots: {str(e)}",
-                updated_count=0,
-                updated_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to update frame slots: {e}")
     
     async def _delete_frame_slots(self, space_id: str, graph_id: str, frame_uri: str, slot_uris: List[str], current_user: Dict) -> SlotDeleteResponse:
         """Delete specific slots from a frame using Edge_hasKGSlot relationships."""
@@ -1575,47 +1554,42 @@ class KGFramesEndpoint:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return SlotDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Space {space_id} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                return SlotDeleteResponse(
-                    success=False,
-                    message="Backend implementation not available",
-                    deleted_count=0,
-                    deleted_uris=[]
-                )
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
-            
+
             # Validate that frame exists
             if not await self._frame_exists_in_backend(backend, space_id, graph_id, frame_uri):
                 return SlotDeleteResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     message=f"Frame {frame_uri} not found",
                     deleted_count=0,
                     deleted_uris=[]
                 )
-            
+
             # Validate all slots exist and are connected to this frame
             validated_slots = []
             for slot_uri in slot_uris:
                 if not await self._slot_exists_in_backend(backend, space_id, graph_id, slot_uri):
                     return SlotDeleteResponse(
-                        success=False,
+                        status=OperationStatus.NOT_FOUND,
                         message=f"Slot {slot_uri} not found",
                         deleted_count=0,
                         deleted_uris=[]
                     )
-                
+
                 # Verify slot is connected to this frame via Edge_hasKGSlot
                 if not await self._slot_connected_to_frame(backend, space_id, graph_id, frame_uri, slot_uri):
                     return SlotDeleteResponse(
-                        success=False,
+                        status=OperationStatus.INVALID_REQUEST,
                         message=f"Slot {slot_uri} is not connected to frame {frame_uri}",
                         deleted_count=0,
                         deleted_uris=[]
@@ -1631,20 +1605,17 @@ class KGFramesEndpoint:
                 self._schedule_auto_sync(backend_impl, space_id, graph_id, validated_slots[:deleted_count], "delete")
 
             return SlotDeleteResponse(
-                success=True,
+                status=OperationStatus.DELETED,
                 message=f"Successfully deleted {deleted_count} slots from frame {frame_uri}",
                 deleted_count=deleted_count,
                 deleted_uris=validated_slots[:deleted_count]
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error deleting frame slots: {e}")
-            return SlotDeleteResponse(
-                success=False,
-                message=f"Failed to delete frame slots: {str(e)}",
-                deleted_count=0,
-                deleted_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to delete frame slots: {e}")
     
     # Helper methods for SPARQL query building and VitalSigns conversion
 
@@ -2063,14 +2034,14 @@ class KGFramesEndpoint:
             
             if not result.success:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=result.message,
                     created_count=0,
                     created_uris=[],
                 )
-            
+
             created_uris = [str(uri) for uri in result.created_uris]
-            
+
             # Count slots created along with frames
             slots_count = 0
             if hasattr(result, 'slots_created'):
@@ -2079,24 +2050,20 @@ class KGFramesEndpoint:
                 # Count KGSlot objects in the original objects
                 from ai_haley_kg_domain.model.KGSlot import KGSlot
                 slots_count = len([obj for obj in objects if isinstance(obj, KGSlot)])
-            
+
             return FrameCreateResponse(
-                success=True,
+                status=OperationStatus.CREATED,
                 message=f"Successfully created {len(created_uris)} frames in graph '{graph_id}' in space '{space_id}'",
                 created_count=len(created_uris),
                 created_uris=created_uris,
                 slots_created=slots_count,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in CREATE mode: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Failed to create frames: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                slots_created=0
-            )
+            raise HTTPException(status_code=500, detail=f"Failed to create frames: {e}")
     
     async def _handle_update_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
         """Handle UPDATE mode: verify frames exist, then update using standalone processor.
@@ -2119,7 +2086,7 @@ class KGFramesEndpoint:
                         invalid_frames = [uri for uri, is_valid in validation_map.items() if not is_valid]
                         if invalid_frames:
                             return FrameUpdateResponse(
-                                success=False,
+                                status=OperationStatus.INVALID_REQUEST,
                                 message=f"Frames are not children of parent {parent_uri}: {', '.join(invalid_frames)}",
                                 updated_uri="",
                                 updated_count=0
@@ -2140,28 +2107,26 @@ class KGFramesEndpoint:
             
             if not result.success:
                 return FrameUpdateResponse(
-                success=False,
-                message=result.message,
-                updated_uri="",
-            )
-            
+                    status=OperationStatus.STORE_FAILED,
+                    message=result.message,
+                    updated_uri="",
+                )
+
             updated_uris = result.created_uris
-            
+
             return FrameUpdateResponse(
-                success=True,
+                status=OperationStatus.UPDATED,
                 message=f"Successfully updated {len(updated_uris)} frames",
                 updated_uri=updated_uris[0] if updated_uris else "unknown",
                 updated_count=len(updated_uris),
                 frames_updated=len(updated_uris),
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in UPDATE mode: {e}")
-            return FrameUpdateResponse(
-                success=False,
-                message=f"Update operation failed: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Update operation failed: {e}")
     
     async def _handle_upsert_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
         """Handle UPSERT mode: create or update frames as needed using standalone processor."""
@@ -2181,29 +2146,26 @@ class KGFramesEndpoint:
             
             if not result.success:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=result.message,
                     created_count=0,
                     created_uris=[],
                 )
-            
+
             upserted_uris = result.created_uris
-            
+
             return FrameCreateResponse(
-                success=True,
+                status=OperationStatus.UPSERTED,
                 message=f"Successfully upserted {len(upserted_uris)} frames",
                 created_count=len(upserted_uris),
                 created_uris=upserted_uris,
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in UPSERT mode: {e}")
-            return FrameCreateResponse(
-                success=False,
-                message=f"Upsert operation failed: {str(e)}",
-                created_count=0,
-                created_uris=[]
-            )
+            raise HTTPException(status_code=500, detail=f"Upsert operation failed: {e}")
     
     async def _handle_replace_mode(self, backend, space_id: str, graph_id: str, frames: List[KGFrame], objects: List[GraphObject], parent_uri: Optional[str]):
         """Handle REPLACE mode: delete the existing frame subtree, then insert the new frame graph.
@@ -2221,7 +2183,7 @@ class KGFramesEndpoint:
             replacement_frame_uris = [str(f.URI) for f in frames if hasattr(f, 'URI')]
             if not replacement_frame_uris:
                 return FrameUpdateResponse(
-                    success=False,
+                    status=OperationStatus.INVALID_REQUEST,
                     message="No frame URIs found in replacement graph",
                     updated_uri="",
                     updated_count=0
@@ -2274,28 +2236,26 @@ class KGFramesEndpoint:
             
             if not result.success:
                 return FrameUpdateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Replace failed during re-creation: {result.message}",
                     updated_uri="",
                     updated_count=0
                 )
-            
+
             created_uris = result.created_uris
             return FrameUpdateResponse(
-                success=True,
+                status=OperationStatus.UPDATED,
                 message=f"Successfully replaced {len(all_uris_to_delete)} frames with {len(created_uris)} new frames",
                 updated_uri=created_uris[0] if created_uris else "unknown",
                 updated_count=len(created_uris),
                 frames_updated=len(created_uris),
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error in REPLACE mode: {e}")
-            return FrameUpdateResponse(
-                success=False,
-                message=f"Replace operation failed: {str(e)}",
-                updated_uri=""
-            )
+            raise HTTPException(status_code=500, detail=f"Replace operation failed: {e}")
     
     async def _frame_exists_in_backend(self, backend, space_id: str, graph_id: str, frame_uri: str) -> bool:
         """Check if frame exists in backend."""
@@ -3142,7 +3102,7 @@ class KGFramesEndpoint:
             
             if result.success:
                 return FrameCreateResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message=result.message,
                     created_count=result.frame_count,
                     created_uris=result.created_uris,
@@ -3150,22 +3110,18 @@ class KGFramesEndpoint:
                 )
             else:
                 return FrameCreateResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message=result.message,
                     created_count=0,
                     created_uris=[],
                     frames_created=0
                 )
-                
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Child frame creation failed: {e}", exc_info=True)
-            return FrameCreateResponse(
-                success=False,
-                message=f"Child frame creation failed: {str(e)}",
-                created_count=0,
-                created_uris=[],
-                frames_created=0
-            )
+            raise HTTPException(status_code=500, detail=f"Child frame creation failed: {e}")
     
     async def _get_frame_graph(
         self,
@@ -3218,20 +3174,17 @@ class KGFramesEndpoint:
             )
             
             return FrameDeleteResponse(
-                success=success,
+                status=OperationStatus.DELETED if success else OperationStatus.STORE_FAILED,
                 message="Frame graph deleted successfully" if success else "Frame graph deletion failed",
                 deleted_count=1 if success else 0,
                 frames_deleted=1 if success else 0
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Frame graph deletion failed: {e}", exc_info=True)
-            return FrameDeleteResponse(
-                success=False,
-                message=f"Frame graph deletion failed: {str(e)}",
-                deleted_count=0,
-                frames_deleted=0
-            )
+            raise HTTPException(status_code=500, detail=f"Frame graph deletion failed: {e}")
     
     def _apply_frame_sorting(self, frames: List[KGFrame], sort_by: Optional[str], sort_order: Optional[str]) -> List[KGFrame]:
         """Apply sorting to frame list."""

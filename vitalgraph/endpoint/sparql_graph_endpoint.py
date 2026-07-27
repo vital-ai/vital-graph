@@ -14,8 +14,10 @@ from ..model.sparql_model import (
     SPARQLGraphRequest,
     SPARQLGraphResponse,
     GraphInfo,
-    GraphInfoResponse
+    GraphInfoResponse,
+    GraphCountsResponse
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write
 
 
@@ -71,6 +73,7 @@ class SPARQLGraphEndpoint:
         # GET endpoint for fast graph object counts
         @self.router.get(
             "/graph_counts",
+            response_model=GraphCountsResponse,
             tags=["Graphs"],
             summary="Get Graph Object Counts",
             description="Fast counts of entities, frames, and relations in a graph"
@@ -162,13 +165,16 @@ class SPARQLGraphEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return SPARQLGraphResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    operation=request.operation,
+                    graph_uri=request.target_graph_uri or request.source_graph_uri,
+                    message=f"Space '{space_id}' not found",
+                    error=f"Space '{space_id}' not found"
                 )
-            
+
             space_impl = space_record.space_impl
-            
+
             # Get the database-specific implementation for graph operations
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
@@ -221,8 +227,14 @@ class SPARQLGraphEndpoint:
             operation_time = time.time() - start_time
             
             if success:
+                if operation == "CREATE":
+                    success_status = OperationStatus.CREATED
+                elif operation in ("DROP", "CLEAR"):
+                    success_status = OperationStatus.DELETED
+                else:
+                    success_status = OperationStatus.OK
                 return SPARQLGraphResponse(
-                    success=True,
+                    status=success_status,
                     operation=request.operation,
                     graph_uri=request.target_graph_uri or request.source_graph_uri,
                     message=f"{request.operation} operation completed successfully",
@@ -230,20 +242,20 @@ class SPARQLGraphEndpoint:
                 )
             else:
                 return SPARQLGraphResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     operation=request.operation,
                     graph_uri=request.target_graph_uri or request.source_graph_uri,
                     message=f"{request.operation} operation failed",
                     operation_time=operation_time,
                     error="Graph operation returned false"
                 )
-        
+
         except HTTPException:
             raise
         except Exception as e:
             self.logger.error(f"Error executing graph operation: {e}")
             return SPARQLGraphResponse(
-                success=False,
+                status=OperationStatus.ERROR,
                 operation=request.operation,
                 graph_uri=request.target_graph_uri or request.source_graph_uri,
                 message=f"Graph operation failed: {str(e)}",
@@ -351,50 +363,44 @@ class SPARQLGraphEndpoint:
         try:
             self.logger.info(f"Getting info for graph '{graph_uri}' in space '{space_id}' for user '{current_user.get('username', 'unknown')}'")
             
-            # Validate space manager
+            # Validate space manager (server-internal — 500)
             if self.space_manager is None:
-                return GraphInfoResponse(
-                    success=False,
-                    graph_info=None,
-                    error="Space manager not available",
-                    message="Internal server error"
+                raise HTTPException(
+                    status_code=500,
+                    detail="Space manager not available"
                 )
-        
+
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
                 return GraphInfoResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     graph_info=None,
-                    error=f"Space '{space_id}' not found",
-                    message="Space not found"
+                    message=f"Space '{space_id}' not found"
                 )
-        
+
             space_impl = space_record.space_impl
-        
+
             # Get the database-specific implementation for graph operations
             db_space_impl = space_impl.get_db_space_impl()
             if not db_space_impl:
-                return GraphInfoResponse(
-                    success=False,
-                    graph_info=None,
-                    error="Database-specific space implementation not available",
-                    message="Internal server error"
+                raise HTTPException(
+                    status_code=500,
+                    detail="Database-specific space implementation not available"
                 )
-        
+
             # Get graph info using PostgreSQL graph table operations
             graph_data = await db_space_impl.graphs.get_graph(space_id, graph_uri)
-            
+
             if not graph_data:
-                # Return error response for non-existent graphs
+                # Graph does not exist — domain outcome (HTTP 200 + NOT_FOUND)
                 self.logger.info(f"Graph '{graph_uri}' not found in space '{space_id}'")
                 return GraphInfoResponse(
-                    success=False,
+                    status=OperationStatus.NOT_FOUND,
                     graph_info=None,
-                    error=f"Graph '{graph_uri}' not found in space '{space_id}'",
-                    message="Graph not found"
+                    message=f"Graph '{graph_uri}' not found in space '{space_id}'"
                 )
-            
+
             # Return success response with graph info
             graph_info = GraphInfo(
                 graph_uri=graph_data['graph_uri'],
@@ -402,21 +408,20 @@ class SPARQLGraphEndpoint:
                 created_time=graph_data.get('created_time', '').isoformat() if graph_data.get('created_time') else None,
                 updated_time=graph_data.get('updated_time', '').isoformat() if graph_data.get('updated_time') else None
             )
-            
+
             return GraphInfoResponse(
-                success=True,
+                status=OperationStatus.FOUND,
                 graph_info=graph_info,
-                error=None,
                 message="Graph info retrieved successfully"
             )
-        
+
+        except HTTPException:
+            raise
         except Exception as e:
             self.logger.error(f"Error getting graph info: {e}")
-            return GraphInfoResponse(
-                success=False,
-                graph_info=None,
-                error=str(e),
-                message="Error getting graph info"
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error getting graph info: {str(e)}"
             )
 
 
@@ -446,7 +451,10 @@ class SPARQLGraphEndpoint:
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=404, detail="Space not found")
+                return GraphCountsResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                )
 
             space_impl = space_record.space_impl
             db_space_impl = space_impl.get_db_space_impl()
@@ -468,7 +476,10 @@ class SPARQLGraphEndpoint:
                     graph_id,
                 )
                 if ctx_uuid is None:
-                    return {"entity_count": 0, "frame_count": 0, "relation_count": 0}
+                    return GraphCountsResponse(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Graph '{graph_id}' not found in space '{space_id}'",
+                    )
 
                 vt_uuid = await conn.fetchval(
                     f"SELECT term_uuid FROM {term} "
@@ -476,7 +487,7 @@ class SPARQLGraphEndpoint:
                     _VITALTYPE,
                 )
                 if vt_uuid is None:
-                    return {"entity_count": 0, "frame_count": 0, "relation_count": 0}
+                    return GraphCountsResponse(status=OperationStatus.FOUND)
 
                 # One query: count vitaltype rows grouped by object (type URI)
                 rows = await conn.fetch(f"""
@@ -500,11 +511,12 @@ class SPARQLGraphEndpoint:
                     elif uri in self._RELATION_TYPES:
                         relation_count += cnt
 
-                return {
-                    "entity_count": entity_count,
-                    "frame_count": frame_count,
-                    "relation_count": relation_count,
-                }
+                return GraphCountsResponse(
+                    status=OperationStatus.FOUND,
+                    entity_count=entity_count,
+                    frame_count=frame_count,
+                    relation_count=relation_count,
+                )
 
         except HTTPException:
             raise

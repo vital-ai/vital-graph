@@ -173,8 +173,10 @@ const EntityRegistryDetail: React.FC = () => {
     if (!entityId || isNew) return;
     try {
       setLoading(true);
-      const data = await apiService.getRegistryEntity(entityId);
-      const e = data.entity || data;
+      // getRegistryEntity unwraps the { entity } envelope at the client boundary,
+      // so this is the entity record itself (null when not found).
+      const e = await apiService.getRegistryEntity(entityId);
+      if (!e) throw new Error('Entity not found');
       setEntity(e);
       setForm({
         primary_name: e.primary_name || '',
@@ -231,7 +233,7 @@ const EntityRegistryDetail: React.FC = () => {
         const names: Record<string, string> = {};
         fetched.forEach((res, i) => {
           if (res.status === 'fulfilled') {
-            const e = res.value.entity || res.value;
+            const e = res.value; // already the unwrapped entity record (or null)
             if (e?.primary_name) names[counterparts[i]] = e.primary_name;
           }
         });

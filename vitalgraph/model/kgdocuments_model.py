@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+
 
 # ---------------------------------------------------------------------------
 # Segmentation request/response
@@ -24,11 +26,9 @@ class SegmentDocumentRequest(BaseModel):
     overlap_tokens: int = Field(0, description="Token overlap between segments")
 
 
-class SegmentDocumentResponse(BaseModel):
+class SegmentDocumentResponse(ResultStatus):
     """Response from segmenting a KGDocument."""
 
-    success: bool = True
-    message: str = ""
     document_uri: str = ""
     parent_copy_uri: str = ""
     method_uri: str = ""
@@ -54,7 +54,7 @@ class SegmentationConfigRequest(BaseModel):
     auto_vectorize: bool = Field(True)
 
 
-class SegmentationConfigResponse(BaseModel):
+class SegmentationConfigResponse(ResultStatus):
     """Single segmentation config entry."""
 
     config_id: int
@@ -68,7 +68,7 @@ class SegmentationConfigResponse(BaseModel):
     created_time: Optional[str] = None
 
 
-class SegmentationConfigListResponse(BaseModel):
+class SegmentationConfigListResponse(ResultStatus):
     """List of segmentation configs."""
 
     configs: List[SegmentationConfigResponse] = Field(default_factory=list)
@@ -79,7 +79,7 @@ class SegmentationConfigListResponse(BaseModel):
 # KGDocument list/detail (for future document CRUD endpoint)
 # ---------------------------------------------------------------------------
 
-class KGDocumentResponse(BaseModel):
+class KGDocumentResponse(ResultStatus):
     """Response for a single KGDocument."""
 
     uri: str
@@ -95,7 +95,7 @@ class KGDocumentResponse(BaseModel):
     url: Optional[str] = None
 
 
-class KGDocumentListResponse(BaseModel):
+class KGDocumentListResponse(ResultStatus):
     """Response for listing KGDocuments."""
 
     documents: List[KGDocumentResponse] = Field(default_factory=list)
@@ -135,7 +135,7 @@ class SegmentationWorkerStatus(BaseModel):
     listen_channels_active: int = 0
 
 
-class SegmentationStatusSummaryResponse(BaseModel):
+class SegmentationStatusSummaryResponse(ResultStatus):
     """Aggregate segmentation status summary for a space."""
 
     pending: int = 0

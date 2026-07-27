@@ -22,9 +22,10 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth.role_dependencies import require_space_read, require_space_write
+from ..model.result_status import OperationStatus
 from ..model.search_mappings_model import (
     SearchMappingOut, SearchMappingPropertyOut, SearchMappingIndexOut,
-    SearchMappingListResponse,
+    SearchMappingListResponse, SearchMappingIndexListResponse,
     CreateSearchMappingRequest, UpdateSearchMappingRequest,
     AddIndexRequest, AddPropertyRequest, DeleteResponse,
 )
@@ -81,11 +82,14 @@ class SearchMappingsEndpoint:
             mappings = [_dto_to_out(d) for d in dtos]
             return SearchMappingListResponse(
                 mappings=mappings, total_count=len(mappings),
+                status=OperationStatus.FOUND if mappings else OperationStatus.EMPTY,
             )
         except Exception as e:
             if "UndefinedTable" in type(e).__name__ or "does not exist" in str(e):
                 logger.warning("Search mapping table not found for space %s — returning empty list", space_id)
-                return SearchMappingListResponse(mappings=[], total_count=0)
+                return SearchMappingListResponse(
+                    mappings=[], total_count=0, status=OperationStatus.EMPTY,
+                )
             raise
         finally:
             await self._release(conn)
@@ -97,7 +101,10 @@ class SearchMappingsEndpoint:
             mgr = SearchMappingManager(conn, space_id)
             dto = await mgr.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
+                return SearchMappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
             return _dto_to_out(dto)
         finally:
             await self._release(conn)
@@ -119,7 +126,7 @@ class SearchMappingsEndpoint:
                 include_pred_name=body.include_pred_name,
             )
             dto = await mgr.get_mapping(mapping_id)
-            return _dto_to_out(dto)
+            return _dto_to_out(dto, status=OperationStatus.CREATED)
         finally:
             await self._release(conn)
 
@@ -134,8 +141,11 @@ class SearchMappingsEndpoint:
             update_fields = body.model_dump(exclude_none=True)
             dto = await mgr.update_mapping(mapping_id, **update_fields)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
-            return _dto_to_out(dto)
+                return SearchMappingOut(
+                    mapping_id=mapping_id, mapping_type="", index_name="",
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
+            return _dto_to_out(dto, status=OperationStatus.UPDATED)
         finally:
             await self._release(conn)
 
@@ -148,8 +158,13 @@ class SearchMappingsEndpoint:
             mgr = SearchMappingManager(conn, space_id)
             deleted = await mgr.delete_mapping(mapping_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Mapping not found")
-            return DeleteResponse(message="Mapping deleted", deleted=True)
+                return DeleteResponse(
+                    deleted=False, status=OperationStatus.NOT_FOUND,
+                    message="Mapping not found",
+                )
+            return DeleteResponse(
+                deleted=True, status=OperationStatus.DELETED, message="Mapping deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -164,7 +179,12 @@ class SearchMappingsEndpoint:
             # Verify mapping exists
             dto = await mgr.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
+                return SearchMappingPropertyOut(
+                    property_id=0, mapping_id=mapping_id,
+                    property_uri=body.property_uri,
+                    property_role=body.property_role, ordinal=body.ordinal,
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
             prop_id = await mgr.add_property(
                 mapping_id, body.property_uri,
                 property_role=body.property_role,
@@ -176,6 +196,7 @@ class SearchMappingsEndpoint:
                 property_uri=body.property_uri,
                 property_role=body.property_role,
                 ordinal=body.ordinal,
+                status=OperationStatus.CREATED,
             )
         finally:
             await self._release(conn)
@@ -190,8 +211,13 @@ class SearchMappingsEndpoint:
             mgr = SearchMappingManager(conn, space_id)
             deleted = await mgr.remove_property(property_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Property not found")
-            return DeleteResponse(message="Property deleted", deleted=True)
+                return DeleteResponse(
+                    deleted=False, status=OperationStatus.NOT_FOUND,
+                    message="Property not found",
+                )
+            return DeleteResponse(
+                deleted=True, status=OperationStatus.DELETED, message="Property deleted",
+            )
         finally:
             await self._release(conn)
 
@@ -204,13 +230,20 @@ class SearchMappingsEndpoint:
             mgr = SearchMappingManager(conn, space_id)
             dto = await mgr.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
+                return SearchMappingIndexListResponse(
+                    indexes=[], total_count=0,
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
             indexes = await mgr.list_indexes(mapping_id)
-            return [SearchMappingIndexOut(
+            index_outs = [SearchMappingIndexOut(
                 id=i.id, mapping_id=i.mapping_id,
                 index_type=i.index_type, index_name=i.index_name,
                 created_time=i.created_time,
             ) for i in indexes]
+            return SearchMappingIndexListResponse(
+                indexes=index_outs, total_count=len(index_outs),
+                status=OperationStatus.FOUND if index_outs else OperationStatus.EMPTY,
+            )
         finally:
             await self._release(conn)
 
@@ -220,22 +253,29 @@ class SearchMappingsEndpoint:
     ):
         require_space_write(current_user, space_id)
         if body.index_type not in ('vector', 'fts'):
-            raise HTTPException(
-                status_code=400,
-                detail="index_type must be 'vector' or 'fts'",
+            return SearchMappingIndexOut(
+                id=0, mapping_id=mapping_id,
+                index_type=body.index_type, index_name=body.index_name,
+                status=OperationStatus.INVALID_REQUEST,
+                message="index_type must be 'vector' or 'fts'",
             )
         conn = await self._acquire()
         try:
             mgr = SearchMappingManager(conn, space_id)
             dto = await mgr.get_mapping(mapping_id)
             if dto is None:
-                raise HTTPException(status_code=404, detail="Mapping not found")
+                return SearchMappingIndexOut(
+                    id=0, mapping_id=mapping_id,
+                    index_type=body.index_type, index_name=body.index_name,
+                    status=OperationStatus.NOT_FOUND, message="Mapping not found",
+                )
             junction_id = await mgr.add_index(
                 mapping_id, body.index_type, body.index_name,
             )
             return SearchMappingIndexOut(
                 id=junction_id, mapping_id=mapping_id,
                 index_type=body.index_type, index_name=body.index_name,
+                status=OperationStatus.CREATED,
             )
         finally:
             await self._release(conn)
@@ -250,8 +290,14 @@ class SearchMappingsEndpoint:
             mgr = SearchMappingManager(conn, space_id)
             deleted = await mgr.remove_index(junction_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Index association not found")
-            return DeleteResponse(message="Index association removed", deleted=True)
+                return DeleteResponse(
+                    deleted=False, status=OperationStatus.NOT_FOUND,
+                    message="Index association not found",
+                )
+            return DeleteResponse(
+                deleted=True, status=OperationStatus.DELETED,
+                message="Index association removed",
+            )
         finally:
             await self._release(conn)
 
@@ -298,7 +344,6 @@ class SearchMappingsEndpoint:
         @self.router.post(
             "/search-mappings",
             response_model=SearchMappingOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Search Mappings"],
             summary="Create Search Mapping",
         )
@@ -339,7 +384,6 @@ class SearchMappingsEndpoint:
         @self.router.post(
             "/search-mappings/{mapping_id}/properties",
             response_model=SearchMappingPropertyOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Search Mappings"],
             summary="Add Property to Mapping",
         )
@@ -369,7 +413,7 @@ class SearchMappingsEndpoint:
 
         @self.router.get(
             "/search-mappings/{mapping_id}/indexes",
-            response_model=list,
+            response_model=SearchMappingIndexListResponse,
             tags=["Search Mappings"],
             summary="List Index Associations",
         )
@@ -383,7 +427,6 @@ class SearchMappingsEndpoint:
         @self.router.post(
             "/search-mappings/{mapping_id}/indexes",
             response_model=SearchMappingIndexOut,
-            status_code=status.HTTP_201_CREATED,
             tags=["Search Mappings"],
             summary="Associate Index with Mapping",
         )
@@ -416,9 +459,10 @@ class SearchMappingsEndpoint:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _dto_to_out(dto) -> SearchMappingOut:
+def _dto_to_out(dto, status: OperationStatus = OperationStatus.FOUND) -> SearchMappingOut:
     """Convert a SearchMappingDTO to the Pydantic response model."""
     return SearchMappingOut(
+        status=status,
         mapping_id=dto.mapping_id,
         mapping_type=dto.mapping_type,
         type_uri=dto.type_uri,

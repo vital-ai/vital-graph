@@ -97,6 +97,7 @@ class FilesEndpoint(BaseEndpoint):
                 page_size=page_size,
                 has_more=response_data.get('has_more', False),
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} files",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -156,6 +157,7 @@ class FilesEndpoint(BaseEndpoint):
                 file_uri=uri,
                 file_node=file_node,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved file {uri}",
                 space_id=space_id,
                 graph_id=graph_id,
@@ -212,6 +214,7 @@ class FilesEndpoint(BaseEndpoint):
                 page_size=len(objects),
                 has_more=False,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(objects)} files",
                 space_id=space_id,
                 graph_id=graph_id
@@ -262,6 +265,7 @@ class FilesEndpoint(BaseEndpoint):
                 created_count=response_data.get('created_count', 0),
                 objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Created {response_data.get('created_count', 0)} file(s)",
                 space_id=space_id,
                 graph_id=graph_id
@@ -312,6 +316,7 @@ class FilesEndpoint(BaseEndpoint):
                 updated_count=response_data.get('updated_count', 0),
                 objects=objects,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Updated {response_data.get('updated_count', 0)} file(s)",
                 space_id=space_id,
                 graph_id=graph_id
@@ -360,6 +365,7 @@ class FilesEndpoint(BaseEndpoint):
                 deleted_uris=[uri],
                 deleted_count=1,
                 status_code=response.status_code,
+                status=response_data.get('status'),
                 message=f"Deleted file {uri}",
                 space_id=space_id,
                 graph_id=graph_id,

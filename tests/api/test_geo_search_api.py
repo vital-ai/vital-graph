@@ -172,7 +172,7 @@ class TestGeoPoints:
             limit=1,
             offset=0,
         )
-        assert resp.limit == 1
+        assert resp.page_size == 1
         assert resp.offset == 0
 
 

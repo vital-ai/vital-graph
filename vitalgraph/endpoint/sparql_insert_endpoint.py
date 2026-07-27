@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLInsertRequest,
     SPARQLInsertResponse
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_write
 
 
@@ -112,9 +113,10 @@ class SPARQLInsertEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return SPARQLInsertResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    error=f"Space '{space_id}' not found"
                 )
         
             space_impl = space_record.space_impl
@@ -142,24 +144,24 @@ class SPARQLInsertEndpoint:
                 nudge_backfill()
 
                 return SPARQLInsertResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message="Update executed successfully",
                     insert_time=insert_time
                 )
             else:
                 return SPARQLInsertResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message="Update failed",
                     insert_time=insert_time,
                     error="Update operation returned false"
                 )
-        
+
         except HTTPException:
             raise
         except Exception as e:
             self.logger.error(f"Error executing SPARQL update: {e}")
             return SPARQLInsertResponse(
-                success=False,
+                status=OperationStatus.ERROR,
                 message=f"SPARQL insert failed: {str(e)}",
                 error=str(e)
             )

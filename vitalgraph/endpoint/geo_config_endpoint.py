@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 
 from ..auth.role_dependencies import require_space_read, require_space_write
 from ..vectorization.geo_config_manager import GeoConfigManager, DEFAULT_LAT_PREDICATES, DEFAULT_LON_PREDICATES
-from ..model.geo_model import GeoConfigOut, UpdateGeoConfigRequest
+from ..model.geo_model import GeoConfigOut, GeoConfigResetResponse, UpdateGeoConfigRequest
+from ..model.result_status import OperationStatus
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class GeoConfigEndpoint:
         mgr, conn = await self._get_manager(space_id)
         try:
             dto = await mgr.ensure_config()
-            return GeoConfigOut(**dto.to_dict())
+            return GeoConfigOut(status=OperationStatus.FOUND, **dto.to_dict())
         finally:
             await self._release(conn)
 
@@ -74,8 +75,11 @@ class GeoConfigEndpoint:
             await mgr.ensure_config()
             dto = await mgr.update_config(**body.dict(exclude_none=True))
             if dto is None:
-                raise HTTPException(status_code=404, detail="Geo config not found")
-            return GeoConfigOut(**dto.to_dict())
+                return GeoConfigOut(
+                    status=OperationStatus.NOT_FOUND,
+                    message="Geo config not found",
+                )
+            return GeoConfigOut(status=OperationStatus.UPDATED, **dto.to_dict())
         finally:
             await self._release(conn)
 
@@ -84,7 +88,11 @@ class GeoConfigEndpoint:
         mgr, conn = await self._get_manager(space_id)
         try:
             await mgr.delete_config()
-            return {"message": "Geo config reset", "space_id": space_id}
+            return GeoConfigResetResponse(
+                status=OperationStatus.DELETED,
+                space_id=space_id,
+                message="Geo config reset",
+            )
         finally:
             await self._release(conn)
 
@@ -124,6 +132,7 @@ class GeoConfigEndpoint:
 
         @self.router.delete(
             "/geo-config",
+            response_model=GeoConfigResetResponse,
             tags=["Geo Config"],
             summary="Reset Geo Config",
             description="Delete geo config row (resets to unconfigured state)",

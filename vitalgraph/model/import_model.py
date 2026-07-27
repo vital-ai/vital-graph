@@ -10,6 +10,7 @@ from enum import Enum
 from datetime import datetime
 
 from .api_model import BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 class JobStatus(str, Enum):
@@ -82,27 +83,28 @@ class ImportJobsResponse(BasePaginatedResponse):
     jobs: List[ImportJob]
 
 
-class ImportJobResponse(BaseModel):
+class ImportJobResponse(ResultStatus):
     """Response model for single import job."""
-    job: ImportJob
+    status: OperationStatus = OperationStatus.FOUND
+    job: Optional[ImportJob] = None
 
 
-class ImportCreateResponse(BaseModel):
+class ImportCreateResponse(ResultStatus):
     """Response model for import job creation."""
-    message: str
+    status: OperationStatus = OperationStatus.CREATED
     job_id: str
     job: ImportJob
 
 
-class ImportDeleteResponse(BaseModel):
+class ImportDeleteResponse(ResultStatus):
     """Response model for import job deletion."""
-    message: str
+    status: OperationStatus = OperationStatus.DELETED
     job_id: str
 
 
-class ImportExecuteResponse(BaseModel):
+class ImportExecuteResponse(ResultStatus):
     """Response model for import job execution."""
-    message: str
+    status: OperationStatus = OperationStatus.OK
     job_id: str
     execution_started: bool
 
@@ -119,16 +121,17 @@ class ImportStatusResponse(BaseModel):
     error_message: Optional[str]
 
 
-class ImportLogResponse(BaseModel):
+class ImportLogResponse(ResultStatus):
     """Response model for import job log."""
+    status: OperationStatus = OperationStatus.FOUND
     job_id: str
     log_entries: List[Dict[str, Any]]
     total_entries: int
 
 
-class ImportUploadResponse(BaseModel):
+class ImportUploadResponse(ResultStatus):
     """Response model for import file upload."""
-    message: str
+    status: OperationStatus = OperationStatus.CREATED
     job_id: str
     filename: str
     file_size: int

@@ -34,6 +34,7 @@ from vitalgraph.model.kgtypes_model import (
     KGTypeDocumentationUpdateResponse, KGTypeDocumentationDeleteResponse,
     KGTypeSearchResponse,
 )
+from vitalgraph.model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_read, require_space_write, require_system_space_write
 
 
@@ -361,15 +362,15 @@ class KGTypesEndpoint:
             # Get complete document from atomic processor
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
-            
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available - server configuration error")
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
-            
+
             # Apply search filter if provided (prioritize search over filter for HTTP routes)
             search_filter = search if search else filter
             triples, total_count = await self.kgtypes_read_processor.list_kgtypes(
@@ -381,12 +382,13 @@ class KGTypesEndpoint:
                 search=search_filter,
                 type_uri=type_uri
             )
-            
+
             self.logger.info(f"🔍 LIST: Received {len(triples)} RDFLib triples, total_count: {total_count}")
-            
+
             graph_objects = (await asyncio.to_thread(GraphObject.from_triples_list, triples)) if triples else []
             quads = await asyncio.to_thread(graphobjects_to_quad_list, graph_objects, graph_id)
             return QuadResponse(
+                status=OperationStatus.FOUND if total_count else OperationStatus.EMPTY,
                 total_count=total_count,
                 page_size=page_size,
                 offset=offset,
@@ -413,13 +415,13 @@ class KGTypesEndpoint:
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
-            
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available - server configuration error")
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
             kgtype_object = await self.kgtypes_read_processor.get_kgtype_by_uri(
                 backend=backend_adapter,
@@ -427,17 +429,19 @@ class KGTypesEndpoint:
                 graph_id=graph_id,
                 kgtype_uri=uri
             )
-            
+
             if not kgtype_object:
                 self.logger.warning(f"🔍 GET: KGType not found: {uri}")
                 return QuadResultsResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"KGType with URI '{uri}' not found",
                     total_count=0,
                     results=[],
                 )
-            
+
             quads = await asyncio.to_thread(graphobjects_to_quad_list, [kgtype_object], graph_id)
             return QuadResultsResponse(
+                status=OperationStatus.FOUND,
                 message=f"Found KGType '{uri}'",
                 total_count=1,
                 results=quads,
@@ -463,13 +467,13 @@ class KGTypesEndpoint:
             uris = [u.strip() for u in uri_list.split(',') if u.strip()]
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
-            
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available - server configuration error")
+
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
-            
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
+
             backend_adapter = create_backend_adapter(backend)
             kgtype_objects = await self.kgtypes_read_processor.get_kgtypes_by_uris(
                 backend=backend_adapter,
@@ -477,11 +481,12 @@ class KGTypesEndpoint:
                 graph_id=graph_id,
                 kgtype_uris=uris
             )
-            
+
             self.logger.info(f"🔍 GET_BY_URIS: Received {len(kgtype_objects)} KGType GraphObjects for {len(uris)} URIs")
-            
+
             quads = await asyncio.to_thread(graphobjects_to_quad_list, kgtype_objects, graph_id)
             return QuadResponse(
+                status=OperationStatus.FOUND if kgtype_objects else OperationStatus.EMPTY,
                 total_count=len(kgtype_objects),
                 page_size=len(kgtype_objects),
                 offset=0,
@@ -511,14 +516,29 @@ class KGTypesEndpoint:
             kgtype_objects = quad_list_to_graphobjects(quads)
             typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
             if not typed_objects:
-                raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
+                return KGTypeCreateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid KGType objects found in request",
+                    created_count=0,
+                    created_uris=[],
+                )
             kgtype_objects = typed_objects
 
             if not self.space_manager:
-                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+                return KGTypeCreateResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    created_count=0,
+                    created_uris=[],
+                )
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+                return KGTypeCreateResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    created_count=0,
+                    created_uris=[],
+                )
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             backend_adapter = create_backend_adapter(backend)
@@ -547,7 +567,6 @@ class KGTypesEndpoint:
             )
 
             return KGTypeCreateResponse(
-                success=True,
                 message=f"Successfully created {len(created_uris)} KG type definitions",
                 created_count=len(created_uris),
                 created_uris=created_uris
@@ -573,14 +592,29 @@ class KGTypesEndpoint:
             kgtype_objects = quad_list_to_graphobjects(quads)
             typed_objects = [obj for obj in kgtype_objects if isinstance(obj, KGType)]
             if not typed_objects:
-                raise HTTPException(status_code=400, detail="No valid KGType objects found in request")
+                return KGTypeUpdateResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid KGType objects found in request",
+                    updated_count=0,
+                    updated_uris=[],
+                )
             kgtype_objects = typed_objects
 
             if not self.space_manager:
-                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+                return KGTypeUpdateResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    updated_count=0,
+                    updated_uris=[],
+                )
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=404, detail=f"Space '{space_id}' not found")
+                return KGTypeUpdateResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    updated_count=0,
+                    updated_uris=[],
+                )
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             backend_adapter = create_backend_adapter(backend)
@@ -608,7 +642,6 @@ class KGTypesEndpoint:
             )
 
             return KGTypeUpdateResponse(
-                success=True,
                 message=f"Successfully updated {len(updated_uris)} KG type definitions",
                 updated_count=len(updated_uris),
                 updated_uris=updated_uris
@@ -642,9 +675,11 @@ class KGTypesEndpoint:
             
             # Validate that at least one deletion method is provided
             if not uri and not uri_list and not (document and document.graph):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid request: must provide uri, uri_list, or document with objects"
+                return KGTypeDeleteResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="Invalid request: must provide uri, uri_list, or document with objects",
+                    deleted_count=0,
+                    deleted_uris=[],
                 )
             
             deleted_count = 0
@@ -658,13 +693,18 @@ class KGTypesEndpoint:
                     uri_str = str(uri) if uri else uri
                     space_record = await self.space_manager.get_space_or_load(space_id)
                     if not space_record:
-                        raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-                    
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.NOT_FOUND,
+                            message=f"Space {space_id} not found",
+                            deleted_count=0,
+                            deleted_uris=[],
+                        )
+
                     space_impl = space_record.space_impl
                     backend = space_impl.get_db_space_impl()
                     if not backend:
-                        raise HTTPException(status_code=500, detail="Backend implementation not available")
-                    
+                        raise HTTPException(status_code=503, detail="Backend implementation not available")
+
                     backend_adapter = create_backend_adapter(backend)
                     success = await self.kgtypes_delete_processor.delete_kgtype(
                         backend=backend_adapter,
@@ -691,26 +731,35 @@ class KGTypesEndpoint:
                                 if part:
                                     uris.append(part)
                     else:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid URI list format: expected string or list"
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.INVALID_REQUEST,
+                            message="Invalid URI list format: expected string or list",
+                            deleted_count=0,
+                            deleted_uris=[],
                         )
-                    
+
                     if not uris:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid URI list: no valid URIs found"
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.INVALID_REQUEST,
+                            message="Invalid URI list: no valid URIs found",
+                            deleted_count=0,
+                            deleted_uris=[],
                         )
-                    
+
                     space_record = self.space_manager.get_space(space_id)
                     if not space_record:
-                        raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-                    
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.NOT_FOUND,
+                            message=f"Space {space_id} not found",
+                            deleted_count=0,
+                            deleted_uris=[],
+                        )
+
                     space_impl = space_record.space_impl
                     backend = space_impl.get_db_space_impl()
                     if not backend:
-                        raise HTTPException(status_code=500, detail="Backend implementation not available")
-                    
+                        raise HTTPException(status_code=503, detail="Backend implementation not available")
+
                     backend_adapter = create_backend_adapter(backend)
                     deleted_count = await self.kgtypes_delete_processor.delete_kgtypes_batch(
                         backend=backend_adapter,
@@ -730,20 +779,27 @@ class KGTypesEndpoint:
                             uris_to_delete.append(kgtype_uri)
                     
                     if not uris_to_delete:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid document: no valid URIs found in objects"
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.INVALID_REQUEST,
+                            message="Invalid document: no valid URIs found in objects",
+                            deleted_count=0,
+                            deleted_uris=[],
                         )
-                    
+
                     space_record = self.space_manager.get_space(space_id)
                     if not space_record:
-                        raise HTTPException(status_code=404, detail=f"Space {space_id} not found")
-                    
+                        return KGTypeDeleteResponse(
+                            status=OperationStatus.NOT_FOUND,
+                            message=f"Space {space_id} not found",
+                            deleted_count=0,
+                            deleted_uris=[],
+                        )
+
                     space_impl = space_record.space_impl
                     backend = space_impl.get_db_space_impl()
                     if not backend:
-                        raise HTTPException(status_code=500, detail="Backend implementation not available")
-                    
+                        raise HTTPException(status_code=503, detail="Backend implementation not available")
+
                     backend_adapter = create_backend_adapter(backend)
                     deleted_count = await self.kgtypes_delete_processor.delete_kgtypes_batch(
                         backend=backend_adapter,
@@ -765,23 +821,28 @@ class KGTypesEndpoint:
                 self.logger.debug(f"Delete response - deleted_uris: {deleted_uris}, deleted_uris_str: {deleted_uris_str}")
                 
                 return KGTypeDeleteResponse(
-                    success=True,
                     message=f"Successfully deleted {deleted_count} KG types via {delete_method} from graph '{graph_id}' in space '{space_id}'",
                     deleted_count=deleted_count,
                     deleted_uris=deleted_uris_str
                 )
-                
+
+            except HTTPException:
+                raise
             except Exception as e:
-                # Handle service-level errors
+                # Handle service-level (domain) errors
                 if "not found" in str(e).lower():
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"One or more KGTypes not found: {str(e)}"
+                    return KGTypeDeleteResponse(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"One or more KGTypes not found: {str(e)}",
+                        deleted_count=0,
+                        deleted_uris=[],
                     )
                 else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Failed to delete KGTypes: {str(e)}"
+                    return KGTypeDeleteResponse(
+                        status=OperationStatus.STORE_FAILED,
+                        message=f"Failed to delete KGTypes: {str(e)}",
+                        deleted_count=0,
+                        deleted_uris=[],
                     )
         
         except HTTPException:
@@ -805,12 +866,12 @@ class KGTypesEndpoint:
         try:
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
 
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
 
             backend_adapter = create_backend_adapter(backend)
             rel_data = await self.kgtypes_read_processor.get_type_relationships(
@@ -821,7 +882,7 @@ class KGTypesEndpoint:
             )
 
             return KGTypeRelationshipsResponse(
-                success=True,
+                status=OperationStatus.FOUND,
                 message=f"Found {len(rel_data['edges'])} edges for type '{type_uri}'",
                 source_type=rel_data['source_type'],
                 edges=rel_data['edges'],
@@ -843,11 +904,11 @@ class KGTypesEndpoint:
         """Get backend adapter for a space, raising HTTPException on failure."""
         space_record = await self.space_manager.get_space_or_load(space_id)
         if not space_record:
-            raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+            raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
         space_impl = space_record.space_impl
         backend = space_impl.get_db_space_impl()
         if not backend:
-            raise HTTPException(status_code=500, detail="Backend implementation not available")
+            raise HTTPException(status_code=503, detail="Backend implementation not available")
         return create_backend_adapter(backend)
 
     # ── Relationship Create/Delete ─────────────────────────────────
@@ -864,7 +925,6 @@ class KGTypesEndpoint:
                 type_uri=type_uri, edge_type=edge_type, target_uri=target_uri,
             )
             return KGTypeRelationshipCreateResponse(
-                success=True,
                 message=f"Created {edge_type} edge from {type_uri} to {target_uri}",
                 edge_uri=result['edge_uri'],
                 edge_type=result['edge_type'],
@@ -872,7 +932,10 @@ class KGTypesEndpoint:
                 destination_uri=result['destination_uri'],
             )
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            return KGTypeRelationshipCreateResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=str(e),
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -891,9 +954,13 @@ class KGTypesEndpoint:
                 type_uri=type_uri, edge_uri=edge_uri,
             )
             if not deleted:
-                raise HTTPException(status_code=404, detail=f"Edge {edge_uri} not found or not associated with type {type_uri}")
+                return KGTypeRelationshipDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Edge {edge_uri} not found or not associated with type {type_uri}",
+                    deleted=False,
+                    edge_uri=edge_uri,
+                )
             return KGTypeRelationshipDeleteResponse(
-                success=True,
                 message=f"Deleted edge {edge_uri}",
                 deleted=True,
                 edge_uri=edge_uri,
@@ -917,7 +984,7 @@ class KGTypesEndpoint:
                 type_uri=type_uri,
             )
             return KGTypeDocumentationResponse(
-                success=True,
+                status=OperationStatus.FOUND if result['has_documentation'] else OperationStatus.EMPTY,
                 message="Documentation found" if result['has_documentation'] else "No documentation",
                 type_uri=result['type_uri'],
                 content=result.get('content'),
@@ -943,7 +1010,7 @@ class KGTypesEndpoint:
             )
             action = "Created" if result['created'] else "Updated"
             return KGTypeDocumentationUpdateResponse(
-                success=True,
+                status=OperationStatus.CREATED if result['created'] else OperationStatus.UPDATED,
                 message=f"{action} documentation for {type_uri}",
                 type_uri=result['type_uri'],
                 document_uri=result['document_uri'],
@@ -966,7 +1033,7 @@ class KGTypesEndpoint:
                 type_uri=type_uri,
             )
             return KGTypeDocumentationDeleteResponse(
-                success=True,
+                status=OperationStatus.DELETED if deleted else OperationStatus.NO_OP,
                 message="Documentation deleted" if deleted else "No documentation to delete",
                 type_uri=type_uri,
                 deleted=deleted,
@@ -1014,7 +1081,7 @@ class KGTypesEndpoint:
             )
 
             return KGTypeSearchResponse(
-                success=True,
+                status=OperationStatus.FOUND if result['total_count'] else OperationStatus.EMPTY,
                 message=f"Found {result['total_count']} types matching '{query}'",
                 types=result['types'],
                 count=result['count'],

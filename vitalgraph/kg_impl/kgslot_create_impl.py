@@ -20,6 +20,7 @@ from ai_haley_kg_domain.model.Edge_hasKGSlot import Edge_hasKGSlot
 
 # Model imports
 from ..model.kgframes_model import SlotCreateResponse, SlotUpdateResponse
+from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
@@ -135,6 +136,7 @@ class KGSlotCreateProcessor:
                 slot_uri = str(slot.URI)
                 if await self.backend.object_exists(space_id, graph_id, slot_uri):
                     return SlotCreateResponse(
+                        status=OperationStatus.ALREADY_EXISTS,
                         message=f"Slot {slot_uri} already exists - cannot create in 'create' mode",
                         created_count=0,
                         created_uris=[]
@@ -148,12 +150,14 @@ class KGSlotCreateProcessor:
             if result.success:
                 slot_uris = [str(slot.URI) for slot in slots]
                 return SlotCreateResponse(
+                    status=OperationStatus.CREATED,
                     message=f"Successfully created {len(slots)} slots",
                     created_count=len(slots),
                     created_uris=slot_uris
                 )
             else:
                 return SlotCreateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to store slots: {result.message}",
                     created_count=0,
                     created_uris=[]
@@ -162,6 +166,7 @@ class KGSlotCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in create mode: {e}")
             return SlotCreateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error creating slots: {str(e)}",
                 created_count=0,
                 created_uris=[]
@@ -176,6 +181,7 @@ class KGSlotCreateProcessor:
                 slot_uri = str(slot.URI)
                 if not await self.backend.object_exists(space_id, graph_id, slot_uri):
                     return SlotUpdateResponse(
+                        status=OperationStatus.NOT_FOUND,
                         message=f"Slot {slot_uri} not found - cannot update in 'update' mode",
                         updated_uri=""
                     )
@@ -191,11 +197,13 @@ class KGSlotCreateProcessor:
             if result.success:
                 slot_uri = str(slots[0].URI)
                 return SlotUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated slot: {slot_uri}",
                     updated_uri=slot_uri
                 )
             else:
                 return SlotUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update slot: {result.message}",
                     updated_uri=""
                 )
@@ -203,10 +211,11 @@ class KGSlotCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in update mode: {e}")
             return SlotUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error updating slot: {str(e)}",
                 updated_uri=""
             )
-    
+
     async def _handle_upsert_mode(self, space_id: str, graph_id: str,
                                 slots: List[KGSlot], objects: List[GraphObject]) -> SlotUpdateResponse:
         """Handle UPSERT mode: create if not exists, update if exists."""
@@ -234,11 +243,13 @@ class KGSlotCreateProcessor:
                 slot_uri = str(slots[0].URI)
                 action = "updated" if existing_slots else "created"
                 return SlotUpdateResponse(
+                    status=OperationStatus.UPSERTED,
                     message=f"Successfully {action} slot: {slot_uri}",
                     updated_uri=slot_uri
                 )
             else:
                 return SlotUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to upsert slot: {result.message}",
                     updated_uri=""
                 )
@@ -246,6 +257,7 @@ class KGSlotCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in upsert mode: {e}")
             return SlotUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error upserting slot: {str(e)}",
                 updated_uri=""
             )
@@ -287,12 +299,14 @@ class KGSlotCreateProcessor:
         """Create appropriate error response based on operation mode."""
         if operation_mode == OperationMode.CREATE:
             return SlotCreateResponse(
+                status=OperationStatus.ERROR,
                 message=message,
                 created_count=0,
                 created_uris=[]
             )
         else:  # UPDATE or UPSERT
             return SlotUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=message,
                 updated_uri=""
             )

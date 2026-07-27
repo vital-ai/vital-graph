@@ -32,6 +32,7 @@ from ..kg_impl.kgrelations_read_impl import KGRelationsReadProcessor
 from ..kg_impl.kgrelations_delete_impl import KGRelationsDeleteProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.model.result_status import OperationStatus
 from vitalgraph.utils.quad_format_utils import quad_list_to_graphobjects, graphobjects_to_quad_list
 from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from fastapi import Response as FastAPIResponse
@@ -106,7 +107,7 @@ class KGRelationsEndpoint:
                     relation_type_uri, direction, page_size, offset, current_user
                 )
         
-        @self.router.post("/kgrelations", response_model=Union[RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse], tags=["KG Relations"])
+        @self.router.post("/kgrelations", response_model=None, tags=["KG Relations"])
         async def create_or_update_relations(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),
@@ -178,12 +179,12 @@ class KGRelationsEndpoint:
             
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
             
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             backend = create_backend_adapter(backend_impl)
             read_processor = KGRelationsReadProcessor(backend)
@@ -224,12 +225,12 @@ class KGRelationsEndpoint:
             
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
             
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             backend = create_backend_adapter(backend_impl)
             read_processor = KGRelationsReadProcessor(backend)
@@ -258,6 +259,32 @@ class KGRelationsEndpoint:
                 detail=f"Failed to get KG Relation: {str(e)}"
             )
     
+    def _invalid_write_response(
+        self, operation_mode: OperationMode, message: str,
+    ) -> Union[RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse]:
+        """Build an INVALID_REQUEST write response matching the operation mode."""
+        if operation_mode == OperationMode.UPDATE:
+            return RelationUpdateResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=message,
+                updated_count=0,
+                updated_uris=[],
+            )
+        elif operation_mode == OperationMode.UPSERT:
+            return RelationUpsertResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=message,
+                created_count=0,
+                created_uris=[],
+            )
+        else:
+            return RelationCreateResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=message,
+                created_count=0,
+                created_uris=[],
+            )
+
     async def _create_or_update_relations(
         self, space_id: str, graph_id: str, quads: List[Quad],
         operation_mode: OperationMode, current_user: Dict,
@@ -268,22 +295,24 @@ class KGRelationsEndpoint:
 
             graph_objects = quad_list_to_graphobjects(quads)
             if not graph_objects:
-                raise HTTPException(status_code=400, detail="No valid objects found in request")
+                return self._invalid_write_response(
+                    operation_mode, "No valid objects found in request")
 
             # Validate that objects contain Edge instances (relations are edges)
             from vital_ai_vitalsigns.model.VITAL_Edge import VITAL_Edge
             edge_objects = [obj for obj in graph_objects if isinstance(obj, VITAL_Edge)]
             if not edge_objects:
-                raise HTTPException(status_code=400, detail="No valid Edge/relation objects found in request")
+                return self._invalid_write_response(
+                    operation_mode, "No valid Edge/relation objects found in request")
 
             # Get backend implementation
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             backend = create_backend_adapter(backend_impl)
 
             # Create processor
@@ -320,12 +349,12 @@ class KGRelationsEndpoint:
             # Get backend implementation
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
             
             space_impl = space_record.space_impl
             backend_impl = space_impl.get_db_space_impl()
             if not backend_impl:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             # Create backend adapter
             backend = create_backend_adapter(backend_impl)
@@ -353,12 +382,12 @@ class KGRelationsEndpoint:
             # Get backend implementation via generic interface
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(status_code=500, detail=f"Space {space_id} not available - server configuration error")
+                raise HTTPException(status_code=503, detail=f"Space {space_id} not available - server configuration error")
             
             space_impl = space_record.space_impl
             backend = space_impl.get_db_space_impl()
             if not backend:
-                raise HTTPException(status_code=500, detail="Backend implementation not available")
+                raise HTTPException(status_code=503, detail="Backend implementation not available")
             
             # Build SPARQL query from criteria
             sparql_query = self._build_query_relations_sparql(

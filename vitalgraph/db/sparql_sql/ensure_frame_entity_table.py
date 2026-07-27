@@ -8,9 +8,23 @@ Replaces the old frame_entity_mv materialized view.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _acquire_conn(conn, conn_params):
+    """Yield a usable connection for DDL/populate, reusing the caller's pooled
+    connection when provided.  Acquiring a SECOND pool connection while already
+    holding one deadlocks a small pool under concurrency (issue 019)."""
+    if conn is not None:
+        yield conn
+        return
+    from . import db_provider as db
+    async with db.get_connection(params=conn_params) as c:
+        yield c
 
 SLOT_TYPE_URI = "http://vital.ai/ontology/haley-ai-kg#hasKGSlotType"
 SLOT_VALUE_URI = "http://vital.ai/ontology/haley-ai-kg#hasEntitySlotValue"
@@ -59,7 +73,7 @@ async def ensure_frame_entity_table(space_id: str, conn=None, conn_params=None) 
 
         if not table_rows:
             logger.info("ensure_frame_entity_table(%s): creating table", space_id)
-            async with db.get_connection(params=conn_params) as c:
+            async with _acquire_conn(conn, conn_params) as c:
                 await c.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table_name} (
                         frame_uuid           UUID NOT NULL,
@@ -131,7 +145,7 @@ async def ensure_frame_entity_table(space_id: str, conn=None, conn_params=None) 
                 ))[1] IS NOT NULL
                 ON CONFLICT DO NOTHING
             """
-            async with db.get_connection(params=conn_params) as c:
+            async with _acquire_conn(conn, conn_params) as c:
                 await c.execute(populate_sql)
                 await c.execute(f"ANALYZE {table_name}")
 

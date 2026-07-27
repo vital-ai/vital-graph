@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .kgentities_model import EntityQueryCriteria, EntityPropertyFilter, FrameCriteria, SlotCriteria, SortCriteria, VectorSearchCriteria, MultiVectorSearchCriteria, GeoSearchCriteria, DocumentSearchCriteria
 from .api_model import BasePaginatedResponse
+from .result_status import ResultStatus, OperationStatus
 
 
 class KGQueryCriteria(BaseModel):
@@ -197,7 +198,7 @@ class DocumentQueryResponse(BasePaginatedResponse):
 
 # Optional: Statistics and utility models
 
-class KGQueryStatsResponse(BaseModel):
+class KGQueryStatsResponse(ResultStatus):
     """Response model for KG query statistics."""
     total_entities: int = Field(..., description="Total entities in graph")
     total_relations: int = Field(..., description="Total relations in graph")

@@ -31,6 +31,7 @@ from ..model.export_model import (
     ExportExecuteResponse,
     ExportStatusResponse,
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_admin
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,7 @@ class ExportEndpoint:
 
         row = await self.job_manager.get_job(job_id)
         return ExportCreateResponse(
+            status=OperationStatus.CREATED,
             message="Export job created",
             job_id=job_id,
             job=_row_to_export_job(row),
@@ -238,8 +240,16 @@ class ExportEndpoint:
     async def _get_export_job(self, job_id: str) -> ExportJobResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Export job {job_id} not found")
-        return ExportJobResponse(job=_row_to_export_job(row))
+            return ExportJobResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Export job {job_id} not found",
+                job=None,
+            )
+        return ExportJobResponse(
+            status=OperationStatus.FOUND,
+            message="Export job found",
+            job=_row_to_export_job(row),
+        )
 
     async def _delete_export_job(self, job_id: str) -> ExportDeleteResponse:
         # Clean up staged output file if it exists
@@ -252,8 +262,13 @@ class ExportEndpoint:
 
         deleted = await self.job_manager.delete_job(job_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail=f"Export job {job_id} not found")
+            return ExportDeleteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Export job {job_id} not found",
+                job_id=job_id,
+            )
         return ExportDeleteResponse(
+            status=OperationStatus.DELETED,
             message="Export job deleted",
             job_id=job_id,
         )
@@ -261,24 +276,34 @@ class ExportEndpoint:
     async def _execute_export_job(self, job_id: str) -> ExportExecuteResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Export job {job_id} not found")
+            return ExportExecuteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Export job {job_id} not found",
+                job_id=job_id,
+                execution_started=False,
+            )
 
         file_path = row.get("file_s3_key")
         if not file_path:
-            raise HTTPException(
-                status_code=400,
-                detail="Export job has no output path configured.",
+            return ExportExecuteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message="Export job has no output path configured.",
+                job_id=job_id,
+                execution_started=False,
             )
 
         started = await self.job_manager.start_job(job_id, file_path=file_path)
         if not started:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot start job (status={row['status']}, "
-                       f"or max concurrency reached)",
+            return ExportExecuteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Cannot start job (status={row['status']}, "
+                        f"or max concurrency reached)",
+                job_id=job_id,
+                execution_started=False,
             )
 
         return ExportExecuteResponse(
+            status=OperationStatus.OK,
             message="Export job execution started",
             job_id=job_id,
             execution_started=True,

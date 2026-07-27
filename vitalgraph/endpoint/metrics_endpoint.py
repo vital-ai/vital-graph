@@ -14,6 +14,13 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Query
 
+from ..model.metrics_model import (
+    MetricsResponse,
+    MetricsTotals,
+    SlowQueriesResponse,
+)
+from ..model.result_status import OperationStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,21 +37,21 @@ class MetricsEndpoint:
         self._setup_routes()
 
     def _setup_routes(self):
-        @self.router.get("/metrics")
+        @self.router.get("/metrics", response_model=MetricsResponse)
         async def get_space_metrics(
             space_id: str = Query(..., description="Space ID"),
             range: str = Query("realtime", description="Time range: realtime, 24h, 7d, 30d"),
         ):
             return await self.get_metrics(space_id, range)
 
-        @self.router.get("/metrics/slow")
+        @self.router.get("/metrics/slow", response_model=SlowQueriesResponse)
         async def get_slow_queries(
             space_id: str = Query(..., description="Space ID"),
             limit: int = Query(50, ge=1, le=100),
         ):
             return await self.get_slow_log(space_id, limit)
 
-    async def get_metrics(self, space_id: str, time_range: str) -> Dict[str, Any]:
+    async def get_metrics(self, space_id: str, time_range: str) -> MetricsResponse:
         """Get metrics for a space over a given time range.
 
         - 'realtime': last 60 minutes (per-minute granularity)
@@ -61,47 +68,53 @@ class MetricsEndpoint:
             minutes = 60 if time_range == 'realtime' else 1440
             data = await collector.get_realtime_series(space_id, minutes=minutes)
 
-            return {
-                "success": True,
-                "space_id": space_id,
-                "range": time_range,
-                "granularity": "minute",
-                "timestamps": [
+            return MetricsResponse(
+                status=OperationStatus.FOUND,
+                space_id=space_id,
+                range=time_range,
+                granularity="minute",
+                timestamps=[
                     datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
                     for ts in data["timestamps"]
                 ],
-                "series": data["series"],
-                "totals": data["totals"],
-            }
+                series=data["series"],
+                totals=MetricsTotals(**data["totals"]),
+            )
 
         elif time_range in ('7d', '30d'):
             days = 7 if time_range == '7d' else 30
             return await self._get_pg_metrics(space_id, time_range, days)
 
         else:
-            return {"success": False, "message": f"Invalid range: {time_range}"}
+            return MetricsResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Invalid range: {time_range}",
+                space_id=space_id,
+                range=time_range,
+                granularity="",
+            )
 
-    async def get_slow_log(self, space_id: str, limit: int) -> Dict[str, Any]:
+    async def get_slow_log(self, space_id: str, limit: int) -> SlowQueriesResponse:
         """Get recent slow queries from PostgreSQL."""
         collector = self._get_collector()
         if not collector:
-            return {
-                "success": True,
-                "space_id": space_id,
-                "slow_queries": [],
-                "message": "Metrics collection not enabled",
-            }
+            return SlowQueriesResponse(
+                status=OperationStatus.FOUND,
+                space_id=space_id,
+                slow_queries=[],
+                message="Metrics collection not enabled",
+            )
 
         entries = await collector.get_slow_log(space_id, limit=limit)
-        return {
-            "success": True,
-            "space_id": space_id,
-            "slow_queries": entries,
-        }
+        return SlowQueriesResponse(
+            status=OperationStatus.FOUND,
+            space_id=space_id,
+            slow_queries=entries,
+        )
 
     async def _get_pg_metrics(
         self, space_id: str, time_range: str, days: int
-    ) -> Dict[str, Any]:
+    ) -> MetricsResponse:
         """Read hourly metrics from PostgreSQL."""
         pool = self._get_pool()
         if not pool:
@@ -175,19 +188,19 @@ class MetricsEndpoint:
         all_avg = [v for d in series.values() for v in d["avg_ms"] if v > 0]
         avg_latency = int(sum(all_avg) / len(all_avg)) if all_avg else 0
 
-        return {
-            "success": True,
-            "space_id": space_id,
-            "range": time_range,
-            "granularity": "hour",
-            "timestamps": timestamps,
-            "series": series,
-            "totals": {
-                "total_requests": total_requests,
-                "total_errors": total_errors,
-                "avg_latency_ms": avg_latency,
-            },
-        }
+        return MetricsResponse(
+            status=OperationStatus.FOUND,
+            space_id=space_id,
+            range=time_range,
+            granularity="hour",
+            timestamps=timestamps,
+            series=series,
+            totals=MetricsTotals(
+                total_requests=total_requests,
+                total_errors=total_errors,
+                avg_latency_ms=avg_latency,
+            ),
+        )
 
     def _get_collector(self):
         """Get the PostgresMetricsCollector from the API instance."""
@@ -203,17 +216,13 @@ class MetricsEndpoint:
             return self.api._pool
         return None
 
-    def _empty_response(self, space_id: str, time_range: str) -> Dict[str, Any]:
-        return {
-            "success": True,
-            "space_id": space_id,
-            "range": time_range,
-            "granularity": "minute" if time_range in ('realtime', '24h') else "hour",
-            "timestamps": [],
-            "series": {},
-            "totals": {
-                "total_requests": 0,
-                "total_errors": 0,
-                "avg_latency_ms": 0,
-            },
-        }
+    def _empty_response(self, space_id: str, time_range: str) -> MetricsResponse:
+        return MetricsResponse(
+            status=OperationStatus.EMPTY,
+            space_id=space_id,
+            range=time_range,
+            granularity="minute" if time_range in ('realtime', '24h') else "hour",
+            timestamps=[],
+            series={},
+            totals=MetricsTotals(),
+        )

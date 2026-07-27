@@ -16,6 +16,7 @@ from ai_haley_kg_domain.model.Edge_hasKGRelation import Edge_hasKGRelation
 
 # Model imports
 from ..model.kgrelations_model import RelationCreateResponse, RelationUpdateResponse, RelationUpsertResponse
+from ..model.result_status import OperationStatus
 
 # Local imports
 from .kg_backend_utils import KGBackendInterface, BackendOperationResult
@@ -97,12 +98,14 @@ class KGRelationsCreateProcessor:
             if result.success:
                 relation_uris = [str(relation.URI) for relation in relations if hasattr(relation, 'URI')]
                 return RelationCreateResponse(
+                    status=OperationStatus.CREATED,
                     message=f"Successfully created {len(relations)} KG relations",
                     created_count=len(relations),
                     created_uris=relation_uris
                 )
             else:
                 return RelationCreateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to store relations: {result.message}",
                     created_count=0,
                     created_uris=[]
@@ -111,6 +114,7 @@ class KGRelationsCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in create mode: {e}")
             return RelationCreateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error creating relations: {str(e)}",
                 created_count=0,
                 created_uris=[]
@@ -132,11 +136,13 @@ class KGRelationsCreateProcessor:
                 # Return first relation URI as updated_uri (singular)
                 updated_uri = str(relations[0].URI) if relations and hasattr(relations[0], 'URI') else ""
                 return RelationUpdateResponse(
+                    status=OperationStatus.UPDATED,
                     message=f"Successfully updated {len(relations)} KG relations",
                     updated_uri=updated_uri
                 )
             else:
                 return RelationUpdateResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to update relations: {result.message}",
                     updated_uri=""
                 )
@@ -144,6 +150,7 @@ class KGRelationsCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in update mode: {e}")
             return RelationUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error updating relations: {str(e)}",
                 updated_uri=""
             )
@@ -165,12 +172,14 @@ class KGRelationsCreateProcessor:
             if result.success:
                 relation_uris = [str(relation.URI) for relation in relations if hasattr(relation, 'URI')]
                 return RelationUpsertResponse(
+                    status=OperationStatus.UPSERTED,
                     message=f"Successfully upserted {len(relations)} KG relations",
                     created_count=len(relations),
                     created_uris=relation_uris
                 )
             else:
                 return RelationUpsertResponse(
+                    status=OperationStatus.STORE_FAILED,
                     message=f"Failed to upsert relations: {result.message}",
                     created_count=0,
                     created_uris=[]
@@ -179,6 +188,7 @@ class KGRelationsCreateProcessor:
         except Exception as e:
             self.logger.error(f"Error in upsert mode: {e}")
             return RelationUpsertResponse(
+                status=OperationStatus.ERROR,
                 message=f"Error upserting relations: {str(e)}",
                 created_count=0,
                 created_uris=[]
@@ -242,18 +252,21 @@ class KGRelationsCreateProcessor:
         """Create an error response based on operation mode."""
         if operation_mode == OperationMode.CREATE:
             return RelationCreateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Failed to create relations: {error_message}",
                 created_count=0,
                 created_uris=[]
             )
         elif operation_mode == OperationMode.UPDATE:
             return RelationUpdateResponse(
+                status=OperationStatus.ERROR,
                 message=f"Failed to update relations: {error_message}",
                 updated_count=0,
                 updated_uris=[]
             )
         else:  # UPSERT
             return RelationUpsertResponse(
+                status=OperationStatus.ERROR,
                 message=f"Failed to upsert relations: {error_message}",
                 created_count=0,
                 created_uris=[]

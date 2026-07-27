@@ -14,8 +14,9 @@ from ..auth.role_dependencies import require_admin
 from ..auth.password import verify_password, hash_password
 from ..model.users_model import (
     User, UserCreate, UsersListResponse, UserCreateResponse, UserUpdateResponse, UserDeleteResponse,
-    PasswordChangeRequest, PasswordChangeResponse
+    PasswordChangeRequest, PasswordChangeResponse, UserSpaceAccessResponse
 )
+from ..model.result_status import OperationStatus
 
 
 class UsersEndpoint:
@@ -45,6 +46,7 @@ class UsersEndpoint:
             require_admin(current_user)
             users = await self.api.list_users(current_user, name_filter=name_filter)
             return UsersListResponse(
+                status=OperationStatus.FOUND,
                 users=users,
                 total_count=len(users),
                 page_size=len(users),
@@ -62,6 +64,7 @@ class UsersEndpoint:
             require_admin(current_user)
             created_user = await self.api.add_user(user.model_dump(), current_user)
             return UserCreateResponse(
+                status=OperationStatus.CREATED,
                 message="User created successfully",
                 created_count=1,
                 created_uris=[str(created_user.get('id', ''))]
@@ -96,7 +99,10 @@ class UsersEndpoint:
             require_admin(current_user)
             await self.api.update_user(user_id, user.model_dump(), current_user)
             return UserUpdateResponse(
+                status=OperationStatus.UPDATED,
                 message="User updated successfully",
+                updated_count=1,
+                updated_uris=[user_id],
                 updated_uri=user_id
             )
         
@@ -114,6 +120,7 @@ class UsersEndpoint:
             require_admin(current_user)
             await self.api.delete_user(user_id, current_user)
             return UserDeleteResponse(
+                status=OperationStatus.DELETED,
                 message="User deleted successfully",
                 deleted_count=1,
                 deleted_uris=[user_id]
@@ -121,6 +128,7 @@ class UsersEndpoint:
 
         @self.router.get(
             "/users/spaces",
+            response_model=UserSpaceAccessResponse,
             tags=["Users"],
             summary="Get User Space Access",
             description="Get space access map for a user (admin only)"
@@ -132,12 +140,21 @@ class UsersEndpoint:
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)
             if not user:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+                return UserSpaceAccessResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message="User not found",
+                    username=user_id,
+                )
             spaces = await self.api.db.get_user_spaces(user["user_id"])
-            return {"username": user_id, "spaces": spaces}
+            return UserSpaceAccessResponse(
+                status=OperationStatus.FOUND,
+                username=user_id,
+                spaces=spaces,
+            )
 
         @self.router.put(
             "/users/spaces",
+            response_model=UserSpaceAccessResponse,
             tags=["Users"],
             summary="Grant Space Access",
             description="Grant or update space access for a user (admin only)"
@@ -151,23 +168,45 @@ class UsersEndpoint:
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)
             if not user:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+                return UserSpaceAccessResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message="User not found",
+                    username=user_id,
+                    space_id=space_id,
+                )
             access_level = body.get("access_level", "r")
             if access_level not in ("rw", "r"):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="access_level must be 'rw' or 'r'")
+                return UserSpaceAccessResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="access_level must be 'rw' or 'r'",
+                    username=user_id,
+                    space_id=space_id,
+                )
             try:
                 await self.api.db.set_user_space_access(
                     user["user_id"], space_id, access_level,
                     granted_by=current_user.get("username")
                 )
             except ValueError as e:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+                return UserSpaceAccessResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=str(e),
+                    username=user_id,
+                    space_id=space_id,
+                )
             emit_audit_event("auth.space_access.granted", current_user.get("username", "system"),
                              target=user_id, space_id=space_id, level=access_level)
-            return {"message": f"Access '{access_level}' granted to '{user_id}' for space '{space_id}'"}
+            return UserSpaceAccessResponse(
+                status=OperationStatus.UPDATED,
+                message=f"Access '{access_level}' granted to '{user_id}' for space '{space_id}'",
+                username=user_id,
+                space_id=space_id,
+                access_level=access_level,
+            )
 
         @self.router.delete(
             "/users/spaces",
+            response_model=UserSpaceAccessResponse,
             tags=["Users"],
             summary="Revoke Space Access",
             description="Revoke a user's access to a specific space (admin only)"
@@ -180,11 +219,21 @@ class UsersEndpoint:
             require_admin(current_user)
             user = await self.api.db.get_user_by_username(user_id)
             if not user:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+                return UserSpaceAccessResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message="User not found",
+                    username=user_id,
+                    space_id=space_id,
+                )
             await self.api.db.revoke_user_space_access(user["user_id"], space_id)
             emit_audit_event("auth.space_access.revoked", current_user.get("username", "system"),
                              target=user_id, space_id=space_id)
-            return {"message": f"Access revoked for '{user_id}' on space '{space_id}'"}
+            return UserSpaceAccessResponse(
+                status=OperationStatus.DELETED,
+                message=f"Access revoked for '{user_id}' on space '{space_id}'",
+                username=user_id,
+                space_id=space_id,
+            )
 
         @self.router.post(
             "/me/password",
@@ -217,16 +266,20 @@ class UsersEndpoint:
             # Verify current password
             stored_hash = user.get("password_hash")
             if not stored_hash or not verify_password(body.current_password, stored_hash):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Current password is incorrect"
+                return PasswordChangeResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="Current password is incorrect",
+                    changed=False,
+                    tokens_invalidated=False,
                 )
 
             # Ensure new password differs from current
             if body.current_password == body.new_password:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="New password must differ from current password"
+                return PasswordChangeResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="New password must differ from current password",
+                    changed=False,
+                    tokens_invalidated=False,
                 )
 
             # Hash and store new password (also bumps token_version)
@@ -249,7 +302,12 @@ class UsersEndpoint:
             emit_audit_event("auth.password.changed", username,
                              target=username, changed_by="self")
             self.logger.info(f"Password changed for user '{username}' (self-service)")
-            return PasswordChangeResponse()
+            return PasswordChangeResponse(
+                status=OperationStatus.UPDATED,
+                message="Password changed successfully",
+                changed=True,
+                tokens_invalidated=True,
+            )
 
 
 def create_users_router(api, auth_dependency) -> APIRouter:

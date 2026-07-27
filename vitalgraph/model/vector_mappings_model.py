@@ -5,8 +5,14 @@ Pydantic request/response models for Vector Mappings endpoints.
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
 
-class MappingPropertyOut(BaseModel):
+
+class MappingPropertyOut(ResultStatus):
+    """A child property within a vector mapping (also the add-property response)."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/...)"
+    )
     property_id: int
     mapping_id: int
     property_uri: str
@@ -14,7 +20,10 @@ class MappingPropertyOut(BaseModel):
     ordinal: int = 0
 
 
-class MappingOut(BaseModel):
+class MappingOut(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/CREATED/UPDATED/...)"
+    )
     mapping_id: int
     mapping_type: str
     type_uri: Optional[str] = None
@@ -27,9 +36,20 @@ class MappingOut(BaseModel):
     properties: List[MappingPropertyOut] = []
 
 
-class MappingListResponse(BaseModel):
+class MappingListResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     mappings: List[MappingOut]
     total_count: int
+
+
+class DeleteResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NOT_FOUND/NO_OP/...)"
+    )
+    mapping_id: Optional[int] = None
+    property_id: Optional[int] = None
 
 
 class CreateMappingRequest(BaseModel):

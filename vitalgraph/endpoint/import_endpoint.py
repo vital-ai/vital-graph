@@ -33,6 +33,7 @@ from ..model.import_model import (
     ImportLogResponse,
     ImportUploadResponse,
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_admin
 
 logger = logging.getLogger(__name__)
@@ -195,6 +196,7 @@ class ImportEndpoint:
         )
         row = await self.job_manager.get_job(job_id)
         return ImportCreateResponse(
+            status=OperationStatus.CREATED,
             message="Import job created",
             job_id=job_id,
             job=_row_to_import_job(row),
@@ -222,14 +224,27 @@ class ImportEndpoint:
     async def _get_import_job(self, job_id: str) -> ImportJobResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Import job {job_id} not found")
-        return ImportJobResponse(job=_row_to_import_job(row))
+            return ImportJobResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Import job {job_id} not found",
+                job=None,
+            )
+        return ImportJobResponse(
+            status=OperationStatus.FOUND,
+            message="Import job found",
+            job=_row_to_import_job(row),
+        )
 
     async def _delete_import_job(self, job_id: str) -> ImportDeleteResponse:
         deleted = await self.job_manager.delete_job(job_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail=f"Import job {job_id} not found")
+            return ImportDeleteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Import job {job_id} not found",
+                job_id=job_id,
+            )
         return ImportDeleteResponse(
+            status=OperationStatus.DELETED,
             message="Import job deleted",
             job_id=job_id,
         )
@@ -239,11 +254,20 @@ class ImportEndpoint:
     ) -> ImportUploadResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Import job {job_id} not found")
+            return ImportUploadResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Import job {job_id} not found",
+                job_id=job_id,
+                filename="",
+                file_size=0,
+            )
         if row["status"] not in ("created", "failed", "cancelled"):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot upload to job in status '{row['status']}'",
+            return ImportUploadResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Cannot upload to job in status '{row['status']}'",
+                job_id=job_id,
+                filename="",
+                file_size=0,
             )
 
         # Stage file to a temp directory
@@ -271,6 +295,7 @@ class ImportEndpoint:
                      filename, file_size, job_id)
 
         return ImportUploadResponse(
+            status=OperationStatus.CREATED,
             message="File uploaded and staged",
             job_id=job_id,
             filename=filename,
@@ -280,24 +305,34 @@ class ImportEndpoint:
     async def _execute_import_job(self, job_id: str) -> ImportExecuteResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Import job {job_id} not found")
+            return ImportExecuteResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Import job {job_id} not found",
+                job_id=job_id,
+                execution_started=False,
+            )
 
         file_path = row.get("file_s3_key")  # staged local path
         if not file_path or not os.path.exists(file_path):
-            raise HTTPException(
-                status_code=400,
-                detail="No file uploaded. Use POST /import/{id}/upload first.",
+            return ImportExecuteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message="No file uploaded. Use POST /import/{id}/upload first.",
+                job_id=job_id,
+                execution_started=False,
             )
 
         started = await self.job_manager.start_job(job_id, file_path=file_path)
         if not started:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Cannot start job (status={row['status']}, "
-                       f"or max concurrency reached)",
+            return ImportExecuteResponse(
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Cannot start job (status={row['status']}, "
+                        f"or max concurrency reached)",
+                job_id=job_id,
+                execution_started=False,
             )
 
         return ImportExecuteResponse(
+            status=OperationStatus.OK,
             message="Import job execution started",
             job_id=job_id,
             execution_started=True,
@@ -321,11 +356,19 @@ class ImportEndpoint:
     async def _get_import_log(self, job_id: str) -> ImportLogResponse:
         row = await self.job_manager.get_job(job_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=f"Import job {job_id} not found")
+            return ImportLogResponse(
+                status=OperationStatus.NOT_FOUND,
+                message=f"Import job {job_id} not found",
+                job_id=job_id,
+                log_entries=[],
+                total_entries=0,
+            )
         log_entries = row.get("log_entries") or []
         if isinstance(log_entries, str):
             log_entries = json.loads(log_entries)
         return ImportLogResponse(
+            status=OperationStatus.FOUND,
+            message="Import job log found",
             job_id=str(row["job_id"]),
             log_entries=log_entries,
             total_entries=len(log_entries),

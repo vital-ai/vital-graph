@@ -89,6 +89,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentsListResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} KGDocuments",
                 documents=graph_objects,
                 count=pagination.get('total_count', len(graph_objects)),
@@ -140,6 +141,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
                 return build_success_response(
                     KGDocumentResponse,
                     status_code=200,
+                    status=response_data.get('status'),
                     message=f"Retrieved KGDocument: {uri}",
                     document=graph_objects[0],
                 )
@@ -196,6 +198,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentSegmentsResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Retrieved {len(graph_objects)} segments for {parent_uri}",
                 segments=graph_objects,
                 count=len(graph_objects),
@@ -262,6 +265,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentCreateResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Created {created_count} KGDocuments",
                 created=True,
                 created_count=created_count,
@@ -321,6 +325,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentUpdateResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Updated {updated_count} KGDocuments",
                 updated=True,
                 updated_count=updated_count,
@@ -374,6 +379,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentDeleteResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Deleted KGDocument: {uri}",
                 deleted=True,
                 deleted_count=response_data.get('total_count', 1),
@@ -426,6 +432,7 @@ class KGDocumentsEndpoint(BaseEndpoint):
             return build_success_response(
                 KGDocumentDeleteResponse,
                 status_code=200,
+                status=response_data.get('status'),
                 message=f"Deleted {len(deleted_uris)} KGDocuments",
                 deleted=True,
                 deleted_count=response_data.get('total_count', len(deleted_uris)),

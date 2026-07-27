@@ -14,6 +14,7 @@ from ..model.sparql_model import (
     SPARQLDeleteRequest,
     SPARQLDeleteResponse
 )
+from ..model.result_status import OperationStatus
 from ..auth.role_dependencies import require_space_write
 
 
@@ -90,9 +91,10 @@ class SPARQLDeleteEndpoint:
             # Validate space exists (with DB fallback on cache miss)
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return SPARQLDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
+                    error=f"Space '{space_id}' not found"
                 )
         
             space_impl = space_record.space_impl
@@ -115,24 +117,24 @@ class SPARQLDeleteEndpoint:
             
             if success:
                 return SPARQLDeleteResponse(
-                    success=True,
+                    status=OperationStatus.DELETED,
                     message="Delete executed successfully",
                     delete_time=delete_time
                 )
             else:
                 return SPARQLDeleteResponse(
-                    success=False,
+                    status=OperationStatus.STORE_FAILED,
                     message="Delete failed",
                     delete_time=delete_time,
                     error="Delete operation returned false"
                 )
-        
+
         except HTTPException:
             raise
         except Exception as e:
             self.logger.error(f"Error executing SPARQL delete: {e}")
             return SPARQLDeleteResponse(
-                success=False,
+                status=OperationStatus.ERROR,
                 message=f"SPARQL delete failed: {str(e)}",
                 error=str(e)
             )

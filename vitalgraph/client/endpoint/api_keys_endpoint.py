@@ -11,7 +11,7 @@ from .base_endpoint import BaseEndpoint
 from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
 from ...model.api_key_model import (
     ApiKeyCreateRequest, ApiKeyCreateResponse,
-    ApiKeyListResponse, ApiKeyInfo, ApiKeyDeleteResponse,
+    ApiKeyListResponse, ApiKeyInfo, ApiKeyDeleteResponse, ApiKeyGetResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,21 +66,23 @@ class ApiKeysClientEndpoint(BaseEndpoint):
             "GET", self._url(), ApiKeyListResponse, params=params,
         )
 
-    async def get_key(self, key_id: str) -> ApiKeyInfo:
+    async def get_key(self, key_id: str) -> Optional[ApiKeyInfo]:
         """Get metadata for a single API key.
 
         Args:
             key_id: Key ID
 
         Returns:
-            ApiKeyInfo with key metadata
+            ApiKeyInfo with key metadata, or None if the key was not found
+            (server returns a 200 ApiKeyGetResponse with status=not_found).
         """
         self._check_connection()
         validate_required_params(key_id=key_id)
         params = build_query_params(key_id=key_id)
-        return await self._make_typed_request(
-            "GET", self._url("/key"), ApiKeyInfo, params=params,
+        resp = await self._make_typed_request(
+            "GET", self._url("/key"), ApiKeyGetResponse, params=params,
         )
+        return resp.key
 
     async def revoke_key(self, key_id: str) -> ApiKeyDeleteResponse:
         """Revoke (delete) an API key.

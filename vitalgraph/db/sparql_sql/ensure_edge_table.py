@@ -7,6 +7,7 @@ The edge table is a regular table maintained by app-level sync
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,25 @@ EDGE_DEST_URI = "http://vital.ai/ontology/vital-core#hasEdgeDestination"
 
 # Module-level cache: space_id → bool
 _edge_table_ready: dict = {}    # True once table verified populated this process
+
+
+@asynccontextmanager
+async def _acquire_conn(conn, conn_params):
+    """Yield a usable connection for DDL/populate.
+
+    CRITICAL (issue 019 pool-deadlock): when the caller already holds a pooled
+    connection (``conn`` is not None), reuse it instead of acquiring a SECOND
+    connection from the pool.  Acquiring a second connection while holding one
+    deadlocks a small pool — with N concurrent callers each holding one and
+    each blocking to acquire another, the pool bleeds out and unrelated reads
+    stall.  Only acquire a fresh connection when the caller has none.
+    """
+    if conn is not None:
+        yield conn
+        return
+    from . import db_provider as db
+    async with db.get_connection(params=conn_params) as c:
+        yield c
 
 
 async def ensure_edge_table(space_id: str, conn=None, conn_params=None) -> bool:
@@ -47,7 +67,7 @@ async def ensure_edge_table(space_id: str, conn=None, conn_params=None) -> bool:
         if not table_rows:
             # Create the edge table + indexes
             logger.info("ensure_edge_table(%s): creating edge table", space_id)
-            async with db.get_connection(params=conn_params) as c:
+            async with _acquire_conn(conn, conn_params) as c:
                 await c.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table_name} (
                         edge_uuid        UUID NOT NULL,
@@ -95,7 +115,7 @@ async def ensure_edge_table(space_id: str, conn=None, conn_params=None) -> bool:
                 )
                 ON CONFLICT DO NOTHING
             """
-            async with db.get_connection(params=conn_params) as c:
+            async with _acquire_conn(conn, conn_params) as c:
                 await c.execute(populate_sql)
                 await c.execute(f"ANALYZE {table_name}")
 

@@ -5,8 +5,14 @@ Pydantic request/response models for Vector Indexes endpoints.
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from .result_status import ResultStatus, OperationStatus
+from .api_model import BasePaginatedResponse
 
-class VectorIndexOut(BaseModel):
+
+class VectorIndexOut(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.CREATED, description="Outcome discriminator (CREATED/ALREADY_EXISTS/...)"
+    )
     index_id: int
     index_name: str
     dimensions: int
@@ -19,9 +25,19 @@ class VectorIndexOut(BaseModel):
     embedding_count: Optional[int] = None
 
 
-class VectorIndexListResponse(BaseModel):
+class VectorIndexListResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/NOT_FOUND/...)"
+    )
     indexes: List[VectorIndexOut]
     total_count: int
+
+
+class VectorIndexDeleteResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.DELETED, description="Outcome discriminator (DELETED/NOT_FOUND/...)"
+    )
+    index_name: str
 
 
 class CreateVectorIndexRequest(BaseModel):
@@ -47,8 +63,10 @@ class ReindexRequest(BaseModel):
     batch_size: int = Field(100, ge=1, le=1000, description="Batch size for processing")
 
 
-class ReindexResponse(BaseModel):
-    message: str
+class ReindexResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.OK, description="Outcome discriminator (OK/NOT_FOUND/INVALID_REQUEST/...)"
+    )
     index_name: str
     job_id: Optional[str] = Field(None, description="Background job ID for status polling")
     subjects_processed: int = 0
@@ -75,8 +93,10 @@ class VectorUpsertRequest(BaseModel):
     vectors: List[VectorEntry] = Field(..., min_length=1, max_length=1000)
 
 
-class VectorUpsertResponse(BaseModel):
-    message: str
+class VectorUpsertResponse(ResultStatus):
+    status: OperationStatus = Field(
+        OperationStatus.UPSERTED, description="Outcome discriminator (UPSERTED/NOT_FOUND/PARTIAL/...)"
+    )
     upserted: int = 0
     errors: List[str] = []
 
@@ -90,11 +110,8 @@ class VectorGetOut(BaseModel):
     updated_time: Optional[str] = None
 
 
-class VectorGetResponse(BaseModel):
+class VectorGetResponse(BasePaginatedResponse):
     vectors: List[VectorGetOut]
-    total_count: int
-    page_size: int = 100
-    offset: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +133,10 @@ class ReindexJobStatus(BaseModel):
     completed_at: Optional[str] = None
 
 
-class ReindexJobListResponse(BaseModel):
+class ReindexJobListResponse(ResultStatus):
     """List of reindex job statuses."""
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/...)"
+    )
     jobs: List[ReindexJobStatus] = []
     total_count: int = 0

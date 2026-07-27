@@ -34,6 +34,7 @@ from ..model.kgdocuments_model import (
     SegmentationWorkerStatus,
 )
 from vitalgraph.model.quad_model import Quad, QuadRequest, QuadResponse, QuadResultsResponse
+from vitalgraph.model.result_status import OperationStatus
 from vitalgraph.utils.quad_format_utils import graphobjects_to_quad_list, quad_list_to_graphobjects
 from ..kg_impl.kgdocuments_read_impl import KGDocumentsReadProcessor
 from ..kg_impl.kg_backend_utils import create_backend_adapter
@@ -68,14 +69,14 @@ class KGDocumentsEndpoint:
     async def _get_backend(self, space_id: str):
         """Get backend adapter for a space."""
         if not self.space_manager:
-            raise HTTPException(status_code=500, detail="Space manager not available")
+            raise HTTPException(status_code=503, detail="Space manager not available")
         space_record = await self.space_manager.get_space_or_load(space_id)
         if not space_record:
-            raise HTTPException(status_code=500, detail=f"Space {space_id} not available")
+            raise HTTPException(status_code=503, detail=f"Space {space_id} not available")
         space_impl = space_record.space_impl
         backend = space_impl.get_db_space_impl()
         if not backend:
-            raise HTTPException(status_code=500, detail="Backend not available")
+            raise HTTPException(status_code=503, detail="Backend not available")
         return create_backend_adapter(backend), space_impl
 
     def _setup_routes(self):
@@ -430,7 +431,7 @@ class KGDocumentsEndpoint:
             )
             if job_id is not None:
                 return SegmentDocumentResponse(
-                    success=True,
+                    status=OperationStatus.CREATED,
                     message="Segmentation job enqueued",
                     document_uri=body.document_uri,
                     job_id=job_id,
@@ -440,7 +441,7 @@ class KGDocumentsEndpoint:
             # Job queue unavailable — return error instead of blocking with sync fallback
             logger.warning(f"Job queue unavailable for {body.document_uri}")
             return SegmentDocumentResponse(
-                success=False,
+                status=OperationStatus.ERROR,
                 message="Segmentation job queue unavailable; cannot process request",
                 document_uri=body.document_uri,
             )
@@ -448,7 +449,7 @@ class KGDocumentsEndpoint:
         except Exception as e:
             logger.error(f"Error segmenting document {body.document_uri}: {e}")
             return SegmentDocumentResponse(
-                success=False,
+                status=OperationStatus.ERROR,
                 message=f"Segmentation failed: {str(e)}",
                 document_uri=body.document_uri,
             )
@@ -467,20 +468,20 @@ class KGDocumentsEndpoint:
         space_manager = self.space_manager
         if not space_manager:
             return SegmentDocumentResponse(
-                success=False, message="Space manager not available"
+                status=OperationStatus.ERROR, message="Space manager not available"
             )
 
         space_record = await space_manager.get_space_or_load(space_id)
         if not space_record:
             return SegmentDocumentResponse(
-                success=False, message=f"Space {space_id} not found"
+                status=OperationStatus.NOT_FOUND, message=f"Space {space_id} not found"
             )
 
         space_impl = space_record.space_impl
         backend_impl = space_impl.get_db_space_impl()
         if not backend_impl:
             return SegmentDocumentResponse(
-                success=False, message="Backend not available"
+                status=OperationStatus.ERROR, message="Backend not available"
             )
 
         # Fetch original document properties
@@ -489,7 +490,7 @@ class KGDocumentsEndpoint:
         )
         if doc_properties is None:
             return SegmentDocumentResponse(
-                success=False,
+                status=OperationStatus.NOT_FOUND,
                 message=f"Document {body.document_uri} not found",
                 document_uri=body.document_uri,
             )
@@ -549,7 +550,7 @@ class KGDocumentsEndpoint:
         )
 
         return SegmentDocumentResponse(
-            success=True,
+            status=OperationStatus.CREATED,
             message=f"Created {output.segment_count} segments",
             document_uri=document_uri,
             parent_copy_uri=output.parent_copy_properties["URI"],
@@ -822,7 +823,7 @@ class KGDocumentsEndpoint:
             config = await manager.get_config(config_id)
             if not config:
                 raise HTTPException(status_code=500, detail="Failed to retrieve created config")
-            return self._dto_to_response(config)
+            return self._dto_to_response(config, status=OperationStatus.CREATED)
         finally:
             if pool and conn:
                 await pool.release(conn)
@@ -844,8 +845,14 @@ class KGDocumentsEndpoint:
 
             config = await manager.get_config(config_id)
             if not config:
-                raise HTTPException(status_code=404, detail="Config not found")
-            return self._dto_to_response(config)
+                return SegmentationConfigResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Segmentation config {config_id} not found",
+                    config_id=config_id,
+                    document_type_uri=body.document_type_uri,
+                    segment_method_uri=body.segment_method_uri,
+                )
+            return self._dto_to_response(config, status=OperationStatus.UPDATED)
         finally:
             if pool and conn:
                 await pool.release(conn)
@@ -856,8 +863,14 @@ class KGDocumentsEndpoint:
         try:
             deleted = await manager.delete_config(config_id)
             if not deleted:
-                raise HTTPException(status_code=404, detail="Config not found")
-            return {"success": True, "message": f"Deleted config {config_id}"}
+                return {
+                    "status": OperationStatus.NOT_FOUND.value,
+                    "message": f"Segmentation config {config_id} not found",
+                }
+            return {
+                "status": OperationStatus.DELETED.value,
+                "message": f"Deleted config {config_id}",
+            }
         finally:
             if pool and conn:
                 await pool.release(conn)
@@ -930,9 +943,12 @@ class KGDocumentsEndpoint:
         return None, None
 
     @staticmethod
-    def _dto_to_response(dto) -> SegmentationConfigResponse:
+    def _dto_to_response(
+        dto, status: OperationStatus = OperationStatus.OK
+    ) -> SegmentationConfigResponse:
         """Convert DTO to response model."""
         return SegmentationConfigResponse(
+            status=status,
             config_id=dto.config_id,
             document_type_uri=dto.document_type_uri,
             segment_method_uri=dto.segment_method_uri,
@@ -977,6 +993,7 @@ class KGDocumentsEndpoint:
                 )
                 if not graph_objects:
                     return QuadResultsResponse(
+                        status=OperationStatus.NOT_FOUND,
                         message=f"KGDocument '{uri}' not found",
                         total_count=0,
                         results=[],
@@ -993,6 +1010,7 @@ class KGDocumentsEndpoint:
             )
             if not graph_object:
                 return QuadResultsResponse(
+                    status=OperationStatus.NOT_FOUND,
                     message=f"KGDocument '{uri}' not found",
                     total_count=0,
                     results=[],
@@ -1042,7 +1060,13 @@ class KGDocumentsEndpoint:
         """Create KGDocument(s) from quad payload, with write protection for managed segments."""
         try:
             # Check for managed segment types in incoming quads
-            self._check_write_protection(quads)
+            protection_error = self._check_write_protection(quads)
+            if protection_error:
+                return QuadResultsResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=protection_error,
+                    total_count=0, results=[],
+                )
 
             backend_adapter, space_impl = await self._get_backend(space_id)
 
@@ -1050,7 +1074,8 @@ class KGDocumentsEndpoint:
             graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             if not graph_objects:
                 return QuadResultsResponse(
-                    success=False, message="No valid objects in payload",
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid objects in payload",
                     total_count=0, results=[],
                 )
 
@@ -1064,7 +1089,7 @@ class KGDocumentsEndpoint:
             self._schedule_auto_sync(space_impl, space_id, graph_id, created_uris, "upsert")
 
             return QuadResultsResponse(
-                success=True,
+                status=OperationStatus.CREATED,
                 message=f"Created {len(graph_objects)} KGDocument(s)",
                 total_count=len(graph_objects),
                 results=quads,
@@ -1079,7 +1104,13 @@ class KGDocumentsEndpoint:
         """Update KGDocument(s) from quad payload, with write protection for managed segments."""
         try:
             # Check for managed segment types in incoming quads
-            self._check_write_protection(quads)
+            protection_error = self._check_write_protection(quads)
+            if protection_error:
+                return QuadResultsResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message=protection_error,
+                    total_count=0, results=[],
+                )
 
             backend_adapter, space_impl = await self._get_backend(space_id)
 
@@ -1087,7 +1118,8 @@ class KGDocumentsEndpoint:
             graph_objects = await asyncio.to_thread(quad_list_to_graphobjects, quads)
             if not graph_objects:
                 return QuadResultsResponse(
-                    success=False, message="No valid objects in payload",
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No valid objects in payload",
                     total_count=0, results=[],
                 )
 
@@ -1116,7 +1148,7 @@ class KGDocumentsEndpoint:
             self._schedule_auto_sync(space_impl, space_id, graph_id, updated_uris, "upsert")
 
             return QuadResultsResponse(
-                success=True,
+                status=OperationStatus.UPDATED,
                 message=f"Updated {len(updated_uris)} KGDocument(s)",
                 total_count=len(updated_uris),
                 results=quads,
@@ -1141,14 +1173,26 @@ class KGDocumentsEndpoint:
                 uris_to_delete.extend([u.strip() for u in uri_list.split(",") if u.strip()])
 
             if not uris_to_delete:
-                raise HTTPException(status_code=400, detail="No URIs provided for deletion")
+                return QuadResultsResponse(
+                    status=OperationStatus.INVALID_REQUEST,
+                    message="No URIs provided for deletion",
+                    total_count=0, results=[],
+                )
 
             backend_adapter, space_impl = await self._get_backend(space_id)
 
             deleted_count = 0
             for doc_uri in uris_to_delete:
                 # Check write protection: don't allow deleting managed segments directly
-                await self._check_delete_protection(backend_adapter, space_id, graph_id, doc_uri)
+                protection_error = await self._check_delete_protection(
+                    backend_adapter, space_id, graph_id, doc_uri
+                )
+                if protection_error:
+                    return QuadResultsResponse(
+                        status=OperationStatus.INVALID_REQUEST,
+                        message=protection_error,
+                        total_count=0, results=[],
+                    )
 
                 # Delete the document itself
                 await backend_adapter.delete_object(space_id, graph_id, doc_uri)
@@ -1162,7 +1206,7 @@ class KGDocumentsEndpoint:
             self._schedule_auto_sync(space_impl, space_id, graph_id, uris_to_delete, "delete")
 
             return QuadResultsResponse(
-                success=True,
+                status=OperationStatus.DELETED,
                 message=f"Deleted {deleted_count} KGDocument(s) with cascade",
                 total_count=deleted_count,
                 results=[],
@@ -1197,30 +1241,36 @@ class KGDocumentsEndpoint:
     # Write protection helpers
     # ------------------------------------------------------------------
 
-    def _check_write_protection(self, quads: List[Quad]) -> None:
-        """Reject writes that target managed segment/parent objects."""
+    def _check_write_protection(self, quads: List[Quad]) -> Optional[str]:
+        """Reject writes that target managed segment/parent objects.
+
+        Returns an error message (domain validation failure) or None if OK.
+        """
         for q in quads:
             # Check if any quad sets a managed segment type
             pred = q.p.strip("<>") if q.p.startswith("<") else q.p
             obj_val = q.o.strip('"').split('"')[0] if q.o.startswith('"') else q.o.strip("<>")
             if pred == self._HAS_SEGMENT_TYPE_PRED and obj_val in self._MANAGED_SEGMENT_TYPES:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot directly create/modify segmentation-managed documents. "
-                           "Update the original document instead.",
+                return (
+                    "Cannot directly create/modify segmentation-managed documents. "
+                    "Update the original document instead."
                 )
+        return None
 
     async def _check_delete_protection(
         self, backend_adapter, space_id: str, graph_id: str, uri: str
-    ) -> None:
-        """Check if a URI is a managed segment (reject direct deletion)."""
+    ) -> Optional[str]:
+        """Check if a URI is a managed segment (reject direct deletion).
+
+        Returns an error message (domain validation failure) or None if OK.
+        """
         # Fast-path: URI pattern check
         if "_parent_" in uri or "_seg_" in uri:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot directly delete managed segment '{uri}'. "
-                       "Delete the original document to cascade.",
+            return (
+                f"Cannot directly delete managed segment '{uri}'. "
+                "Delete the original document to cascade."
             )
+        return None
 
     async def _cascade_delete_segments(
         self, backend_adapter, space_id: str, graph_id: str, original_uri: str

@@ -2,6 +2,18 @@ import { BaseEndpoint } from './BaseEndpoint.js';
 import { validateRequired } from '../utils/params.js';
 import type { VitalGraphResponse } from '../response/types.js';
 
+/** A registry data record (entity, location, relationship, …). Shape is
+ *  domain-specific and validated server-side, so it is left open here. */
+export type RegistryRecord = Record<string, unknown>;
+
+/**
+ * Server envelope for registry routes that wrap their payload in a named data
+ * field. HTTP is always 200; success/failure is read from `status`/`success`
+ * and the data field is null on failure.
+ */
+type RegistryEnvelope<K extends string> = VitalGraphResponse &
+  Partial<Record<K, RegistryRecord | null>>;
+
 export interface SearchEntitiesOptions {
   query?: string;
   typeKey?: string;
@@ -67,11 +79,12 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return this.request('POST', '/api/registry/entities', { json: data });
   }
 
-  async getEntity(entityId: string): Promise<VitalGraphResponse> {
+  async getEntity(entityId: string): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('GET', '/api/registry/entities/get', {
+    const body = await this.request<RegistryEnvelope<'entity'>>('GET', '/api/registry/entities/get', {
       params: { entity_id: entityId },
     });
+    return body.entity ?? null;
   }
 
   async searchEntities(options: SearchEntitiesOptions = {}): Promise<VitalGraphResponse> {
@@ -88,12 +101,13 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async updateEntity(entityId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+  async updateEntity(entityId: string, data: Record<string, unknown>): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('PUT', '/api/registry/entities/update', {
+    const body = await this.request<RegistryEnvelope<'entity'>>('PUT', '/api/registry/entities/update', {
       params: { entity_id: entityId },
       json: data,
     });
+    return body.entity ?? null;
   }
 
   async deleteEntity(entityId: string): Promise<VitalGraphResponse> {
@@ -107,12 +121,13 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Identifiers
   // ------------------------------------------------------------------
 
-  async addIdentifier(entityId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+  async addIdentifier(entityId: string, data: Record<string, unknown>): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('POST', '/api/registry/identifiers/add', {
+    const body = await this.request<RegistryEnvelope<'identifier'>>('POST', '/api/registry/identifiers/add', {
       params: { entity_id: entityId },
       json: data,
     });
+    return body.identifier ?? null;
   }
 
   async listIdentifiers(entityId: string): Promise<VitalGraphResponse> {
@@ -128,23 +143,26 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async lookupByIdentifier(namespace: string, value: string): Promise<VitalGraphResponse> {
+  async lookupByIdentifier(namespace: string, value: string): Promise<RegistryRecord[]> {
     validateRequired({ namespace, value });
-    return this.request('GET', '/api/registry/identifiers/lookup', {
-      params: { namespace, value },
-    });
+    const body = await this.request<VitalGraphResponse & { entities?: RegistryRecord[] }>(
+      'GET', '/api/registry/identifiers/lookup', {
+        params: { namespace, value },
+      });
+    return body.entities ?? [];
   }
 
   // ------------------------------------------------------------------
   // Aliases
   // ------------------------------------------------------------------
 
-  async addAlias(entityId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+  async addAlias(entityId: string, data: Record<string, unknown>): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('POST', '/api/registry/aliases/add', {
+    const body = await this.request<RegistryEnvelope<'alias'>>('POST', '/api/registry/aliases/add', {
       params: { entity_id: entityId },
       json: data,
     });
+    return body.alias ?? null;
   }
 
   async listAliases(entityId: string): Promise<VitalGraphResponse> {
@@ -179,12 +197,13 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async addEntityCategory(entityId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+  async addEntityCategory(entityId: string, data: Record<string, unknown>): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('POST', '/api/registry/categories/assign', {
+    const body = await this.request<RegistryEnvelope<'entity_category'>>('POST', '/api/registry/categories/assign', {
       params: { entity_id: entityId },
       json: data,
     });
+    return body.entity_category ?? null;
   }
 
   async removeEntityCategory(entityId: string, categoryKey: string): Promise<VitalGraphResponse> {
@@ -217,18 +236,20 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Locations
   // ------------------------------------------------------------------
 
-  async createLocation(entityId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
+  async createLocation(entityId: string, data: Record<string, unknown>): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('POST', '/api/registry/locations/add', {
+    const body = await this.request<RegistryEnvelope<'location'>>('POST', '/api/registry/locations/add', {
       params: { entity_id: entityId },
       json: data,
     });
+    return body.location ?? null;
   }
 
-  async getLocation(locationId: number): Promise<VitalGraphResponse> {
-    return this.request('GET', '/api/registry/locations/get', {
+  async getLocation(locationId: number): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'location'>>('GET', '/api/registry/locations/get', {
       params: { location_id: locationId },
     });
+    return body.location ?? null;
   }
 
   async listLocations(entityId: string, includeExpired = false): Promise<VitalGraphResponse> {
@@ -238,11 +259,12 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async updateLocation(locationId: number, data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('PUT', '/api/registry/locations/update', {
+  async updateLocation(locationId: number, data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'location'>>('PUT', '/api/registry/locations/update', {
       params: { location_id: locationId },
       json: data,
     });
+    return body.location ?? null;
   }
 
   async removeLocation(locationId: number): Promise<VitalGraphResponse> {
@@ -255,11 +277,12 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Location Categories
   // ------------------------------------------------------------------
 
-  async addLocationCategory(locationId: number, data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('POST', '/api/registry/locations/categories/assign', {
+  async addLocationCategory(locationId: number, data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'location_category'>>('POST', '/api/registry/locations/categories/assign', {
       params: { location_id: locationId },
       json: data,
     });
+    return body.location_category ?? null;
   }
 
   async removeLocationCategory(locationId: number, categoryKey: string): Promise<VitalGraphResponse> {
@@ -290,14 +313,16 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Relationships
   // ------------------------------------------------------------------
 
-  async createRelationship(data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('POST', '/api/registry/relationships', { json: data });
+  async createRelationship(data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'relationship'>>('POST', '/api/registry/relationships', { json: data });
+    return body.relationship ?? null;
   }
 
-  async getRelationship(relationshipId: number): Promise<VitalGraphResponse> {
-    return this.request('GET', '/api/registry/relationships/get', {
+  async getRelationship(relationshipId: number): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'relationship'>>('GET', '/api/registry/relationships/get', {
       params: { relationship_id: relationshipId },
     });
+    return body.relationship ?? null;
   }
 
   async listRelationships(entityId: string, direction = 'both', includeExpired = false): Promise<VitalGraphResponse> {
@@ -307,11 +332,12 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async updateRelationship(relationshipId: number, data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('PUT', '/api/registry/relationships/update', {
+  async updateRelationship(relationshipId: number, data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'relationship'>>('PUT', '/api/registry/relationships/update', {
       params: { relationship_id: relationshipId },
       json: data,
     });
+    return body.relationship ?? null;
   }
 
   async removeRelationship(relationshipId: number): Promise<VitalGraphResponse> {
@@ -324,8 +350,9 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Same-As
   // ------------------------------------------------------------------
 
-  async createSameAs(data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('POST', '/api/registry/sameas', { json: data });
+  async createSameAs(data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'same_as'>>('POST', '/api/registry/sameas', { json: data });
+    return body.same_as ?? null;
   }
 
   async getSameAs(entityId: string): Promise<VitalGraphResponse> {
@@ -335,18 +362,20 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async retractSameAs(sameAsId: number, data: Record<string, unknown>): Promise<VitalGraphResponse> {
-    return this.request('PUT', '/api/registry/sameas/retract', {
+  async retractSameAs(sameAsId: number, data: Record<string, unknown>): Promise<RegistryRecord | null> {
+    const body = await this.request<RegistryEnvelope<'same_as'>>('PUT', '/api/registry/sameas/retract', {
       params: { same_as_id: sameAsId },
       json: data,
     });
+    return body.same_as ?? null;
   }
 
-  async resolveEntity(entityId: string): Promise<VitalGraphResponse> {
+  async resolveEntity(entityId: string): Promise<RegistryRecord | null> {
     validateRequired({ entity_id: entityId });
-    return this.request('GET', '/api/registry/sameas/resolve', {
+    const body = await this.request<RegistryEnvelope<'entity'>>('GET', '/api/registry/sameas/resolve', {
       params: { entity_id: entityId },
     });
+    return body.entity ?? null;
   }
 
   // ------------------------------------------------------------------
@@ -371,14 +400,16 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   async listMetadata(
     kind: string,
     opts: { includeInactive?: boolean; includeUsage?: boolean; q?: string } = {},
-  ): Promise<VitalGraphResponse> {
-    return this.request('GET', `/api/registry/metadata/${kind}`, {
-      params: {
-        include_inactive: opts.includeInactive || undefined,
-        include_usage: opts.includeUsage || undefined,
-        q: opts.q,
-      },
-    });
+  ): Promise<RegistryRecord[]> {
+    const body = await this.request<VitalGraphResponse & { items?: RegistryRecord[] }>(
+      'GET', `/api/registry/metadata/${kind}`, {
+        params: {
+          include_inactive: opts.includeInactive || undefined,
+          include_usage: opts.includeUsage || undefined,
+          q: opts.q,
+        },
+      });
+    return body.items ?? [];
   }
 
   async getMetadata(kind: string, key: string): Promise<VitalGraphResponse> {
