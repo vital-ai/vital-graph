@@ -39,6 +39,7 @@ if env_path.exists():
     load_dotenv(env_path)
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
+from vitalgraph.model.result_status import OperationStatus
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -193,8 +194,9 @@ class QueryTestRunner:
     async def test_get_entity_basic(self):
         logger.info("\n--- Get Entity (basic fields) ---")
         try:
-            e = await self.reg.get_entity(ACES_DENTAL)
-            self._report("Get by ID", e.entity_id == ACES_DENTAL)
+            env = await self.reg.get_entity(ACES_DENTAL)
+            e = env.entity
+            self._report("Get by ID", e is not None and e.entity_id == ACES_DENTAL)
             self._report("Has primary_name", e.primary_name == 'Aces Dental, P.C.')
             self._report("Has entity_uri", e.entity_uri is not None and e.entity_uri.startswith('urn:entity:'))
             self._report("Type key is business_entity", e.type_key == 'business_entity')
@@ -212,7 +214,8 @@ class QueryTestRunner:
     async def test_get_entity_with_alias(self):
         logger.info("\n--- Get Entity (aliases + identifiers inline) ---")
         try:
-            e = await self.reg.get_entity(ACES_DENTAL)
+            env = await self.reg.get_entity(ACES_DENTAL)
+            e = env.entity
             self._report("Has aliases list", e.aliases is not None and len(e.aliases) >= 1,
                          f"count={len(e.aliases) if e.aliases else 0}")
             if e.aliases:
@@ -236,8 +239,8 @@ class QueryTestRunner:
     async def test_identifiers_lookup(self):
         logger.info("\n--- Identifier Lookup (SF_ACCOUNT_ID) ---")
         try:
-            results = await self.reg.lookup_by_identifier(
-                'SF_ACCOUNT_ID', '0018b00002MhtCzAAJ')
+            results = (await self.reg.lookup_by_identifier(
+                'SF_ACCOUNT_ID', '0018b00002MhtCzAAJ')).entities
             found_ids = [e.entity_id for e in results]
             self._report("Lookup SF_ACCOUNT_ID finds Aces Dental",
                          ACES_DENTAL in found_ids,
@@ -249,7 +252,7 @@ class QueryTestRunner:
         logger.info("\n--- Identifier Lookup (EIN) ---")
         try:
             # Uprising Agency has EIN 87-1490780
-            results = await self.reg.lookup_by_identifier('EIN', '87-1490780')
+            results = (await self.reg.lookup_by_identifier('EIN', '87-1490780')).entities
             found_ids = [e.entity_id for e in results]
             self._report("Lookup EIN finds Uprising Agency",
                          UPRISING_AGENCY in found_ids,
@@ -261,8 +264,8 @@ class QueryTestRunner:
         logger.info("\n--- Identifier Lookup (EMAIL) ---")
         try:
             # Nina Anderson has EMAIL hello@thegroomhaus.com
-            results = await self.reg.lookup_by_identifier(
-                'EMAIL', 'hello@thegroomhaus.com')
+            results = (await self.reg.lookup_by_identifier(
+                'EMAIL', 'hello@thegroomhaus.com')).entities
             found_ids = [e.entity_id for e in results]
             self._report("Lookup EMAIL finds Nina Anderson",
                          NINA_ANDERSON in found_ids,
@@ -318,10 +321,10 @@ class QueryTestRunner:
     async def test_category_filter(self):
         logger.info("\n--- List Entities by Category ---")
         try:
-            entities = await self.reg.list_entities_by_category('customer')
-            self._report("Customer category has entities", len(entities) > 0,
-                         f"count={len(entities)}")
-            customer_ids = [e.entity_id for e in entities]
+            result = await self.reg.list_entities_by_category('customer')
+            self._report("Customer category has entities", result.total_count > 0,
+                         f"count={len(result.entities)} total={result.total_count}")
+            customer_ids = [e.entity_id for e in result.entities]
             self._report("Aces Dental in customer list",
                          ACES_DENTAL in customer_ids)
         except Exception as ex:
@@ -813,12 +816,12 @@ class QueryTestRunner:
                          f"count={original_count}")
 
             if locs:
-                loc0 = await self.reg.get_location(locs[0].location_id)
+                loc0 = (await self.reg.get_location(locs[0].location_id)).location
                 self._report("Get location by ID", loc0 is not None)
-                self._report("Location has latitude", loc0.latitude is not None)
+                self._report("Location has latitude", loc0 is not None and loc0.latitude is not None)
 
             # Create a test location
-            new_loc = await self.reg.create_location(
+            new_loc = (await self.reg.create_location(
                 ACES_DENTAL,
                 LocationCreateRequest(
                     location_type_key='branch',
@@ -831,16 +834,17 @@ class QueryTestRunner:
                     postal_code='10001',
                     latitude=40.7484,
                     longitude=-73.9967,
-                ))
-            self._report("Create location", new_loc.location_id > 0,
-                         f"id={new_loc.location_id}")
+                ))).location
+            self._report("Create location", new_loc is not None and new_loc.location_id > 0,
+                         f"id={new_loc.location_id if new_loc else None}")
 
             # Update it
-            updated = await self.reg.update_location(
+            updated = (await self.reg.update_location(
                 new_loc.location_id,
-                LocationUpdateRequest(location_name='Aces Dental Manhattan (Updated)'))
+                LocationUpdateRequest(location_name='Aces Dental Manhattan (Updated)'))).location
             self._report("Update location name",
-                         updated.location_name == 'Aces Dental Manhattan (Updated)')
+                         updated is not None
+                         and updated.location_name == 'Aces Dental Manhattan (Updated)')
 
             # Remove it
             await self.reg.remove_location(new_loc.location_id)
@@ -859,12 +863,18 @@ class QueryTestRunner:
     async def test_error_cases(self):
         logger.info("\n--- Error Cases ---")
         try:
-            await self.reg.get_entity('ent_nonexistent_xyz')
-            self._report("Get non-existent entity raises error", False, "Should have raised")
+            # Domain outcomes come back as HTTP 200 with the outcome in the
+            # envelope — a missing entity is NOT_FOUND with entity=None,
+            # not a raised error.
+            env = await self.reg.get_entity('ent_nonexistent_xyz')
+            self._report("Get non-existent entity returns NOT_FOUND",
+                         env.status == OperationStatus.NOT_FOUND,
+                         f"status={env.status}")
+            self._report("Get non-existent entity has no entity",
+                         env.entity is None)
         except Exception as e:
-            self._report("Get non-existent entity raises error",
-                         '404' in str(e) or 'not found' in str(e).lower(),
-                         str(e)[:80])
+            self._report("Get non-existent entity returns NOT_FOUND", False,
+                         f"raised instead: {str(e)[:80]}")
 
 
 async def main():

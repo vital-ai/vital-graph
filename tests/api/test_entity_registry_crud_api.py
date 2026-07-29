@@ -254,11 +254,12 @@ class TestCategories:
 
     async def test_list_entities_by_category(self, vg_client):
         """List entities belonging to our test category."""
-        entities = await vg_client.entity_registry.list_entities_by_category(
+        result = await vg_client.entity_registry.list_entities_by_category(
             TestCategories._key,
         )
-        assert isinstance(entities, list)
-        assert any(e.entity_id == TestEntityCrud._shared_id for e in entities)
+        assert isinstance(result.entities, list)
+        assert result.total_count >= 1
+        assert any(e.entity_id == TestEntityCrud._shared_id for e in result.entities)
 
     async def test_remove_entity_category(self, vg_client):
         """Remove category from entity and verify."""

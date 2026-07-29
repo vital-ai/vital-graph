@@ -24,6 +24,11 @@ export interface SearchEntitiesOptions {
   pageSize?: number;
 }
 
+export interface ListEntitiesByCategoryOptions {
+  page?: number;
+  pageSize?: number;
+}
+
 export interface SearchEntityOptions {
   q?: string;
   identifierValue?: string;
@@ -213,10 +218,23 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async listEntitiesByCategory(categoryKey: string): Promise<VitalGraphResponse> {
+  /**
+   * List entities in a category. Paginated — the response carries
+   * `entities`, `total_count`, `page` and `page_size`.
+   *
+   * `page_size` is capped at 100 server-side; larger values are rejected.
+   */
+  async listEntitiesByCategory(
+    categoryKey: string,
+    options: ListEntitiesByCategoryOptions = {},
+  ): Promise<VitalGraphResponse> {
     validateRequired({ category_key: categoryKey });
     return this.request('GET', '/api/registry/categories/entities', {
-      params: { category_key: categoryKey },
+      params: {
+        category_key: categoryKey,
+        page: options.page ?? 1,
+        page_size: options.pageSize ?? 20,
+      },
     });
   }
 

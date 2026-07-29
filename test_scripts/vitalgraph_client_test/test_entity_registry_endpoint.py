@@ -29,6 +29,7 @@ if env_path.exists():
     load_dotenv(env_path)
 
 from vitalgraph.client.vitalgraph_client import VitalGraphClient
+from vitalgraph.model.result_status import OperationStatus
 from vitalgraph.model.entity_registry_model import (
     AliasCreateRequest,
     EntityCategoryRequest,
@@ -142,8 +143,8 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Get Entity ---")
         acme_id = self.ids['acme_corp']
         try:
-            entity = await self.client.entity_registry.get_entity(acme_id)
-            self._report("Get entity by ID", entity.entity_id == acme_id)
+            entity = (await self.client.entity_registry.get_entity(acme_id)).entity
+            self._report("Get entity by ID", entity is not None and entity.entity_id == acme_id)
             self._report("Entity has URI", entity.entity_uri.startswith('urn:entity:'))
             self._report("Entity has type_key", entity.type_key == 'business')
             self._report("Entity name is Acme Corporation", entity.primary_name == 'Acme Corporation')
@@ -167,7 +168,7 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Get Entity Geo Coordinates ---")
         try:
             # Entity WITH coordinates
-            geo = await self.client.entity_registry.get_entity(self.ids['geo_test'])
+            geo = (await self.client.entity_registry.get_entity(self.ids['geo_test'])).entity
             self._report("GeoTest has latitude",
                          geo.latitude is not None and abs(geo.latitude - 40.7357) < 0.001,
                          f"latitude={geo.latitude}")
@@ -176,7 +177,7 @@ class EntityRegistryTestRunner:
                          f"longitude={geo.longitude}")
 
             # Entity WITHOUT coordinates
-            nogeo = await self.client.entity_registry.get_entity(self.ids['no_geo'])
+            nogeo = (await self.client.entity_registry.get_entity(self.ids['no_geo'])).entity
             self._report("NoGeo has null latitude", nogeo.latitude is None)
             self._report("NoGeo has null longitude", nogeo.longitude is None)
         except Exception as e:
@@ -195,7 +196,7 @@ class EntityRegistryTestRunner:
                 website='https://new.acme.example.com',
                 updated_by='test_runner',
             )
-            entity = await self.client.entity_registry.update_entity(acme_id, req)
+            entity = (await self.client.entity_registry.update_entity(acme_id, req)).entity
             self._report("Update description", entity.description == 'Updated description for Acme')
             self._report("Update website", entity.website == 'https://new.acme.example.com')
             self._report("Latitude preserved after update",
@@ -214,7 +215,7 @@ class EntityRegistryTestRunner:
                 longitude=-87.6298,
                 updated_by='test_runner',
             )
-            updated = await self.client.entity_registry.update_entity(geo_id, req)
+            updated = (await self.client.entity_registry.update_entity(geo_id, req)).entity
             self._report("Update latitude to Chicago",
                          updated.latitude is not None and abs(updated.latitude - 41.8781) < 0.001,
                          f"latitude={updated.latitude}")
@@ -272,14 +273,14 @@ class EntityRegistryTestRunner:
                 identifier_namespace='CRM', identifier_value='ACCT-00482',
                 created_by='test_runner',
             )
-            new_ident = await self.client.entity_registry.add_identifier(acme_id, req)
-            self._report("Add identifier", new_ident.identifier_namespace == 'CRM')
+            new_ident = (await self.client.entity_registry.add_identifier(acme_id, req)).identifier
+            self._report("Add identifier", new_ident is not None and new_ident.identifier_namespace == 'CRM')
 
-            found_list = await self.client.entity_registry.lookup_by_identifier('DUNS', 'DUNS-TEST-001')
+            found_list = (await self.client.entity_registry.lookup_by_identifier('DUNS', 'DUNS-TEST-001')).entities
             found_ids = [e.entity_id for e in found_list]
             self._report("Lookup by DUNS", acme_id in found_ids, f"matched {len(found_list)} entities")
 
-            found_list2 = await self.client.entity_registry.lookup_by_identifier('CRM', 'ACCT-00482')
+            found_list2 = (await self.client.entity_registry.lookup_by_identifier('CRM', 'ACCT-00482')).entities
             found_ids2 = [e.entity_id for e in found_list2]
             self._report("Lookup by CRM", acme_id in found_ids2, f"matched {len(found_list2)} entities")
 
@@ -307,8 +308,8 @@ class EntityRegistryTestRunner:
                 alias_name='Acme Manufacturing', alias_type='former',
                 created_by='test_runner',
             )
-            new_alias = await self.client.entity_registry.add_alias(acme_id, req)
-            self._report("Add alias", new_alias.alias_name == 'Acme Manufacturing')
+            new_alias = (await self.client.entity_registry.add_alias(acme_id, req)).alias
+            self._report("Add alias", new_alias is not None and new_alias.alias_name == 'Acme Manufacturing')
 
             result = await self.client.entity_registry.remove_alias(new_alias.alias_id)
             self._report("Remove alias", result.get('success') is True)
@@ -336,12 +337,12 @@ class EntityRegistryTestRunner:
             self._report("Has 'partner' category", 'partner' in cat_keys)
 
             req = EntityCategoryRequest(category_key='customer', created_by='test_runner')
-            mapping = await self.client.entity_registry.add_entity_category(acme_id, req)
-            self._report("Add entity category", mapping.category_key == 'customer')
+            mapping = (await self.client.entity_registry.add_entity_category(acme_id, req)).entity_category
+            self._report("Add entity category", mapping is not None and mapping.category_key == 'customer')
 
             req2 = EntityCategoryRequest(category_key='partner', created_by='test_runner')
-            mapping2 = await self.client.entity_registry.add_entity_category(acme_id, req2)
-            self._report("Add second category", mapping2.category_key == 'partner')
+            mapping2 = (await self.client.entity_registry.add_entity_category(acme_id, req2)).entity_category
+            self._report("Add second category", mapping2 is not None and mapping2.category_key == 'partner')
 
             entity_cats = await self.client.entity_registry.list_entity_categories(acme_id)
             entity_cat_keys = [c.category_key for c in entity_cats]
@@ -349,9 +350,9 @@ class EntityRegistryTestRunner:
                          f"keys={entity_cat_keys}")
 
             entities_in_cat = await self.client.entity_registry.list_entities_by_category('customer')
-            found_ids = [e.entity_id for e in entities_in_cat]
+            found_ids = [e.entity_id for e in entities_in_cat.entities]
             self._report("List entities by category", acme_id in found_ids,
-                         f"count={len(entities_in_cat)}")
+                         f"count={len(entities_in_cat.entities)} total={entities_in_cat.total_count}")
 
             result = await self.client.entity_registry.remove_entity_category(acme_id, 'partner')
             self._report("Remove entity category", result.get('success') is True)
@@ -384,24 +385,24 @@ class EntityRegistryTestRunner:
                 reason='Duplicate entity detected',
                 created_by='test_runner',
             )
-            mapping = await self.client.entity_registry.create_same_as(req)
-            self._report("Create same-as", mapping.source_entity_id == source_id)
+            mapping = (await self.client.entity_registry.create_same_as(req)).same_as
+            self._report("Create same-as", mapping is not None and mapping.source_entity_id == source_id)
 
             mappings = await self.client.entity_registry.get_same_as(source_id)
             self._report("Get same-as mappings", len(mappings) >= 1)
 
-            resolved = await self.client.entity_registry.resolve_entity(source_id)
-            self._report("Resolve entity (transitive)", resolved.entity_id == target_id,
-                         f"resolved to {resolved.entity_id}")
+            resolved = (await self.client.entity_registry.resolve_entity(source_id)).entity
+            self._report("Resolve entity (transitive)", resolved is not None and resolved.entity_id == target_id,
+                         f"resolved to {resolved.entity_id if resolved else None}")
 
             retract_req = SameAsRetractRequest(
                 retracted_by='test_runner', reason='Testing retraction',
             )
-            retracted = await self.client.entity_registry.retract_same_as(mapping.same_as_id, retract_req)
-            self._report("Retract same-as", retracted.status == 'retracted')
+            retracted = (await self.client.entity_registry.retract_same_as(mapping.same_as_id, retract_req)).same_as
+            self._report("Retract same-as", retracted is not None and retracted.status == 'retracted')
 
-            resolved2 = await self.client.entity_registry.resolve_entity(source_id)
-            self._report("Resolve after retraction", resolved2.entity_id == source_id)
+            resolved2 = (await self.client.entity_registry.resolve_entity(source_id)).entity
+            self._report("Resolve after retraction", resolved2 is not None and resolved2.entity_id == source_id)
         except Exception as e:
             self._report("Same-As", False, str(e))
             traceback.print_exc()
@@ -769,20 +770,24 @@ class EntityRegistryTestRunner:
     # ------------------------------------------------------------------
 
     async def test_entity_search(self):
-        logger.info("\n--- Test: Entity Search (Weaviate) ---")
+        logger.info("\n--- Test: Entity Search ---")
         acme_id = self.ids['acme_corp']
         geo_id = self.ids['geo_test']
+        # carol_chen is never mutated by this suite, so her description stays
+        # semantically stable. acme_corp's description is rewritten by
+        # test_update_entity, so it must not be used as a search target.
+        carol_id = self.ids['carol_chen']
         try:
             # Basic semantic search (q only)
             resp = await self.client.entity_registry.search_entity(
-                q="corporation business", min_certainty=0.5, limit=10)
+                q="software architect consultant", min_certainty=0.3, limit=10)
             self._report("Entity search returns response", resp.success is True)
             self._report("Entity search has results", len(resp.results) > 0,
                          f"count={len(resp.results)}")
 
             if resp.results:
                 result_ids = [r.entity_id for r in resp.results]
-                self._report("Acme Corp in entity search results", acme_id in result_ids)
+                self._report("Carol Chen in entity search results", carol_id in result_ids)
                 top = resp.results[0]
                 self._report("Result has score", top.score > 0, f"score={top.score}")
                 self._report("Result has distance", top.distance is not None)
@@ -828,18 +833,18 @@ class EntityRegistryTestRunner:
 
             # Combined semantic + geo: entities near SF
             resp6 = await self.client.entity_registry.search_entity(
-                q="corporation", latitude=37.78, longitude=-122.42,
+                q="software architect consultant", latitude=37.78, longitude=-122.42,
                 radius_km=10, min_certainty=0.3, limit=10)
             geo_range_ids = [r.entity_id for r in resp6.results]
             self._report("Semantic+geo near SF returns results",
                          len(resp6.results) > 0, f"count={len(resp6.results)}")
-            self._report("Acme Corp within 10km of SF",
-                         acme_id in geo_range_ids,
+            self._report("Carol Chen within 10km of SF",
+                         carol_id in geo_range_ids,
                          f"results={geo_range_ids}")
 
             # Combined semantic + geo: entities near Newark
             resp7 = await self.client.entity_registry.search_entity(
-                q="corporation", latitude=40.74, longitude=-74.17,
+                q="geospatial analytics", latitude=40.74, longitude=-74.17,
                 radius_km=10, min_certainty=0.3, limit=10)
             geo_range_ids2 = [r.entity_id for r in resp7.results]
             self._report("Semantic+geo near Newark returns results",
@@ -883,7 +888,7 @@ class EntityRegistryTestRunner:
 
             # Get a specific location
             if locs:
-                loc = await reg.get_location(locs[0].location_id)
+                loc = (await reg.get_location(locs[0].location_id)).location
                 self._report("Get location by ID", loc is not None)
                 self._report("Location has entity_id", loc.entity_id == acme_id)
                 self._report("Location has latitude",
@@ -891,7 +896,7 @@ class EntityRegistryTestRunner:
                              f"lat={loc.latitude}")
 
             # Create a new location
-            new_loc = await reg.create_location(
+            new_loc = (await reg.create_location(
                 acme_id,
                 LocationCreateRequest(
                     location_type_key='branch',
@@ -907,7 +912,7 @@ class EntityRegistryTestRunner:
                     longitude=-122.6784,
                     timezone='America/Los_Angeles',
                 ),
-            )
+            )).location
             self._report("Create location", new_loc is not None and new_loc.location_id > 0,
                          f"location_id={new_loc.location_id}")
 
@@ -920,15 +925,16 @@ class EntityRegistryTestRunner:
                          f"before={len(locs)} after={len(locs2)}")
 
             # Update the location
-            updated = await reg.update_location(
+            updated = (await reg.update_location(
                 test_location_id,
                 LocationUpdateRequest(
                     location_name='Acme Portland Branch (Updated)',
                     description='Updated test branch office',
                 ),
-            )
+            )).location
             self._report("Update location name",
-                         updated.location_name == 'Acme Portland Branch (Updated)')
+                         updated is not None
+                         and updated.location_name == 'Acme Portland Branch (Updated)')
 
             # Remove the test location
             await reg.remove_location(test_location_id)
@@ -950,6 +956,8 @@ class EntityRegistryTestRunner:
         acme_id = self.ids['acme_corp']
         geo_id = self.ids['geo_test']
         pinnacle_id = self.ids['pinnacle_consulting']
+        # Stable semantic target: carol_chen is never mutated by this suite.
+        carol_id = self.ids['carol_chen']
         reg = self.client.entity_registry
 
         try:
@@ -1053,30 +1061,30 @@ class EntityRegistryTestRunner:
                          len(loc_addr_none.results) == 0)
 
             # --- search_entity with q + geo (combined semantic + geo) ---
-            # "manufacturing" near SF — should find Acme, not GeoTest
+            # "software architect" near SF — should find Carol Chen, not GeoTest
             topic_resp = await reg.search_entity(
-                q="manufacturing company",
+                q="software architect consultant",
                 latitude=37.79, longitude=-122.40, radius_km=20,
                 min_certainty=0.3)
             self._report("Entity search q+geo near SF returns results",
                          topic_resp.success and len(topic_resp.results) > 0,
                          f"count={len(topic_resp.results)}")
             topic_ids = [r.entity_id for r in topic_resp.results]
-            self._report("Acme Corp in q+geo SF results",
-                         acme_id in topic_ids)
+            self._report("Carol Chen in q+geo SF results",
+                         carol_id in topic_ids)
             self._report("GeoTest NOT in q+geo SF results",
                          geo_id not in topic_ids)
 
             # Check locations returned inline
             if topic_resp.results:
-                acme_result = next((r for r in topic_resp.results if r.entity_id == acme_id), None)
-                if acme_result:
+                carol_result = next((r for r in topic_resp.results if r.entity_id == carol_id), None)
+                if carol_result:
                     self._report("q+geo result has locations",
-                                 len(acme_result.locations) > 0,
-                                 f"count={len(acme_result.locations)}")
+                                 len(carol_result.locations) > 0,
+                                 f"count={len(carol_result.locations)}")
                     self._report("q+geo result has score",
-                                 acme_result.score > 0,
-                                 f"score={acme_result.score}")
+                                 carol_result.score > 0,
+                                 f"score={carol_result.score}")
 
             # "consulting" near Boston — should find Pinnacle
             topic_resp2 = await reg.search_entity(
@@ -1146,8 +1154,8 @@ class EntityRegistryTestRunner:
         person_id = self.ids['alice_johnson']
         try:
             # Check current status first
-            entity = await self.client.entity_registry.get_entity(person_id)
-            if entity.status == 'deleted':
+            entity = (await self.client.entity_registry.get_entity(person_id)).entity
+            if entity is not None and entity.status == 'deleted':
                 self._report("Entity already deleted (from previous run)", True)
                 self._report("Deleted entity still retrievable", True)
                 self._report("Deleted entity excluded from active list", True)
@@ -1160,8 +1168,8 @@ class EntityRegistryTestRunner:
             active_ids = [e.entity_id for e in results.entities]
             self._report("Deleted entity excluded from active list", person_id not in active_ids)
 
-            entity = await self.client.entity_registry.get_entity(person_id)
-            self._report("Deleted entity still retrievable", entity.status == 'deleted')
+            entity = (await self.client.entity_registry.get_entity(person_id)).entity
+            self._report("Deleted entity still retrievable", entity is not None and entity.status == 'deleted')
         except Exception as e:
             self._report("Delete entity", False, str(e))
 
@@ -1173,19 +1181,26 @@ class EntityRegistryTestRunner:
         logger.info("\n--- Test: Error Cases ---")
 
         try:
-            await self.client.entity_registry.get_entity('e_nonexistent')
-            self._report("Get non-existent entity returns 404", False, "Should have raised")
+            # Domain outcomes come back as HTTP 200 with the outcome in the
+            # envelope — a missing entity is NOT_FOUND with entity=None.
+            env = await self.client.entity_registry.get_entity('e_nonexistent')
+            self._report("Get non-existent entity returns NOT_FOUND",
+                         env.status == OperationStatus.NOT_FOUND, f"status={env.status}")
+            self._report("Get non-existent entity has no entity", env.entity is None)
         except Exception as e:
-            self._report("Get non-existent entity returns error", '404' in str(e) or 'not found' in str(e).lower(),
-                         str(e)[:80])
+            self._report("Get non-existent entity returns NOT_FOUND", False,
+                         f"raised instead: {str(e)[:80]}")
 
         try:
             from vitalgraph.model.entity_registry_model import EntityCreateRequest
             req = EntityCreateRequest(type_key='invalid_type', primary_name='Bad Entity')
-            await self.client.entity_registry.create_entity(req)
-            self._report("Invalid type_key rejected", False, "Should have raised")
+            resp = await self.client.entity_registry.create_entity(req)
+            self._report("Invalid type_key rejected",
+                         resp.status == OperationStatus.INVALID_REQUEST,
+                         f"status={resp.status} message={resp.message}")
         except Exception as e:
-            self._report("Invalid type_key rejected", True, str(e)[:80])
+            self._report("Invalid type_key rejected", False,
+                         f"raised instead: {str(e)[:80]}")
 
 
 async def main():

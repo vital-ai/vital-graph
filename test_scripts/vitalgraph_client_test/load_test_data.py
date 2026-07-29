@@ -590,13 +590,13 @@ async def load_data():
 
         # Bob Martinez employed by Acme Corporation
         try:
-            rel = await reg.create_relationship(RelationshipCreateRequest(
+            rel = (await reg.create_relationship(RelationshipCreateRequest(
                 entity_source=manifest['entities']['acme_corp'],
                 entity_destination=manifest['entities']['bob_martinez'],
                 relationship_type_key='employer_of',
                 description='Regional sales director at Acme Corporation',
                 created_by=CREATED_BY,
-            ))
+            ))).relationship
             manifest.setdefault('relationships', []).append(rel.relationship_id)
             logger.info(f"  acme_corp -> bob_martinez (employer_of): {rel.relationship_id}")
         except Exception as e:
@@ -604,13 +604,13 @@ async def load_data():
 
         # Carol Chen is an advisor to Acme Corporation
         try:
-            rel = await reg.create_relationship(RelationshipCreateRequest(
+            rel = (await reg.create_relationship(RelationshipCreateRequest(
                 entity_source=manifest['entities']['carol_chen'],
                 entity_destination=manifest['entities']['acme_corp'],
                 relationship_type_key='advisor_to',
                 description='Technical architecture advisor',
                 created_by=CREATED_BY,
-            ))
+            ))).relationship
             manifest.setdefault('relationships', []).append(rel.relationship_id)
             logger.info(f"  carol_chen -> acme_corp (advisor_to): {rel.relationship_id}")
         except Exception as e:
@@ -618,13 +618,13 @@ async def load_data():
 
         # David Okafor employed by Pinnacle Consulting
         try:
-            rel = await reg.create_relationship(RelationshipCreateRequest(
+            rel = (await reg.create_relationship(RelationshipCreateRequest(
                 entity_source=manifest['entities']['pinnacle_consulting'],
                 entity_destination=manifest['entities']['david_okafor'],
                 relationship_type_key='employer_of',
                 description='Trade compliance officer at Pinnacle Consulting Group',
                 created_by=CREATED_BY,
-            ))
+            ))).relationship
             manifest.setdefault('relationships', []).append(rel.relationship_id)
             logger.info(f"  pinnacle_consulting -> david_okafor (employer_of): {rel.relationship_id}")
         except Exception as e:
@@ -632,13 +632,13 @@ async def load_data():
 
         # Acme Corporation is a customer of GeoTest Corp
         try:
-            rel = await reg.create_relationship(RelationshipCreateRequest(
+            rel = (await reg.create_relationship(RelationshipCreateRequest(
                 entity_source=manifest['entities']['acme_corp'],
                 entity_destination=manifest['entities']['geo_test'],
                 relationship_type_key='customer_of',
                 description='Acme uses GeoTest geospatial analytics platform',
                 created_by=CREATED_BY,
-            ))
+            ))).relationship
             manifest.setdefault('relationships', []).append(rel.relationship_id)
             logger.info(f"  acme_corp -> geo_test (customer_of): {rel.relationship_id}")
         except Exception as e:
@@ -646,13 +646,13 @@ async def load_data():
 
         # Elena Vasquez employed by GeoTest Corp
         try:
-            rel = await reg.create_relationship(RelationshipCreateRequest(
+            rel = (await reg.create_relationship(RelationshipCreateRequest(
                 entity_source=manifest['entities']['geo_test'],
                 entity_destination=manifest['entities']['elena_vasquez'],
                 relationship_type_key='employer_of',
                 description='Supply chain operations manager at GeoTest Corp',
                 created_by=CREATED_BY,
-            ))
+            ))).relationship
             manifest.setdefault('relationships', []).append(rel.relationship_id)
             logger.info(f"  geo_test -> elena_vasquez (employer_of): {rel.relationship_id}")
         except Exception as e:
