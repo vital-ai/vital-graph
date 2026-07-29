@@ -148,8 +148,11 @@ class EntityRegistryCLI:
             if os.environ.get('ENTITY_FUZZY_BACKEND') == 'postgresql':
                 from vitalgraph.entity_registry.entity_fuzzy_pg import EntityFuzzyIndexPG
                 fuzzy_index = EntityFuzzyIndexPG(self.pool)
-                count = await fuzzy_index.initialize(self.pool)
-                logger.info(f"Fuzzy index (PG) loaded {count} entities")
+                count = await fuzzy_index.initialize(
+                    self.pool, skip_if_populated=True,
+                )
+                if count:
+                    logger.info(f"Fuzzy index (PG) built {count} entities")
                 self.fuzzy = fuzzy_index
             elif os.environ.get('ENTITY_FUZZY_ENABLED', '').lower() == 'true':
                 from vitalgraph.entity_registry.entity_fuzzy import EntityFuzzyIndex

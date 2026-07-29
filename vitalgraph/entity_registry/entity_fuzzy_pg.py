@@ -547,7 +547,8 @@ class EntityFuzzyIndexPG:
     # ------------------------------------------------------------------
 
     async def initialize(self, pool=None, since=None, chunk_size: int = 5000,
-                         skip_lock: bool = False) -> int:
+                         skip_lock: bool = False,
+                         skip_if_populated: bool = False) -> int:
         """Load entities from the database and build the LSH index.
 
         For full rebuild: truncates band tables, streams all entities,
@@ -561,11 +562,28 @@ class EntityFuzzyIndexPG:
             since: Optional datetime for incremental sync.
             chunk_size: Entities per batch for bulk insert.
             skip_lock: If True, skip advisory lock.
+            skip_if_populated: If True and this is a full rebuild, skip the
+                rebuild entirely when the band tables already hold data.
+                Used at server startup, where the persisted bands are the
+                source of truth and a rebuild would both block the event
+                loop and discard prebuilt data. Rebuild tools leave this
+                False so an explicit rebuild still truncates and reloads.
 
         Returns:
             Number of entities indexed.
         """
         pool = pool or self.pool
+
+        if skip_if_populated and since is None:
+            if await self.storage.has_band_data():
+                # Bands persist across restarts; scoring metadata is
+                # lazy-loaded per query, so there is nothing to warm here.
+                self._initialized = True
+                logger.info(
+                    "Entity fuzzy index (PG): band tables already populated, "
+                    "skipping rebuild"
+                )
+                return 0
 
         if not skip_lock:
             acquired = await self.storage.try_advisory_lock()

@@ -414,14 +414,22 @@ class EntityRegistryEndpoint:
                 return RegistryWriteResponse(status=OperationStatus.INVALID_REQUEST, message=str(e),
                                              entity_id=entity_id, category_key=category_key)
 
-        @self.router.get("/categories/entities", response_model=List[EntityResponse],
+        @self.router.get("/categories/entities", response_model=EntityListResponse,
                          tags=["Entity Registry"])
         async def list_entities_by_category_route(
             category_key: str = Query(..., description="Category key"),
+            page: int = Query(1, ge=1),
+            page_size: int = Query(20, ge=1, le=100),
             current_user: Dict = Depends(auth),
         ):
-            entities = await self.registry.list_entities_by_category(category_key)
-            return [_entity_to_response(e) for e in entities]
+            entities, total = await self.registry.list_entities_by_category(
+                category_key, page=page, page_size=page_size,
+            )
+            return EntityListResponse(
+                status=OperationStatus.FOUND if entities else OperationStatus.EMPTY,
+                entities=[_entity_to_response(e) for e in entities],
+                total_count=total, page=page, page_size=page_size,
+            )
 
         # -- Location Types --
 

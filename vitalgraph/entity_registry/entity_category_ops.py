@@ -4,7 +4,7 @@ Category operations mixin for the Entity Registry.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from .entity_status import ACTIVE, DELETED, RETRACTED
 
 if TYPE_CHECKING:
@@ -130,19 +130,37 @@ class CategoryMixin:
             )
             return [dict(r) for r in rows]
 
-    async def list_entities_by_category(self, category_key: str) -> List[Dict[str, Any]]:
-        """List all active entities in a given category."""
+    async def list_entities_by_category(
+        self, category_key: str,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        List active entities in a given category, paginated.
+
+        Returns:
+            Tuple of (entities list, total count).
+        """
+        where = (
+            "FROM entity_category_map ecm "
+            "JOIN category ec ON ecm.category_id = ec.category_id "
+            "JOIN entity e ON ecm.entity_id = e.entity_id "
+            f"WHERE ec.category_key = $1 AND ecm.status = '{ACTIVE}' AND e.status != '{DELETED}'"
+        )
+        offset = (page - 1) * page_size
+
         async with self.pool.acquire() as conn:
+            total = await conn.fetchval(
+                f"SELECT COUNT(DISTINCT ecm.entity_id) {where}", category_key
+            )
             rows = await conn.fetch(
-                "SELECT DISTINCT ecm.entity_id FROM entity_category_map ecm "
-                "JOIN category ec ON ecm.category_id = ec.category_id "
-                "JOIN entity e ON ecm.entity_id = e.entity_id "
-                f"WHERE ec.category_key = $1 AND ecm.status = '{ACTIVE}' AND e.status != '{DELETED}'",
-                category_key
+                f"SELECT DISTINCT ecm.entity_id {where} "
+                "ORDER BY ecm.entity_id LIMIT $2 OFFSET $3",
+                category_key, page_size, offset
             )
             entities = []
             for row in rows:
                 entity = await self.get_entity(row['entity_id'])
                 if entity:
                     entities.append(entity)
-            return entities
+            return entities, total

@@ -384,6 +384,25 @@ class PostgreSQLFuzzyStorage:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(f"SELECT COUNT(*) FROM {TABLE_HASH}")
 
+    async def has_band_data(self) -> bool:
+        """Check whether the band tables already hold data.
+
+        Uses EXISTS rather than a COUNT so this stays O(1) — the band
+        table can hold tens of millions of rows and a count would scan
+        all of them on every startup.
+
+        Returns:
+            True if both band tables have at least one row.
+        """
+        async with self.pool.acquire() as conn:
+            primary = await conn.fetchval(
+                f"SELECT EXISTS (SELECT 1 FROM {TABLE_PRIMARY})"
+            )
+            phonetic = await conn.fetchval(
+                f"SELECT EXISTS (SELECT 1 FROM {TABLE_PHONETIC})"
+            )
+            return bool(primary) and bool(phonetic)
+
     # ------------------------------------------------------------------
     # Advisory lock (replaces Redis distributed lock)
     # ------------------------------------------------------------------

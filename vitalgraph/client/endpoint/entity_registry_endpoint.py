@@ -292,15 +292,16 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return response.json()
 
-    async def list_entities_by_category(self, category_key: str) -> List[EntityResponse]:
-        """List all entities in a given category."""
+    async def list_entities_by_category(
+        self, category_key: str, page: int = 1, page_size: int = 20,
+    ) -> EntityListResponse:
+        """List entities in a given category (paginated)."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/categories/entities"),
-            params={"category_key": category_key},
+            params={"category_key": category_key, "page": page, "page_size": page_size},
         )
-        data = response.json()
-        return [EntityResponse.model_validate(e) for e in data]
+        return EntityListResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Location Types

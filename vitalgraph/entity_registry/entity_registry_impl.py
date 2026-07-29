@@ -122,11 +122,16 @@ class EntityRegistryImpl(
             # Initialize fuzzy index if configured
             if self.fuzzy_index:
                 if isinstance(self.fuzzy_index, EntityFuzzyIndexPG):
-                    # PostgreSQL backend: band tables persist, only need to
-                    # rebuild the in-memory scoring cache on startup
+                    # PostgreSQL backend: band tables persist across restarts
+                    # and scoring metadata is lazy-loaded per query, so an
+                    # already-populated index needs no startup work. Only
+                    # build when the tables are empty (first-time setup).
                     try:
-                        count = await self.fuzzy_index.initialize(self.pool)
-                        logger.info(f"Entity fuzzy index (PG) loaded {count} entities")
+                        count = await self.fuzzy_index.initialize(
+                            self.pool, skip_if_populated=True,
+                        )
+                        if count:
+                            logger.info(f"Entity fuzzy index (PG) built {count} entities")
                     except Exception as e:
                         logger.error(f"Failed to initialize entity fuzzy index (PG): {e}")
                 elif self.fuzzy_index.storage_config:
