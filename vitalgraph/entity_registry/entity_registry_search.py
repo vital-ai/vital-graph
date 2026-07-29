@@ -107,6 +107,7 @@ class EntityRegistrySearch:
         sql = f"""
             SELECT e.entity_id, e.primary_name, e.description,
                    e.country, e.region, e.locality,
+                   e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    v.search_text,
                    1.0 - (v.embedding <=> $1::vector) AS score
@@ -218,6 +219,7 @@ class EntityRegistrySearch:
             )
             SELECT e.entity_id, e.primary_name, e.description,
                    e.country, e.region, e.locality,
+                   e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    c.hybrid_score AS score
             FROM combined c
@@ -298,7 +300,9 @@ class EntityRegistrySearch:
             params.append(type_key)
             param_idx += 1
         if country_code:
-            filters.append(f"el.country = ${param_idx}")
+            # el.country holds the full name ("United States"); the ISO code
+            # lives in el.country_code.
+            filters.append(f"el.country_code = ${param_idx}")
             params.append(country_code)
             param_idx += 1
         if locality:
@@ -482,6 +486,7 @@ class EntityRegistrySearch:
             )
             SELECT e.entity_id, e.primary_name, e.description,
                    e.country, e.region, e.locality,
+                   e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    cl.distance_km, cl.latitude AS closest_lat, cl.longitude AS closest_lon,
                    cl.source_type, cl.source_id
@@ -571,6 +576,7 @@ class EntityRegistrySearch:
             )
             SELECT e.entity_id, e.primary_name, e.description,
                    e.country, e.region, e.locality,
+                   e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    v.search_text,
                    1.0 - (v.embedding <=> $1::vector) AS score
@@ -667,6 +673,7 @@ class EntityRegistrySearch:
         sql = f"""
             SELECT DISTINCT e.entity_id, e.primary_name, e.description,
                    e.country, e.region, e.locality,
+                   e.latitude, e.longitude,
                    et.type_key, et.type_label
             FROM entity_identifier ei
             JOIN entity e ON e.entity_id = ei.entity_id

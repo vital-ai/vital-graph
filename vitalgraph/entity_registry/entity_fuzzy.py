@@ -755,10 +755,17 @@ class EntityFuzzyIndex:
             if phonetic_entries:
                 self._bulk_write_lsh(self.phonetic_lsh, phonetic_entries)
         else:
-            # In-memory: use normal datasketch insert
+            # In-memory: datasketch's insert() rejects an existing key
+            # ("The given key already exists"), so upsert explicitly. A full
+            # re-sync re-inserts every key that is already indexed; stale
+            # entries are pruned afterwards in _do_initialize.
             for raw_key, mh in lsh_entries:
+                if raw_key in self.lsh:
+                    self.lsh.remove(raw_key)
                 self.lsh.insert(raw_key, mh)
             for raw_key, mh in phonetic_entries:
+                if raw_key in self.phonetic_lsh:
+                    self.phonetic_lsh.remove(raw_key)
                 self.phonetic_lsh.insert(raw_key, mh)
 
         # Phase 3: Batch-store fuzzy hashes in Redis HASH

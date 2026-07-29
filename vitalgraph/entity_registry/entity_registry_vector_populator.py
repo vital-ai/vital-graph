@@ -95,7 +95,13 @@ def build_entity_search_text(entity: dict) -> str:
 def build_location_search_text(location: dict) -> str:
     """Build composite search text for a location.
 
-    Format: "{location_name}. {location_type_label}. {description}. {formatted_address}"
+    Format: "{location_name}. {location_type_label}. {description}.
+             {address_line_1}. {address_line_2}. {formatted_address}"
+
+    The structured address lines are included as well as the formatted
+    address because the two often spell the same street differently
+    ("100 Market Street" vs "100 Market St"). Indexing both means the
+    address keyword search matches either form.
     """
     parts = []
     if location.get('location_name'):
@@ -104,6 +110,10 @@ def build_location_search_text(location: dict) -> str:
         parts.append(location['location_type_label'])
     if location.get('description'):
         parts.append(location['description'])
+    if location.get('address_line_1'):
+        parts.append(location['address_line_1'])
+    if location.get('address_line_2'):
+        parts.append(location['address_line_2'])
     if location.get('formatted_address'):
         parts.append(location['formatted_address'])
     elif location.get('locality') or location.get('country'):
