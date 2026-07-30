@@ -116,8 +116,21 @@ test.describe('Indexes CRUD — Vector', () => {
     // Set index name
     await modal.locator('#createName').fill(VECTOR_INDEX_NAME);
 
-    // Set dimensions
-    await modal.locator('#dimensions').fill('256');
+    // Dimensions are derived from the selected model and are deliberately not
+    // editable — an index must be created at its model's native width, or it
+    // builds a column the model cannot fill and vectorization fails later at
+    // reindex. Assert the derivation instead of trying to type a width.
+    const dimensions = modal.locator('#dimensions');
+    await expect(dimensions).toBeDisabled();
+    await expect(dimensions).toHaveValue('384'); // vitalsigns_onnx, the default
+
+    // Switching model must move dimensions with it.
+    await modal.locator('#provider').selectOption('openai');
+    await expect(dimensions).toHaveValue('1536');
+
+    // Back to the local default so creation needs no API key.
+    await modal.locator('#provider').selectOption('vitalsigns_onnx');
+    await expect(dimensions).toHaveValue('384');
 
     // Click Create
     await modal.locator('button', { hasText: 'Create' }).first().click();
