@@ -113,6 +113,13 @@ dev = [
     "asyncpg>=0.29.0",
     "fastapi>=0.104.0",
     "PyJWT>=2.8.0",
+    #   tests/unit/test_client_retry.py -> client.vitalgraph_client -> httpx,
+    #       and transitively endpoint.files_endpoint  -> aiohttp
+    #                        binary.async_streaming   -> aiofiles
+    # These are the light half of the `client` extra.
+    "httpx>=0.27.0",
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.0.0",
 ]
 
 # Testing utilities
