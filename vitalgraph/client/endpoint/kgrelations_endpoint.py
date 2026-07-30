@@ -44,7 +44,7 @@ class KGRelationsEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None, idempotent=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -65,6 +65,9 @@ class KGRelationsEndpoint(BaseEndpoint):
                 kwargs['headers'] = headers
             if content is not None:
                 kwargs['content'] = content
+            if idempotent is not None:
+                # Read-only POSTs opt into post-send retry; see client retry policy.
+                kwargs['idempotent'] = idempotent
             
             response = await self._make_authenticated_request(method, url, **kwargs)
             

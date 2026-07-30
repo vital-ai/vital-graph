@@ -92,9 +92,28 @@ class VitalGraphClientConfig:
                 'password': self._get_profile_env('AUTH_PASSWORD', 'admin')
             },
             'client': {
-                'timeout': int(self._get_profile_env('TIMEOUT', '30')),
+                # Transport timeouts (seconds). 'timeout' is the read/write
+                # timeout; connect and pool get their own, much shorter, values.
+                'timeout': float(self._get_profile_env('TIMEOUT', '30')),
+                'connect_timeout': float(self._get_profile_env('CONNECT_TIMEOUT', '5')),
+                'pool_timeout': float(self._get_profile_env('POOL_TIMEOUT', '5')),
+                # Total wall-clock ceiling for one logical call, covering every
+                # retry attempt and every backoff sleep between them.
+                'request_budget': float(self._get_profile_env('REQUEST_BUDGET', '60')),
+                # Retry policy
                 'max_retries': int(self._get_profile_env('MAX_RETRIES', '3')),
-                'retry_delay': int(self._get_profile_env('RETRY_DELAY', '1'))
+                'retry_delay': float(self._get_profile_env('RETRY_DELAY', '1')),
+                'retry_backoff_base': float(self._get_profile_env('RETRY_BACKOFF_BASE', '2.0')),
+                'retry_max_delay': float(self._get_profile_env('RETRY_MAX_DELAY', '10')),
+                # Connection pool
+                'max_connections': int(self._get_profile_env('MAX_CONNECTIONS', '100')),
+                'max_keepalive': int(self._get_profile_env('MAX_KEEPALIVE', '20')),
+                'keepalive_expiry': float(self._get_profile_env('KEEPALIVE_EXPIRY', '5')),
+                # Client-side in-flight cap; 0 disables.
+                'max_concurrency': int(self._get_profile_env('MAX_CONCURRENCY', '0')),
+                # Circuit breaker; threshold 0 disables.
+                'breaker_threshold': int(self._get_profile_env('BREAKER_THRESHOLD', '5')),
+                'breaker_reset': float(self._get_profile_env('BREAKER_RESET', '30')),
             }
         }
     
@@ -157,36 +176,157 @@ class VitalGraphClientConfig:
         password = auth_config.get('password', 'admin')
         return username, password
     
-    def get_timeout(self) -> int:
+    def get_timeout(self) -> float:
         """
-        Get the request timeout in seconds.
-        
+        Get the read/write timeout in seconds for a single attempt.
+
         Returns:
             Timeout in seconds
         """
         client_config = self.get_client_config()
-        return client_config.get('timeout', 30)
-    
+        return float(client_config.get('timeout', 30))
+
+    def get_connect_timeout(self) -> float:
+        """
+        Get the connection-establishment timeout in seconds.
+
+        A long connect timeout is never useful: a server that will accept the
+        connection accepts it in well under a second.
+
+        Returns:
+            Connect timeout in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('connect_timeout', 5))
+
+    def get_pool_timeout(self) -> float:
+        """
+        Get the timeout for acquiring a connection from the pool.
+
+        Returns:
+            Pool acquisition timeout in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('pool_timeout', 5))
+
+    def get_request_budget(self) -> float:
+        """
+        Get the total wall-clock ceiling for one logical call.
+
+        This bounds all attempts and all backoff sleeps together, so a single
+        call can never hold a caller (a request handler, a Celery slot) for
+        longer than this regardless of how the retries play out.
+
+        Returns:
+            Per-call budget in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('request_budget', 60))
+
     def get_max_retries(self) -> int:
         """
-        Get the maximum number of retry attempts.
-        
+        Get the maximum number of retry attempts (after the first attempt).
+
         Returns:
             Maximum retry attempts
         """
         client_config = self.get_client_config()
-        return client_config.get('max_retries', 3)
-    
-    def get_retry_delay(self) -> int:
+        return int(client_config.get('max_retries', 3))
+
+    def get_retry_delay(self) -> float:
         """
-        Get the delay between retry attempts in seconds.
-        
+        Get the base delay for retry backoff in seconds.
+
         Returns:
-            Retry delay in seconds
+            Base retry delay in seconds
         """
         client_config = self.get_client_config()
-        return client_config.get('retry_delay', 1)
-    
+        return float(client_config.get('retry_delay', 1))
+
+    def get_retry_backoff_base(self) -> float:
+        """
+        Get the exponential growth factor applied per retry attempt.
+
+        Returns:
+            Backoff base (1.0 disables growth)
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('retry_backoff_base', 2.0))
+
+    def get_retry_max_delay(self) -> float:
+        """
+        Get the ceiling on the pre-jitter backoff delay.
+
+        Returns:
+            Maximum retry delay in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('retry_max_delay', 10))
+
+    def get_max_connections(self) -> int:
+        """
+        Get the maximum number of pooled connections.
+
+        Returns:
+            Maximum connections
+        """
+        client_config = self.get_client_config()
+        return int(client_config.get('max_connections', 100))
+
+    def get_max_keepalive(self) -> int:
+        """
+        Get the maximum number of idle keep-alive connections.
+
+        Returns:
+            Maximum keep-alive connections
+        """
+        client_config = self.get_client_config()
+        return int(client_config.get('max_keepalive', 20))
+
+    def get_keepalive_expiry(self) -> float:
+        """
+        Get the idle keep-alive connection expiry in seconds.
+
+        Returns:
+            Keep-alive expiry in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('keepalive_expiry', 5))
+
+    def get_max_concurrency(self) -> int:
+        """
+        Get the client-side cap on in-flight requests (0 disables).
+
+        Prevents a single client from saturating its own connection pool and
+        generating the pool timeouts it would then retry.
+
+        Returns:
+            Maximum concurrent requests, or 0 for unlimited
+        """
+        client_config = self.get_client_config()
+        return int(client_config.get('max_concurrency', 0))
+
+    def get_breaker_threshold(self) -> int:
+        """
+        Get the consecutive-failure count that opens the circuit breaker
+        (0 disables the breaker).
+
+        Returns:
+            Failure threshold
+        """
+        client_config = self.get_client_config()
+        return int(client_config.get('breaker_threshold', 5))
+
+    def get_breaker_reset(self) -> float:
+        """
+        Get the circuit breaker reset timeout in seconds.
+
+        Returns:
+            Reset timeout in seconds
+        """
+        client_config = self.get_client_config()
+        return float(client_config.get('breaker_reset', 30))
+
     def validate_config(self) -> None:
         """
         Validate the loaded configuration.
@@ -210,11 +350,47 @@ class VitalGraphClientConfig:
         if not password or not isinstance(password, str):
             raise ClientConfigurationError("Password must be a non-empty string")
         
-        # Validate timeout
-        timeout = self.get_timeout()
-        if not isinstance(timeout, int) or timeout <= 0:
-            raise ClientConfigurationError("Timeout must be a positive integer")
-        
+        # Validate positive-valued timing settings
+        for name, value in (
+            ('Timeout', self.get_timeout()),
+            ('Connect timeout', self.get_connect_timeout()),
+            ('Pool timeout', self.get_pool_timeout()),
+            ('Request budget', self.get_request_budget()),
+            ('Retry max delay', self.get_retry_max_delay()),
+            ('Keepalive expiry', self.get_keepalive_expiry()),
+        ):
+            if not isinstance(value, (int, float)) or value <= 0:
+                raise ClientConfigurationError(f"{name} must be a positive number")
+
+        # Validate non-negative settings
+        for name, value in (
+            ('Max retries', self.get_max_retries()),
+            ('Retry delay', self.get_retry_delay()),
+            ('Max concurrency', self.get_max_concurrency()),
+            ('Breaker threshold', self.get_breaker_threshold()),
+            ('Breaker reset', self.get_breaker_reset()),
+        ):
+            if not isinstance(value, (int, float)) or value < 0:
+                raise ClientConfigurationError(f"{name} must be a non-negative number")
+
+        if self.get_retry_backoff_base() < 1.0:
+            raise ClientConfigurationError("Retry backoff base must be >= 1.0")
+
+        if self.get_max_connections() <= 0:
+            raise ClientConfigurationError("Max connections must be a positive integer")
+
+        if self.get_max_keepalive() < 0:
+            raise ClientConfigurationError("Max keepalive must be a non-negative integer")
+
+        # A budget smaller than a single attempt's timeout means retries can
+        # never happen; that is legal but almost always a misconfiguration.
+        if self.get_request_budget() < self.get_timeout():
+            logger.warning(
+                "Request budget (%.1fs) is below the per-attempt timeout (%.1fs); "
+                "requests will be cut off before the transport timeout fires",
+                self.get_request_budget(), self.get_timeout()
+            )
+
         logger.info("Client configuration validation passed")
     
     def __str__(self) -> str:

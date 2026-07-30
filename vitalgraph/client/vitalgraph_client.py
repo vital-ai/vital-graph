@@ -42,7 +42,23 @@ from .endpoint.geo_points_endpoint import GeoPointsClientEndpoint
 from .endpoint.kgdocuments_endpoint import KGDocumentsEndpoint as KGDocumentsClientEndpoint
 from .endpoint.metrics_endpoint import MetricsClientEndpoint
 from .endpoint.ontology_endpoint import OntologyClientEndpoint
-from .utils.client_utils import VitalGraphClientError
+from .utils.client_utils import (
+    VitalGraphClientError,
+    VitalGraphClientConnectionError,
+    VitalGraphClientTimeoutError,
+    VitalGraphClientUnavailableError,
+)
+from .retry import (
+    CircuitBreaker,
+    FailureClass,
+    IDEMPOTENT_METHODS,
+    RetryPolicy,
+    RetryStats,
+    classify_exception,
+    classify_status,
+    parse_retry_after,
+    safe_log_url,
+)
 from .utils.format_helpers import ClientWireFormat
 from .vitalgraph_client_inf import VitalGraphClientInterface
 from ..model.sparql_model import GraphInfo, SPARQLGraphResponse
@@ -106,9 +122,21 @@ class VitalGraphClient(VitalGraphClientInterface):
             {PROFILE}_CLIENT_SERVER_URL: Server endpoint URL
             {PROFILE}_CLIENT_AUTH_USERNAME: Authentication username
             {PROFILE}_CLIENT_AUTH_PASSWORD: Authentication password
-            {PROFILE}_CLIENT_TIMEOUT: Request timeout in seconds
+            {PROFILE}_CLIENT_TIMEOUT: Read/write timeout in seconds per attempt
+            {PROFILE}_CLIENT_CONNECT_TIMEOUT: Connection timeout in seconds
+            {PROFILE}_CLIENT_POOL_TIMEOUT: Pool acquisition timeout in seconds
+            {PROFILE}_CLIENT_REQUEST_BUDGET: Total per-call ceiling across retries
             {PROFILE}_CLIENT_MAX_RETRIES: Maximum retry attempts
-            
+            {PROFILE}_CLIENT_RETRY_DELAY: Base backoff delay in seconds
+            {PROFILE}_CLIENT_RETRY_BACKOFF_BASE: Exponential backoff factor
+            {PROFILE}_CLIENT_RETRY_MAX_DELAY: Backoff ceiling in seconds
+            {PROFILE}_CLIENT_MAX_CONNECTIONS: Connection pool size
+            {PROFILE}_CLIENT_MAX_KEEPALIVE: Idle keep-alive connections
+            {PROFILE}_CLIENT_MAX_CONCURRENCY: In-flight request cap (0 = unlimited)
+            {PROFILE}_CLIENT_BREAKER_THRESHOLD: Consecutive failures before the
+                circuit breaker opens (0 disables)
+            {PROFILE}_CLIENT_BREAKER_RESET: Breaker reset timeout in seconds
+
         Example:
             # Use LOCAL profile with username/password
             export VITALGRAPH_CLIENT_ENVIRONMENT=local
@@ -149,7 +177,24 @@ class VitalGraphClient(VitalGraphClientInterface):
         except ClientConfigurationError as e:
             logger.error(f"Failed to load client configuration: {e}")
             raise VitalGraphClientError(f"Configuration error: {e}")
-        
+
+        # Retry policy, circuit breaker, and counters
+        self.retry_policy = RetryPolicy(
+            max_retries=self.config.get_max_retries(),
+            retry_delay=self.config.get_retry_delay(),
+            backoff_base=self.config.get_retry_backoff_base(),
+            max_delay=self.config.get_retry_max_delay(),
+            request_budget=self.config.get_request_budget(),
+        )
+        self.circuit_breaker = CircuitBreaker(
+            threshold=self.config.get_breaker_threshold(),
+            reset_timeout=self.config.get_breaker_reset(),
+        )
+        self.retry_stats = RetryStats()
+        self._concurrency_limiter: Optional[asyncio.Semaphore] = None
+        # Seam for tests: the budget clock. Mirrors CircuitBreaker's clock.
+        self._clock = time.monotonic
+
         # Initialize endpoint handlers
         self.kgtypes = KGTypesEndpoint(self)
         self.kgframes = KGFramesEndpoint(self)
@@ -206,12 +251,35 @@ class VitalGraphClient(VitalGraphClientInterface):
                 'User-Agent': 'VitalGraph-Client/1.0'
             }
             
+            # Per-phase timeouts rather than one scalar: a 30s connect timeout is
+            # never useful, and an unbounded pool wait is what turns load into
+            # PoolTimeout instead of backpressure.
+            timeout_config = httpx.Timeout(
+                connect=self.config.get_connect_timeout(),
+                read=timeout,
+                write=timeout,
+                pool=self.config.get_pool_timeout(),
+            )
+            limits = httpx.Limits(
+                max_connections=self.config.get_max_connections(),
+                max_keepalive_connections=self.config.get_max_keepalive(),
+                keepalive_expiry=self.config.get_keepalive_expiry(),
+            )
+
             self.async_session = httpx.AsyncClient(
-                timeout=timeout,
+                timeout=timeout_config,
+                limits=limits,
                 headers=headers,
                 follow_redirects=True
             )
-            
+
+            # Optional client-side in-flight cap, so one client cannot saturate
+            # its own pool and then retry the timeouts it caused.
+            max_concurrency = self.config.get_max_concurrency()
+            self._concurrency_limiter = (
+                asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
+            )
+
             # Authenticate with the server
             if self._api_key:
                 # API key mode: set Bearer header directly, no login needed
@@ -233,7 +301,7 @@ class VitalGraphClient(VitalGraphClientInterface):
             await self._cleanup_session()
             raise VitalGraphClientError(f"Failed to open client: {e}")
     
-    async def _authenticate(self, server_url: str, api_base_path: str, timeout: int) -> None:
+    async def _authenticate(self, server_url: str, api_base_path: str, timeout: float) -> None:
         """
         Authenticate with the VitalGraph server using JWT authentication via /api/login endpoint.
         
@@ -268,8 +336,16 @@ class VitalGraphClient(VitalGraphClientInterface):
             # Set content type for form data and send authentication request
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
             assert self.async_session is not None
-            response = await self.async_session.post(login_url, data=login_data, headers=headers)
-            
+            # auth=False: there is no token to refresh yet, and a 401 here means
+            # bad credentials, not an expired session. idempotent=False keeps a
+            # login that reached the server from being replayed — only connect
+            # failures are retried.
+            response = await self._send_with_retry(
+                "POST", login_url,
+                auth=False, idempotent=False, timeout=timeout,
+                data=login_data, headers=headers,
+            )
+
             if response.status_code == 200:
                 # Authentication successful - parse JWT response
                 auth_result = response.json()
@@ -316,10 +392,14 @@ class VitalGraphClient(VitalGraphClientInterface):
                 logger.error(error_msg)
                 raise VitalGraphClientError(error_msg)
                 
+        except VitalGraphClientError:
+            # Already typed and described by the retry core — do not re-wrap,
+            # or callers lose the connection/timeout/unavailable distinction.
+            raise
         except httpx.HTTPError as e:
             error_msg = f"Failed to connect to authentication endpoint: {e}"
             logger.error(error_msg)
-            raise VitalGraphClientError(error_msg)
+            raise VitalGraphClientError(error_msg) from e
         except Exception as e:
             error_msg = f"Authentication error: {e}"
             logger.error(error_msg)
@@ -456,8 +536,15 @@ class VitalGraphClient(VitalGraphClientInterface):
             }
             
             refresh_data = {"refresh_token": self.refresh_token}
-            response = await self.async_session.post(refresh_url, json=refresh_data, headers=headers)
-            
+            # auth=False avoids recursing into _ensure_valid_token; idempotent=False
+            # keeps a refresh that reached the server from being replayed (it may
+            # have already rotated the token).
+            response = await self._send_with_retry(
+                "POST", refresh_url,
+                auth=False, idempotent=False,
+                json=refresh_data, headers=headers,
+            )
+
             if response.status_code == 200:
                 # Refresh successful
                 refresh_result = response.json()
@@ -508,114 +595,325 @@ class VitalGraphClient(VitalGraphClientInterface):
             if not await self._refresh_access_token():
                 raise VitalGraphClientError("Failed to refresh access token - please re-authenticate")
     
-    # Transient connection errors worth retrying
-    _RETRYABLE_EXCEPTIONS = (
-        httpx.ConnectError,
-        httpx.RemoteProtocolError,
-        httpx.ReadError,
-        httpx.WriteError,
-        httpx.ConnectTimeout,
-        httpx.ReadTimeout,
-        ConnectionResetError,
-    )
+    # Below this much remaining budget, another attempt cannot accomplish
+    # anything useful, so we stop rather than burn a socket on it.
+    _MIN_ATTEMPT_WINDOW = 0.1
+
+    def _build_attempt_timeout(
+        self, remaining: float, timeout_override: Any = None
+    ) -> httpx.Timeout:
+        """Build the timeout for a single attempt, clamped to the remaining budget.
+
+        Clamping is what makes the budget a real ceiling: without it a final
+        attempt started just under the deadline could still run for the full
+        read timeout past it.
+        """
+        assert self.config is not None
+        if isinstance(timeout_override, httpx.Timeout):
+            connect, read = timeout_override.connect, timeout_override.read
+            write, pool = timeout_override.write, timeout_override.pool
+        elif timeout_override is not None:
+            connect = read = write = pool = float(timeout_override)
+        else:
+            read = write = self.config.get_timeout()
+            connect = self.config.get_connect_timeout()
+            pool = self.config.get_pool_timeout()
+
+        def clamp(value: Optional[float]) -> float:
+            return remaining if value is None else min(float(value), remaining)
+
+        return httpx.Timeout(
+            connect=clamp(connect), read=clamp(read), write=clamp(write), pool=clamp(pool)
+        )
+
+    async def _send_once(
+        self, method: str, url: str, remaining: float, timeout_override: Any, **kwargs
+    ) -> httpx.Response:
+        """Issue exactly one request, honoring the optional concurrency cap."""
+        assert self.async_session is not None
+        attempt_timeout = self._build_attempt_timeout(remaining, timeout_override)
+        if self._concurrency_limiter is not None:
+            async with self._concurrency_limiter:
+                return await self.async_session.request(
+                    method, url, timeout=attempt_timeout, **kwargs
+                )
+        return await self.async_session.request(
+            method, url, timeout=attempt_timeout, **kwargs
+        )
+
+    async def _handle_401(self) -> None:
+        """Refresh credentials after a 401, by refresh token or full re-auth."""
+        logger.warning("Received 401 Unauthorized - refreshing credentials")
+        if self.refresh_token:
+            logger.info("Attempting token refresh with refresh token")
+            if not await self._refresh_access_token():
+                raise VitalGraphClientError(
+                    "Token refresh failed after 401 - please re-authenticate"
+                )
+        else:
+            logger.info("No refresh token available - re-authenticating with credentials")
+            await self._reauthenticate()
+
+    @staticmethod
+    def _status_error(exc: httpx.HTTPStatusError) -> VitalGraphClientError:
+        """Build the error for a non-retryable status, preserving server detail."""
+        detail = ""
+        try:
+            body = exc.response.json()
+            detail = body.get("detail", "")
+        except Exception:
+            pass
+        msg = f"Request failed ({exc.response.status_code}): {detail or exc}"
+        return VitalGraphClientError(msg, status_code=exc.response.status_code)
+
+    @staticmethod
+    def _terminal_error(
+        method: str,
+        url: str,
+        failure_class: Optional[FailureClass],
+        attempts: int,
+        exc: Optional[BaseException],
+        reason: str,
+        retry_after: Optional[float] = None,
+    ) -> VitalGraphClientError:
+        """Map an exhausted/abandoned retry sequence onto a typed exception.
+
+        Callers (Celery tasks in particular) need to tell "the server is down"
+        from "this call is too slow" from "this will never work".
+        """
+        msg = (
+            f"{method} {safe_log_url(url)} failed after {attempts} attempt(s): "
+            f"{reason}"
+        )
+        if exc is not None:
+            msg = f"{msg} ({type(exc).__name__}: {exc})"
+
+        status_code = (
+            exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        )
+        if failure_class is None:
+            # No class means the deadline ended the call, whatever the last
+            # underlying failure was.
+            return VitalGraphClientTimeoutError(msg, status_code=status_code)
+        if failure_class is FailureClass.DECLINED:
+            return VitalGraphClientUnavailableError(
+                msg, status_code=status_code, retry_after=retry_after
+            )
+        if failure_class is FailureClass.PRE_SEND:
+            return VitalGraphClientConnectionError(msg, status_code=status_code)
+        if isinstance(exc, httpx.TimeoutException) or status_code == 504:
+            return VitalGraphClientTimeoutError(msg, status_code=status_code)
+        return VitalGraphClientConnectionError(msg, status_code=status_code)
+
+    async def _send_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        auth: bool = True,
+        idempotent: Optional[bool] = None,
+        replayable: bool = True,
+        budget: Optional[float] = None,
+        max_retries: Optional[int] = None,
+        timeout: Any = None,
+        **kwargs,
+    ) -> httpx.Response:
+        """Send a request with classification-driven retry, backoff, and a budget.
+
+        Every HTTP call the client makes goes through here, so the retry
+        semantics are the same for authenticated endpoints, health probes, and
+        the login/refresh round trips.
+
+        Args:
+            method: HTTP method.
+            url: Request URL.
+            auth: Whether to attach/refresh credentials and handle 401.
+            idempotent: Whether replaying this request is safe. Defaults to the
+                method's own semantics; pass True for a POST that is really a
+                read (search, query) to opt it into post-send retry.
+            replayable: Whether the request body can be produced a second time.
+                Pass False for streamed bodies (generators, open file handles):
+                they are consumed on the first attempt, so a retry would send a
+                truncated or empty body. Disables retry entirely.
+            budget: Total wall-clock ceiling for this call, defaulting to the
+                configured request budget.
+            max_retries: Per-call override of the retry count.
+            timeout: Per-call timeout override (seconds or ``httpx.Timeout``).
+
+        Returns:
+            The successful response.
+
+        Raises:
+            VitalGraphClientUnavailableError: Server declined, or breaker open.
+            VitalGraphClientTimeoutError: Budget exhausted.
+            VitalGraphClientConnectionError: Server unreachable.
+            VitalGraphClientError: Any non-retryable failure.
+        """
+        method = method.upper()
+        if idempotent is None:
+            idempotent = method in IDEMPOTENT_METHODS
+        if self.async_session is None:
+            raise VitalGraphClientError("Client is not connected")
+
+        policy = self.retry_policy
+        retry_limit = policy.max_retries if max_retries is None else max_retries
+        total_budget = policy.request_budget if budget is None else budget
+        deadline = self._clock() + total_budget
+        self.retry_stats.requests += 1
+
+        if not self.circuit_breaker.allows_request():
+            self.retry_stats.breaker_rejections += 1
+            wait = self.circuit_breaker.retry_after()
+            raise VitalGraphClientUnavailableError(
+                f"Circuit breaker open for {safe_log_url(url)}; "
+                f"failing fast for another {wait:.1f}s",
+                retry_after=wait,
+            )
+
+        last_exc: Optional[BaseException] = None
+        reauthed = False
+        attempt = 0
+
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= self._MIN_ATTEMPT_WINDOW:
+                self.retry_stats.budget_exhausted += 1
+                raise self._terminal_error(
+                    method, url, None, attempt, last_exc,
+                    f"exceeded {total_budget:.1f}s request budget",
+                ) from last_exc
+
+            if auth and not self.disable_proactive_refresh:
+                await self._ensure_valid_token()
+
+            failure_class: Optional[FailureClass] = None
+            retry_after: Optional[float] = None
+
+            try:
+                self.retry_stats.attempts += 1
+                response = await self._send_once(
+                    method, url, remaining, timeout, **kwargs
+                )
+                response.raise_for_status()
+                self.circuit_breaker.record_success()
+                return response
+
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                # A 401 is not a retry: refresh credentials once, then re-enter
+                # the loop so the refreshed attempt gets full retry coverage.
+                if auth and status == 401 and not reauthed:
+                    reauthed = True
+                    await self._handle_401()
+                    logger.info("Retrying request with refreshed credentials")
+                    continue
+
+                failure_class = classify_status(status)
+                if failure_class is FailureClass.FATAL:
+                    raise self._status_error(e) from e
+                if failure_class is FailureClass.DECLINED:
+                    self.circuit_breaker.record_failure()
+                    retry_after = parse_retry_after(e.response.headers.get("Retry-After"))
+                last_exc = e
+
+            except (httpx.TransportError, ConnectionResetError) as e:
+                failure_class = classify_exception(e)
+                if failure_class is FailureClass.PRE_SEND:
+                    # Only pre-send failures say anything about server health.
+                    self.circuit_breaker.record_failure()
+                last_exc = e
+
+            except httpx.HTTPError as e:
+                # Malformed URL, too many redirects, local protocol error, ...
+                raise VitalGraphClientError(f"Request failed: {e}") from e
+
+            # --- retry decision -------------------------------------------------
+            if not replayable:
+                # A consumed generator or file handle cannot be re-sent; a retry
+                # would upload a truncated body, which is worse than failing.
+                raise self._terminal_error(
+                    method, url, failure_class, attempt + 1, last_exc,
+                    "request body cannot be replayed; not retrying",
+                    retry_after=retry_after,
+                ) from last_exc
+
+            if failure_class is FailureClass.POST_SEND and not idempotent:
+                self.retry_stats.non_retryable_writes += 1
+                raise self._terminal_error(
+                    method, url, failure_class, attempt + 1, last_exc,
+                    "non-idempotent request may already have been processed; "
+                    "not retrying",
+                ) from last_exc
+
+            if attempt >= retry_limit:
+                raise self._terminal_error(
+                    method, url, failure_class, attempt + 1, last_exc,
+                    f"exhausted {retry_limit} retries",
+                    retry_after=retry_after,
+                ) from last_exc
+
+            sleep_for = policy.compute_sleep(attempt, retry_after)
+            remaining = deadline - self._clock()
+            if sleep_for + self._MIN_ATTEMPT_WINDOW >= remaining:
+                self.retry_stats.budget_exhausted += 1
+                # failure_class is deliberately dropped here: what ended this
+                # call is the deadline, not the underlying failure, and callers
+                # keying on the budget need a stable type to catch.
+                raise self._terminal_error(
+                    method, url, None, attempt + 1, last_exc,
+                    f"exceeded {total_budget:.1f}s request budget",
+                    retry_after=retry_after,
+                ) from last_exc
+
+            self.retry_stats.record_retry(failure_class)
+            # First retry is worth a warning; the rest are detail.
+            log_at = logger.warning if attempt == 0 else logger.debug
+            log_at(
+                "Retrying %s %s after %s (%s): attempt %d/%d, sleeping %.2fs, "
+                "%.1fs budget left",
+                method, safe_log_url(url),
+                type(last_exc).__name__ if last_exc else "unknown",
+                failure_class.value if failure_class else "unknown",
+                attempt + 1, retry_limit + 1, sleep_for, remaining,
+            )
+            await asyncio.sleep(sleep_for)
+            attempt += 1
 
     async def _make_authenticated_request(self, method: str, url: str, **kwargs) -> httpx.Response:
         """
         Make an authenticated async request with automatic token refresh
-        and retry on transient connection errors.
-        
+        and classification-driven retry.
+
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
             url: Request URL
-            **kwargs: Additional request parameters
-            
+            **kwargs: Additional request parameters. ``idempotent``, ``budget``,
+                ``max_retries``, and ``timeout`` are consumed as retry controls;
+                anything else is passed through to httpx.
+
         Returns:
             Response object
-            
+
         Raises:
             VitalGraphClientError: If request fails after all retries
         """
         if not self.is_connected():
             raise VitalGraphClientError("Client is not connected")
-        
-        max_retries = self.config.get_max_retries() if self.config else 3
-        retry_delay = self.config.get_retry_delay() if self.config else 1
-        last_exception = None
 
-        for attempt in range(max_retries + 1):
-            # Proactive: Ensure we have a valid access token (unless disabled for testing)
-            if not self.disable_proactive_refresh:
-                await self._ensure_valid_token()
-            
-            try:
-                assert self.async_session is not None
-                response = await self.async_session.request(method, url, **kwargs)
-                response.raise_for_status()
-                return response
-            except httpx.HTTPStatusError as e:
-                # Reactive: Handle 401 Unauthorized with token refresh and retry
-                if e.response.status_code == 401:
-                    logger.warning("Received 401 Unauthorized - attempting token refresh and retry")
-                    
-                    # Determine authentication mode and handle accordingly
-                    if self.refresh_token:
-                        logger.info("Attempting token refresh with refresh token")
-                        if not await self._refresh_access_token():
-                            raise VitalGraphClientError("Token refresh failed after 401 - please re-authenticate")
-                    else:
-                        logger.info("No refresh token available - re-authenticating with credentials")
-                        await self._reauthenticate()
-                    
-                    # Retry the request ONCE with new token
-                    logger.info("Retrying request with refreshed token")
-                    try:
-                        assert self.async_session is not None
-                        response = await self.async_session.request(method, url, **kwargs)
-                        response.raise_for_status()
-                        return response
-                    except httpx.HTTPError as retry_error:
-                        raise VitalGraphClientError(f"Request failed after token refresh: {retry_error}")
-                elif e.response.status_code in (502, 503, 504):
-                    # Transient server errors — retry
-                    last_exception = e
-                    if attempt < max_retries:
-                        logger.warning(
-                            f"⚠️ HTTP {e.response.status_code} on {method} {url} "
-                            f"(attempt {attempt + 1}/{max_retries + 1}) — retrying in {retry_delay}s"
-                        )
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    raise VitalGraphClientError(f"Request failed after {max_retries + 1} attempts: {e}")
-                else:
-                    # Not a retryable error — preserve status code and response detail
-                    detail = ""
-                    try:
-                        body = e.response.json()
-                        detail = body.get("detail", "")
-                    except Exception:
-                        pass
-                    msg = f"Request failed ({e.response.status_code}): {detail or e}"
-                    raise VitalGraphClientError(msg, status_code=e.response.status_code)
-            except self._RETRYABLE_EXCEPTIONS as e:
-                # Transient connection errors — retry
-                last_exception = e
-                if attempt < max_retries:
-                    logger.warning(
-                        f"⚠️ Connection error on {method} {url}: {type(e).__name__}: {e} "
-                        f"(attempt {attempt + 1}/{max_retries + 1}) — retrying in {retry_delay}s"
-                    )
-                    await asyncio.sleep(retry_delay)
-                    continue
-                raise VitalGraphClientError(
-                    f"Request failed after {max_retries + 1} attempts: {e}"
-                )
-            except httpx.HTTPError as e:
-                # Non-retryable HTTP error
-                raise VitalGraphClientError(f"Request failed: {e}")
-        
-        # Should not reach here, but safety net
-        raise VitalGraphClientError(f"Request failed after {max_retries + 1} attempts: {last_exception}")
-    
+        return await self._send_with_retry(method, url, auth=True, **kwargs)
+
+    def stats(self) -> Dict[str, Any]:
+        """
+        Get in-process retry and circuit breaker counters.
+
+        Returns:
+            Dictionary of counters plus current breaker state
+        """
+        data = self.retry_stats.as_dict()
+        data["breaker_state"] = self.circuit_breaker.state.value
+        data["breaker_trips"] = self.circuit_breaker.trip_count
+        return data
+
     def get_server_info(self) -> Dict[str, Any]:
         """
         Get information about the configured server.
@@ -640,9 +938,18 @@ class VitalGraphClient(VitalGraphClientInterface):
             'server_url': self.config.get_server_url(),
             'api_base_path': self.config.get_api_base_path(),
             'timeout': self.config.get_timeout(),
+            'connect_timeout': self.config.get_connect_timeout(),
+            'pool_timeout': self.config.get_pool_timeout(),
+            'request_budget': self.config.get_request_budget(),
             'max_retries': self.config.get_max_retries(),
+            'retry_delay': self.config.get_retry_delay(),
+            'retry_backoff_base': self.config.get_retry_backoff_base(),
+            'retry_max_delay': self.config.get_retry_max_delay(),
+            'max_concurrency': self.config.get_max_concurrency(),
+            'breaker_threshold': self.config.get_breaker_threshold(),
             'is_connected': self.is_connected(),
-            'authentication': auth_info
+            'authentication': auth_info,
+            'retry_stats': self.stats(),
         }
     
     async def __aenter__(self):
@@ -668,13 +975,20 @@ class VitalGraphClient(VitalGraphClientInterface):
     # Health / diagnostics (unauthenticated)
     # ------------------------------------------------------------------
 
+    # A health probe that retries for a minute is not a health probe. These get
+    # a short budget and a single retry, and they still go through the retry
+    # core so the breaker and counters see them.
+    _HEALTH_BUDGET = 5.0
+
     async def health(self) -> Dict[str, Any]:
         """Check service health via GET /health (no auth required)."""
         if not self.async_session or not self.config:
             raise VitalGraphClientError("Client is not open")
         url = f"{self.config.get_server_url()}/health"
-        resp = await self.async_session.get(url)
-        resp.raise_for_status()
+        resp = await self._send_with_retry(
+            "GET", url, auth=False, budget=self._HEALTH_BUDGET, max_retries=1,
+            timeout=self._HEALTH_BUDGET,
+        )
         return resp.json()
 
     async def cache_stats(self) -> Dict[str, Any]:
@@ -682,8 +996,10 @@ class VitalGraphClient(VitalGraphClientInterface):
         if not self.async_session or not self.config:
             raise VitalGraphClientError("Client is not open")
         url = f"{self.config.get_server_url()}/health/cache"
-        resp = await self.async_session.get(url)
-        resp.raise_for_status()
+        resp = await self._send_with_retry(
+            "GET", url, auth=False, budget=self._HEALTH_BUDGET, max_retries=1,
+            timeout=self._HEALTH_BUDGET,
+        )
         return resp.json()
 
     # Space CRUD Methods - Delegated to SpacesEndpoint

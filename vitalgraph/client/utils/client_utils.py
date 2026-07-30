@@ -9,10 +9,38 @@ from typing import Dict, Any, Optional
 
 class VitalGraphClientError(Exception):
     """Base exception for VitalGraph client errors."""
-    
+
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(message)
         self.status_code = status_code
+
+
+class VitalGraphClientConnectionError(VitalGraphClientError):
+    """The server could not be reached, or the connection failed mid-request.
+
+    Retrying the whole operation later is reasonable.
+    """
+
+
+class VitalGraphClientTimeoutError(VitalGraphClientError):
+    """The request exceeded its per-call time budget.
+
+    Distinct from a connection failure: the server may well be up and simply
+    slow, and the same call may succeed with a larger budget.
+    """
+
+
+class VitalGraphClientUnavailableError(VitalGraphClientError):
+    """The server declined to serve the request (429/503), or the client-side
+    circuit breaker is open after repeated failures.
+
+    Backing off for longer than a retry loop would is the appropriate response.
+    """
+
+    def __init__(self, message: str, status_code: Optional[int] = None,
+                 retry_after: Optional[float] = None):
+        super().__init__(message, status_code=status_code)
+        self.retry_after = retry_after
 
 
 def validate_required_params(**params):

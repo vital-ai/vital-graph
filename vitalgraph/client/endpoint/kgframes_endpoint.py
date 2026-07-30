@@ -56,7 +56,7 @@ class KGFramesEndpoint(BaseEndpoint):
             self._vs = VitalSigns()
         return self._vs
     
-    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None, idempotent=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -73,6 +73,9 @@ class KGFramesEndpoint(BaseEndpoint):
                 kwargs['headers'] = headers
             if content is not None:
                 kwargs['content'] = content
+            if idempotent is not None:
+                # Read-only POSTs opt into post-send retry; see client retry policy.
+                kwargs['idempotent'] = idempotent
             
             response = await self._make_authenticated_request(method, url, **kwargs)
             
@@ -1163,7 +1166,8 @@ class KGFramesEndpoint(BaseEndpoint):
         url = f"{self._get_server_url()}/api/graphs/kgframes/query"
         params = build_query_params(space_id=space_id, graph_id=graph_id)
         
-        return await self._make_typed_request('POST', url, FrameQueryResponse, params=params, json=query_request.model_dump())
+        # Read-only query expressed as a POST — safe to replay.
+        return await self._make_typed_request('POST', url, FrameQueryResponse, params=params, json=query_request.model_dump(), idempotent=True)
     
     async def list_kgframes_with_graphs(self, space_id: str, graph_id: str, page_size: int = 10, offset: int = 0,
                                  search: Optional[str] = None, include_frame_graphs: bool = False) -> MultiFrameGraphResponse:

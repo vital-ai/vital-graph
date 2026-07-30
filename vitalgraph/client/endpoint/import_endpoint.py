@@ -83,7 +83,9 @@ class ImportEndpoint(BaseEndpoint):
             url = f"{self._get_server_url().rstrip('/')}/api/data/import/upload?job_id={job_id}"
             with open(file_path_obj, 'rb') as f:
                 files = {'file': (file_path_obj.name, f, 'application/octet-stream')}
-                response = await self._make_authenticated_request('POST', url, files=files)
+                # The open file handle is at EOF after the first attempt — a
+                # retry would upload an empty body.
+                response = await self._make_authenticated_request('POST', url, files=files, replayable=False)
                 response.raise_for_status()
                 return ImportUploadResponse.model_validate(response.json())
         except httpx.HTTPError as e:

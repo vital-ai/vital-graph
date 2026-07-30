@@ -7,6 +7,7 @@ Hides wire format complexity and returns VitalSigns GraphObjects directly.
 
 import httpx
 import aiohttp
+import logging
 from typing import Dict, Any, Optional, BinaryIO, Union, List
 from pathlib import Path
 import asyncio
@@ -15,7 +16,12 @@ from vital_ai_vitalsigns.model.GraphObject import GraphObject
 from vital_ai_vitalsigns.vitalsigns import VitalSigns
 
 from .base_endpoint import BaseEndpoint
-from ..utils.client_utils import VitalGraphClientError, validate_required_params, build_query_params
+from ..utils.client_utils import (
+    VitalGraphClientError,
+    VitalGraphClientConnectionError,
+    validate_required_params,
+    build_query_params,
+)
 from ..binary.streaming import (
     BinaryGenerator, BinaryConsumer, BytesConsumer,
     create_generator, create_consumer
@@ -42,6 +48,13 @@ from ..response.response_builder import (
     build_success_response,
     build_error_response,
 )
+from ..retry import FailureClass, classify_exception
+
+logger = logging.getLogger(__name__)
+
+# File transfers are long by nature and are not covered by the per-call request
+# budget that bounds ordinary API calls.
+STREAM_TIMEOUT = 300.0
 
 
 class FilesEndpoint(BaseEndpoint):
@@ -671,8 +684,9 @@ class FilesEndpoint(BaseEndpoint):
                 files = {
                     'file': ('pumped_file', file_generator(), content_type)
                 }
-                
-                response = await self._make_authenticated_request('POST', upload_url, params=upload_params, files=files)
+
+                # Generator body is consumed on the first attempt — not replayable.
+                response = await self._make_authenticated_request('POST', upload_url, params=upload_params, files=files, replayable=False)
             else:
                 # Non-streaming: collect all content into memory first
                 # (More compatible but uses more memory)
@@ -872,8 +886,9 @@ class FilesEndpoint(BaseEndpoint):
             files = {
                 'file': (final_filename, sync_generator(), final_content_type)
             }
-            
-            response = await self._make_authenticated_request('POST', url, params=params, files=files)
+
+            # Generator body is consumed on the first attempt — not replayable.
+            response = await self._make_authenticated_request('POST', url, params=params, files=files, replayable=False)
             response_data = response.json()
             
             return FileUploadResponse(
@@ -919,40 +934,81 @@ class FilesEndpoint(BaseEndpoint):
                 chunk_size=chunk_size
             )
             
-            # Use httpx for async HTTP requests
-            async with httpx.AsyncClient() as client:
-                # Get auth headers
+            # Use the client's shared session: its connection pool, configured
+            # headers, and TLS setup rather than a throwaway AsyncClient.
+            session = self.client.async_session
+            if session is None:
+                raise VitalGraphClientError("Client is not connected")
+
+            # A stream cannot be retried transparently once bytes have reached
+            # the consumer, so retry is limited to the connect phase — before
+            # any chunk is written. Anything later surfaces as a partial
+            # download, which the caller must handle.
+            max_attempts = max(1, self.client.retry_policy.max_retries + 1)
+            last_exc: Optional[BaseException] = None
+
+            for attempt in range(max_attempts):
                 headers = await self._get_auth_headers()
-                
-                async with client.stream('GET', url, params=params, headers=headers, timeout=300.0) as response:
-                    response.raise_for_status()
-                    
-                    content_type = response.headers.get('content-type', 'application/octet-stream')
-                    
-                    # Create async consumer from destination
-                    consumer = create_async_consumer(destination)
-                    total_size = 0
-                    
-                    # Stream chunks directly
-                    async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-                        if chunk:
-                            await consumer.consume(chunk)
-                            total_size += len(chunk)
-                    
-                    await consumer.finalize()
-                    
-                    return FileUploadResponse(
-                        file_uri=file_uri,
-                        size=total_size,
-                        content_type=content_type,
-                        filename=file_uri.split('/')[-1] if '/' in file_uri else file_uri.split(':')[-1],
-                        message=f"Downloaded {total_size} bytes from {file_uri}",
-                        error_code=0,
-                        status_code=200,
-                        space_id=space_id,
-                        graph_id=graph_id
+                try:
+                    async with session.stream(
+                        'GET', url, params=params, headers=headers,
+                        timeout=httpx.Timeout(
+                            connect=self.client.config.get_connect_timeout(),
+                            read=STREAM_TIMEOUT,
+                            write=STREAM_TIMEOUT,
+                            pool=self.client.config.get_pool_timeout(),
+                        ),
+                    ) as response:
+                        response.raise_for_status()
+
+                        content_type = response.headers.get('content-type', 'application/octet-stream')
+
+                        # Create async consumer from destination
+                        consumer = create_async_consumer(destination)
+                        total_size = 0
+
+                        # Stream chunks directly
+                        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                            if chunk:
+                                await consumer.consume(chunk)
+                                total_size += len(chunk)
+
+                        await consumer.finalize()
+
+                        return FileUploadResponse(
+                            file_uri=file_uri,
+                            size=total_size,
+                            content_type=content_type,
+                            filename=file_uri.split('/')[-1] if '/' in file_uri else file_uri.split(':')[-1],
+                            message=f"Downloaded {total_size} bytes from {file_uri}",
+                            error_code=0,
+                            status_code=200,
+                            space_id=space_id,
+                            graph_id=graph_id
+                        )
+                except (httpx.TransportError, ConnectionResetError) as e:
+                    last_exc = e
+                    if classify_exception(e) is not FailureClass.PRE_SEND:
+                        raise VitalGraphClientConnectionError(
+                            f"Download of {file_uri} failed mid-stream; "
+                            f"the destination may hold a partial file "
+                            f"({type(e).__name__}: {e})"
+                        ) from e
+                    if attempt + 1 >= max_attempts:
+                        break
+                    sleep_for = self.client.retry_policy.compute_sleep(attempt)
+                    logger.warning(
+                        "Retrying stream download of %s after %s: attempt %d/%d, "
+                        "sleeping %.2fs",
+                        file_uri, type(e).__name__, attempt + 1, max_attempts, sleep_for
                     )
-                    
+                    await asyncio.sleep(sleep_for)
+
+            raise VitalGraphClientConnectionError(
+                f"Could not connect to download {file_uri} after {max_attempts} "
+                f"attempt(s): {last_exc}"
+            ) from last_exc
+
         except VitalGraphClientError:
             raise
         except Exception as e:

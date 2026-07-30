@@ -37,7 +37,8 @@ class SparqlEndpoint(BaseEndpoint):
         
         url = f"{self._get_server_url().rstrip('/')}/api/graphs/sparql/query"
         
-        return await self._make_typed_request('POST', url, SPARQLQueryResponse, params={'space_id': space_id}, json=request.model_dump())
+        # A SPARQL query is a read expressed as a POST — safe to replay.
+        return await self._make_typed_request('POST', url, SPARQLQueryResponse, params={'space_id': space_id}, json=request.model_dump(), idempotent=True)
     
     async def execute_sparql_insert(self, space_id: str, request: SPARQLInsertRequest) -> SPARQLInsertResponse:
         """

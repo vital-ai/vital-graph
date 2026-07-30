@@ -57,7 +57,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
         super().__init__(client)
         self.vs = VitalSigns()
     
-    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None):
+    async def _make_request(self, method: str, url: str, params=None, json=None, headers=None, content=None, idempotent=None):
         """
         Make authenticated HTTP request with automatic token refresh.
         Uses base endpoint's authenticated request method.
@@ -78,6 +78,9 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 kwargs['headers'] = headers
             if content is not None:
                 kwargs['content'] = content
+            if idempotent is not None:
+                # Read-only POSTs opt into post-send retry; see client retry policy.
+                kwargs['idempotent'] = idempotent
             
             response = await self._make_authenticated_request(method, url, **kwargs)
             
@@ -1313,7 +1316,8 @@ class KGEntitiesEndpoint(BaseEndpoint):
                 graph_id=graph_id
             )
             
-            response = await self._make_request('POST', url, params=params, json=query_criteria)
+            # Read-only query expressed as a POST — safe to replay.
+            response = await self._make_request('POST', url, params=params, json=query_criteria, idempotent=True)
             response_data = response.json()
             
             # Server returns QuadResponse-shaped JSON with results field
@@ -1420,6 +1424,7 @@ class KGEntitiesEndpoint(BaseEndpoint):
             "graph_id": graph_id,
             "count_requests": count_requests,
         }
-        response = await self._make_request('POST', url, json=body)
+        # Read-only count aggregation expressed as a POST — safe to replay.
+        response = await self._make_request('POST', url, json=body, idempotent=True)
         data = response.json()
         return data.get("counts", [])

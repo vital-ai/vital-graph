@@ -93,7 +93,9 @@ class KGQueriesEndpoint(BaseEndpoint):
                 url,
                 KGQueryResponse,
                 params=params,
-                json=request_dict
+                json=request_dict,
+                # Read-only query expressed as a POST — safe to replay.
+                idempotent=True
             )
             
             # Log response for debugging
