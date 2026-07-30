@@ -100,6 +100,19 @@ dev = [
     "nltk>=3.8.0",
     "numpy>=1.24.0",
     "sentencepiece>=0.1.99",
+    # Tier 1 (tests/unit) runs with `pip install -e ".[dev]"` and must be able to
+    # IMPORT the modules under test, even though those tests touch no DB or model.
+    # Several L0 tests reach server-side code whose module-level imports pull these
+    # in transitively:
+    #   tests/unit/test_auto_sync_lifecycle.py          -> vectorization.auto_sync -> asyncpg
+    #   tests/unit/test_vector_index_dimension_validation.py
+    #       -> endpoint.vector_indexes_endpoint -> fastapi
+    #       -> auth.role_dependencies            -> fastapi.security, PyJWT
+    # These are the light half of the `server` extra — deliberately NOT the whole
+    # extra, which drags in torch via `heavy`, psycopg and SQLAlchemy.
+    "asyncpg>=0.29.0",
+    "fastapi>=0.104.0",
+    "PyJWT>=2.8.0",
 ]
 
 # Testing utilities
