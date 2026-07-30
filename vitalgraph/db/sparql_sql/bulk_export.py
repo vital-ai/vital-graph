@@ -9,10 +9,16 @@ frame_entity / stats tables) so the restored space is immediately queryable.
 Only the core tables are exported: the edge/frame_entity/geo/stats tables are
 deterministic functions of the quads, so shipping them would just bloat the
 backup — they are resynced on import instead.
+
+``export_space`` runs all three COPYs in one ``REPEATABLE READ`` snapshot and
+records that snapshot in a ``manifest.json`` sidecar, so an export is internally
+consistent and can anchor a later catch-up sync.  See
+``planning/planning_db/space_sync_and_cutover_plan.md`` §5b.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Dict
@@ -25,6 +31,10 @@ logger = logging.getLogger(__name__)
 # datatype before term before rdf_quad for clarity).
 _EXPORT_TABLES = ("datatype", "term", "rdf_quad")
 
+# Sidecar file recording the export's snapshot watermark (see export_space).
+_MANIFEST_NAME = "manifest.json"
+_MANIFEST_VERSION = 1
+
 
 def _bare(name: str) -> str:
     return name.split(".")[-1]
@@ -33,19 +43,78 @@ def _bare(name: str) -> str:
 async def export_space(conn, space_id: str, dest_dir: str) -> Dict[str, str]:
     """Binary-COPY each core table to ``<dest_dir>/<table>.bin``.
 
-    Returns a ``{logical_table: file_path}`` map. Streams row-by-row, so peak
-    memory is independent of table size.
+    All three COPYs run inside a single ``REPEATABLE READ`` read-only
+    transaction, so they share one snapshot.  This matters twice over:
+
+    - **Consistency.** Under concurrent writes, per-statement snapshots let the
+      later ``rdf_quad`` COPY see rows whose terms the earlier ``term`` COPY
+      missed, producing an export with quads referencing absent terms.
+    - **Catch-up sync.** A single snapshot gives the export one well-defined
+      point in time, so a later delta can ask exactly "what changed since?".
+
+    That snapshot is recorded in ``<dest_dir>/manifest.json`` (see
+    ``read_export_manifest``) as a ``pg_snapshot`` watermark — the correct basis
+    for a catch-up, unlike a wall-clock time: a transaction that starts before
+    the export and commits after it writes rows with an *earlier* timestamp that
+    were nonetheless invisible to the export, so a ``ts > watermark`` delta
+    silently loses them.  ``pg_visible_in_snapshot(xmin, watermark)`` does not.
+
+    Returns a ``{logical_table: file_path}`` map (plus a ``"manifest"`` key).
+    Streams row-by-row, so peak memory is independent of table size.
     """
     t = SparqlSQLSchema.get_table_names(space_id)
     os.makedirs(dest_dir, exist_ok=True)
     paths: Dict[str, str] = {}
-    for key in _EXPORT_TABLES:
-        table = _bare(t[key])
-        path = os.path.join(dest_dir, f"{table}.bin")
-        await conn.copy_from_table(table, output=path, format="binary")
-        paths[key] = path
-        logger.info("export_space(%s): %s -> %s", space_id, table, path)
+
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        # Read the watermark INSIDE the transaction, before any COPY: it must
+        # describe the same snapshot the COPYs see.
+        snapshot = await conn.fetchval("SELECT pg_current_snapshot()::text")
+        # WAL position, for a slot/LSN-based catch-up. Unavailable on a standby
+        # (and irrelevant there), so never let it fail the export.
+        try:
+            lsn = await conn.fetchval("SELECT pg_current_wal_lsn()::text")
+        except Exception:
+            lsn = None
+
+        for key in _EXPORT_TABLES:
+            table = _bare(t[key])
+            path = os.path.join(dest_dir, f"{table}.bin")
+            await conn.copy_from_table(table, output=path, format="binary")
+            paths[key] = path
+            logger.info("export_space(%s): %s -> %s", space_id, table, path)
+
+    manifest = {
+        "space_id": space_id,
+        "version": _MANIFEST_VERSION,
+        "snapshot": snapshot,
+        "wal_lsn": lsn,
+        "tables": {k: os.path.basename(v) for k, v in paths.items()},
+    }
+    manifest_path = os.path.join(dest_dir, _MANIFEST_NAME)
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2, sort_keys=True)
+    paths["manifest"] = manifest_path
+    logger.info("export_space(%s): snapshot watermark %s -> %s",
+                space_id, snapshot, manifest_path)
     return paths
+
+
+def read_export_manifest(dest_dir: str) -> Dict[str, object]:
+    """Load the manifest written alongside an export (see ``export_space``).
+
+    The ``snapshot`` field is the watermark for a catch-up sync:
+
+    .. code-block:: sql
+
+        SELECT … FROM {space}_rdf_quad
+        WHERE NOT pg_visible_in_snapshot(xmin::text::xid8, $1::text::pg_snapshot)
+
+    Raises ``FileNotFoundError`` for exports taken before manifests existed —
+    those have no single point in time and cannot anchor a catch-up.
+    """
+    with open(os.path.join(dest_dir, _MANIFEST_NAME), encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 async def import_space(conn, space_id: str, paths: Dict[str, str],

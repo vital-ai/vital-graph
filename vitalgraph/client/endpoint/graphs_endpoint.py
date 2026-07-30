@@ -44,7 +44,19 @@ class GraphsEndpoint(BaseEndpoint):
             response = await self._make_authenticated_request('GET', url, params={'space_id': space_id})
             response_data = response.json()
             
-            # Parse each item in the list as a GraphInfo object
+            # The server now returns a GraphListResponse envelope
+            # ({graphs, total_count, success, status, message}); older servers
+            # returned a bare array. Accept both.
+            if isinstance(response_data, dict) and 'graphs' in response_data:
+                graphs = [GraphInfo.model_validate(item) for item in response_data['graphs']]
+                return GraphsListResponse(
+                    graphs=graphs,
+                    total=response_data.get('total_count', len(graphs)),
+                    error_code=0,
+                    status_code=200,
+                    status=response_data.get('status'),
+                    message=response_data.get('message') or 'Graphs listed successfully'
+                )
             if isinstance(response_data, list):
                 graphs = [GraphInfo.model_validate(item) for item in response_data]
                 return GraphsListResponse(

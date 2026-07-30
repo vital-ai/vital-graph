@@ -11,18 +11,36 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from ..model.result_status import OperationStatus
 from .agent_models import (
+    AgentChangeLogEntry,
+    AgentChangeLogResponse,
     AgentCreate,
+    AgentDeleteResponse,
+    AgentDiscoverResponse,
     AgentEndpointCreate,
+    AgentEndpointDeleteResponse,
+    AgentEndpointEnvelope,
+    AgentEndpointListResponse,
     AgentEndpointResponse,
     AgentEndpointUpdate,
+    AgentEnvelope,
     AgentFunctionCreate,
+    AgentFunctionDeleteResponse,
+    AgentFunctionDiscoverResponse,
+    AgentFunctionEnvelope,
+    AgentFunctionListResponse,
     AgentFunctionResponse,
     AgentFunctionUpdate,
     AgentListResponse,
     AgentResponse,
+    AgentSearchResponse,
+    AgentSearchResult,
     AgentStatusChange,
+    AgentStatusChangeResponse,
     AgentTypeCreate,
+    AgentTypeEnvelope,
+    AgentTypeListResponse,
     AgentTypeResponse,
     AgentUpdate,
 )
@@ -142,13 +160,17 @@ class AgentRegistryEndpoint:
         # Agent Types
         # ============================================================
 
-        @self.router.get("/agent/types", response_model=List[AgentTypeResponse],
+        @self.router.get("/agent/types", response_model=AgentTypeListResponse,
                          tags=["Agent Registry"])
         async def list_agent_types_route(current_user: Dict = Depends(auth)):
             types = await self.registry.list_agent_types()
-            return [AgentTypeResponse(**t) for t in types]
+            items = [AgentTypeResponse(**t) for t in types]
+            return AgentTypeListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                agent_types=items, total_count=len(items),
+            )
 
-        @self.router.post("/agent/types", response_model=AgentTypeResponse,
+        @self.router.post("/agent/types", response_model=AgentTypeEnvelope,
                           tags=["Agent Registry"])
         async def create_agent_type_route(
             request: AgentTypeCreate, current_user: Dict = Depends(auth),
@@ -159,13 +181,16 @@ class AgentRegistryEndpoint:
                     type_label=request.type_label,
                     type_description=request.type_description,
                 )
-                return AgentTypeResponse(**at)
+                return AgentTypeEnvelope(
+                    status=OperationStatus.CREATED, agent_type=AgentTypeResponse(**at),
+                )
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Agent type already exists: {request.type_key}",
+                    return AgentTypeEnvelope(
+                        status=OperationStatus.ALREADY_EXISTS,
+                        message=f"Agent type already exists: {request.type_key}",
                     )
+                self.logger.error("Error creating agent type: %s", e)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e),
                 )
@@ -193,11 +218,12 @@ class AgentRegistryEndpoint:
             if agent_id:
                 agent = await self.registry.get_agent(agent_id)
                 if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent not found: {agent_id}",
+                    return AgentListResponse(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Agent not found: {agent_id}",
                     )
                 return AgentListResponse(
+                    status=OperationStatus.FOUND,
                     agents=[_agent_to_response(agent)],
                     total_count=1, page_size=1, offset=0,
                 )
@@ -206,11 +232,12 @@ class AgentRegistryEndpoint:
             if agent_uri:
                 agent = await self.registry.get_agent_by_uri(agent_uri)
                 if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent not found: {agent_uri}",
+                    return AgentListResponse(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Agent not found: {agent_uri}",
                     )
                 return AgentListResponse(
+                    status=OperationStatus.FOUND,
                     agents=[_agent_to_response(agent)],
                     total_count=1, page_size=1, offset=0,
                 )
@@ -222,14 +249,16 @@ class AgentRegistryEndpoint:
                 protocol_format_uri=protocol_format_uri,
                 page=page, page_size=page_size,
             )
+            items = [_agent_to_response(a) for a in agents]
             return AgentListResponse(
-                agents=[_agent_to_response(a) for a in agents],
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                agents=items,
                 total_count=total,
                 page_size=page_size,
                 offset=(page - 1) * page_size,
             )
 
-        @self.router.post("/agent", response_model=AgentResponse,
+        @self.router.post("/agent", response_model=AgentEnvelope,
                           tags=["Agent Registry"])
         async def create_agent_route(
             request: AgentCreate, current_user: Dict = Depends(auth),
@@ -254,23 +283,23 @@ class AgentRegistryEndpoint:
                     endpoints=endpoints,
                 )
                 full = await self.registry.get_agent(agent['agent_id'])
-                return _agent_to_response(full)
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                return AgentEnvelope(
+                    status=OperationStatus.CREATED, agent=_agent_to_response(full),
                 )
+            except ValueError as e:
+                return AgentEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e))
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Agent URI already exists: {request.agent_uri}",
+                    return AgentEnvelope(
+                        status=OperationStatus.ALREADY_EXISTS,
+                        message=f"Agent URI already exists: {request.agent_uri}",
                     )
                 self.logger.error("Error creating agent: %s", e)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e),
                 )
 
-        @self.router.put("/agent", response_model=AgentResponse,
+        @self.router.put("/agent", response_model=AgentEnvelope,
                          tags=["Agent Registry"])
         async def update_agent_route(
             request: AgentUpdate,
@@ -296,17 +325,18 @@ class AgentRegistryEndpoint:
                     updated_by=current_user.get('username'),
                 )
                 if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent not found: {agent_id}",
+                    return AgentEnvelope(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Agent not found: {agent_id}",
                     )
-                return _agent_to_response(agent)
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                return AgentEnvelope(
+                    status=OperationStatus.UPDATED, agent=_agent_to_response(agent),
                 )
+            except ValueError as e:
+                return AgentEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e))
 
-        @self.router.delete("/agent", tags=["Agent Registry"])
+        @self.router.delete("/agent", response_model=AgentDeleteResponse,
+                            tags=["Agent Registry"])
         async def delete_agent_route(
             agent_id: str = Query(..., description="Agent ID"),
             current_user: Dict = Depends(auth),
@@ -315,17 +345,18 @@ class AgentRegistryEndpoint:
                 agent_id, deleted_by=current_user.get('username'),
             )
             if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Agent not found: {agent_id}",
+                return AgentDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Agent not found: {agent_id}", agent_id=agent_id,
                 )
-            return {"success": True, "agent_id": agent_id}
+            return AgentDeleteResponse(status=OperationStatus.DELETED, agent_id=agent_id)
 
         # ============================================================
         # Agent Status
         # ============================================================
 
-        @self.router.put("/agent/status", tags=["Agent Registry"])
+        @self.router.put("/agent/status", response_model=AgentStatusChangeResponse,
+                         tags=["Agent Registry"])
         async def change_agent_status_route(
             request: AgentStatusChange,
             agent_id: str = Query(..., description="Agent ID"),
@@ -337,30 +368,37 @@ class AgentRegistryEndpoint:
                     updated_by=current_user.get('username'),
                 )
                 if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent not found: {agent_id}",
+                    return AgentStatusChangeResponse(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Agent not found: {agent_id}", agent_id=agent_id,
                     )
-                return {"success": True, "agent_id": agent_id, "status": request.status}
+                return AgentStatusChangeResponse(
+                    status=OperationStatus.UPDATED,
+                    agent_id=agent_id, agent_status=request.status,
+                )
             except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                return AgentStatusChangeResponse(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e), agent_id=agent_id,
                 )
 
         # ============================================================
         # Agent Endpoints
         # ============================================================
 
-        @self.router.get("/agent/endpoints", response_model=List[AgentEndpointResponse],
+        @self.router.get("/agent/endpoints", response_model=AgentEndpointListResponse,
                          tags=["Agent Registry"])
         async def list_endpoints_route(
             agent_id: str = Query(..., description="Agent ID"),
             current_user: Dict = Depends(auth),
         ):
             eps = await self.registry.list_endpoints(agent_id)
-            return [_endpoint_to_response(ep) for ep in eps]
+            items = [_endpoint_to_response(ep) for ep in eps]
+            return AgentEndpointListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                endpoints=items, total_count=len(items),
+            )
 
-        @self.router.post("/agent/endpoints", response_model=AgentEndpointResponse,
+        @self.router.post("/agent/endpoints", response_model=AgentEndpointEnvelope,
                           tags=["Agent Registry"])
         async def create_endpoint_route(
             request: AgentEndpointCreate,
@@ -377,18 +415,21 @@ class AgentRegistryEndpoint:
                     notes=request.notes,
                     created_by=current_user.get('username'),
                 )
-                return _endpoint_to_response(ep)
+                return AgentEndpointEnvelope(
+                    status=OperationStatus.CREATED, endpoint=_endpoint_to_response(ep),
+                )
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Endpoint URI already exists for this agent: {request.endpoint_uri}",
+                    return AgentEndpointEnvelope(
+                        status=OperationStatus.ALREADY_EXISTS,
+                        message=f"Endpoint URI already exists for this agent: {request.endpoint_uri}",
                     )
+                self.logger.error("Error creating endpoint: %s", e)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e),
                 )
 
-        @self.router.put("/agent/endpoints", response_model=AgentEndpointResponse,
+        @self.router.put("/agent/endpoints", response_model=AgentEndpointEnvelope,
                          tags=["Agent Registry"])
         async def update_endpoint_route(
             request: AgentEndpointUpdate,
@@ -405,13 +446,16 @@ class AgentRegistryEndpoint:
                 updated_by=current_user.get('username'),
             )
             if ep is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Endpoint not found: {endpoint_id}",
+                return AgentEndpointEnvelope(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Endpoint not found: {endpoint_id}",
                 )
-            return _endpoint_to_response(ep)
+            return AgentEndpointEnvelope(
+                status=OperationStatus.UPDATED, endpoint=_endpoint_to_response(ep),
+            )
 
-        @self.router.delete("/agent/endpoints", tags=["Agent Registry"])
+        @self.router.delete("/agent/endpoints", response_model=AgentEndpointDeleteResponse,
+                            tags=["Agent Registry"])
         async def delete_endpoint_route(
             endpoint_id: int = Query(..., description="Endpoint ID"),
             current_user: Dict = Depends(auth),
@@ -420,26 +464,32 @@ class AgentRegistryEndpoint:
                 endpoint_id, deleted_by=current_user.get('username'),
             )
             if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Endpoint not found: {endpoint_id}",
+                return AgentEndpointDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Endpoint not found: {endpoint_id}", endpoint_id=endpoint_id,
                 )
-            return {"success": True, "endpoint_id": endpoint_id}
+            return AgentEndpointDeleteResponse(
+                status=OperationStatus.DELETED, endpoint_id=endpoint_id,
+            )
 
         # ============================================================
         # Agent Functions
         # ============================================================
 
-        @self.router.get("/agent/functions", response_model=List[AgentFunctionResponse],
+        @self.router.get("/agent/functions", response_model=AgentFunctionListResponse,
                          tags=["Agent Registry"])
         async def list_functions_route(
             agent_id: str = Query(..., description="Agent ID"),
             current_user: Dict = Depends(auth),
         ):
             fns = await self.registry.list_functions(agent_id)
-            return [_function_to_response(fn) for fn in fns]
+            items = [_function_to_response(fn) for fn in fns]
+            return AgentFunctionListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                functions=items, total_count=len(items),
+            )
 
-        @self.router.post("/agent/functions", response_model=AgentFunctionResponse,
+        @self.router.post("/agent/functions", response_model=AgentFunctionEnvelope,
                           tags=["Agent Registry"])
         async def create_function_route(
             request: AgentFunctionCreate,
@@ -457,18 +507,21 @@ class AgentRegistryEndpoint:
                     notes=request.notes,
                     created_by=current_user.get('username'),
                 )
-                return _function_to_response(fn)
+                return AgentFunctionEnvelope(
+                    status=OperationStatus.CREATED, function=_function_to_response(fn),
+                )
             except Exception as e:
                 if 'duplicate key' in str(e).lower() or 'unique' in str(e).lower():
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=f"Function URI already exists for this agent: {request.function_uri}",
+                    return AgentFunctionEnvelope(
+                        status=OperationStatus.ALREADY_EXISTS,
+                        message=f"Function URI already exists for this agent: {request.function_uri}",
                     )
+                self.logger.error("Error creating function: %s", e)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e),
                 )
 
-        @self.router.get("/agent/function", response_model=AgentFunctionResponse,
+        @self.router.get("/agent/function", response_model=AgentFunctionEnvelope,
                          tags=["Agent Registry"])
         async def get_function_route(
             function_id: int = Query(..., description="Function ID"),
@@ -476,13 +529,15 @@ class AgentRegistryEndpoint:
         ):
             fn = await self.registry.get_function(function_id)
             if fn is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Function not found: {function_id}",
+                return AgentFunctionEnvelope(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Function not found: {function_id}",
                 )
-            return _function_to_response(fn)
+            return AgentFunctionEnvelope(
+                status=OperationStatus.FOUND, function=_function_to_response(fn),
+            )
 
-        @self.router.put("/agent/functions", response_model=AgentFunctionResponse,
+        @self.router.put("/agent/functions", response_model=AgentFunctionEnvelope,
                          tags=["Agent Registry"])
         async def update_function_route(
             request: AgentFunctionUpdate,
@@ -501,17 +556,20 @@ class AgentRegistryEndpoint:
                     updated_by=current_user.get('username'),
                 )
                 if fn is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Function not found: {function_id}",
+                    return AgentFunctionEnvelope(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Function not found: {function_id}",
                     )
-                return _function_to_response(fn)
+                return AgentFunctionEnvelope(
+                    status=OperationStatus.UPDATED, function=_function_to_response(fn),
+                )
             except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                return AgentFunctionEnvelope(
+                    status=OperationStatus.INVALID_REQUEST, message=str(e),
                 )
 
-        @self.router.delete("/agent/functions", tags=["Agent Registry"])
+        @self.router.delete("/agent/functions", response_model=AgentFunctionDeleteResponse,
+                            tags=["Agent Registry"])
         async def delete_function_route(
             function_id: int = Query(..., description="Function ID"),
             current_user: Dict = Depends(auth),
@@ -520,13 +578,16 @@ class AgentRegistryEndpoint:
                 function_id, deleted_by=current_user.get('username'),
             )
             if not deleted:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Function not found: {function_id}",
+                return AgentFunctionDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Function not found: {function_id}", function_id=function_id,
                 )
-            return {"success": True, "function_id": function_id}
+            return AgentFunctionDeleteResponse(
+                status=OperationStatus.DELETED, function_id=function_id,
+            )
 
-        @self.router.get("/agent/function/discover", tags=["Agent Registry"])
+        @self.router.get("/agent/function/discover", response_model=AgentFunctionDiscoverResponse,
+                         tags=["Agent Registry"])
         async def discover_by_function_route(
             function_uri: str = Query(..., description="Function URI to search for"),
             agent_status: str = Query('active', description="Filter agents by status"),
@@ -535,13 +596,17 @@ class AgentRegistryEndpoint:
             results = await self.registry.discover_by_function(
                 function_uri=function_uri, agent_status=agent_status,
             )
-            return {"function_uri": function_uri, "agents": results}
+            return AgentFunctionDiscoverResponse(
+                status=OperationStatus.FOUND if results else OperationStatus.EMPTY,
+                function_uri=function_uri, agents=results, total_count=len(results),
+            )
 
         # ============================================================
         # General Agent Discovery
         # ============================================================
 
-        @self.router.get("/agent/discover", tags=["Agent Registry"])
+        @self.router.get("/agent/discover", response_model=AgentDiscoverResponse,
+                         tags=["Agent Registry"])
         async def discover_agents_route(
             capability: Optional[str] = Query(None, description="Filter by capability"),
             type_key: Optional[str] = Query(None, description="Filter by agent type key"),
@@ -561,9 +626,9 @@ class AgentRegistryEndpoint:
                 try:
                     pc_contains = _json.loads(protocol_config_contains)
                 except _json.JSONDecodeError:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="protocol_config_contains must be valid JSON",
+                    return AgentDiscoverResponse(
+                        status=OperationStatus.INVALID_REQUEST,
+                        message="protocol_config_contains must be valid JSON",
                     )
             agents = await self.registry.discover_agents(
                 capability=capability,
@@ -573,16 +638,18 @@ class AgentRegistryEndpoint:
                 protocol_config_contains=pc_contains,
                 status=agent_status,
             )
-            return {
-                "count": len(agents),
-                "agents": [_agent_to_response(a).model_dump() for a in agents],
-            }
+            items = [_agent_to_response(a) for a in agents]
+            return AgentDiscoverResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                agents=items, total_count=len(items),
+            )
 
         # ============================================================
         # Rollback
         # ============================================================
 
-        @self.router.put("/agent/rollback", tags=["Agent Registry"])
+        @self.router.put("/agent/rollback", response_model=AgentEnvelope,
+                         tags=["Agent Registry"])
         async def rollback_agent_route(
             agent_id: str = Query(..., description="Agent ID"),
             log_id: int = Query(..., description="Change log entry ID to rollback to"),
@@ -595,21 +662,22 @@ class AgentRegistryEndpoint:
                     rolled_back_by=current_user.get('username'),
                 )
                 if agent is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Agent not found: {agent_id}",
+                    return AgentEnvelope(
+                        status=OperationStatus.NOT_FOUND,
+                        message=f"Agent not found: {agent_id}",
                     )
-                return _agent_to_response(agent)
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(e),
+                return AgentEnvelope(
+                    status=OperationStatus.UPDATED, agent=_agent_to_response(agent),
                 )
+            except ValueError as e:
+                return AgentEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e))
 
         # ============================================================
         # Semantic / FTS Search
         # ============================================================
 
-        @self.router.get("/agent/search/vector", tags=["Agent Registry"])
+        @self.router.get("/agent/search/vector", response_model=AgentSearchResponse,
+                         tags=["Agent Registry"])
         async def vector_search_route(
             query: str = Query(..., description="Natural language search query"),
             limit: int = Query(10, ge=1, le=100),
@@ -617,40 +685,46 @@ class AgentRegistryEndpoint:
         ):
             try:
                 agents = await self.registry.vector_search(query, limit=limit)
-                return {
-                    "query": query,
-                    "count": len(agents),
-                    "agents": [
-                        {**_agent_to_response(a).model_dump(), "similarity": a.get("similarity")}
-                        for a in agents
-                    ],
-                }
+                results = [
+                    AgentSearchResult(
+                        agent=_agent_to_response(a), similarity=a.get("similarity"),
+                    )
+                    for a in agents
+                ]
+                return AgentSearchResponse(
+                    status=OperationStatus.FOUND if results else OperationStatus.EMPTY,
+                    query=query, results=results, total_count=len(results),
+                )
             except RuntimeError as e:
+                # Vector backend unavailable is a SERVER-level fault, not a
+                # domain outcome, so this correctly stays a 503.
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e),
                 )
 
-        @self.router.get("/agent/search/fts", tags=["Agent Registry"])
+        @self.router.get("/agent/search/fts", response_model=AgentSearchResponse,
+                         tags=["Agent Registry"])
         async def fts_search_route(
             query: str = Query(..., description="Full-text search query"),
             limit: int = Query(20, ge=1, le=100),
             current_user: Dict = Depends(auth),
         ):
             agents = await self.registry.fts_search(query, limit=limit)
-            return {
-                "query": query,
-                "count": len(agents),
-                "agents": [
-                    {**_agent_to_response(a).model_dump(), "fts_rank": a.get("fts_rank")}
-                    for a in agents
-                ],
-            }
+            results = [
+                AgentSearchResult(agent=_agent_to_response(a), fts_rank=a.get("fts_rank"))
+                for a in agents
+            ]
+            return AgentSearchResponse(
+                status=OperationStatus.FOUND if results else OperationStatus.EMPTY,
+                query=query, results=results, total_count=len(results),
+            )
 
         # ============================================================
         # Change Log
         # ============================================================
 
-        @self.router.get("/agent/changelog", tags=["Agent Registry"])
+        @self.router.get("/agent/changelog", response_model=AgentChangeLogResponse,
+                         tags=["Agent Registry"])
         async def get_agent_changelog_route(
             agent_id: str = Query(..., description="Agent ID"),
             limit: int = Query(50, ge=1, le=500),
@@ -660,7 +734,11 @@ class AgentRegistryEndpoint:
             for entry in entries:
                 if 'change_detail' in entry:
                     entry['change_detail'] = _parse_jsonb(entry['change_detail'])
-            return {"agent_id": agent_id, "entries": entries}
+            items = [AgentChangeLogEntry(**e) for e in entries]
+            return AgentChangeLogResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                agent_id=agent_id, entries=items, total_count=len(items),
+            )
 
 
 def create_agent_registry_router(app_impl, auth_dependency) -> APIRouter:

@@ -24,7 +24,21 @@ pytestmark = [
 
 INDEX_NAME = f"vec_test_{uuid.uuid4().hex[:8]}"
 INDEX_NAME_L2 = f"vec_l2_{uuid.uuid4().hex[:8]}"
-DIMENSIONS = 4  # small for test speed
+# Native width of the `vitalsigns` provider these indexes declare. The server
+# rejects an index whose width the provider cannot emit, so the previous 4-dim
+# index is no longer creatable. Vectors are zero-padded, which leaves every
+# cosine/L2 relationship between them unchanged.
+DIMENSIONS = 384
+
+
+def _pad(v):
+    """Zero-pad a hand-written vector to the index width."""
+    return v + [0.0] * (DIMENSIONS - len(v))
+
+
+def _padded_literal(v):
+    """pgvector text literal for a zero-padded hand-written vector."""
+    return "[" + ",".join(str(x) for x in _pad(v)) + "]"
 TEST_URI = "urn:test:vector_entity_1"
 TEST_URI_2 = "urn:test:vector_entity_2"
 TEST_URI_3 = "urn:test:vector_entity_3"
@@ -169,7 +183,7 @@ class TestVectorSearch:
                 {
                     "subject_uri": TEST_URI,
                     "graph_uri": vector_env["graph_id"],
-                    "embedding": [0.1, 0.2, 0.3, 0.4],
+                    "embedding": _pad([0.1, 0.2, 0.3, 0.4]),
                     "search_text": "Test entity for vector search",
                 }
             ],
@@ -185,12 +199,12 @@ class TestVectorSearch:
                 {
                     "subject_uri": TEST_URI_2,
                     "graph_uri": vector_env["graph_id"],
-                    "embedding": [0.5, 0.6, 0.7, 0.8],
+                    "embedding": _pad([0.5, 0.6, 0.7, 0.8]),
                 },
                 {
                     "subject_uri": TEST_URI_3,
                     "graph_uri": vector_env["graph_id"],
-                    "embedding": [0.9, 0.1, 0.2, 0.3],
+                    "embedding": _pad([0.9, 0.1, 0.2, 0.3]),
                 },
             ],
         )
@@ -205,7 +219,7 @@ class TestVectorSearch:
                 {
                     "subject_uri": TEST_URI,
                     "graph_uri": vector_env["graph_id"],
-                    "embedding": [1.0, 0.0, 0.0, 0.0],
+                    "embedding": _pad([1.0, 0.0, 0.0, 0.0]),
                 },
             ],
         )
@@ -371,7 +385,7 @@ class TestVectorReindexAndSimilarity:
         criteria = KGQueryCriteria(
             query_type="entity",
             vector_criteria=VectorSearchCriteria(
-                vector="[0.1, 0.2, 0.3, 0.4]",
+                vector=_padded_literal([0.1, 0.2, 0.3, 0.4]),
                 index_name=INDEX_NAME,
                 top_k=5,
             ),
@@ -396,7 +410,7 @@ class TestVectorReindexAndSimilarity:
         criteria = KGQueryCriteria(
             query_type="entity",
             vector_criteria=VectorSearchCriteria(
-                vector="[0.5, 0.6, 0.7, 0.8]",
+                vector=_padded_literal([0.5, 0.6, 0.7, 0.8]),
                 index_name=INDEX_NAME,
                 top_k=5,
                 min_score=0.1,

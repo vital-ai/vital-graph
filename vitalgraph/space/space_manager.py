@@ -300,13 +300,26 @@ class SpaceManager:
             return False
         
         try:
+            # Stop background auto-sync BEFORE dropping anything.  Those tasks
+            # embed text and then write; left running they spend real money on
+            # a space being deleted and then fail against half-dropped tables,
+            # filling the PostgreSQL log with "relation does not exist".
+            try:
+                from vitalgraph.vectorization.auto_sync import cancel_space_syncs
+                await cancel_space_syncs(space_id)
+            except Exception as sync_e:
+                # Never block deletion on sync teardown.
+                self.logger.warning(
+                    f"Error cancelling auto-sync tasks for '{space_id}': {sync_e}"
+                )
+
             # Create SpaceImpl for deletion operations
             if space_record:
                 space_impl = space_record.space_impl
             else:
                 # Create temporary SpaceImpl for deletion
                 space_impl = SpaceImpl(space_id=space_id, backend=self.space_backend)
-            
+
             # Delete space storage (backend handles all cleanup)
             storage_deleted = await space_impl.destroy()
             if not storage_deleted:

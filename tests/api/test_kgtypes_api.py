@@ -12,6 +12,8 @@ import uuid
 import pytest
 import pytest_asyncio
 
+from vitalgraph.model.result_status import OperationStatus
+
 from ai_haley_kg_domain.model.KGType import KGType
 from ai_haley_kg_domain.model.KGEntityType import KGEntityType
 from ai_haley_kg_domain.model.KGFrameType import KGFrameType
@@ -487,6 +489,11 @@ class TestKGTypeDescription:
         assert resp.type_uri == "http://vital.ai/ontology/haley-ai-kg#KGEntity"
         assert resp.mapping_type == "kgentity"
         # description may be None if no description text stored, but response is valid
+        # Contract: status discriminates found vs empty; both are success.
+        assert resp.success
+        assert resp.status == (
+            OperationStatus.FOUND if resp.description else OperationStatus.EMPTY
+        )
 
     async def test_description_unknown_type(self, vg_client):
         """Unknown type URI returns response with None description."""
@@ -495,3 +502,6 @@ class TestKGTypeDescription:
         )
         assert resp.type_uri == "http://example.org/nonexistent/type"
         assert resp.description is None
+        # A missing description is EMPTY, not NOT_FOUND, and still success=True.
+        assert resp.status == OperationStatus.EMPTY
+        assert resp.success

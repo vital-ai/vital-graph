@@ -154,9 +154,10 @@ class TestIdentifiers:
     async def test_list_identifiers(self, vg_client):
         """List identifiers for the shared entity."""
         entity_id = TestEntityCrud._shared_id
-        ids = await vg_client.entity_registry.list_identifiers(entity_id)
-        assert isinstance(ids, list)
-        assert any(i.identifier_id == TestIdentifiers._id for i in ids)
+        resp = await vg_client.entity_registry.list_identifiers(entity_id)
+        assert resp.success
+        assert resp.total_count == len(resp.identifiers)
+        assert any(i.identifier_id == TestIdentifiers._id for i in resp.identifiers)
 
     async def test_lookup_by_identifier(self, vg_client):
         """Lookup entity by namespace + value."""
@@ -171,8 +172,8 @@ class TestIdentifiers:
         result = await vg_client.entity_registry.remove_identifier(TestIdentifiers._id)
         assert result.get("success") is True or result.get("retracted") is True
 
-        ids = await vg_client.entity_registry.list_identifiers(TestEntityCrud._shared_id)
-        assert not any(i.identifier_id == TestIdentifiers._id for i in ids)
+        resp = await vg_client.entity_registry.list_identifiers(TestEntityCrud._shared_id)
+        assert not any(i.identifier_id == TestIdentifiers._id for i in resp.identifiers)
 
 
 # ---------------------------------------------------------------------------
@@ -198,17 +199,18 @@ class TestAliases:
 
     async def test_list_aliases(self, vg_client):
         """List aliases for the shared entity."""
-        aliases = await vg_client.entity_registry.list_aliases(TestEntityCrud._shared_id)
-        assert isinstance(aliases, list)
-        assert any(a.alias_id == TestAliases._id for a in aliases)
+        resp = await vg_client.entity_registry.list_aliases(TestEntityCrud._shared_id)
+        assert resp.success
+        assert resp.total_count == len(resp.aliases)
+        assert any(a.alias_id == TestAliases._id for a in resp.aliases)
 
     async def test_remove_alias(self, vg_client):
         """Remove alias and verify it's gone."""
         result = await vg_client.entity_registry.remove_alias(TestAliases._id)
         assert result.get("success") is True or result.get("retracted") is True
 
-        aliases = await vg_client.entity_registry.list_aliases(TestEntityCrud._shared_id)
-        assert not any(a.alias_id == TestAliases._id for a in aliases)
+        resp = await vg_client.entity_registry.list_aliases(TestEntityCrud._shared_id)
+        assert not any(a.alias_id == TestAliases._id for a in resp.aliases)
 
 
 # ---------------------------------------------------------------------------
@@ -231,9 +233,10 @@ class TestCategories:
 
     async def test_list_categories(self, vg_client):
         """List all categories and verify ours exists."""
-        cats = await vg_client.entity_registry.list_categories()
-        assert isinstance(cats, list)
-        assert any(c.category_key == TestCategories._key for c in cats)
+        resp = await vg_client.entity_registry.list_categories()
+        assert resp.success
+        assert resp.total_count == len(resp.categories)
+        assert any(c.category_key == TestCategories._key for c in resp.categories)
 
     async def test_assign_category_to_entity(self, vg_client):
         """Assign category to the shared entity."""
@@ -246,11 +249,11 @@ class TestCategories:
 
     async def test_list_entity_categories(self, vg_client):
         """List categories for the shared entity."""
-        cats = await vg_client.entity_registry.list_entity_categories(
+        resp = await vg_client.entity_registry.list_entity_categories(
             TestEntityCrud._shared_id,
         )
-        assert isinstance(cats, list)
-        assert any(c.category_key == TestCategories._key for c in cats)
+        assert resp.success
+        assert any(c.category_key == TestCategories._key for c in resp.entity_categories)
 
     async def test_list_entities_by_category(self, vg_client):
         """List entities belonging to our test category."""
@@ -268,10 +271,10 @@ class TestCategories:
         )
         assert result.get("success") is True or result.get("removed") is True
 
-        cats = await vg_client.entity_registry.list_entity_categories(
+        resp = await vg_client.entity_registry.list_entity_categories(
             TestEntityCrud._shared_id,
         )
-        assert not any(c.category_key == TestCategories._key for c in cats)
+        assert not any(c.category_key == TestCategories._key for c in resp.entity_categories)
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +297,10 @@ class TestLocations:
 
     async def test_list_location_types(self, vg_client):
         """List location types and verify ours exists."""
-        types = await vg_client.entity_registry.list_location_types()
-        assert isinstance(types, list)
-        assert any(t.type_key == TestLocations._type_key for t in types)
+        resp = await vg_client.entity_registry.list_location_types()
+        assert resp.success
+        assert resp.total_count == len(resp.location_types)
+        assert any(t.type_key == TestLocations._type_key for t in resp.location_types)
 
     async def test_create_location(self, vg_client):
         """Add a location to the shared entity."""
@@ -321,9 +325,10 @@ class TestLocations:
 
     async def test_list_locations(self, vg_client):
         """List locations for the shared entity."""
-        locs = await vg_client.entity_registry.list_locations(TestEntityCrud._shared_id)
-        assert isinstance(locs, list)
-        assert any(loc.location_id == TestLocations._loc_id for loc in locs)
+        resp = await vg_client.entity_registry.list_locations(TestEntityCrud._shared_id)
+        assert resp.success
+        assert resp.total_count == len(resp.locations)
+        assert any(loc.location_id == TestLocations._loc_id for loc in resp.locations)
 
     async def test_update_location(self, vg_client):
         """Update location name and verify."""
@@ -343,8 +348,8 @@ class TestLocations:
         result = await vg_client.entity_registry.remove_location(TestLocations._loc_id)
         assert result.get("success") is True or result.get("retracted") is True
 
-        locs = await vg_client.entity_registry.list_locations(TestEntityCrud._shared_id)
-        assert not any(loc.location_id == TestLocations._loc_id for loc in locs)
+        resp = await vg_client.entity_registry.list_locations(TestEntityCrud._shared_id)
+        assert not any(loc.location_id == TestLocations._loc_id for loc in resp.locations)
 
 
 # ---------------------------------------------------------------------------

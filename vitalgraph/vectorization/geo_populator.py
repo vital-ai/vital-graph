@@ -20,6 +20,8 @@ Legacy formats ("lat,lon" or "lat lon" strings) are supported as fallback.
 from __future__ import annotations
 
 import logging
+
+import asyncpg
 import re
 import time
 from dataclasses import dataclass, field
@@ -155,8 +157,9 @@ async def resolve_geo_config(
     mgr = GeoConfigManager(conn, space_id)
     try:
         return await mgr.get_config()
-    except Exception:
-        # Table may not exist on older spaces
+    except asyncpg.exceptions.UndefinedTableError:
+        # Space predates the geo tables. Narrow on purpose: a broad
+        # `except Exception` also hid genuine failures against a live space.
         logger.debug("resolve_geo_config: geo_config table not found for %s", space_id)
         return None
 

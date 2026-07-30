@@ -16,6 +16,40 @@
 #   python -m tests.shared.seed_ui_test_data
 #   cd e2e && npx playwright test
 #   docker compose -f docker-compose.test.yml down
+#
+# Running the pytest API suite (tests/api) against THIS stack
+# -----------------------------------------------------------
+# tests/api/conftest.py defaults to http://localhost:8001 and the project .env
+# pins LOCAL_CLIENT_SERVER_URL to that same dev port. Both must be overridden or
+# the suite silently runs against the DEV server on :8001 — which, if it is
+# serving an older image, produces confusing failures that look like product
+# bugs rather than a misdirected test run:
+#
+#   LOCAL_CLIENT_SERVER_URL=http://localhost:8002 \
+#   VG_TEST_PG_PORT=5433 VG_TEST_PG_PASSWORD=testpass \
+#     python -m pytest tests/api -q
+#
+# Embedding models
+# ----------------
+# All local embedding weights are baked into the image (see Dockerfile), so the
+# stack vectorizes with no network access. That covers
+# tests/api/test_paraphrase_multilingual_vector_integration.py, which creates an
+# index with provider="paraphrase_multilingual_minilm_l12_v2" and needs the
+# server to embed with it.
+#
+# Compose interpolates ${...} from the project .env, so OPENAI_API_KEY and the
+# entity-registry provider below can be set there rather than exported.
+#
+# To run the whole stack's ENTITY REGISTRY against a different model:
+#
+#   VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER=paraphrase_multilingual_minilm_l12_v2 \
+#     docker compose -f docker-compose.test.yml up -d --build --wait
+#
+# The vector tables carry one column per model, so switching needs no schema
+# change even when the widths differ (openai is 1536, the others 384). Switching
+# does leave the new model's column empty until the registry is re-vectorized,
+# so vector search returns no hits until then — including under
+# docker-compose.test.persist.yml, where the old data survives.
 
 name: vg-test
 
@@ -71,6 +105,25 @@ services:
       - STORAGE_ENDPOINT=http://minio:9000
       - STORAGE_ACCESS_KEY=minioadmin
       - STORAGE_SECRET_KEY=minioadmin
+      # Embeddings. Passed through from the host / .env so the vector, FTS and
+      # semantic-search suites can actually run; without it they fail with empty
+      # result sets rather than skipping. See
+      # planning/planning_cleanup/openai_vector_test_and_mapping_cleanup_plan.md
+      # step 4. Empty default keeps the stack startable without a key.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Entity registry embedding model, used for BOTH vectorization and search.
+      # One column per model exists on the vector tables; this picks which is
+      # read and written. Switching needs no migration — see the header note.
+      #   vitalsigns_onnx                         384 — paraphrase-MiniLM-L3-v2 (default, bundled)
+      #   paraphrase_multilingual_minilm_l12_v2   384 — multilingual, baked into the image
+      #   openai                                 1536 — text-embedding-3-small, uses OPENAI_API_KEY above
+      - VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER=${VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER:-vitalsigns_onnx}
+      # Which variable holds the OpenAI key, when the provider above is `openai`.
+      # Defaults to the OPENAI_API_KEY passed in just above.
+      - VITALGRAPH_ENTITY_REGISTRY_OPENAI_API_KEY_ENV=${VITALGRAPH_ENTITY_REGISTRY_OPENAI_API_KEY_ENV:-OPENAI_API_KEY}
+      # Agent registry — same options, set independently of the entity registry.
+      - VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER=${VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER:-vitalsigns_onnx}
+      - VITALGRAPH_AGENT_REGISTRY_OPENAI_API_KEY_ENV=${VITALGRAPH_AGENT_REGISTRY_OPENAI_API_KEY_ENV:-OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

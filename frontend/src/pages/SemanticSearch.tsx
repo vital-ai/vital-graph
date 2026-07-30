@@ -240,8 +240,7 @@ const SemanticSearch: React.FC = () => {
         return;
       }
       try {
-        const data = await apiService.getGraphs(selectedSpace);
-        setGraphs(data);
+        setGraphs((await apiService.getGraphs(selectedSpace)).graphs ?? []);
       } catch {
         setGraphs([]);
       }

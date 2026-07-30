@@ -1002,17 +1002,22 @@ class AgentRegistryImpl:
         from vitalgraph.agent_registry.agent_registry_vector_schema import AGENT_VECTOR_TABLE
 
         provider = self._vector_populator._provider
+        # Read the same per-model column the populator writes.  Rows embedded
+        # by a different model leave it NULL and simply drop out, rather than
+        # being compared in the wrong embedding space.
+        emb_col = self._vector_populator._embedding_column
         embeddings = await provider.vectorize_texts([query_text])
         query_embedding = embeddings[0]
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT v.agent_id, v.search_text, "
-                f"1 - (v.embedding <=> $1::vector) AS similarity "
+                f"1 - (v.{emb_col} <=> $1::vector) AS similarity "
                 f"FROM {AGENT_VECTOR_TABLE} v "
                 f"JOIN agent a ON v.agent_id = a.agent_id "
                 f"WHERE a.status = 'active' "
-                f"ORDER BY v.embedding <=> $1::vector "
+                f"AND v.{emb_col} IS NOT NULL "
+                f"ORDER BY v.{emb_col} <=> $1::vector "
                 f"LIMIT $2",
                 str(query_embedding), limit,
             )

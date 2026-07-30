@@ -21,7 +21,10 @@ import asyncpg
 from vitalgraph.agent_registry.agent_registry_vector_schema import (
     AGENT_VECTOR_TABLE, FTS_AGENT_TABLE,
 )
-from vitalgraph.vectorization.registry import get_provider
+from vitalgraph.agent_registry.agent_registry_vector_config import (
+    get_agent_registry_embedding_column,
+    get_agent_registry_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +89,10 @@ class AgentRegistryVectorPopulator:
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
-        self._provider = get_provider("vitalsigns", cache_key="agent_registry")
+        self._provider = get_agent_registry_provider(cache_key="agent_registry")
+        # Which per-model column this provider owns.  Interpolated into SQL,
+        # so it must come from the frozen EMBEDDING_COLUMNS map.
+        self._embedding_column = get_agent_registry_embedding_column()
 
     # ==================================================================
     # Full rebuild
@@ -165,10 +171,11 @@ class AgentRegistryVectorPopulator:
         # Insert into vector + FTS tables
         async with self.pool.acquire() as conn:
             await conn.executemany(f"""
-                INSERT INTO {AGENT_VECTOR_TABLE} (subject_uuid, agent_id, embedding, search_text, updated_time)
+                INSERT INTO {AGENT_VECTOR_TABLE} (subject_uuid, agent_id, {self._embedding_column}, search_text, updated_time)
                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
                 ON CONFLICT (subject_uuid) DO UPDATE
-                SET embedding = EXCLUDED.embedding, search_text = EXCLUDED.search_text,
+                SET {self._embedding_column} = EXCLUDED.{self._embedding_column},
+                    search_text = EXCLUDED.search_text,
                     updated_time = CURRENT_TIMESTAMP
             """, [
                 (str(rec[0]), rec[1], embeddings[idx], rec[2])

@@ -119,9 +119,10 @@ const AgentRegistryDetail: React.FC = () => {
         apiService.getAgentFunctions(agentId),
         apiService.getAgentChangelog(agentId),
       ]);
-      if (epData.status === 'fulfilled') setEndpoints(Array.isArray(epData.value) ? epData.value : []);
-      if (fnData.status === 'fulfilled') setFunctions(Array.isArray(fnData.value) ? fnData.value : []);
-      if (clData.status === 'fulfilled') setChangelog(clData.value.entries || []);
+      // All three return a ResultStatus envelope with a domain-named list field.
+      if (epData.status === 'fulfilled') setEndpoints(epData.value.endpoints ?? []);
+      if (fnData.status === 'fulfilled') setFunctions(fnData.value.functions ?? []);
+      if (clData.status === 'fulfilled') setChangelog(clData.value.entries ?? []);
     } finally {
       setSubLoading(false);
     }

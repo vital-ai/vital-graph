@@ -7,7 +7,7 @@ Includes relationship types and relationship CRUD.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from .entity_status import ACTIVE, RETRACTED
 
 if TYPE_CHECKING:
@@ -267,12 +267,24 @@ class RelationshipMixin:
         self, entity_id: str,
         direction: str = 'both',
         include_expired: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """List relationships for an entity.
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """List relationships for an entity, paginated.
+
+        A hub entity (large org, country-level location) can have very high
+        degree, so this is paginated: an unbounded fetch of the full adjacency
+        list is the same failure mode that made list_entities_by_category time
+        out on large categories.
 
         Args:
             direction: 'outgoing', 'incoming', or 'both'.
             include_expired: If True, includes non-current relationships.
+            page: 1-based page number.
+            page_size: Rows per page.
+
+        Returns:
+            Tuple of (relationships list, total count).
         """
         if direction == 'outgoing':
             where_dir = "rv.entity_source = $1"
@@ -286,15 +298,19 @@ class RelationshipMixin:
         else:
             where_current = " AND rv.is_current = TRUE"
 
-        sql = (
-            "SELECT rv.*, rt.type_key AS relationship_type_key, "
-            "rt.type_label AS relationship_type_label, rt.inverse_key "
+        where = (
             "FROM entity_relationship_view rv "
             "JOIN relationship_type rt ON rv.relationship_type_id = rt.relationship_type_id "
-            f"WHERE {where_dir}{where_current} "
-            "ORDER BY rv.relationship_id"
+            f"WHERE {where_dir}{where_current}"
         )
+        offset = (page - 1) * page_size
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, entity_id)
-            return [dict(r) for r in rows]
+            total = await conn.fetchval(f"SELECT COUNT(*) {where}", entity_id)
+            rows = await conn.fetch(
+                "SELECT rv.*, rt.type_key AS relationship_type_key, "
+                f"rt.type_label AS relationship_type_label, rt.inverse_key {where} "
+                "ORDER BY rv.relationship_id LIMIT $2 OFFSET $3",
+                entity_id, page_size, offset,
+            )
+            return [dict(r) for r in rows], total

@@ -272,8 +272,15 @@ class RelationshipResponse(BaseModel):
         from_attributes = True
 
 
-class RelationshipTypeResponse(ResultStatus):
-    status: OperationStatus = OperationStatus.FOUND
+# Reference-data models below are DUAL-PURPOSE: the same shape is both a list
+# element and the body of the sibling single-object POST route. Only the latter
+# should carry the ResultStatus contract — a list element shipping its own
+# success/status/message triple is redundant on every row. So each is split into
+# a plain `XItem` (list element) and `XResponse(ResultStatus, XItem)` (single
+# object). XResponse keeps its exact previous wire shape, so the POST routes are
+# unaffected.
+
+class RelationshipTypeItem(BaseModel):
     relationship_type_id: Optional[int] = None
     type_key: Optional[str] = None
     type_label: Optional[str] = None
@@ -286,8 +293,11 @@ class RelationshipTypeResponse(ResultStatus):
         from_attributes = True
 
 
-class LocationTypeResponse(ResultStatus):
+class RelationshipTypeResponse(ResultStatus, RelationshipTypeItem):
     status: OperationStatus = OperationStatus.FOUND
+
+
+class LocationTypeItem(BaseModel):
     location_type_id: Optional[int] = None
     type_key: Optional[str] = None
     type_label: Optional[str] = None
@@ -297,6 +307,10 @@ class LocationTypeResponse(ResultStatus):
 
     class Config:
         from_attributes = True
+
+
+class LocationTypeResponse(ResultStatus, LocationTypeItem):
+    status: OperationStatus = OperationStatus.FOUND
 
 
 class LocationCategoryResponse(BaseModel):
@@ -378,8 +392,7 @@ class SameAsResponse(BaseModel):
         from_attributes = True
 
 
-class EntityTypeResponse(ResultStatus):
-    status: OperationStatus = OperationStatus.FOUND
+class EntityTypeItem(BaseModel):
     type_id: Optional[int] = None
     type_key: Optional[str] = None
     type_label: Optional[str] = None
@@ -391,8 +404,11 @@ class EntityTypeResponse(ResultStatus):
         from_attributes = True
 
 
-class CategoryResponse(ResultStatus):
+class EntityTypeResponse(ResultStatus, EntityTypeItem):
     status: OperationStatus = OperationStatus.FOUND
+
+
+class CategoryItem(BaseModel):
     category_id: Optional[int] = None
     category_key: Optional[str] = None
     category_label: Optional[str] = None
@@ -402,6 +418,10 @@ class CategoryResponse(ResultStatus):
 
     class Config:
         from_attributes = True
+
+
+class CategoryResponse(ResultStatus, CategoryItem):
+    status: OperationStatus = OperationStatus.FOUND
 
 
 class EntityCategoryResponse(BaseModel):
@@ -642,6 +662,136 @@ class RegistryWriteResponse(ResultStatus):
     category_key: Optional[str] = None
     kind: Optional[str] = None
     key: Optional[str] = None
+
+
+# ------------------------------------------------------------------
+# List envelopes
+# ------------------------------------------------------------------
+# These routes previously returned a BARE JSON ARRAY, so they carried no
+# status/message and could not distinguish "matched nothing" (EMPTY) from
+# "parent not found" (NOT_FOUND) — both serialized as []. Each now returns a
+# ResultStatus envelope with a domain-named plural field plus total_count,
+# matching the existing EntityListResponse / ChangeLogResponse convention.
+#
+# total_count is present on every envelope even where the list is unpaginated
+# (reference data, where it always equals the item count). It is the
+# forward-compatible hook: adding page/page_size to any one of these later is an
+# additive, non-breaking change because the envelope already exists.
+
+class IdentifierListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    identifiers: List[IdentifierResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class AliasListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    aliases: List[AliasResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class LocationListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    locations: List[LocationResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class LocationTypeListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    location_types: List[LocationTypeItem] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class LocationCategoryListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    location_categories: List[LocationCategoryResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class RelationshipTypeListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    relationship_types: List[RelationshipTypeItem] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class RelationshipListResponse(ResultStatus):
+    """Paginated — a hub entity's adjacency list is unbounded (see page/page_size)."""
+
+    status: OperationStatus = OperationStatus.FOUND
+    relationships: List[RelationshipResponse] = Field(default_factory=list)
+    total_count: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class SameAsListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    same_as: List[SameAsResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class EntityTypeListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    entity_types: List[EntityTypeItem] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class CategoryListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    categories: List[CategoryItem] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class EntityCategoryListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    entity_categories: List[EntityCategoryResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+# ------------------------------------------------------------------
+# Admin index rebuild
+# ------------------------------------------------------------------
+# Shared by POST /admin/rebuild (fuzzy, weaviate) and
+# POST /admin/populate-vectors (vectors, fts, geo). Both are "rebuild one or more
+# index subsystems", so they speak one shape rather than two vocabularies. Keeping
+# them on a single model also means a future merge of the two routes is a
+# route-level change with no model churn.
+
+class SubsystemRebuildResult(BaseModel):
+    """Per-subsystem outcome inside an admin rebuild."""
+
+    subsystem: str = Field(..., description="fuzzy | weaviate | vectors | fts | geo")
+    enabled: bool = Field(True, description="False when the subsystem is not configured; it was skipped")
+    duration_seconds: Optional[float] = Field(None, description="Wall-clock time for this subsystem")
+    counts: Dict[str, int] = Field(default_factory=dict, description="Subsystem-specific counters")
+    errors: List[str] = Field(default_factory=list, description="Failures encountered; empty on success")
+
+
+class AdminRebuildResponse(ResultStatus):
+    """Response for the entity-registry admin rebuild routes."""
+
+    status: OperationStatus = OperationStatus.OK
+    results: List[SubsystemRebuildResult] = Field(default_factory=list)
+
+    @classmethod
+    def from_results(cls, results: List[SubsystemRebuildResult], message: str = "") -> "AdminRebuildResponse":
+        """Derive the contract status from the per-subsystem outcomes.
+
+        Nothing actually ran (none requested, or all disabled) -> NO_OP.
+        All that ran succeeded -> OK. Every one that ran failed -> STORE_FAILED.
+        Otherwise -> PARTIAL.
+        """
+        ran = [r for r in results if r.enabled]
+        errored = [r for r in ran if r.errors]
+        if not ran:
+            status = OperationStatus.NO_OP
+        elif not errored:
+            status = OperationStatus.OK
+        elif len(errored) == len(ran):
+            status = OperationStatus.STORE_FAILED
+        else:
+            status = OperationStatus.PARTIAL
+        return cls(status=status, results=results, message=message)
 
 
 # Backward-compat aliases

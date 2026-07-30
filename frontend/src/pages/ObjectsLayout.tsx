@@ -59,7 +59,7 @@ const ObjectsLayout: React.FC = () => {
   const fetchGraphs = useCallback(async (space: string) => {
     try {
       setGraphsLoading(true);
-      setGraphs(await apiService.getGraphs(space));
+      setGraphs((await apiService.getGraphs(space)).graphs ?? []);
       setError(null);
     } catch {
       setError('Failed to load graphs.');

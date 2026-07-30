@@ -9,17 +9,32 @@ from typing import Any, Dict, List, Optional
 
 from .base_endpoint import BaseEndpoint
 from ...agent_registry.agent_models import (
+    AgentChangeLogResponse,
     AgentCreate,
+    AgentDeleteResponse,
+    AgentDiscoverResponse,
     AgentEndpointCreate,
+    AgentEndpointDeleteResponse,
+    AgentEndpointEnvelope,
+    AgentEndpointListResponse,
     AgentEndpointResponse,
     AgentEndpointUpdate,
+    AgentEnvelope,
     AgentFunctionCreate,
+    AgentFunctionDeleteResponse,
+    AgentFunctionDiscoverResponse,
+    AgentFunctionEnvelope,
+    AgentFunctionListResponse,
     AgentFunctionResponse,
     AgentFunctionUpdate,
     AgentListResponse,
     AgentResponse,
+    AgentSearchResponse,
     AgentStatusChange,
+    AgentStatusChangeResponse,
     AgentTypeCreate,
+    AgentTypeEnvelope,
+    AgentTypeListResponse,
     AgentTypeResponse,
     AgentUpdate,
 )
@@ -42,20 +57,19 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
     # Agent Types
     # ------------------------------------------------------------------
 
-    async def list_agent_types(self) -> List[AgentTypeResponse]:
+    async def list_agent_types(self) -> AgentTypeListResponse:
         """List all agent types."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/types"),
         )
-        data = response.json()
-        return [AgentTypeResponse.model_validate(t) for t in data]
+        return AgentTypeListResponse.model_validate(response.json())
 
-    async def create_agent_type(self, request: AgentTypeCreate) -> AgentTypeResponse:
+    async def create_agent_type(self, request: AgentTypeCreate) -> AgentTypeEnvelope:
         """Create a new agent type."""
         self._check_connection()
         return await self._make_typed_request(
-            "POST", self._url("/agent/types"), AgentTypeResponse,
+            "POST", self._url("/agent/types"), AgentTypeEnvelope,
             json=request.model_dump(exclude_none=True),
         )
 
@@ -63,11 +77,11 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
     # Agent CRUD
     # ------------------------------------------------------------------
 
-    async def create_agent(self, request: AgentCreate) -> AgentResponse:
+    async def create_agent(self, request: AgentCreate) -> AgentEnvelope:
         """Create a new agent."""
         self._check_connection()
         return await self._make_typed_request(
-            "POST", self._url("/agent"), AgentResponse,
+            "POST", self._url("/agent"), AgentEnvelope,
             json=request.model_dump(exclude_none=True),
         )
 
@@ -117,25 +131,25 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
             "GET", self._url("/agent"), AgentListResponse, params=params,
         )
 
-    async def update_agent(self, agent_id: str, request: AgentUpdate) -> AgentResponse:
+    async def update_agent(self, agent_id: str, request: AgentUpdate) -> AgentEnvelope:
         """Update an agent."""
         self._check_connection()
         return await self._make_typed_request(
-            "PUT", self._url("/agent"), AgentResponse,
+            "PUT", self._url("/agent"), AgentEnvelope,
             params={"agent_id": agent_id},
             json=request.model_dump(exclude_none=True),
         )
 
-    async def delete_agent(self, agent_id: str) -> Dict[str, Any]:
+    async def delete_agent(self, agent_id: str) -> AgentDeleteResponse:
         """Soft-delete an agent."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "DELETE", self._url("/agent"),
             params={"agent_id": agent_id},
         )
-        return response.json()
+        return AgentDeleteResponse.model_validate(response.json())
 
-    async def change_agent_status(self, agent_id: str, request: AgentStatusChange) -> Dict[str, Any]:
+    async def change_agent_status(self, agent_id: str, request: AgentStatusChange) -> AgentStatusChangeResponse:
         """Change agent status."""
         self._check_connection()
         response = await self._make_authenticated_request(
@@ -143,106 +157,104 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
             params={"agent_id": agent_id},
             json=request.model_dump(exclude_none=True),
         )
-        return response.json()
+        return AgentStatusChangeResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Agent Endpoints
     # ------------------------------------------------------------------
 
-    async def list_endpoints(self, agent_id: str) -> List[AgentEndpointResponse]:
+    async def list_endpoints(self, agent_id: str) -> AgentEndpointListResponse:
         """List all endpoints for an agent."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/endpoints"),
             params={"agent_id": agent_id},
         )
-        data = response.json()
-        return [AgentEndpointResponse.model_validate(ep) for ep in data]
+        return AgentEndpointListResponse.model_validate(response.json())
 
-    async def create_endpoint(self, agent_id: str, request: AgentEndpointCreate) -> AgentEndpointResponse:
+    async def create_endpoint(self, agent_id: str, request: AgentEndpointCreate) -> AgentEndpointEnvelope:
         """Create an endpoint for an agent."""
         self._check_connection()
         return await self._make_typed_request(
-            "POST", self._url("/agent/endpoints"), AgentEndpointResponse,
+            "POST", self._url("/agent/endpoints"), AgentEndpointEnvelope,
             params={"agent_id": agent_id},
             json=request.model_dump(exclude_none=True),
         )
 
-    async def update_endpoint(self, endpoint_id: int, request: AgentEndpointUpdate) -> AgentEndpointResponse:
+    async def update_endpoint(self, endpoint_id: int, request: AgentEndpointUpdate) -> AgentEndpointEnvelope:
         """Update an endpoint."""
         self._check_connection()
         return await self._make_typed_request(
-            "PUT", self._url("/agent/endpoints"), AgentEndpointResponse,
+            "PUT", self._url("/agent/endpoints"), AgentEndpointEnvelope,
             params={"endpoint_id": endpoint_id},
             json=request.model_dump(exclude_none=True),
         )
 
-    async def delete_endpoint(self, endpoint_id: int) -> Dict[str, Any]:
+    async def delete_endpoint(self, endpoint_id: int) -> AgentEndpointDeleteResponse:
         """Delete an endpoint."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "DELETE", self._url("/agent/endpoints"),
             params={"endpoint_id": endpoint_id},
         )
-        return response.json()
+        return AgentEndpointDeleteResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Agent Functions
     # ------------------------------------------------------------------
 
-    async def list_functions(self, agent_id: str) -> List[AgentFunctionResponse]:
+    async def list_functions(self, agent_id: str) -> AgentFunctionListResponse:
         """List all functions for an agent."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/functions"),
             params={"agent_id": agent_id},
         )
-        data = response.json()
-        return [AgentFunctionResponse.model_validate(fn) for fn in data]
+        return AgentFunctionListResponse.model_validate(response.json())
 
-    async def create_function(self, agent_id: str, request: AgentFunctionCreate) -> AgentFunctionResponse:
+    async def create_function(self, agent_id: str, request: AgentFunctionCreate) -> AgentFunctionEnvelope:
         """Create a function for an agent."""
         self._check_connection()
         return await self._make_typed_request(
-            "POST", self._url("/agent/functions"), AgentFunctionResponse,
+            "POST", self._url("/agent/functions"), AgentFunctionEnvelope,
             params={"agent_id": agent_id},
             json=request.model_dump(exclude_none=True),
         )
 
-    async def get_function(self, function_id: int) -> AgentFunctionResponse:
+    async def get_function(self, function_id: int) -> AgentFunctionEnvelope:
         """Get a function by ID."""
         self._check_connection()
         return await self._make_typed_request(
-            "GET", self._url("/agent/function"), AgentFunctionResponse,
+            "GET", self._url("/agent/function"), AgentFunctionEnvelope,
             params={"function_id": function_id},
         )
 
-    async def update_function(self, function_id: int, request: AgentFunctionUpdate) -> AgentFunctionResponse:
+    async def update_function(self, function_id: int, request: AgentFunctionUpdate) -> AgentFunctionEnvelope:
         """Update a function."""
         self._check_connection()
         return await self._make_typed_request(
-            "PUT", self._url("/agent/functions"), AgentFunctionResponse,
+            "PUT", self._url("/agent/functions"), AgentFunctionEnvelope,
             params={"function_id": function_id},
             json=request.model_dump(exclude_none=True),
         )
 
-    async def delete_function(self, function_id: int) -> Dict[str, Any]:
+    async def delete_function(self, function_id: int) -> AgentFunctionDeleteResponse:
         """Soft-delete a function."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "DELETE", self._url("/agent/functions"),
             params={"function_id": function_id},
         )
-        return response.json()
+        return AgentFunctionDeleteResponse.model_validate(response.json())
 
-    async def discover_by_function(self, function_uri: str, agent_status: str = 'active') -> Dict[str, Any]:
+    async def discover_by_function(self, function_uri: str, agent_status: str = 'active') -> AgentFunctionDiscoverResponse:
         """Find agents that provide a specific function URI."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/function/discover"),
             params={"function_uri": function_uri, "agent_status": agent_status},
         )
-        return response.json()
+        return AgentFunctionDiscoverResponse.model_validate(response.json())
 
     async def discover_agents(
         self,
@@ -252,7 +264,7 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
         protocol_config_key: Optional[str] = None,
         protocol_config_contains: Optional[Dict[str, Any]] = None,
         agent_status: str = 'active',
-    ) -> Dict[str, Any]:
+    ) -> AgentDiscoverResponse:
         """Discover agents by capability, type, protocol, protocol_config, and status.
 
         Args:
@@ -277,17 +289,17 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/discover"), params=params,
         )
-        return response.json()
+        return AgentDiscoverResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Rollback
     # ------------------------------------------------------------------
 
-    async def rollback_agent(self, agent_id: str, log_id: int) -> AgentResponse:
+    async def rollback_agent(self, agent_id: str, log_id: int) -> AgentEnvelope:
         """Rollback an agent to a previous changelog state."""
         self._check_connection()
         return await self._make_typed_request(
-            "PUT", self._url("/agent/rollback"), AgentResponse,
+            "PUT", self._url("/agent/rollback"), AgentEnvelope,
             params={"agent_id": agent_id, "log_id": log_id},
         )
 
@@ -295,33 +307,33 @@ class AgentRegistryClientEndpoint(BaseEndpoint):
     # Semantic / FTS Search
     # ------------------------------------------------------------------
 
-    async def vector_search(self, query: str, limit: int = 10) -> Dict[str, Any]:
+    async def vector_search(self, query: str, limit: int = 10) -> AgentSearchResponse:
         """Semantic agent search using vector embeddings."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/search/vector"),
             params={"query": query, "limit": limit},
         )
-        return response.json()
+        return AgentSearchResponse.model_validate(response.json())
 
-    async def fts_search(self, query: str, limit: int = 20) -> Dict[str, Any]:
+    async def fts_search(self, query: str, limit: int = 20) -> AgentSearchResponse:
         """Full-text agent search."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/search/fts"),
             params={"query": query, "limit": limit},
         )
-        return response.json()
+        return AgentSearchResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Change Log
     # ------------------------------------------------------------------
 
-    async def get_change_log(self, agent_id: str, limit: int = 50) -> Dict[str, Any]:
+    async def get_change_log(self, agent_id: str, limit: int = 50) -> AgentChangeLogResponse:
         """Get agent change log."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/agent/changelog"),
             params={"agent_id": agent_id, "limit": limit},
         )
-        return response.json()
+        return AgentChangeLogResponse.model_validate(response.json())

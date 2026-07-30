@@ -15,6 +15,7 @@ from ..model.sparql_model import (
     SPARQLGraphResponse,
     GraphInfo,
     GraphInfoResponse,
+    GraphListResponse,
     GraphCountsResponse
 )
 from ..model.result_status import OperationStatus
@@ -39,7 +40,7 @@ class SPARQLGraphEndpoint:
         # GET endpoint to list graphs
         @self.router.get(
             "/graphs",
-            response_model=List[GraphInfo],
+            response_model=GraphListResponse,
             tags=["Graphs"],
             summary="List Graphs",
             description="List all graphs in the specified space"
@@ -301,7 +302,7 @@ class SPARQLGraphEndpoint:
         else:
             raise ValueError(f"Unsupported graph operation: {operation}")
     
-    async def _list_graphs(self, space_id: str, current_user: Dict) -> List[GraphInfo]:
+    async def _list_graphs(self, space_id: str, current_user: Dict) -> GraphListResponse:
         """List all graphs in the space."""
         
         try:
@@ -314,14 +315,15 @@ class SPARQLGraphEndpoint:
                     detail="Space manager not available"
                 )
         
-            # Validate space exists (with DB fallback on cache miss)
+            # Validate space exists (with DB fallback on cache miss).
+            # A missing space is a DOMAIN outcome: HTTP 200 + status NOT_FOUND.
             space_record = await self.space_manager.get_space_or_load(space_id)
             if not space_record:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Space '{space_id}' not found"
+                return GraphListResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Space '{space_id}' not found",
                 )
-        
+
             space_impl = space_record.space_impl
         
             # Get the database-specific implementation for graph operations
@@ -345,8 +347,12 @@ class SPARQLGraphEndpoint:
                     updated_time=graph_data.get('updated_time', '').isoformat() if graph_data.get('updated_time') else None
                 )
                 graph_infos.append(graph_info)
-            
-            return graph_infos
+
+            return GraphListResponse(
+                status=OperationStatus.FOUND if graph_infos else OperationStatus.EMPTY,
+                graphs=graph_infos,
+                total_count=len(graph_infos),
+            )
         
         except HTTPException:
             raise

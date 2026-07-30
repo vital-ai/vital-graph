@@ -29,6 +29,7 @@ from ..model.kgdocuments_model import (
     SegmentationConfigRequest,
     SegmentationConfigResponse,
     SegmentationConfigListResponse,
+    SegmentationConfigDeleteResponse,
     SegmentationJobStatusResponse,
     SegmentationStatusSummaryResponse,
     SegmentationWorkerStatus,
@@ -267,6 +268,7 @@ class KGDocumentsEndpoint:
 
         @self.router.delete(
             "/kgdocuments/segmentation-configs",
+            response_model=SegmentationConfigDeleteResponse,
             tags=["KG Documents"],
             summary="Delete segmentation config",
         )
@@ -584,7 +586,7 @@ class KGDocumentsEndpoint:
         # Try to get the VitalSigns provider tokenizer
         try:
             from vitalgraph.vectorization import get_provider
-            provider = get_provider("vitalsigns")
+            provider = get_provider("vitalsigns_onnx")
             if provider and hasattr(provider, "_tokenizer"):
                 return provider._tokenizer
         except Exception:
@@ -863,14 +865,16 @@ class KGDocumentsEndpoint:
         try:
             deleted = await manager.delete_config(config_id)
             if not deleted:
-                return {
-                    "status": OperationStatus.NOT_FOUND.value,
-                    "message": f"Segmentation config {config_id} not found",
-                }
-            return {
-                "status": OperationStatus.DELETED.value,
-                "message": f"Deleted config {config_id}",
-            }
+                return SegmentationConfigDeleteResponse(
+                    status=OperationStatus.NOT_FOUND,
+                    message=f"Segmentation config {config_id} not found",
+                    config_id=config_id,
+                )
+            return SegmentationConfigDeleteResponse(
+                status=OperationStatus.DELETED,
+                message=f"Deleted config {config_id}",
+                config_id=config_id,
+            )
         finally:
             if pool and conn:
                 await pool.release(conn)

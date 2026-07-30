@@ -9,9 +9,21 @@ from typing import Any, Dict, List, Optional
 
 from .base_endpoint import BaseEndpoint
 from ...model.entity_registry_model import (
+    AdminRebuildResponse,
     AliasCreateRequest,
     AliasEnvelope,
+    AliasListResponse,
     AliasResponse,
+    CategoryListResponse,
+    EntityCategoryListResponse,
+    EntityTypeListResponse,
+    IdentifierListResponse,
+    LocationCategoryListResponse,
+    LocationListResponse,
+    LocationTypeListResponse,
+    RelationshipListResponse,
+    RelationshipTypeListResponse,
+    SameAsListResponse,
     CategoryCreateRequest,
     CategoryResponse,
     ChangeLogResponse,
@@ -164,15 +176,14 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return resp
 
-    async def list_identifiers(self, entity_id: str) -> List[IdentifierResponse]:
+    async def list_identifiers(self, entity_id: str) -> IdentifierListResponse:
         """List all active identifiers for an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/identifiers/list"),
             params={"entity_id": entity_id},
         )
-        data = response.json()
-        return [IdentifierResponse.model_validate(i) for i in data]
+        return IdentifierListResponse.model_validate(response.json())
 
     async def remove_identifier(self, identifier_id: int) -> Dict[str, Any]:
         """Retract an identifier."""
@@ -217,15 +228,14 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return resp
 
-    async def list_aliases(self, entity_id: str) -> List[AliasResponse]:
+    async def list_aliases(self, entity_id: str) -> AliasListResponse:
         """List all active aliases for an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/aliases/list"),
             params={"entity_id": entity_id},
         )
-        data = response.json()
-        return [AliasResponse.model_validate(a) for a in data]
+        return AliasListResponse.model_validate(response.json())
 
     async def remove_alias(self, alias_id: int) -> Dict[str, Any]:
         """Retract an alias."""
@@ -240,14 +250,13 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Categories
     # ------------------------------------------------------------------
 
-    async def list_categories(self) -> List[CategoryResponse]:
+    async def list_categories(self) -> CategoryListResponse:
         """List all entity categories."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/categories"),
         )
-        data = response.json()
-        return [CategoryResponse.model_validate(c) for c in data]
+        return CategoryListResponse.model_validate(response.json())
 
     async def create_category(self, request: CategoryCreateRequest) -> CategoryResponse:
         """Create a new entity category."""
@@ -257,15 +266,14 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
             json=request.model_dump(exclude_none=True),
         )
 
-    async def list_entity_categories(self, entity_id: str) -> List[EntityCategoryResponse]:
+    async def list_entity_categories(self, entity_id: str) -> EntityCategoryListResponse:
         """List all active categories for an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/categories/entity"),
             params={"entity_id": entity_id},
         )
-        data = response.json()
-        return [EntityCategoryResponse.model_validate(c) for c in data]
+        return EntityCategoryListResponse.model_validate(response.json())
 
     async def add_entity_category(self, entity_id: str, request: EntityCategoryRequest) -> EntityCategoryEnvelope:
         """Assign a category to an entity.
@@ -307,14 +315,13 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Location Types
     # ------------------------------------------------------------------
 
-    async def list_location_types(self) -> List[LocationTypeResponse]:
+    async def list_location_types(self) -> LocationTypeListResponse:
         """List all location types."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/location/types"),
         )
-        data = response.json()
-        return [LocationTypeResponse.model_validate(t) for t in data]
+        return LocationTypeListResponse.model_validate(response.json())
 
     async def create_location_type(self, request: LocationTypeCreateRequest) -> LocationTypeResponse:
         """Create a new location type."""
@@ -357,15 +364,14 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return resp
 
-    async def list_locations(self, entity_id: str, include_expired: bool = False) -> List[LocationResponse]:
+    async def list_locations(self, entity_id: str, include_expired: bool = False) -> LocationListResponse:
         """List locations for an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/locations/list"),
             params={"entity_id": entity_id, "include_expired": include_expired},
         )
-        data = response.json()
-        return [LocationResponse.model_validate(loc) for loc in data]
+        return LocationListResponse.model_validate(response.json())
 
     async def update_location(self, location_id: int, request: LocationUpdateRequest) -> LocationEnvelope:
         """Update a location.
@@ -420,28 +426,26 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return response.json()
 
-    async def list_location_categories(self, location_id: int) -> List[LocationCategoryResponse]:
+    async def list_location_categories(self, location_id: int) -> LocationCategoryListResponse:
         """List categories for a location."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/locations/categories/list"),
             params={"location_id": location_id},
         )
-        data = response.json()
-        return [LocationCategoryResponse.model_validate(c) for c in data]
+        return LocationCategoryListResponse.model_validate(response.json())
 
     # ------------------------------------------------------------------
     # Relationship Types
     # ------------------------------------------------------------------
 
-    async def list_relationship_types(self) -> List[RelationshipTypeResponse]:
+    async def list_relationship_types(self) -> RelationshipTypeListResponse:
         """List all relationship types."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/relationship/types"),
         )
-        data = response.json()
-        return [RelationshipTypeResponse.model_validate(t) for t in data]
+        return RelationshipTypeListResponse.model_validate(response.json())
 
     async def create_relationship_type(self, request: RelationshipTypeCreateRequest) -> RelationshipTypeResponse:
         """Create a new relationship type."""
@@ -490,15 +494,24 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
 
     async def list_relationships(
         self, entity_id: str, direction: str = 'both', include_expired: bool = False,
-    ) -> List[RelationshipResponse]:
-        """List relationships for an entity."""
+        page: int = 1, page_size: int = 20,
+    ) -> RelationshipListResponse:
+        """List relationships for an entity, paginated.
+
+        Returns a RelationshipListResponse (``.relationships``/``.total_count``/
+        ``.page``/``.page_size``) rather than a bare list: a hub entity's
+        adjacency list is unbounded, so this route pages (page_size max 100).
+        """
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/relationships/list"),
-            params={"entity_id": entity_id, "direction": direction, "include_expired": include_expired},
+            params={
+                "entity_id": entity_id, "direction": direction,
+                "include_expired": include_expired,
+                "page": page, "page_size": page_size,
+            },
         )
-        data = response.json()
-        return [RelationshipResponse.model_validate(r) for r in data]
+        return RelationshipListResponse.model_validate(response.json())
 
     async def update_relationship(self, relationship_id: int, request: RelationshipUpdateRequest) -> RelationshipEnvelope:
         """Update a relationship.
@@ -543,15 +556,14 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
         )
         return resp
 
-    async def get_same_as(self, entity_id: str) -> List[SameAsResponse]:
+    async def get_same_as(self, entity_id: str) -> SameAsListResponse:
         """Get all active same-as mappings for an entity."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/sameas/list"),
             params={"entity_id": entity_id},
         )
-        data = response.json()
-        return [SameAsResponse.model_validate(m) for m in data]
+        return SameAsListResponse.model_validate(response.json())
 
     async def retract_same_as(self, same_as_id: int, request: SameAsRetractRequest) -> SameAsEnvelope:
         """Retract a same-as mapping.
@@ -586,14 +598,13 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Entity Types
     # ------------------------------------------------------------------
 
-    async def list_entity_types(self) -> List[EntityTypeResponse]:
+    async def list_entity_types(self) -> EntityTypeListResponse:
         """List all entity types."""
         self._check_connection()
         response = await self._make_authenticated_request(
             "GET", self._url("/entity/types"),
         )
-        data = response.json()
-        return [EntityTypeResponse.model_validate(t) for t in data]
+        return EntityTypeListResponse.model_validate(response.json())
 
     async def create_entity_type(self, request: EntityTypeCreateRequest) -> EntityTypeResponse:
         """Create a new entity type."""
@@ -798,10 +809,35 @@ class EntityRegistryClientEndpoint(BaseEndpoint):
     # Admin: Populate vectors/FTS/geo
     # ------------------------------------------------------------------
 
-    async def populate_vectors(self) -> Dict[str, Any]:
-        """Trigger a full rebuild of entity registry vector/FTS/geo tables."""
+    async def populate_vectors(self) -> AdminRebuildResponse:
+        """Trigger a full rebuild of entity registry vector/FTS/geo tables.
+
+        Returns an AdminRebuildResponse carrying the unified status contract plus a
+        per-subsystem breakdown (``vectors``, ``geo``). Previously returned the raw
+        response dict.
+        """
         self._check_connection()
-        response = await self._make_authenticated_request(
-            "POST", self._url("/admin/populate-vectors"),
+        return await self._make_typed_request(
+            "POST", self._url("/admin/populate-vectors"), AdminRebuildResponse,
         )
-        return response.json()
+
+    async def admin_rebuild(
+        self,
+        rebuild_fuzzy: bool = True,
+        rebuild_weaviate: bool = False,
+        notify_workers: bool = True,
+    ) -> AdminRebuildResponse:
+        """Rebuild entity-registry secondary indexes (fuzzy, Weaviate).
+
+        POST /api/registry/admin/rebuild. Shares AdminRebuildResponse with
+        populate_vectors().
+        """
+        self._check_connection()
+        return await self._make_typed_request(
+            "POST", self._url("/admin/rebuild"), AdminRebuildResponse,
+            params={
+                "rebuild_fuzzy": rebuild_fuzzy,
+                "rebuild_weaviate": rebuild_weaviate,
+                "notify_workers": notify_workers,
+            },
+        )

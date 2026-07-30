@@ -61,7 +61,7 @@ const GraphObjects: React.FC = () => {
     if (!selectedSpace) { setGraphs([]); return; }
     try {
       setGraphsLoading(true);
-      setGraphs(await apiService.getGraphs(selectedSpace));
+      setGraphs((await apiService.getGraphs(selectedSpace)).graphs ?? []);
     } catch { setGraphs([]); }
     finally { setGraphsLoading(false); }
   }, [selectedSpace]);

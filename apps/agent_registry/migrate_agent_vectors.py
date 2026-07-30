@@ -17,7 +17,8 @@ import logging
 import sys
 from pathlib import Path
 
-project_root = Path(__file__).parent.parent
+# apps/<subdir>/<script>.py — the repo root is three levels up, not two.
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from dotenv import load_dotenv

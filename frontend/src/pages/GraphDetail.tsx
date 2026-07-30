@@ -55,7 +55,7 @@ const GraphDetail: React.FC = () => {
         }
 
         // Find graph by URI
-        const graphsData = await apiService.getGraphs(spaceId);
+        const graphsData: GraphInfo[] = (await apiService.getGraphs(spaceId)).graphs ?? [];
         const match = graphsData.find((g: GraphInfo) => g.graph_uri === graphUri);
 
         if (!match) {
@@ -114,7 +114,7 @@ const GraphDetail: React.FC = () => {
       setBannerMessage({ type: 'success', message: 'Graph purged successfully!' });
       setShowPurgeModal(false);
       // Refresh graph data
-      const graphsData = await apiService.getGraphs(spaceId);
+      const graphsData: GraphInfo[] = (await apiService.getGraphs(spaceId)).graphs ?? [];
       const match = graphsData.find((g: GraphInfo) => g.graph_uri === graph.graph_uri);
       if (match) setGraph(match);
       setTimeout(() => setBannerMessage(null), 3000);

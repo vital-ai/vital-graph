@@ -31,6 +31,22 @@ class GraphInfo(BaseModel):
     )
 
 
+class GraphListResponse(ResultStatus):
+    """Response model for GET /api/graphs/graphs.
+
+    Previously a bare JSON array, which could not carry status/message and made
+    "space has no graphs" (EMPTY) indistinguishable from "space not found"
+    (NOT_FOUND) — both serialized as [].
+    """
+    status: OperationStatus = Field(
+        OperationStatus.FOUND, description="Outcome discriminator (FOUND/EMPTY/NOT_FOUND)"
+    )
+    graphs: List[GraphInfo] = Field(
+        default_factory=list, description="Graphs in the space"
+    )
+    total_count: int = Field(0, description="Number of graphs returned")
+
+
 class GraphInfoResponse(ResultStatus):
     """Response model for graph info requests.
 

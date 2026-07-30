@@ -12,7 +12,8 @@ import signal
 import json
 import asyncio
 import logging
-from typing import Optional, List, Dict, Any
+import re
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 from datetime import datetime
 
@@ -194,7 +195,7 @@ class VitalGraphDBAdminREPL:
             print("Initializing VitalGraph implementation...")
             self.vital_graph_impl = VitalGraphImpl(config=self.config)
             
-            backend_type = self.config.get_backend_config().get('type', 'postgresql')
+            backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
             
             if backend_type == 'sparql_sql':
                 # sparql_sql: db_impl is created during space_backend.connect()
@@ -272,7 +273,7 @@ class VitalGraphDBAdminREPL:
 
     def _get_backend_admin(self):
         """Return the backend-specific admin module for the current backend type."""
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
         
         if backend_type == 'sparql_sql':
             from vitalgraph.db.sparql_sql.sparql_sql_admin import SparqlSQLAdmin
@@ -294,7 +295,7 @@ class VitalGraphDBAdminREPL:
             print("❌ No admin module available for this backend type.")
             return True
         
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
         print(f"🚀 Initializing {backend_type} Backend")
         print("=" * 50)
         
@@ -945,7 +946,7 @@ class VitalGraphDBAdminREPL:
             print("❌ Not connected to database. Use 'connect;' first.")
             return True
         
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
         if backend_type != 'sparql_sql':
             print("❌ Resync is only available for the sparql_sql backend.")
             return True
@@ -1779,7 +1780,7 @@ Note: All commands must end with a semicolon (;)
             # Create VitalGraphImpl instance with the loaded config
             self.vital_graph_impl = VitalGraphImpl(config=self.config)
             
-            backend_type = self.config.get_backend_config().get('type', 'postgresql')
+            backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
             
             if backend_type == 'sparql_sql':
                 # sparql_sql: connect via space_backend, then pick up db_impl
@@ -2040,51 +2041,93 @@ Note: All commands must end with a semicolon (;)
 
         return success
 
+    @staticmethod
+    def _normalize_space_id(space_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """Normalize a space id for use as a SQL table-name prefix.
+
+        Returns ``(normalized_id, error)``. The id is lowercased because
+        PostgreSQL folds unquoted identifiers: 'Foo' would create foo_* tables
+        while the space row kept 'Foo', and the two could never be matched
+        again. Characters that are not valid in an unquoted identifier are
+        still rejected.
+        """
+        if not space_id:
+            return None, "space id must not be empty"
+        normalized = space_id.lower()
+        if not re.fullmatch(r'[a-z_][a-z0-9_]*', normalized):
+            return None, ("space id must contain only letters, digits and "
+                          "underscores, and must not start with a digit")
+        return normalized, None
+
     async def _cli_create_space(self, space_id: str, space_name: str = None) -> bool:
-        """Create a new space (admin tables + per-space data tables)."""
-        space_name = space_name or space_id
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        """Create a new space (admin tables + per-space data tables).
+
+        The space row and the per-space DDL are committed in a single
+        transaction, so a failure leaves nothing behind.
+        """
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
+
+        normalized, err = self._normalize_space_id(space_id)
+        if err:
+            print(f"❌ Invalid space id '{space_id}': {err}")
+            return False
+        if normalized != space_id:
+            print(f"ℹ️  Space id '{space_id}' normalized to '{normalized}'")
+        space_name = space_name or normalized
+        space_id = normalized
+
+        if backend_type != 'sparql_sql':
+            print(f"❌ Unsupported backend '{backend_type}' for space creation "
+                  f"(expected 'sparql_sql'). Check BACKEND_TYPE in your .env.")
+            return False
 
         try:
-            # Insert into admin space table
+            from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
             print(f"📦 Creating space '{space_id}' (name='{space_name}')...")
-            await self.db_impl.execute_update(
-                "INSERT INTO space (space_id, space_name, update_time) "
-                "VALUES ($1, $2, NOW()) ON CONFLICT (space_id) DO NOTHING",
-                [space_id, space_name]
-            )
 
-            # Create per-space tables for sparql_sql backend
-            if backend_type == 'sparql_sql':
-                from vitalgraph.db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+            async with self.db_impl.connection_pool.acquire() as conn:
+                # Reject an existing space rather than silently no-op'ing on
+                # the insert and then re-running DDL over live tables.
+                existing = await conn.fetchval(
+                    "SELECT 1 FROM space WHERE space_id = $1", space_id
+                )
+                if existing:
+                    print(f"❌ Space '{space_id}' already exists")
+                    return False
+                clashing = await conn.fetchval(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name LIKE $1",
+                    space_id + '\\_%'
+                )
+                if clashing:
+                    print(f"❌ {clashing} table(s) prefixed '{space_id}_' already "
+                          f"exist without a space record — resolve before creating")
+                    return False
+
                 print("   Creating per-space tables, indexes, and seeding datatypes...")
-                async with self.db_impl.connection_pool.acquire() as conn:
-                    await SparqlSQLSchema.create_space(conn, space_id)
-                print(f"✅ Space '{space_id}' created with per-space tables")
-            elif backend_type == 'fuseki_postgresql':
-                from vitalgraph.db.fuseki_postgresql.postgresql_schema import FusekiPostgreSQLSchema
-                schema = FusekiPostgreSQLSchema()
-                print("   Creating per-space tables...")
-                for stmt in schema.create_space_tables_sql(space_id):
-                    await self.db_impl.execute_update(stmt)
-                print("   Creating per-space indexes...")
-                for stmt in schema.create_space_indexes_sql(space_id):
-                    await self.db_impl.execute_update(stmt)
-                print(f"✅ Space '{space_id}' created with per-space tables")
-            else:
-                print(f"✅ Space '{space_id}' registered (no per-space tables for {backend_type})")
+                # All-or-nothing: space row, DDL and vector/FTS bootstraps
+                # commit together or roll back together.
+                async with conn.transaction():
+                    await conn.execute(
+                        "INSERT INTO space (space_id, space_name, update_time) "
+                        "VALUES ($1, $2, NOW())",
+                        space_id, space_name
+                    )
+                    await SparqlSQLSchema.create_space(conn, space_id, strict=True)
 
+            print(f"✅ Space '{space_id}' created with per-space tables")
             return True
 
         except Exception as e:
             print(f"❌ Failed to create space '{space_id}': {e}")
+            print("   No partial state left behind (transaction rolled back).")
             import traceback
             traceback.print_exc()
             return False
 
     async def _cli_drop_space(self, space_id: str) -> bool:
         """Drop a space and its per-space data tables."""
-        backend_type = self.config.get_backend_config().get('type', 'postgresql')
+        backend_type = self.config.get_backend_config().get('type', 'sparql_sql')
 
         try:
             # Drop per-space tables
@@ -2330,12 +2373,19 @@ def main():
     """Main entry point for VitalGraphDB admin REPL."""
     args = parse_args()
     
-    # Load .env file so profile-based env vars (PROD_*, LOCAL_*, etc.) are available
+    # Load .env file so profile-based env vars (PROD_*, LOCAL_*, etc.) are available.
+    # Search the working directory and its parents first, then fall back to the
+    # source-checkout location. The package-relative path only resolves in a
+    # checkout — when installed via pip it points into site-packages, where no
+    # .env exists, so the CLI would silently fall back to default config.
     try:
         from dotenv import load_dotenv
-        env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path, override=False)
+        candidates = [p / ".env" for p in (Path.cwd(), *Path.cwd().parents)]
+        candidates.append(Path(__file__).resolve().parent.parent.parent / ".env")
+        for env_path in candidates:
+            if env_path.exists():
+                load_dotenv(env_path, override=False)
+                break
     except ImportError:
         pass
     

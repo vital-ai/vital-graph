@@ -72,7 +72,7 @@ const Files: React.FC = () => {
     if (!selectedSpace) { setGraphs([]); return; }
     try {
       setGraphsLoading(true);
-      setGraphs(await apiService.getGraphs(selectedSpace));
+      setGraphs((await apiService.getGraphs(selectedSpace)).graphs ?? []);
     } catch { setError('Failed to load graphs.'); setGraphs([]); }
     finally { setGraphsLoading(false); }
   }, [selectedSpace]);

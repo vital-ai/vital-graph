@@ -62,8 +62,18 @@ const Graphs: React.FC = () => {
     try {
       setLoading(true);
       clearError();
-      const data = await apiService.getGraphs(selectedSpace);
-      setGraphs(data);
+      const resp = await apiService.getGraphs(selectedSpace);
+      // The envelope distinguishes an empty space from a missing one — a bare
+      // [] used to conflate them.
+      if (!resp.success) {
+        setGraphs([]);
+        handleError(
+          new Error(resp.message || `Could not load graphs (${resp.status})`),
+          'Failed to load graphs.',
+        );
+        return;
+      }
+      setGraphs(resp.graphs ?? []);
     } catch (err) {
       handleError(err, 'Failed to load graphs.');
       setGraphs([]);

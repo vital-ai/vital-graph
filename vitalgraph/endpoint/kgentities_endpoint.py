@@ -27,7 +27,7 @@ from ..model.kgentities_model import (
     EntityLabelCount,
     EntityCountsResponse,
 )
-from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse
+from ..model.kgframes_model import FrameGraphsResponse, FrameCreateResponse, FrameUpdateResponse, FrameDeleteResponse
 from ..model.result_status import OperationStatus
 # Import VitalSigns integration patterns from mock
 from ..sparql.grouping_uri_queries import GroupingURIQueryBuilder, GroupingURIGraphRetriever
@@ -379,7 +379,7 @@ class KGEntitiesEndpoint:
             else:
                 return await self._create_or_update_frames(space_id, graph_id, quads, operation_mode, entity_uri=entity_uri, current_user=current_user, parent_frame_uri=parent_frame_uri)
         
-        @self.router.delete("/kgentities/kgframes", tags=["KG Entities"])
+        @self.router.delete("/kgentities/kgframes", response_model=FrameDeleteResponse, tags=["KG Entities"])
         async def delete_entity_frames(
             space_id: str = Query(..., description="Space ID"),
             graph_id: str = Query(..., description="Graph ID"),

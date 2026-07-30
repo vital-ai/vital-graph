@@ -148,6 +148,125 @@ Contents:
 
 These files define the domain ontology used for Pydantic model generation and type validation. They are **not modified at deploy time** — changes require a new Docker image build.
 
+### 2.7 Embedding Models (baked into the image)
+
+All embedding weights ship inside the Docker image; a running task makes **no
+network calls to HuggingFace**. The image sets `HF_HUB_OFFLINE=1` and
+`TRANSFORMERS_OFFLINE=1`, so a missing artifact fails loudly at startup rather
+than silently egressing.
+
+| Provider | Model | Where the weights live |
+|---|---|---|
+| `vitalsigns_onnx` (default) | paraphrase-MiniLM-L3-v2, 384 dims, English, CPU ONNX | inside the `vital-model-paraphrase-MiniLM-onnx` wheel |
+| `paraphrase_multilingual_minilm_l12_v2` | paraphrase-multilingual-MiniLM-L12-v2, 384 dims, multilingual | pre-downloaded to `HF_HOME=/app/models/hf` at build time |
+| `openai` | text-embedding-3-small, 1536 dims | remote API — needs `OPENAI_API_KEY` and egress |
+
+NLTK punkt tables (`punkt` and `punkt_tab`) are pre-downloaded to
+`NLTK_DATA=/app/models/nltk`; the multilingual provider calls
+`nltk.sent_tokenize` per vectorization and would otherwise try to fetch them at
+runtime.
+
+Baking the multilingual model adds roughly 500MB to the image — budget ECS task
+ephemeral storage and ECR pull time accordingly.
+
+#### Selecting the entity registry model
+
+The entity registry does **not** read the `provider` column on its vector-index
+row. It picks a provider from one variable, used on both the write
+(vectorization) and read (search) paths:
+
+| `VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER` | Model | Vector width | Notes |
+|---|---|---|---|
+| `vitalsigns_onnx` *(default)* | paraphrase-MiniLM-L3-v2 | 384 | Bundled ONNX, CPU, English, no egress |
+| `paraphrase_multilingual_minilm_l12_v2` | paraphrase-multilingual-MiniLM-L12-v2 | 384 | Baked into the image, no egress |
+| `openai` | text-embedding-3-small | 1536 | Remote API — needs a key and egress, billed per vectorization |
+
+Related: `VITALGRAPH_ENTITY_REGISTRY_OPENAI_API_KEY_ENV` (default
+`OPENAI_API_KEY`) names the variable holding the key, so it can be wired to a
+different Secrets Manager entry than the one the rest of the app uses.
+
+The agent registry has the identical set under
+`VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER` / `..._VECTOR_MODEL` /
+`..._OPENAI_API_KEY_ENV`, resolved independently — staging's entity corpus is
+multilingual while its agent corpus is not.
+
+An unrecognised provider logs a warning and falls back to the default rather
+than failing the task.
+
+**Each model gets its own column, at its native width — nothing is truncated
+and nothing is shared.** The vector tables carry all three columns at all
+times:
+
+| Column | Width |
+|---|---|
+| `embedding_vitalsigns_onnx` | 384 |
+| `embedding_paraphrase_multilingual` | 384 |
+| `embedding_openai_3_small` | 1536 |
+
+Each has its own HNSW index, and only the configured model's column is
+populated. Consequences:
+
+- **Switching models needs no schema migration**, even across widths. The
+  columns already exist.
+- **Unused columns are effectively free.** Measured on pgvector: an HNSW index
+  over an all-NULL column is 16 kB versus 1.6 MB for a populated one, and the
+  NULLs cost a null-bitmap bit in the heap.
+- **A wrong-model read returns nothing rather than nonsense.** Previously a
+  single shared `embedding` column meant "whatever model was configured when
+  the row was written", so a mismatch produced confident garbage. Now the
+  unpopulated column is NULL and those rows simply drop out.
+
+After switching, re-vectorize the registry with a full rebuild — the new
+column starts empty, so vector search returns no hits until it is filled.
+
+#### Migrating an existing deployment to the per-model columns
+
+Environments created before this change have a single `embedding vector(384)`
+column. Move them with:
+
+```bash
+python -m vitalgraph.db.migrations.migrate_registry_embedding_columns \
+    --dsn "postgresql://…" --registry entity --dry-run   # inspect first
+```
+
+**The destination must be stated, not guessed.** The legacy column records
+nothing about which model produced it — that is precisely the defect being
+fixed — so the migration cannot detect it:
+
+| Environment | Flag |
+|---|---|
+| Default | `--target-provider vitalsigns_onnx` (the historical default) |
+| **Staging** | `--target-provider paraphrase_multilingual_minilm_l12_v2` |
+
+> Staging's existing vectors were produced by the **multilingual** model, not
+> the ONNX default. Running the default there would file multilingual vectors
+> under `embedding_vitalsigns_onnx`, and because both are 384-wide **nothing
+> would error** — every later search would just quietly compare across
+> embedding spaces. Always `--dry-run` first and confirm the reported target.
+
+The migration adds all three columns, copies the legacy data into the stated
+one, builds the per-model HNSW indexes, and repoints the
+`entity_registry_vector_index` catalog row. It is idempotent and runs in a
+single transaction.
+
+The legacy `embedding` column is **kept** by default so the copy can be
+verified — and redone if the wrong target was picked. Reclaim the space in a
+second pass once you're satisfied:
+
+```bash
+python -m vitalgraph.db.migrations.migrate_registry_embedding_columns \
+    --dsn "postgresql://…" --registry entity \
+    --target-provider <same-as-before> --drop-legacy
+```
+
+A width mismatch (legacy 384 vs an OpenAI target) is refused outright: OpenAI
+vectors must be produced by re-vectorizing, not by copying 384-wide data.
+
+> `text-embedding-3-large` is rejected: at 3072 dims it exceeds pgvector's
+> 2000-dimension limit for HNSW/ivfflat indexes, and the registry vector tables
+> are HNSW-indexed. The config raises at startup rather than failing later at
+> `CREATE INDEX`.
+
 ---
 
 ## 3. PostgreSQL Database Setup
@@ -767,7 +886,9 @@ The ECS task requires **two containers**: the VitalGraph app and the SPARQL comp
         { "name": "PROD_STORAGE_USE_SSL", "value": "true" },
         { "name": "PROD_LOG_LEVEL", "value": "INFO" },
         { "name": "APP_MODE", "value": "production" },
-        { "name": "WORKERS", "value": "1" }
+        { "name": "WORKERS", "value": "1" },
+        { "name": "VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER", "value": "vitalsigns_onnx" },
+        { "name": "VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER", "value": "vitalsigns_onnx" }
       ],
       "secrets": [
         { "name": "PROD_DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:<region>:<account>:secret:vitalgraph/db-username" },

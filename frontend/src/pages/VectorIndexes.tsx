@@ -23,6 +23,7 @@ import {
 import { HiTrash, HiRefresh, HiExclamation, HiHome, HiEye } from 'react-icons/hi';
 import { vectorGeoService } from '../services/VectorGeoService';
 import { apiService } from '../services/ApiService';
+import { providerShortLabel } from '../types/vectorGeo';
 import type { VectorIndex } from '../types/vectorGeo';
 import { type SpaceInfo } from '../types/api';
 import { formatDateShort } from '../utils/formatUtils';
@@ -198,7 +199,7 @@ const VectorIndexes: React.FC = () => {
                     {idx.index_name}
                   </TableCell>
                   <TableCell>
-                    <Badge color="info">{idx.provider}</Badge>
+                    <Badge color="info" title={idx.provider}>{providerShortLabel(idx.provider)}</Badge>
                   </TableCell>
                   <TableCell>{idx.dimensions}</TableCell>
                   <TableCell className="text-sm text-gray-500 dark:text-gray-400 max-w-48 truncate">

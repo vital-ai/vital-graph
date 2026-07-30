@@ -16,6 +16,18 @@ services:
       - HOST=${HOST:-0.0.0.0}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - WORKERS=${WORKERS:-1}
+      # Entity registry embedding model, used for BOTH vectorization and search.
+      #   vitalsigns_onnx                         384 — paraphrase-MiniLM-L3-v2 (default, English, bundled)
+      #   paraphrase_multilingual_minilm_l12_v2   384 — multilingual, baked into the image
+      #   openai                                 1536 — text-embedding-3-small, needs OPENAI_API_KEY
+      # The vector tables carry one column per model at its native width, so
+      # switching needs no schema migration — unused columns are empty and free.
+      # Re-vectorize the registry after switching: the new column starts empty,
+      # so vector search returns nothing until it is filled.
+      - VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER=${VITALGRAPH_ENTITY_REGISTRY_VECTOR_PROVIDER:-vitalsigns_onnx}
+      # Same choice for the agent registry, set independently: the two corpora
+      # may warrant different models.
+      - VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER=${VITALGRAPH_AGENT_REGISTRY_VECTOR_PROVIDER:-vitalsigns_onnx}
     env_file:
       - .env
     volumes:

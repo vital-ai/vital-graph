@@ -38,6 +38,12 @@ pytestmark = [
 
 WIKI_DIR = Path(__file__).resolve().parent.parent.parent / "test_files" / "wikipedia"
 INDEX_NAME = "document_segments"
+
+# Segmentation jobs finalise shortly *after* the last vector is written, so tests
+# asserting on job status poll for the transition rather than assuming the
+# fixture's vector-count gate implies completion.
+JOB_COMPLETION_POLLS = 30
+JOB_COMPLETION_POLL_INTERVAL = 2.0
 DOC_TYPE = "urn:kgdoctype:wikipedia_article"
 SEG_METHOD = "urn:segmethod:markdown_heading_split"
 
@@ -388,9 +394,25 @@ class TestWikipediaVectorization:
             "Vectors not ready — background vectorization task did not complete"
         )
 
-        status_resp = await vg_client.kgdocuments.get_segmentation_status(
-            space_id=wiki_env["space_id"],
-        )
+        # The wiki_env fixture gates on vector *count*, but a job row only flips to
+        # 'completed' after the last vector is written and the lifecycle finalises.
+        # Vector count is therefore a proxy signal, not the state asserted here —
+        # relying on it made this test intermittently observe 'vectorizing'.
+        # Poll the actual state instead, so the test reacts to the transition
+        # rather than to a fixed wait.
+        status_resp = None
+        for _ in range(JOB_COMPLETION_POLLS):
+            status_resp = await vg_client.kgdocuments.get_segmentation_status(
+                space_id=wiki_env["space_id"],
+            )
+            if status_resp.vectorizing == 0 and status_resp.jobs and all(
+                job["status"] == "completed" for job in status_resp.jobs
+            ):
+                break
+            await asyncio.sleep(JOB_COMPLETION_POLL_INTERVAL)
+
+        assert status_resp is not None, "no segmentation status returned"
+
         # All jobs should have reached 'completed'
         for job in status_resp.jobs:
             assert job["status"] == "completed", (

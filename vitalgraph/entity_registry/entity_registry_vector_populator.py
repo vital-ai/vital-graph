@@ -23,7 +23,10 @@ from vitalgraph.entity_registry.entity_registry_vector_schema import (
     ENTITY_VECTOR_TABLE, LOCATION_VECTOR_TABLE, GEO_TABLE,
     FTS_ENTITY_TABLE, FTS_LOCATION_TABLE, DIMENSIONS,
 )
-from vitalgraph.vectorization.registry import get_provider
+from vitalgraph.entity_registry.entity_registry_vector_config import (
+    get_entity_registry_embedding_column,
+    get_entity_registry_provider,
+)
 from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
@@ -153,7 +156,10 @@ class EntityRegistryVectorPopulator:
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
-        self._provider = get_provider("vitalsigns", cache_key="entity_registry")
+        self._provider = get_entity_registry_provider(cache_key="entity_registry")
+        # Which per-model column this provider owns.  Interpolated into SQL, so
+        # it must come from the frozen EMBEDDING_COLUMNS map, never user input.
+        self._embedding_column = get_entity_registry_embedding_column()
 
     # ==================================================================
     # Full rebuild
@@ -251,10 +257,11 @@ class EntityRegistryVectorPopulator:
         async with self.pool.acquire() as conn:
             # Vector table
             await conn.executemany(f"""
-                INSERT INTO {ENTITY_VECTOR_TABLE} (subject_uuid, entity_id, embedding, search_text, updated_time)
+                INSERT INTO {ENTITY_VECTOR_TABLE} (subject_uuid, entity_id, {self._embedding_column}, search_text, updated_time)
                 VALUES ($1, $2, $3::vector, $4, CURRENT_TIMESTAMP)
                 ON CONFLICT (subject_uuid) DO UPDATE
-                SET embedding = EXCLUDED.embedding, search_text = EXCLUDED.search_text,
+                SET {self._embedding_column} = EXCLUDED.{self._embedding_column},
+                    search_text = EXCLUDED.search_text,
                     updated_time = CURRENT_TIMESTAMP
             """, [
                 (str(rec[0]), rec[1], _vec_to_str(embeddings[idx]), rec[2])
@@ -349,10 +356,11 @@ class EntityRegistryVectorPopulator:
             # Location vector table
             await conn.executemany(f"""
                 INSERT INTO {LOCATION_VECTOR_TABLE}
-                    (subject_uuid, location_id, entity_id, embedding, search_text, updated_time)
+                    (subject_uuid, location_id, entity_id, {self._embedding_column}, search_text, updated_time)
                 VALUES ($1, $2, $3, $4::vector, $5, CURRENT_TIMESTAMP)
                 ON CONFLICT (subject_uuid) DO UPDATE
-                SET embedding = EXCLUDED.embedding, search_text = EXCLUDED.search_text,
+                SET {self._embedding_column} = EXCLUDED.{self._embedding_column},
+                    search_text = EXCLUDED.search_text,
                     updated_time = CURRENT_TIMESTAMP
             """, [
                 (str(rec[0]), rec[1], rec[2], _vec_to_str(embeddings[idx]), rec[3])

@@ -36,10 +36,37 @@ from ..model.vector_indexes_model import (
 logger = logging.getLogger(__name__)
 
 VALID_DISTANCE_METRICS = {"cosine", "l2", "inner_product"}
-VALID_PROVIDERS = {"vitalsigns", "openai", "cohere"}
 
 # Maximum number of completed/failed reindex jobs to keep in memory per instance
 _MAX_REINDEX_HISTORY = 100
+
+
+def _valid_providers() -> set:
+    """Provider names accepted on create, read live from the registry.
+
+    Read at call time rather than import time so a provider registered later
+    is still accepted.  Includes legacy aliases so existing clients keep
+    working.  Previously this was a hardcoded set that had drifted from the
+    registry (it listed 'cohere', which has no provider class, and omitted
+    real ones) — an index created with a name outside the registry silently
+    degrades to a zero vector at query time.
+    """
+    from vitalgraph.vectorization.registry import PROVIDER_ALIASES, PROVIDER_REGISTRY
+    return set(PROVIDER_REGISTRY) | set(PROVIDER_ALIASES)
+
+
+def _validate_dimensions(body) -> Optional[str]:
+    """Reject a vector width the chosen model will not produce.
+
+    Thin adapter over the shared rule in
+    ``vectorization.registry.validate_index_dimensions`` so the REST path and
+    ``vector_index_lifecycle.ensure_index`` cannot diverge.
+    """
+    from vitalgraph.vectorization.registry import validate_index_dimensions
+
+    return validate_index_dimensions(
+        body.provider, body.dimensions, body.provider_config,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +167,31 @@ class VectorIndexesEndpoint:
                 status=OperationStatus.INVALID_REQUEST,
                 message=f"Invalid distance_metric '{body.distance_metric}'. "
                         f"Must be one of: {', '.join(sorted(VALID_DISTANCE_METRICS))}",
+            )
+
+        valid_providers = _valid_providers()
+        if body.provider not in valid_providers:
+            return VectorIndexOut(
+                index_id=0,
+                index_name=body.index_name,
+                dimensions=body.dimensions,
+                distance_metric=body.distance_metric,
+                provider=body.provider,
+                status=OperationStatus.INVALID_REQUEST,
+                message=f"Unknown vectorization provider '{body.provider}'. "
+                        f"Must be one of: {', '.join(sorted(valid_providers))}",
+            )
+
+        dim_error = _validate_dimensions(body)
+        if dim_error:
+            return VectorIndexOut(
+                index_id=0,
+                index_name=body.index_name,
+                dimensions=body.dimensions,
+                distance_metric=body.distance_metric,
+                provider=body.provider,
+                status=OperationStatus.INVALID_REQUEST,
+                message=dim_error,
             )
 
         conn = await self._acquire()

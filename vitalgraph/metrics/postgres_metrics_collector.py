@@ -172,44 +172,88 @@ class PostgresMetricsCollector:
 
         try:
             async with self._pool.acquire() as conn:
+                # Drop records for spaces that no longer exist (or were never
+                # created). query_metrics/slow_query_log have FKs to space, and
+                # spaces are explicitly managed — we never insert space rows
+                # from the metrics path. Buffered metrics can outlive a space
+                # (e.g. a test space deleted before the flush interval), which
+                # would otherwise raise FK violations and abort the batch.
+                referenced = {rec["space_id"] for rec in metric_records}
+                referenced.update(rec["space_id"] for rec in slow_records)
+                known = await self._known_space_ids(conn, referenced)
+                dropped = referenced - known
+                if dropped:
+                    logger.debug(
+                        "Dropping metrics for %d unknown space(s): %s",
+                        len(dropped), ", ".join(sorted(dropped)),
+                    )
+                    aggregated = {
+                        key: stats for key, stats in aggregated.items() if key[0] in known
+                    }
+                    slow_records = [r for r in slow_records if r["space_id"] in known]
+
                 # Batch UPSERT metrics
                 if aggregated:
                     for (space_id, minute_ts, endpoint), stats in aggregated.items():
                         bucket_start = datetime.fromtimestamp(minute_ts, tz=timezone.utc)
-                        await conn.execute(
-                            """
-                            INSERT INTO query_metrics
-                                (space_id, bucket_start, bucket_granularity, endpoint,
-                                 request_count, error_count, total_ms, max_ms)
-                            VALUES ($1, $2, 'minute', $3, $4, $5, $6, $7)
-                            ON CONFLICT (space_id, bucket_start, endpoint, bucket_granularity)
-                            DO UPDATE SET
-                                request_count = query_metrics.request_count + EXCLUDED.request_count,
-                                error_count = query_metrics.error_count + EXCLUDED.error_count,
-                                total_ms = query_metrics.total_ms + EXCLUDED.total_ms,
-                                max_ms = GREATEST(query_metrics.max_ms, EXCLUDED.max_ms)
-                            """,
-                            space_id, bucket_start, endpoint,
-                            stats["request_count"], stats["error_count"],
-                            stats["total_ms"], stats["max_ms"],
-                        )
+                        try:
+                            await conn.execute(
+                                """
+                                INSERT INTO query_metrics
+                                    (space_id, bucket_start, bucket_granularity, endpoint,
+                                     request_count, error_count, total_ms, max_ms)
+                                VALUES ($1, $2, 'minute', $3, $4, $5, $6, $7)
+                                ON CONFLICT (space_id, bucket_start, endpoint, bucket_granularity)
+                                DO UPDATE SET
+                                    request_count = query_metrics.request_count + EXCLUDED.request_count,
+                                    error_count = query_metrics.error_count + EXCLUDED.error_count,
+                                    total_ms = query_metrics.total_ms + EXCLUDED.total_ms,
+                                    max_ms = GREATEST(query_metrics.max_ms, EXCLUDED.max_ms)
+                                """,
+                                space_id, bucket_start, endpoint,
+                                stats["request_count"], stats["error_count"],
+                                stats["total_ms"], stats["max_ms"],
+                            )
+                        except Exception as e:
+                            # Space may have been deleted between the check and
+                            # the insert — skip this bucket, keep the batch going.
+                            logger.debug(
+                                "Skipping query_metrics upsert for space %s: %s", space_id, e
+                            )
 
                 # Insert slow query entries
                 if slow_records:
                     for entry in slow_records:
                         meta_json = json.dumps(entry.get("metadata", {}))
-                        await conn.execute(
-                            """
-                            INSERT INTO slow_query_log
-                                (space_id, endpoint, duration_ms, metadata)
-                            VALUES ($1, $2, $3, $4::jsonb)
-                            """,
-                            entry["space_id"], entry["endpoint"],
-                            int(entry["duration_ms"]), meta_json,
-                        )
+                        try:
+                            await conn.execute(
+                                """
+                                INSERT INTO slow_query_log
+                                    (space_id, endpoint, duration_ms, metadata)
+                                VALUES ($1, $2, $3, $4::jsonb)
+                                """,
+                                entry["space_id"], entry["endpoint"],
+                                int(entry["duration_ms"]), meta_json,
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "Skipping slow_query_log insert for space %s: %s",
+                                entry["space_id"], e,
+                            )
 
         except Exception as e:
             logger.debug(f"Metrics flush to PostgreSQL failed (non-fatal): {e}")
+
+    @staticmethod
+    async def _known_space_ids(conn, space_ids) -> set:
+        """Return the subset of space_ids that exist in the space table."""
+        if not space_ids:
+            return set()
+        rows = await conn.fetch(
+            "SELECT space_id FROM space WHERE space_id = ANY($1::varchar[])",
+            list(space_ids),
+        )
+        return {row["space_id"] for row in rows}
 
     # ─── Read methods (used by MetricsEndpoint) ───────────────────────────
 

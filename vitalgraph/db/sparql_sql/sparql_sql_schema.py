@@ -90,7 +90,10 @@ class SparqlSQLSchema:
                 id SERIAL PRIMARY KEY,
                 install_datetime TIMESTAMP,
                 update_datetime TIMESTAMP,
-                active BOOLEAN
+                active BOOLEAN,
+                vitalgraph_version VARCHAR(64),
+                git_commit VARCHAR(40),
+                deployed_datetime TIMESTAMP
             )
         '''),
         ("space", '''
@@ -542,7 +545,7 @@ class SparqlSQLSchema:
                 index_name      VARCHAR(255) NOT NULL UNIQUE,
                 dimensions      INT NOT NULL,
                 distance_metric VARCHAR(20) NOT NULL DEFAULT 'cosine',
-                provider        VARCHAR(50) NOT NULL DEFAULT 'vitalsigns',
+                provider        VARCHAR(50) NOT NULL DEFAULT 'vitalsigns_onnx',
                 model_name      VARCHAR(255),
                 provider_config JSONB,
                 description     TEXT,
@@ -823,11 +826,30 @@ class SparqlSQLSchema:
     # ------------------------------------------------------------------
 
     @staticmethod
-    async def create_space(conn, space_id: str, partition_quads: int = 0) -> None:
+    async def create_space(conn, space_id: str, partition_quads: int = 0,
+                           strict: bool = True) -> None:
         """Create all per-space tables, indexes, and seed datatypes.
 
         ``partition_quads`` > 0 creates a HASH(context_uuid)-partitioned rdf_quad
         (slim 4-col PK + UUIDv7, PG18) — see create_space_tables_sql.
+
+        Space creation is all-or-nothing: with ``strict`` (the default) a failure
+        in any step — including the vector/FTS bootstraps — propagates, so a
+        caller running this inside a transaction gets a complete space or none
+        at all. Pass ``strict=False`` only to tolerate bootstrap failures and
+        leave a space without its vector/FTS infrastructure.
+        """
+        await SparqlSQLSchema.create_space_core(conn, space_id, partition_quads)
+        await SparqlSQLSchema.bootstrap_space_extras(conn, space_id, strict=strict)
+        logger.info("Created space tables for: %s", space_id)
+
+    @staticmethod
+    async def create_space_core(conn, space_id: str, partition_quads: int = 0) -> None:
+        """Create per-space tables, indexes and seed datatypes.
+
+        Contains only the critical DDL, so it is safe to run inside an explicit
+        transaction — every statement here raises on failure rather than being
+        swallowed.
         """
         schema = SparqlSQLSchema()
 
@@ -845,7 +867,18 @@ class SparqlSQLSchema:
             STANDARD_DATATYPES,
         )
 
-        # Bootstrap document_segments vector index + mapping (non-critical)
+    @staticmethod
+    async def bootstrap_space_extras(conn, space_id: str,
+                                     strict: bool = True) -> None:
+        """Bootstrap the per-space vector/FTS infrastructure.
+
+        With ``strict`` (the default) any failure propagates, so a caller
+        running this inside a transaction gets all-or-nothing space creation.
+        ``strict=False`` restores the older tolerant behaviour, which logs and
+        continues — only safe outside a transaction, since a swallowed error
+        would otherwise leave the enclosing transaction in an aborted state.
+        """
+        # Bootstrap document_segments vector index + mapping
         try:
             from vitalgraph.document.vector_index_setup import (
                 setup_document_segments_vectorization,
@@ -853,9 +886,15 @@ class SparqlSQLSchema:
             ok = await setup_document_segments_vectorization(conn, space_id)
             if ok:
                 logger.info("Bootstrapped document_segments vector index for: %s", space_id)
+            elif strict:
+                raise RuntimeError(
+                    f"document_segments vector bootstrap returned failure for {space_id}"
+                )
             else:
                 logger.warning("Could not bootstrap document_segments index for: %s", space_id)
         except Exception as ve:
+            if strict:
+                raise
             logger.warning(
                 "document_segments vector bootstrap failed (non-critical): %s", ve
             )
@@ -863,7 +902,7 @@ class SparqlSQLSchema:
         # NOTE: kgtype_default search infra is NOT bootstrapped per-space.
         # KG Types live in the centralized sp_kg_types system space only.
 
-        # Bootstrap FTS indexes for any registered vector indexes (non-critical)
+        # Bootstrap FTS indexes for any registered vector indexes
         try:
             from vitalgraph.vectorization.fts_index_lifecycle import ensure_fts_index
             vi_table = f"{space_id}_vector_index"
@@ -873,11 +912,11 @@ class SparqlSQLSchema:
             for row in rows:
                 await ensure_fts_index(conn, space_id, row['index_name'])
         except Exception as fe:
+            if strict:
+                raise
             logger.warning(
                 "FTS index bootstrap failed (non-critical): %s", fe
             )
-
-        logger.info("Created space tables for: %s", space_id)
 
     @staticmethod
     async def drop_space(conn, space_id: str) -> None:
@@ -903,6 +942,13 @@ class SparqlSQLSchema:
                 continue
             await conn.execute(f"DROP TABLE IF EXISTS {tbl} CASCADE")
             logger.debug("Dropped dynamic table: %s", tbl)
+
+        # segmentation_jobs is created on demand by SegmentationJobManager
+        # (not by create_space_tables_sql), so it is not in the static drop
+        # list and would otherwise be left behind on every drop.
+        await conn.execute(
+            f"DROP TABLE IF EXISTS {space_id}_segmentation_jobs CASCADE"
+        )
 
         # Also drop any trigger functions left by FTS data tables
         fn_rows = await conn.fetch(

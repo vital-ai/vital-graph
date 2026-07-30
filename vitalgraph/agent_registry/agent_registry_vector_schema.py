@@ -9,11 +9,37 @@ Table naming: agent_registry_vec_agent, agent_registry_fts_agent.
 
 from typing import List
 
+from vitalgraph.agent_registry.agent_registry_vector_config import (
+    EMBEDDING_COLUMNS,
+    OPENAI,
+    PARAPHRASE_MULTILINGUAL,
+    VITALSIGNS_ONNX,
+    get_agent_registry_dimensions,
+    get_agent_registry_model_name,
+    get_agent_registry_provider_name,
+)
+
+# Short, stable suffixes for index names — the column names themselves would
+# push some index identifiers past PostgreSQL's 63-character limit.
+_INDEX_SUFFIXES = {
+    VITALSIGNS_ONNX: "vsonnx",
+    PARAPHRASE_MULTILINGUAL: "paraml",
+    OPENAI: "oai3s",
+}
+
+VECTOR_TABLE_INDEX_PREFIX = {"agent_registry_vec_agent": "arva"}
+LEGACY_EMBEDDING_COLUMN = "embedding"
+LEGACY_HNSW_INDEXES = {"agent_registry_vec_agent": "idx_arva_hnsw"}
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DIMENSIONS = 384  # paraphrase-multilingual-MiniLM-L12-v2
+# Width of the vector(N) columns, derived from the configured provider so the
+# DDL and the provider that fills it cannot diverge.  Read at import time:
+# these tables are created by an explicit action, so the value in force when
+# that script runs is the one baked into the tables.
+DIMENSIONS = get_agent_registry_dimensions()
 DISTANCE_METRIC = "cosine"
 OPS_CLASS = "vector_cosine_ops"
 
@@ -25,6 +51,32 @@ OPS_CLASS = "vector_cosine_ops"
 AGENT_VECTOR_TABLE = "agent_registry_vec_agent"
 FTS_AGENT_TABLE = "agent_registry_fts_agent"
 VECTOR_INDEX_TABLE = "agent_registry_vector_index"
+
+
+def _embedding_column_ddl() -> str:
+    """One nullable vector column per supported model, at its native width.
+
+    Nullable by design: only the configured model's column is populated, and an
+    unpopulated column costs nothing (a null-bitmap bit in the heap, and an
+    empty HNSW index).
+    """
+    return ",\n".join(
+        f"            {column:<38} vector({dims})"
+        for column, dims in EMBEDDING_COLUMNS.values()
+    )
+
+
+def embedding_index_ddl(table: str, prefix: str) -> List[str]:
+    """An HNSW index per embedding column."""
+    return [
+        f'''
+        CREATE INDEX IF NOT EXISTS idx_{prefix}_hnsw_{suffix}
+            ON {table}
+            USING hnsw ({EMBEDDING_COLUMNS[provider][0]} {OPS_CLASS})
+            WITH (m = 16, ef_construction = 200)
+        '''
+        for provider, suffix in _INDEX_SUFFIXES.items()
+    ]
 
 
 def create_tables_sql() -> List[str]:
@@ -42,7 +94,7 @@ def create_tables_sql() -> List[str]:
             distance_metric VARCHAR(20) NOT NULL DEFAULT '{DISTANCE_METRIC}',
             provider        VARCHAR(100) DEFAULT 'vitalsigns_onnx',
             provider_config JSONB DEFAULT '{{}}'::jsonb,
-            model_name      VARCHAR(255) DEFAULT 'paraphrase-multilingual-MiniLM-L12-v2',
+            model_name      VARCHAR(255) DEFAULT 'paraphrase-MiniLM-L3-v2',
             description     TEXT,
             created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -55,17 +107,12 @@ def create_tables_sql() -> List[str]:
         CREATE TABLE IF NOT EXISTS {AGENT_VECTOR_TABLE} (
             subject_uuid    UUID NOT NULL PRIMARY KEY,
             agent_id        VARCHAR(50) NOT NULL,
-            embedding       vector({DIMENSIONS}) NOT NULL,
+{_embedding_column_ddl()},
             search_text     TEXT,
             updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    stmts.append(f'''
-        CREATE INDEX IF NOT EXISTS idx_arva_hnsw
-            ON {AGENT_VECTOR_TABLE}
-            USING hnsw (embedding {OPS_CLASS})
-            WITH (m = 16, ef_construction = 200)
-    ''')
+    stmts.extend(embedding_index_ddl(AGENT_VECTOR_TABLE, "arva"))
     stmts.append(f'''
         CREATE INDEX IF NOT EXISTS idx_arva_agent_id
             ON {AGENT_VECTOR_TABLE} (agent_id)
@@ -126,7 +173,9 @@ def seed_default_index_sql() -> str:
     """Insert default vector index row if absent."""
     return f'''
         INSERT INTO {VECTOR_INDEX_TABLE} (index_name, dimensions, distance_metric, provider, model_name, description)
-        VALUES ('agent', {DIMENSIONS}, '{DISTANCE_METRIC}', 'vitalsigns_onnx',
-                'paraphrase-multilingual-MiniLM-L12-v2', 'Default agent registry vector index')
+        VALUES ('agent', {DIMENSIONS}, '{DISTANCE_METRIC}',
+                '{get_agent_registry_provider_name()}',
+                '{get_agent_registry_model_name()}',
+                'Default agent registry vector index')
         ON CONFLICT (index_name) DO NOTHING
     '''

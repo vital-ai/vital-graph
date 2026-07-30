@@ -14,6 +14,25 @@ export type RegistryRecord = Record<string, unknown>;
 type RegistryEnvelope<K extends string> = VitalGraphResponse &
   Partial<Record<K, RegistryRecord | null>>;
 
+/**
+ * Server envelope for registry LIST routes. These previously returned a bare
+ * JSON array; they now return `{ success, status, message, <field>: [...],
+ * total_count }` so a read that matched nothing (`status: 'empty'`) is
+ * distinguishable from one that failed or whose parent was not found.
+ *
+ * The list methods below return this envelope RATHER than unwrapping it — the
+ * whole point of the response-status contract is that callers can read
+ * `status`/`success`/`message`, not just the rows.
+ */
+export type RegistryListEnvelope<K extends string> = VitalGraphResponse &
+  Partial<Record<K, RegistryRecord[] | null>> & { total_count?: number };
+
+/** Paginated list envelope (currently only relationships). */
+export type RegistryPagedEnvelope<K extends string> = RegistryListEnvelope<K> & {
+  page?: number;
+  page_size?: number;
+};
+
 export interface SearchEntitiesOptions {
   query?: string;
   typeKey?: string;
@@ -135,7 +154,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return body.identifier ?? null;
   }
 
-  async listIdentifiers(entityId: string): Promise<VitalGraphResponse> {
+  async listIdentifiers(entityId: string): Promise<RegistryListEnvelope<'identifiers'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/identifiers/list', {
       params: { entity_id: entityId },
@@ -170,7 +189,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return body.alias ?? null;
   }
 
-  async listAliases(entityId: string): Promise<VitalGraphResponse> {
+  async listAliases(entityId: string): Promise<RegistryListEnvelope<'aliases'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/aliases/list', {
       params: { entity_id: entityId },
@@ -187,7 +206,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Categories
   // ------------------------------------------------------------------
 
-  async listCategories(): Promise<VitalGraphResponse> {
+  async listCategories(): Promise<RegistryListEnvelope<'categories'>> {
     return this.request('GET', '/api/registry/categories');
   }
 
@@ -195,7 +214,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return this.request('POST', '/api/registry/categories', { json: data });
   }
 
-  async listEntityCategories(entityId: string): Promise<VitalGraphResponse> {
+  async listEntityCategories(entityId: string): Promise<RegistryListEnvelope<'entity_categories'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/categories/entity', {
       params: { entity_id: entityId },
@@ -242,7 +261,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Location Types
   // ------------------------------------------------------------------
 
-  async listLocationTypes(): Promise<VitalGraphResponse> {
+  async listLocationTypes(): Promise<RegistryListEnvelope<'location_types'>> {
     return this.request('GET', '/api/registry/location/types');
   }
 
@@ -270,7 +289,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return body.location ?? null;
   }
 
-  async listLocations(entityId: string, includeExpired = false): Promise<VitalGraphResponse> {
+  async listLocations(entityId: string, includeExpired = false): Promise<RegistryListEnvelope<'locations'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/locations/list', {
       params: { entity_id: entityId, include_expired: includeExpired || undefined },
@@ -309,7 +328,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     });
   }
 
-  async listLocationCategories(locationId: number): Promise<VitalGraphResponse> {
+  async listLocationCategories(locationId: number): Promise<RegistryListEnvelope<'location_categories'>> {
     return this.request('GET', '/api/registry/locations/categories/list', {
       params: { location_id: locationId },
     });
@@ -319,7 +338,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Relationship Types
   // ------------------------------------------------------------------
 
-  async listRelationshipTypes(): Promise<VitalGraphResponse> {
+  async listRelationshipTypes(): Promise<RegistryListEnvelope<'relationship_types'>> {
     return this.request('GET', '/api/registry/relationship/types');
   }
 
@@ -343,10 +362,29 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return body.relationship ?? null;
   }
 
-  async listRelationships(entityId: string, direction = 'both', includeExpired = false): Promise<VitalGraphResponse> {
+  /**
+   * List relationships for an entity — PAGINATED (page_size max 100), because a
+   * hub entity's adjacency list is unbounded.
+   *
+   * Returns the full envelope: read `relationships` for the rows and
+   * `total_count` / `page` / `page_size` to drive paging, plus
+   * `status`/`success`/`message` for the outcome.
+   */
+  async listRelationships(
+    entityId: string,
+    direction = 'both',
+    includeExpired = false,
+    opts: { page?: number; pageSize?: number } = {},
+  ): Promise<RegistryPagedEnvelope<'relationships'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/relationships/list', {
-      params: { entity_id: entityId, direction, include_expired: includeExpired || undefined },
+      params: {
+        entity_id: entityId,
+        direction,
+        include_expired: includeExpired || undefined,
+        page: opts.page ?? 1,
+        page_size: Math.min(opts.pageSize ?? 100, 100),
+      },
     });
   }
 
@@ -373,7 +411,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
     return body.same_as ?? null;
   }
 
-  async getSameAs(entityId: string): Promise<VitalGraphResponse> {
+  async getSameAs(entityId: string): Promise<RegistryListEnvelope<'same_as'>> {
     validateRequired({ entity_id: entityId });
     return this.request('GET', '/api/registry/sameas/list', {
       params: { entity_id: entityId },
@@ -400,7 +438,7 @@ export class EntityRegistryEndpoint extends BaseEndpoint {
   // Entity Types
   // ------------------------------------------------------------------
 
-  async listEntityTypes(): Promise<VitalGraphResponse> {
+  async listEntityTypes(): Promise<RegistryListEnvelope<'entity_types'>> {
     return this.request('GET', '/api/registry/entity/types');
   }
 

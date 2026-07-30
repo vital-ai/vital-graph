@@ -10,11 +10,50 @@ entity_registry_geo, entity_registry_fts_entity, entity_registry_fts_location.
 
 from typing import List
 
+from vitalgraph.entity_registry.entity_registry_vector_config import (
+    EMBEDDING_COLUMNS,
+    OPENAI,
+    PARAPHRASE_MULTILINGUAL,
+    VITALSIGNS_ONNX,
+    get_entity_registry_dimensions,
+    get_entity_registry_embedding_column,
+    get_entity_registry_model_name,
+    get_entity_registry_provider_name,
+)
+
+# Short, stable suffixes for index names — the column names themselves would
+# push some index identifiers past PostgreSQL's 63-character limit.
+_INDEX_SUFFIXES = {
+    VITALSIGNS_ONNX: "vsonnx",
+    PARAPHRASE_MULTILINGUAL: "paraml",
+    OPENAI: "oai3s",
+}
+
+# vector table -> index-name prefix, and the legacy single-column index that
+# predates the per-model columns (dropped by the embedding-column migration).
+VECTOR_TABLE_INDEX_PREFIX = {
+    "entity_registry_vec_entity": "erve",
+    "entity_registry_vec_location": "ervl",
+}
+LEGACY_EMBEDDING_COLUMN = "embedding"
+LEGACY_HNSW_INDEXES = {
+    "entity_registry_vec_entity": "idx_erve_hnsw",
+    "entity_registry_vec_location": "idx_ervl_hnsw",
+}
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DIMENSIONS = 384  # paraphrase-multilingual-MiniLM-L12-v2
+# Embedding width for the vector(N) columns below.  Read from the entity
+# registry vector config so the DDL and the provider that fills it cannot
+# diverge — see entity_registry_vector_config for the env vars.  Defaults to
+# 384 (paraphrase-MiniLM-L3-v2, vitalsigns ONNX).
+#
+# Read at import time: these tables are created by an explicit action (the
+# migrate script), so the value in force when that script runs is the one baked
+# into the tables.  Changing it later requires recreating them.
+DIMENSIONS = get_entity_registry_dimensions()
 DISTANCE_METRIC = "cosine"
 OPS_CLASS = "vector_cosine_ops"
 
@@ -29,6 +68,36 @@ GEO_TABLE = "entity_registry_geo"
 FTS_ENTITY_TABLE = "entity_registry_fts_entity"
 FTS_LOCATION_TABLE = "entity_registry_fts_location"
 VECTOR_INDEX_TABLE = "entity_registry_vector_index"
+
+
+def _embedding_column_ddl() -> str:
+    """One nullable vector column per supported model, at its native width.
+
+    Nullable by design: only the configured model's column is populated, and an
+    unpopulated column costs nothing (a null-bitmap bit in the heap, and an
+    empty HNSW index).
+    """
+    return ",\n".join(
+        f"            {column:<38} vector({dims})"
+        for column, dims in EMBEDDING_COLUMNS.values()
+    )
+
+
+def embedding_index_ddl(table: str, prefix: str) -> List[str]:
+    """An HNSW index per embedding column.
+
+    Index names are derived from a short per-provider suffix rather than the
+    column name, to stay clear of PostgreSQL's 63-character identifier limit.
+    """
+    return [
+        f'''
+        CREATE INDEX IF NOT EXISTS idx_{prefix}_hnsw_{suffix}
+            ON {table}
+            USING hnsw ({EMBEDDING_COLUMNS[provider][0]} {OPS_CLASS})
+            WITH (m = 16, ef_construction = 200)
+        '''
+        for provider, suffix in _INDEX_SUFFIXES.items()
+    ]
 
 
 def create_tables_sql() -> List[str]:
@@ -46,7 +115,7 @@ def create_tables_sql() -> List[str]:
             distance_metric VARCHAR(20) NOT NULL DEFAULT '{DISTANCE_METRIC}',
             provider        VARCHAR(100) DEFAULT 'vitalsigns_onnx',
             provider_config JSONB DEFAULT '{{}}'::jsonb,
-            model_name      VARCHAR(255) DEFAULT 'paraphrase-multilingual-MiniLM-L12-v2',
+            model_name      VARCHAR(255) DEFAULT 'paraphrase-MiniLM-L3-v2',
             description     TEXT,
             created_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -59,17 +128,12 @@ def create_tables_sql() -> List[str]:
         CREATE TABLE IF NOT EXISTS {ENTITY_VECTOR_TABLE} (
             subject_uuid    UUID NOT NULL PRIMARY KEY,
             entity_id       VARCHAR(50) NOT NULL,
-            embedding       vector({DIMENSIONS}) NOT NULL,
+{_embedding_column_ddl()},
             search_text     TEXT,
             updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    stmts.append(f'''
-        CREATE INDEX IF NOT EXISTS idx_erve_hnsw
-            ON {ENTITY_VECTOR_TABLE}
-            USING hnsw (embedding {OPS_CLASS})
-            WITH (m = 16, ef_construction = 200)
-    ''')
+    stmts.extend(embedding_index_ddl(ENTITY_VECTOR_TABLE, "erve"))
     stmts.append(f'''
         CREATE INDEX IF NOT EXISTS idx_erve_entity_id
             ON {ENTITY_VECTOR_TABLE} (entity_id)
@@ -83,17 +147,12 @@ def create_tables_sql() -> List[str]:
             subject_uuid    UUID NOT NULL PRIMARY KEY,
             location_id     INTEGER NOT NULL,
             entity_id       VARCHAR(50) NOT NULL,
-            embedding       vector({DIMENSIONS}) NOT NULL,
+{_embedding_column_ddl()},
             search_text     TEXT,
             updated_time    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    stmts.append(f'''
-        CREATE INDEX IF NOT EXISTS idx_ervl_hnsw
-            ON {LOCATION_VECTOR_TABLE}
-            USING hnsw (embedding {OPS_CLASS})
-            WITH (m = 16, ef_construction = 200)
-    ''')
+    stmts.extend(embedding_index_ddl(LOCATION_VECTOR_TABLE, "ervl"))
     stmts.append(f'''
         CREATE INDEX IF NOT EXISTS idx_ervl_entity_id
             ON {LOCATION_VECTOR_TABLE} (entity_id)
@@ -226,7 +285,9 @@ def seed_default_index_sql() -> str:
     """Insert default vector index row if absent."""
     return f'''
         INSERT INTO {VECTOR_INDEX_TABLE} (index_name, dimensions, distance_metric, provider, model_name, description)
-        VALUES ('entity', {DIMENSIONS}, '{DISTANCE_METRIC}', 'vitalsigns_onnx',
-                'paraphrase-multilingual-MiniLM-L12-v2', 'Default entity registry vector index')
+        VALUES ('entity', {DIMENSIONS}, '{DISTANCE_METRIC}',
+                '{get_entity_registry_provider_name()}',
+                '{get_entity_registry_model_name()}',
+                'Default entity registry vector index')
         ON CONFLICT (index_name) DO NOTHING
     '''

@@ -235,7 +235,9 @@ export interface GraphResponse extends VitalGraphResponse {
 
 export interface GraphsListResponse extends VitalGraphResponse {
   graphs: Record<string, unknown>[];
-  total: number;
+  /** Server field name. `total` retained for backward compatibility. */
+  total_count?: number;
+  total?: number;
 }
 
 export interface GraphCreateResponse extends VitalGraphResponse {

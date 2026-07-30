@@ -34,7 +34,20 @@ pytestmark = [
 # Two indexes for multi-vector fusion
 INDEX_A = f"mv_idx_a_{uuid.uuid4().hex[:6]}"
 INDEX_B = f"mv_idx_b_{uuid.uuid4().hex[:6]}"
-DIMENSIONS = 4
+# Native width of the `vitalsigns_onnx` provider these indexes declare. The
+# server now rejects an index whose width the provider cannot produce, so a
+# 4-dim index is no longer creatable.
+#
+# The vectors below keep their four hand-tuned components and are zero-padded
+# to this width by _pad(). Zeros contribute nothing to a dot product or to a
+# norm, so every cosine similarity annotated below is EXACTLY preserved.
+DIMENSIONS = 384
+
+
+def _pad(v):
+    """Zero-pad a hand-written vector to the index width, preserving cosines."""
+    return v + [0.0] * (DIMENSIONS - len(v))
+
 
 # Unique entity URIs for this test module
 NS = "urn:test:mv:"
@@ -44,19 +57,19 @@ ENTITY_3 = f"{NS}{uuid.uuid4().hex[:8]}"  # moderate in both
 ENTITY_4 = f"{NS}{uuid.uuid4().hex[:8]}"  # ONLY in INDEX_A (tests INTERSECT)
 
 # Query vectors
-QUERY_A = [0.1, 0.2, 0.3, 0.9]
-QUERY_B = [0.9, 0.3, 0.2, 0.1]
+QUERY_A = _pad([0.1, 0.2, 0.3, 0.9])
+QUERY_B = _pad([0.9, 0.3, 0.2, 0.1])
 
 # INDEX_A embeddings — ENTITY_1 is nearest to QUERY_A
-VEC_A_1 = [0.1, 0.2, 0.3, 0.85]   # cosine ~0.999 to QUERY_A
-VEC_A_2 = [0.7, 0.6, 0.5, 0.4]    # cosine ~0.75 to QUERY_A
-VEC_A_3 = [0.3, 0.3, 0.4, 0.6]    # cosine ~0.93 to QUERY_A
-VEC_A_4 = [0.2, 0.2, 0.3, 0.8]    # cosine ~0.998 to QUERY_A (only in A)
+VEC_A_1 = _pad([0.1, 0.2, 0.3, 0.85])   # cosine ~0.999 to QUERY_A
+VEC_A_2 = _pad([0.7, 0.6, 0.5, 0.4])    # cosine ~0.75 to QUERY_A
+VEC_A_3 = _pad([0.3, 0.3, 0.4, 0.6])    # cosine ~0.93 to QUERY_A
+VEC_A_4 = _pad([0.2, 0.2, 0.3, 0.8])    # cosine ~0.998 to QUERY_A (only in A)
 
 # INDEX_B embeddings — ENTITY_2 is nearest to QUERY_B
-VEC_B_1 = [0.5, 0.5, 0.5, 0.5]    # cosine ~0.77 to QUERY_B
-VEC_B_2 = [0.85, 0.3, 0.2, 0.1]   # cosine ~0.999 to QUERY_B
-VEC_B_3 = [0.6, 0.3, 0.3, 0.3]    # cosine ~0.92 to QUERY_B
+VEC_B_1 = _pad([0.5, 0.5, 0.5, 0.5])    # cosine ~0.77 to QUERY_B
+VEC_B_2 = _pad([0.85, 0.3, 0.2, 0.1])   # cosine ~0.999 to QUERY_B
+VEC_B_3 = _pad([0.6, 0.3, 0.3, 0.3])    # cosine ~0.92 to QUERY_B
 # ENTITY_4 intentionally NOT in INDEX_B
 
 

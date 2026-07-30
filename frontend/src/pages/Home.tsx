@@ -143,8 +143,9 @@ const Home: React.FC = () => {
       await Promise.all(
         spacesData.map(async (s: { space: string; space_name?: string }) => {
           try {
-            const graphs = await apiService.getGraphs(s.space);
-            const graphCount = graphs.length;
+            const graphsResp = await apiService.getGraphs(s.space);
+            const graphs = graphsResp.graphs ?? [];
+            const graphCount = graphsResp.total_count ?? graphs.length;
             const tripleCount = graphs.reduce((sum: number, g: { triple_count?: number }) => sum + (g.triple_count || 0), 0);
             spaceSummaries.push({
               space: s.space,

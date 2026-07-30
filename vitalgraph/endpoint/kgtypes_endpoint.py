@@ -30,6 +30,7 @@ from vitalgraph.model.kgtypes_model import (
     KGTypeRelationshipsResponse,
     KGTypeRelationshipCreateRequest, KGTypeRelationshipCreateResponse,
     KGTypeRelationshipDeleteResponse,
+    KGTypeDescriptionResponse,
     KGTypeDocumentationRequest, KGTypeDocumentationResponse,
     KGTypeDocumentationUpdateResponse, KGTypeDocumentationDeleteResponse,
     KGTypeSearchResponse,
@@ -87,6 +88,7 @@ class KGTypesEndpoint:
         # GET /api/graphs/kgtypes/description - Get type description text
         @self.router.get(
             "/kgtypes/description",
+            response_model=KGTypeDescriptionResponse,
             tags=["KG Types"],
             summary="Get Type Description",
             description="Fetch the type-specific description field from the centralized KG Types space",
@@ -337,11 +339,12 @@ class KGTypesEndpoint:
         async with pool.acquire() as conn:
             description = await lookup.get_description(conn, type_uri)
 
-        return {
-            "type_uri": type_uri,
-            "mapping_type": mapping_type,
-            "description": description,
-        }
+        return KGTypeDescriptionResponse(
+            status=OperationStatus.FOUND if description else OperationStatus.EMPTY,
+            type_uri=type_uri,
+            mapping_type=mapping_type,
+            description=description,
+        )
 
     async def _list_kgtypes(
         self,

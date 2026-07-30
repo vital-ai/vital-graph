@@ -171,6 +171,7 @@ class KGTypeSearchResponse(ResultStatus):
 
 class KGTypeDescriptionResponse(ResultStatus):
     """Response model for GET /api/graphs/kgtypes/description."""
+    status: OperationStatus = Field(OperationStatus.FOUND, description="Outcome discriminator")
     type_uri: str = Field(..., description="The KGType URI queried")
     mapping_type: str = Field("kgentity", description="Mapping type used")
     description: Optional[str] = Field(None, description="Type description text")

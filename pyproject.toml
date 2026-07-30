@@ -82,7 +82,7 @@ server = [
     "rapidfuzz>=3.0.0",
     "jellyfish>=1.0.0",
     "nltk>=3.8.0",
-    # VitalSigns ONNX embedding model (paraphrase-multilingual-MiniLM-L12-v2, 384 dims)
+    # VitalSigns ONNX embedding model (paraphrase-MiniLM-L3-v2, 384 dims)
     "vital-model-paraphrase-MiniLM-onnx>=0.2.1",
 ]
 

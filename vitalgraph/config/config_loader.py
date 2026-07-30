@@ -84,7 +84,7 @@ class VitalGraphConfig:
         """
         return {
             'backend': {
-                'type': self._get_profile_env('BACKEND_TYPE', 'fuseki_postgresql')
+                'type': self._get_profile_env('BACKEND_TYPE', 'sparql_sql')
             },
             'database': {
                 'host': self._get_profile_env('DB_HOST', 'localhost'),
@@ -92,10 +92,13 @@ class VitalGraphConfig:
                 'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
                 'username': self._get_profile_env('DB_USERNAME', 'postgres'),
                 'password': self._get_profile_env('DB_PASSWORD', ''),
-                'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
-                'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
-                'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
-                'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600')),
+                # Key names must match what vitalgraph/db/pool.py reads. The former
+                # SQLAlchemy-style pool_size/max_overflow/pool_timeout/pool_recycle
+                # keys were silently ignored by asyncpg, leaving max_size at its
+                # hardcoded default of 15.
+                'min_pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                'max_pool_size': int(self._get_profile_env('DB_MAX_POOL_SIZE', '30')),
+                'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15')),
                 'enable_quad_logging': self._get_profile_env('DB_ENABLE_QUAD_LOGGING', 'false').lower() == 'true'
             },
             'fuseki': {
@@ -122,10 +125,9 @@ class VitalGraphConfig:
                     'database': self._get_profile_env('DB_NAME', 'sparql_sql_graph'),
                     'username': self._get_profile_env('DB_USERNAME', 'postgres'),
                     'password': self._get_profile_env('DB_PASSWORD', ''),
-                    'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
-                    'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
-                    'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
-                    'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600'))
+                    'min_pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                    'max_pool_size': int(self._get_profile_env('DB_MAX_POOL_SIZE', '30')),
+                    'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15'))
                 },
                 'sidecar': {
                     'url': self._get_profile_env('SIDECAR_URL', 'http://localhost:7070'),
@@ -138,10 +140,9 @@ class VitalGraphConfig:
                     'database': self._get_profile_env('DB_NAME', 'vitalgraph'),
                     'username': self._get_profile_env('DB_USERNAME', 'postgres'),
                     'password': self._get_profile_env('DB_PASSWORD', ''),
-                    'pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
-                    'max_overflow': int(self._get_profile_env('DB_MAX_OVERFLOW', '20')),
-                    'pool_timeout': int(self._get_profile_env('DB_POOL_TIMEOUT', '30')),
-                    'pool_recycle': int(self._get_profile_env('DB_POOL_RECYCLE', '3600'))
+                    'min_pool_size': int(self._get_profile_env('DB_POOL_SIZE', '10')),
+                    'max_pool_size': int(self._get_profile_env('DB_MAX_POOL_SIZE', '30')),
+                    'acquire_timeout': float(self._get_profile_env('DB_ACQUIRE_TIMEOUT', '15'))
                 },
                 'fuseki': {
                     'server_url': self._get_profile_env('FUSEKI_URL', 'http://localhost:3030'),
@@ -237,10 +238,9 @@ class VitalGraphConfig:
                 'database': 'vitalgraphdb',
                 'username': 'vitalgraph_user',
                 'password': 'vitalgraph_password',
-                'pool_size': 10,
-                'max_overflow': 20,
-                'pool_timeout': 30,
-                'pool_recycle': 3600
+                'min_pool_size': 10,
+                'max_pool_size': 30,
+                'acquire_timeout': 15.0
             },
             'rdf_pool': {
                 'min_size': 0,

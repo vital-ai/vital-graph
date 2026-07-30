@@ -17,7 +17,7 @@ class VectorIndexOut(ResultStatus):
     index_name: str
     dimensions: int
     distance_metric: str = "cosine"
-    provider: str = "vitalsigns"
+    provider: str = "vitalsigns_onnx"
     model_name: Optional[str] = None
     provider_config: Optional[Dict[str, Any]] = None
     description: Optional[str] = None
@@ -50,7 +50,7 @@ class CreateVectorIndexRequest(BaseModel):
     )
     dimensions: int = Field(..., gt=0, le=16000, description="Embedding dimensions")
     distance_metric: str = Field("cosine", description="cosine | l2 | inner_product")
-    provider: str = Field("vitalsigns", description="Vectorization provider name")
+    provider: str = Field("vitalsigns_onnx", description="Vectorization provider name")
     model_name: Optional[str] = Field(None, description="Model name, e.g. 'text-embedding-3-small'")
     provider_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific config")
     description: Optional[str] = Field(None, description="Human-readable description")

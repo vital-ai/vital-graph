@@ -30,6 +30,11 @@ class InstallData:
     install_datetime: Optional[datetime] = None
     update_datetime: Optional[datetime] = None
     active: bool = True
+    # Deployed-code identity. Existing databases acquire these columns via
+    # apps/migrate_install_version.py; they stay None until a server stamps them.
+    vitalgraph_version: Optional[str] = None
+    git_commit: Optional[str] = None
+    deployed_datetime: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

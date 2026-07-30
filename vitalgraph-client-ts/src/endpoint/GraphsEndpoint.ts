@@ -10,6 +10,14 @@ import type {
 } from '../response/types.js';
 
 export class GraphsEndpoint extends BaseEndpoint {
+  /**
+   * List graphs in a space.
+   *
+   * Returns the GraphListResponse envelope
+   * (`{ graphs, total_count, success, status, message }`); it previously
+   * returned a bare array. `status` distinguishes "space has no graphs"
+   * (`empty`) from "space not found" (`not_found`) — a bare `[]` could not.
+   */
   async list(spaceId: string): Promise<GraphsListResponse> {
     validateRequired({ space_id: spaceId });
     return this.request('GET', '/api/graphs/graphs', {

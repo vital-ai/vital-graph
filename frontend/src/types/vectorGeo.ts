@@ -3,6 +3,75 @@
  */
 
 // ---------------------------------------------------------------------------
+// Vectorization providers
+// ---------------------------------------------------------------------------
+
+/**
+ * The providers the server will accept when creating a vector index.
+ *
+ * These must match PROVIDER_REGISTRY in
+ * vitalgraph/vectorization/registry.py. The server validates `provider` on
+ * create and rejects anything else with INVALID_REQUEST, so a stale entry here
+ * surfaces as a failed create.
+ *
+ * `dimensions` is the model's native output width and is not negotiable — the
+ * index must be created at that width or search returns nothing useful.
+ */
+export interface VectorProviderOption {
+  value: string;
+  label: string;
+  /** Compact form for table cells and badges — the raw values run to 37 chars. */
+  short: string;
+  dimensions: number;
+  note: string;
+}
+
+export const VECTOR_PROVIDERS: VectorProviderOption[] = [
+  {
+    value: 'vitalsigns_onnx',
+    label: 'VitalSigns ONNX — paraphrase-MiniLM-L3-v2',
+    short: 'VitalSigns ONNX',
+    dimensions: 384,
+    note: 'Local, bundled, English. No API key or network needed.',
+  },
+  {
+    value: 'paraphrase_multilingual_minilm_l12_v2',
+    label: 'Multilingual — paraphrase-multilingual-MiniLM-L12-v2',
+    short: 'Multilingual MiniLM',
+    dimensions: 384,
+    note: 'Local, baked into the server image. Multilingual; matches Weaviate.',
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI — text-embedding-3-small',
+    short: 'OpenAI',
+    dimensions: 1536,
+    note: 'Remote API. Requires a server-side key; billed per vectorization.',
+  },
+];
+
+export const DEFAULT_VECTOR_PROVIDER = 'vitalsigns_onnx';
+
+/** Native width for a provider, falling back to the 384 default. */
+export function providerDimensions(provider: string): number {
+  return (
+    VECTOR_PROVIDERS.find((p) => p.value === provider)?.dimensions ?? 384
+  );
+}
+
+/**
+ * Compact display name for a provider.
+ *
+ * Falls back to the raw value so indexes created with a legacy or unknown
+ * provider still render truthfully rather than showing a blank badge.
+ */
+export function providerShortLabel(provider: string): string {
+  return (
+    VECTOR_PROVIDERS.find((p) => p.value === provider)?.short ?? provider
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Vector Indexes
 // ---------------------------------------------------------------------------
 

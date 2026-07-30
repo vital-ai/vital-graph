@@ -844,30 +844,17 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
                     error=f"0 quads inserted (check server logs for index overflow errors)",
                 )
 
-            # ANALYZE so the query planner has accurate statistics for the
-            # freshly-loaded data.  Without this, complex multi-join queries
-            # (e.g. KGQuery relation queries with frame/slot filters) choose
-            # catastrophically bad join orders — up to 9× slower.
-            # Skip if ANALYZE already ran for this space within the last 10s
-            # (e.g. from auto_analyze threshold or a previous store_objects call).
+            # Refresh planner statistics for the auxiliary tables after a write.
+            #
+            # rdf_quad and term are deliberately EXCLUDED. Measured on prod, this
+            # block ran 27k+ times per space over 45 days at ~4.2s per ANALYZE of
+            # rdf_quad alone, accounting for 28.7% of all database time — and
+            # column statistics on a 26.8M-row table barely move when one
+            # applicant's entities are appended. MaintenanceJob and autovacuum own
+            # those two tables now.
+            # See planning/planning_performance/prod_db_saturation_plan.md
             try:
-                from ..db.sparql_sql.auto_analyze import was_analyzed_recently, set_last_analyze_time
-                if was_analyzed_recently(space_id, max_age_seconds=10.0):
-                    self.logger.debug("⏱️  BACKEND ANALYZE: skipped (ran within 10s)")
-                else:
-                    from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
-                    t = SparqlSQLSchema.get_table_names(space_id)
-                    tables = [t['rdf_quad'], t['term'], t['edge'], t['frame_entity'],
-                              t['rdf_pred_stats'], t['rdf_stats'], t['datatype']]
-                    if self._pg_config:
-                        await asyncio.to_thread(self._sync_analyze_tables, tables)
-                    else:
-                        async with self.backend.db_impl.connection_pool.acquire() as conn:
-                            for tbl in tables:
-                                await conn.execute(f"ANALYZE {tbl}")
-                    set_last_analyze_time(space_id)
-                    _t2a = _time.monotonic()
-                    self.logger.info("⏱️  BACKEND ANALYZE: %.3fs", _t2a - _t2)
+                await self._maybe_analyze_aux_tables(space_id, since=_t2)
             except Exception as ae:
                 self.logger.warning("ANALYZE after bulk insert failed (non-fatal): %s", ae)
 
@@ -881,6 +868,91 @@ class SparqlSQLBackendAdapter(KGBackendInterface):
         except Exception as e:
             self.logger.error("store_objects failed: %s", e)
             return BackendOperationResult(success=False, message=str(e), error=str(e))
+
+    # ------------------------------------------------------------------
+    # Post-write ANALYZE of auxiliary tables (three-tier guard)
+    # ------------------------------------------------------------------
+
+    async def _get_analyze_lock_manager(self):
+        """Lazily create the process lock manager used to serialise ANALYZE."""
+        if getattr(self, '_analyze_lock_manager', None) is None:
+            if not self._pg_config:
+                return None
+            from ..process.process_lock_manager import ProcessLockManager
+            mgr = ProcessLockManager(self._pg_config)
+            await mgr.connect()
+            self._analyze_lock_manager = mgr
+        return self._analyze_lock_manager
+
+    async def _maybe_analyze_aux_tables(self, space_id: str, since: float) -> bool:
+        """ANALYZE the auxiliary tables for *space_id*, rate-limited across processes.
+
+        Three tiers, each covering a case the previous one cannot:
+
+        * **Tier 0** — in-process timestamp. Avoids a catalog roundtrip on the hot
+          write path.
+        * **Tier 1** — ``pg_stat_user_tables.last_analyze``, which PostgreSQL keeps
+          globally. This is the guard that actually holds across workers and task
+          restarts; the in-process dict never did.
+        * **Tier 2** — non-blocking advisory lock. ``last_analyze`` only advances
+          when ANALYZE *completes*, so during a run every other process still reads
+          a stale timestamp and would start its own. The lock closes that window —
+          which is also the restart-stampede case, when every task comes up with an
+          empty Tier 0 simultaneously.
+
+        Returns True if ANALYZE actually ran.
+        """
+        import time as _time
+        from ..db.sparql_sql.auto_analyze import (
+            was_analyzed_recently, set_last_analyze_time, fetch_last_analyze_age,
+            ANALYZE_LOCAL_GUARD_SECONDS, ANALYZE_MIN_INTERVAL,
+        )
+        from ..db.sparql_sql.sparql_sql_schema import SparqlSQLSchema
+
+        # Tier 0 — fast path, no DB roundtrip.
+        if was_analyzed_recently(space_id, max_age_seconds=ANALYZE_LOCAL_GUARD_SECONDS):
+            self.logger.debug("⏱️  BACKEND ANALYZE: skipped (local guard)")
+            return False
+
+        t = SparqlSQLSchema.get_table_names(space_id)
+        tables = [t['rdf_pred_stats'], t['rdf_stats'], t['datatype'],
+                  t['edge'], t['frame_entity']]
+        # Largest of the set — the best proxy for "has this space been analyzed".
+        representative = t['edge']
+
+        # Tier 1 — shared clock.
+        pool = getattr(self.backend.db_impl, 'connection_pool', None)
+        if pool is not None:
+            async with pool.acquire() as conn:
+                age = await fetch_last_analyze_age(conn, representative)
+            if age is not None and age < ANALYZE_MIN_INTERVAL:
+                # Re-arm Tier 0 so we don't re-query the catalog on every batch
+                # for the remainder of the interval.
+                set_last_analyze_time(space_id)
+                self.logger.debug(
+                    "⏱️  BACKEND ANALYZE: skipped (shared guard, %.0fs ago)", age)
+                return False
+
+        # Tier 2 — non-blocking lock. If another process is mid-ANALYZE, skip;
+        # never block, or writers queue behind maintenance.
+        lock_mgr = await self._get_analyze_lock_manager()
+        if lock_mgr is not None and not await lock_mgr.try_acquire("analyze", space_id):
+            self.logger.debug("⏱️  BACKEND ANALYZE: skipped (another process holds the lock)")
+            return False
+        try:
+            if self._pg_config:
+                await asyncio.to_thread(self._sync_analyze_tables, tables)
+            elif pool is not None:
+                async with pool.acquire() as conn:
+                    for tbl in tables:
+                        await conn.execute(f"ANALYZE {tbl}")
+            set_last_analyze_time(space_id)
+            self.logger.info("⏱️  BACKEND ANALYZE (aux tables): %.3fs",
+                             _time.monotonic() - since)
+            return True
+        finally:
+            if lock_mgr is not None:
+                await lock_mgr.release("analyze", space_id)
 
     # ------------------------------------------------------------------
     # Thread-offloaded ANALYZE helper

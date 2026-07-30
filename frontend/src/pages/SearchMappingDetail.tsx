@@ -33,6 +33,11 @@ import type {
   UpdateSearchMappingRequest,
 } from '../types/searchFts';
 import { vectorGeoService } from '../services/VectorGeoService';
+import {
+  DEFAULT_VECTOR_PROVIDER,
+  VECTOR_PROVIDERS,
+  providerDimensions,
+} from '../types/vectorGeo';
 
 const MAPPING_TYPE_COLORS: Record<SearchMappingType, string> = {
   kgentity: 'info',
@@ -81,9 +86,11 @@ const SearchMappingDetail: React.FC = () => {
   // FTS creation fields
   const [addFtsLanguages, setAddFtsLanguages] = useState('english');
   // Vector creation fields
-  const [addVecProvider, setAddVecProvider] = useState('sentence_transformers');
-  const [addVecDimensions, setAddVecDimensions] = useState(384);
-  const [addVecModel, setAddVecModel] = useState('all-MiniLM-L6-v2');
+  const [addVecProvider, setAddVecProvider] = useState(DEFAULT_VECTOR_PROVIDER);
+  const [addVecDimensions, setAddVecDimensions] = useState(
+    providerDimensions(DEFAULT_VECTOR_PROVIDER),
+  );
+  const [addVecModel, setAddVecModel] = useState('');
   const [addVecMetric, setAddVecMetric] = useState('cosine');
 
   // Load mapping
@@ -207,7 +214,9 @@ const SearchMappingDetail: React.FC = () => {
           index_name: addIndexName,
           provider: addVecProvider,
           dimensions: addVecDimensions,
-          model_name: addVecModel,
+          // Blank means "let the provider report its own model" rather than
+          // recording an empty string in the index catalog.
+          model_name: addVecModel.trim() || undefined,
           distance_metric: addVecMetric,
         });
       }
@@ -575,31 +584,45 @@ const SearchMappingDetail: React.FC = () => {
             {addIndexType === 'vector' && (
               <>
                 <div>
-                  <Label htmlFor="idx-provider">Provider</Label>
+                  <Label htmlFor="idx-provider">Embedding Model</Label>
                   <Select
                     id="idx-provider"
                     value={addVecProvider}
-                    onChange={(e) => setAddVecProvider(e.target.value)}
+                    onChange={(e) => {
+                      // Dimensions follow the model — they are not a free choice.
+                      const provider = e.target.value;
+                      setAddVecProvider(provider);
+                      setAddVecDimensions(providerDimensions(provider));
+                    }}
                   >
-                    <option value="sentence_transformers">Sentence Transformers</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="cohere">Cohere</option>
+                    {VECTOR_PROVIDERS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label} ({p.dimensions}d)
+                      </option>
+                    ))}
                   </Select>
                 </div>
                 <div>
                   <Label htmlFor="idx-dimensions">Dimensions</Label>
+                  {/* Derived from the model — see the note in Indexes.tsx. */}
                   <TextInput
                     id="idx-dimensions"
                     type="number"
                     value={addVecDimensions}
-                    onChange={(e) => setAddVecDimensions(parseInt(e.target.value) || 384)}
+                    readOnly
+                    disabled
                   />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Set by the selected model
+                  </p>
                 </div>
                 <div>
-                  <Label htmlFor="idx-model">Model Name</Label>
+                  <Label htmlFor="idx-model">Model Name (optional)</Label>
                   <TextInput
                     id="idx-model"
-                    placeholder="all-MiniLM-L6-v2"
+                    placeholder={
+                      VECTOR_PROVIDERS.find((p) => p.value === addVecProvider)?.label ?? ''
+                    }
                     value={addVecModel}
                     onChange={(e) => setAddVecModel(e.target.value)}
                   />

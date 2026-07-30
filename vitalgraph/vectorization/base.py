@@ -48,13 +48,28 @@ class VectorizationProvider(ABC):
     @property
     @abstractmethod
     def provider_name(self) -> str:
-        """Return the canonical provider name (e.g., 'vitalsigns', 'openai')."""
+        """Return the canonical provider name (e.g., 'vitalsigns_onnx', 'openai')."""
         ...
 
     @property
     def model_name(self) -> str:
         """Return the model name. Override in subclasses."""
         return ""
+
+    @classmethod
+    def expected_dimensions(cls, config: Dict[str, Any]) -> Any:
+        """Output width this provider will produce, without instantiating it.
+
+        Lets callers validate a requested vector(N) column against the model
+        BEFORE building the model — index creation happens in API handlers and
+        migration scripts that must not load ONNX/torch weights or need an API
+        key.
+
+        Returns None when the width genuinely cannot be known ahead of time
+        (e.g. an arbitrary HuggingFace model id); callers should skip the check
+        rather than guess.
+        """
+        return None
 
     @classmethod
     @abstractmethod

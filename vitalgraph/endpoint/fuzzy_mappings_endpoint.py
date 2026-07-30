@@ -387,6 +387,7 @@ class FuzzyMappingsEndpoint:
 
         @self.router.post(
             "/fuzzy-mappings/populate",
+            response_model=PopulateResponse,
             tags=["Fuzzy Mappings"],
             summary="Populate Fuzzy Index",
             description="Trigger a full population of fuzzy bands for a specific mapping",

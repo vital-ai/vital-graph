@@ -337,7 +337,8 @@ export default function GraphVisualization() {
   // Fetch first graph URI for current space (needed for entity detail links)
   useEffect(() => {
     if (!spaceId) { setGraphUri(''); return; }
-    ApiService.getGraphs(spaceId).then((graphs: { graph_uri?: string }[]) => {
+    ApiService.getGraphs(spaceId).then((resp: { graphs?: { graph_uri?: string }[] }) => {
+      const graphs = resp.graphs ?? [];
       setGraphUri(graphs.length > 0 ? (graphs[0].graph_uri || '') : '');
     }).catch(() => setGraphUri(''));
   }, [spaceId]);

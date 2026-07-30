@@ -26,6 +26,44 @@ _last_analyze_time: Dict[str, float] = {}
 # Default threshold: ANALYZE after this many row changes
 DEFAULT_ANALYZE_THRESHOLD = 50000
 
+# --- Per-write ANALYZE guard tiers -----------------------------------------
+# Tier 0: in-process fast path. Cheap short-circuit that avoids a catalog
+# roundtrip on the hot write path.
+ANALYZE_LOCAL_GUARD_SECONDS = 60.0
+# Tier 1: shared minimum interval, enforced via pg_stat_user_tables.last_analyze
+# so the guard holds across workers and ECS tasks (the in-process dict does not:
+# with N processes the old 10s guard permitted N ANALYZEs per 10s, and every task
+# restart reset it).
+ANALYZE_MIN_INTERVAL = 900.0
+
+
+async def fetch_last_analyze_age(conn, table: str) -> Optional[float]:
+    """Seconds since *table* was last ANALYZEd, or None if it never has been.
+
+    Reads ``pg_stat_user_tables``, which PostgreSQL maintains globally — so this
+    is shared across processes and survives restarts, unlike the in-process
+    ``_last_analyze_time`` dict.
+
+    Takes ``GREATEST(last_analyze, last_autoanalyze)`` so autovacuum's work
+    counts; otherwise we re-analyze on top of it. Filters on ``relid`` rather
+    than a ``relname LIKE`` pattern so this is a single-row lookup.
+    """
+    try:
+        row = await conn.fetchrow(
+            "SELECT extract(epoch FROM now() - GREATEST("
+            "    COALESCE(last_analyze,     'epoch'::timestamptz),"
+            "    COALESCE(last_autoanalyze, 'epoch'::timestamptz))) AS age "
+            "FROM pg_stat_user_tables WHERE relid = $1::regclass",
+            table,
+        )
+    except Exception as e:
+        # Never let the guard's own failure block the write path.
+        logger.debug("fetch_last_analyze_age(%s) failed: %s", table, e)
+        return None
+    if row is None or row['age'] is None:
+        return None
+    return float(row['age'])
+
 
 def record_changes(space_id: str, row_count: int) -> None:
     """Record that row_count rows were inserted or deleted."""

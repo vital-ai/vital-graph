@@ -151,7 +151,7 @@ const KGQueryBuilder: React.FC = () => {
     if (!selectedSpace) { setGraphs([]); return; }
     try {
       setGraphsLoading(true);
-      const data = await apiService.getGraphs(selectedSpace);
+      const data = (await apiService.getGraphs(selectedSpace)).graphs ?? [];
       setGraphs(data);
       if (data.length > 0) setSelectedGraph(data[0].graph_uri || '');
       else setSelectedGraph('');

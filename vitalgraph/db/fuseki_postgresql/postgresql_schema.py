@@ -24,7 +24,10 @@ class FusekiPostgreSQLSchema:
                 id SERIAL PRIMARY KEY,
                 install_datetime TIMESTAMP,
                 update_datetime TIMESTAMP,
-                active BOOLEAN
+                active BOOLEAN,
+                vitalgraph_version VARCHAR(64),
+                git_commit VARCHAR(40),
+                deployed_datetime TIMESTAMP
             )
         ''',
         

@@ -14,7 +14,10 @@ from vitalgraph.entity_registry.entity_registry_vector_schema import (
     ENTITY_VECTOR_TABLE, LOCATION_VECTOR_TABLE, GEO_TABLE,
     FTS_ENTITY_TABLE, FTS_LOCATION_TABLE,
 )
-from vitalgraph.vectorization.registry import get_provider
+from vitalgraph.entity_registry.entity_registry_vector_config import (
+    get_entity_registry_embedding_column,
+    get_entity_registry_provider,
+)
 from .entity_status import ACTIVE
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,11 @@ class EntityRegistrySearch:
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
-        self._provider = get_provider("vitalsigns", cache_key="entity_registry_search")
+        self._provider = get_entity_registry_provider(cache_key="entity_registry_search")
+        # Which per-model column to read.  Rows whose vectors were written by a
+        # different model leave this NULL, so they simply drop out of results
+        # rather than being compared in the wrong embedding space.
+        self._embedding_column = get_entity_registry_embedding_column()
 
     # ==================================================================
     # Topic search (vector similarity)
@@ -110,14 +117,14 @@ class EntityRegistrySearch:
                    e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    v.search_text,
-                   1.0 - (v.embedding <=> $1::vector) AS score
+                   1.0 - (v.{self._embedding_column} <=> $1::vector) AS score
             FROM {ENTITY_VECTOR_TABLE} v
             JOIN entity e ON e.entity_id = v.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
-            WHERE (v.embedding <=> $1::vector) <= $2
+            WHERE (v.{self._embedding_column} <=> $1::vector) <= $2
               AND e.status = '{ACTIVE}'
               AND {where_clause}
-            ORDER BY v.embedding <=> $1::vector
+            ORDER BY v.{self._embedding_column} <=> $1::vector
             LIMIT $3
         """
 
@@ -200,7 +207,7 @@ class EntityRegistrySearch:
         sql = f"""
             WITH vec_scores AS (
                 SELECT v.entity_id,
-                       1.0 - (v.embedding <=> $1::vector) AS vec_score
+                       1.0 - (v.{self._embedding_column} <=> $1::vector) AS vec_score
                 FROM {ENTITY_VECTOR_TABLE} v
             ),
             fts_scores AS (
@@ -346,7 +353,7 @@ class EntityRegistrySearch:
             vec_join = f"""
                 JOIN {LOCATION_VECTOR_TABLE} lv ON lv.location_id = el.location_id
             """
-            vec_order = f", lv.embedding <=> ${param_idx}::vector"
+            vec_order = f", lv.{self._embedding_column} <=> ${param_idx}::vector"
             param_idx += 1
 
         # Optional address keyword search via FTS
@@ -579,15 +586,15 @@ class EntityRegistrySearch:
                    e.latitude, e.longitude,
                    et.type_key, et.type_label,
                    v.search_text,
-                   1.0 - (v.embedding <=> $1::vector) AS score
+                   1.0 - (v.{self._embedding_column} <=> $1::vector) AS score
             FROM {ENTITY_VECTOR_TABLE} v
             JOIN entity e ON e.entity_id = v.entity_id
             JOIN entity_type et ON et.type_id = e.entity_type_id
             JOIN geo_entities ge ON ge.entity_id = e.entity_id
-            WHERE (v.embedding <=> $1::vector) <= $5
+            WHERE (v.{self._embedding_column} <=> $1::vector) <= $5
               AND e.status = '{ACTIVE}'
               AND {where_clause}
-            ORDER BY v.embedding <=> $1::vector
+            ORDER BY v.{self._embedding_column} <=> $1::vector
             LIMIT $6
         """
 

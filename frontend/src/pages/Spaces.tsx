@@ -53,10 +53,11 @@ const Spaces: React.FC = () => {
       const updated = await Promise.all(
         initial.map(async (s) => {
           try {
-            const graphs = await apiService.getGraphs(s.space);
+            const graphsResp = await apiService.getGraphs(s.space);
+            const graphs = graphsResp.graphs ?? [];
             return {
               ...s,
-              graphCount: graphs.length,
+              graphCount: graphsResp.total_count ?? graphs.length,
               tripleCount: graphs.reduce((sum: number, g: { triple_count?: number }) => sum + (g.triple_count || 0), 0),
               loading: false,
             };

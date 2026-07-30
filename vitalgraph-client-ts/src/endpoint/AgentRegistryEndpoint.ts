@@ -2,6 +2,20 @@ import { BaseEndpoint } from './BaseEndpoint.js';
 import { validateRequired } from '../utils/params.js';
 import type { VitalGraphResponse } from '../response/types.js';
 
+/** An agent registry record (agent, endpoint, function, type). */
+export type AgentRecord = Record<string, unknown>;
+
+/**
+ * Server envelope for agent registry LIST routes. These previously returned a
+ * bare JSON array; they now return `{ success, status, message, <field>: [...],
+ * total_count }` so an empty read is distinguishable from a failure.
+ *
+ * The list methods below return this envelope RATHER than unwrapping it, so
+ * callers can read `status`/`success`/`message` alongside the rows.
+ */
+export type AgentListEnvelope<K extends string> = VitalGraphResponse &
+  Partial<Record<K, AgentRecord[] | null>> & { total_count?: number };
+
 export interface SearchAgentsOptions {
   query?: string;
   typeKey?: string;
@@ -18,7 +32,7 @@ export class AgentRegistryEndpoint extends BaseEndpoint {
   // Agent Types
   // ------------------------------------------------------------------
 
-  async listAgentTypes(): Promise<VitalGraphResponse> {
+  async listAgentTypes(): Promise<AgentListEnvelope<'agent_types'>> {
     return this.request('GET', '/api/agents/agent/types');
   }
 
@@ -78,6 +92,13 @@ export class AgentRegistryEndpoint extends BaseEndpoint {
     });
   }
 
+  /**
+   * Change an agent's lifecycle status.
+   *
+   * NOTE: the response's `status` field is the CONTRACT status
+   * (`updated` / `not_found` / `invalid_request`). The agent's new lifecycle
+   * state is returned as `agent_status` — it previously came back as `status`.
+   */
   async changeAgentStatus(agentId: string, data: Record<string, unknown>): Promise<VitalGraphResponse> {
     validateRequired({ agent_id: agentId });
     return this.request('PUT', '/api/agents/agent/status', {
@@ -90,7 +111,7 @@ export class AgentRegistryEndpoint extends BaseEndpoint {
   // Agent Endpoints
   // ------------------------------------------------------------------
 
-  async listEndpoints(agentId: string): Promise<VitalGraphResponse> {
+  async listEndpoints(agentId: string): Promise<AgentListEnvelope<'endpoints'>> {
     validateRequired({ agent_id: agentId });
     return this.request('GET', '/api/agents/agent/endpoints', {
       params: { agent_id: agentId },
@@ -122,7 +143,7 @@ export class AgentRegistryEndpoint extends BaseEndpoint {
   // Agent Functions
   // ------------------------------------------------------------------
 
-  async listFunctions(agentId: string): Promise<VitalGraphResponse> {
+  async listFunctions(agentId: string): Promise<AgentListEnvelope<'functions'>> {
     validateRequired({ agent_id: agentId });
     return this.request('GET', '/api/agents/agent/functions', {
       params: { agent_id: agentId },

@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from ..model.result_status import OperationStatus, ResultStatus
+
 
 # ---------------------------------------------------------------------------
 # Protocol Format Constants
@@ -123,11 +125,12 @@ class AgentResponse(BaseModel):
     notes: Optional[str] = None
 
 
-class AgentListResponse(BaseModel):
-    agents: List[AgentResponse]
-    total_count: int
-    page_size: int
-    offset: int
+class AgentListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agents: List[AgentResponse] = Field(default_factory=list)
+    total_count: int = 0
+    page_size: int = 0
+    offset: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +210,133 @@ class AgentFunctionResponse(BaseModel):
 class AgentStatusChange(BaseModel):
     status: str
     comment: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Response-status contract envelopes
+# ---------------------------------------------------------------------------
+# AgentResponse / AgentEndpointResponse / AgentFunctionResponse each carry their
+# own domain `status` field (the agent/endpoint/function lifecycle state:
+# active, deleted, …). That collides with the contract's `status`
+# (OperationStatus), so these models CANNOT inherit ResultStatus directly.
+#
+# Same resolution as the entity registry: a NESTED ENVELOPE. The contract lives
+# on the envelope; the data record is nested in a named Optional field, None on
+# not-found / invalid-request. HTTP stays 200 for every domain outcome.
+
+class AgentEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agent: Optional[AgentResponse] = None
+
+
+class AgentTypeEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agent_type: Optional[AgentTypeResponse] = None
+
+
+class AgentEndpointEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    endpoint: Optional[AgentEndpointResponse] = None
+
+
+class AgentFunctionEnvelope(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    function: Optional[AgentFunctionResponse] = None
+
+
+# -- list envelopes (were bare JSON arrays) --
+
+class AgentTypeListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agent_types: List[AgentTypeResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class AgentEndpointListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    endpoints: List[AgentEndpointResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class AgentFunctionListResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    functions: List[AgentFunctionResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+# -- write / delete outcomes (were {"success": true, ...} literals) --
+
+class AgentDeleteResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.DELETED
+    agent_id: Optional[str] = None
+
+
+class AgentEndpointDeleteResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.DELETED
+    endpoint_id: Optional[int] = None
+
+
+class AgentFunctionDeleteResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.DELETED
+    function_id: Optional[int] = None
+
+
+class AgentStatusChangeResponse(ResultStatus):
+    """Result of PUT /agent/status. ``agent_status`` is the agent's new
+    lifecycle state, named apart from the contract's ``status``."""
+    status: OperationStatus = OperationStatus.UPDATED
+    agent_id: Optional[str] = None
+    agent_status: Optional[str] = None
+
+
+# -- discovery / search --
+
+class AgentDiscoverResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agents: List[AgentResponse] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class AgentFunctionDiscoverResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    function_uri: str = ""
+    agents: List[Dict[str, Any]] = Field(default_factory=list)
+    total_count: int = 0
+
+
+class AgentSearchResult(BaseModel):
+    """An agent plus its per-search-mode score."""
+    agent: AgentResponse
+    similarity: Optional[float] = None
+    fts_rank: Optional[float] = None
+
+
+class AgentSearchResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    query: str = ""
+    results: List[AgentSearchResult] = Field(default_factory=list)
+    total_count: int = 0
+
+
+# -- change log --
+
+class AgentChangeLogEntry(BaseModel):
+    log_id: Optional[int] = None
+    agent_id: Optional[str] = None
+    change_type: Optional[str] = None
+    change_detail: Dict[str, Any] = Field(default_factory=dict)
+    changed_by: Optional[str] = None
+    changed_time: Optional[datetime] = None
+
+    class Config:
+        extra = "allow"
+
+
+class AgentChangeLogResponse(ResultStatus):
+    status: OperationStatus = OperationStatus.FOUND
+    agent_id: str = ""
+    entries: List[AgentChangeLogEntry] = Field(default_factory=list)
+    total_count: int = 0
 
 
 # Resolve forward references

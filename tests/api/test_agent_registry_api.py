@@ -10,6 +10,8 @@ import uuid
 
 import pytest
 
+from vitalgraph.model.result_status import OperationStatus
+
 from vitalgraph.agent_registry.agent_models import (
     AgentCreate,
     AgentEndpointCreate,
@@ -35,24 +37,29 @@ class TestAgentRegistryCrud:
     async def test_list_agent_types(self, vg_client):
         """List agent types — seed chat type should exist."""
         ar = vg_client.agent_registry
-        types = await ar.list_agent_types()
-        keys = [t.type_key for t in types]
+        resp = await ar.list_agent_types()
+        assert resp.success
+        keys = [t.type_key for t in resp.agent_types]
         assert "urn:vital-ai:agent-type:chat" in keys
 
     async def test_create_agent_type(self, vg_client):
         """Create an agent type (idempotent — 409 is acceptable)."""
         ar = vg_client.agent_registry
         type_key = f"urn:vital-ai:agent-type:test-{uuid.uuid4().hex[:6]}"
-        try:
-            at = await ar.create_agent_type(AgentTypeCreate(
-                type_key=type_key,
-                type_label="Test Bot",
-                type_description="Agent type created by API tests",
-            ))
-            assert at.type_key == type_key
-        except Exception as e:
-            # 409 / duplicate is OK
-            assert "409" in str(e) or "already exists" in str(e).lower()
+        resp = await ar.create_agent_type(AgentTypeCreate(
+            type_key=type_key,
+            type_label="Test Bot",
+            type_description="Agent type created by API tests",
+        ))
+        # Contract: HTTP 200 for both outcomes; status discriminates.
+        assert resp.status in (OperationStatus.CREATED, OperationStatus.ALREADY_EXISTS)
+        if resp.status == OperationStatus.CREATED:
+            assert resp.success
+            assert resp.agent_type is not None
+            assert resp.agent_type.type_key == type_key
+        else:
+            assert not resp.success
+            assert "already exists" in resp.message.lower()
 
     async def test_agent_lifecycle(self, vg_client):
         """Create → get → update → status change → delete agent."""
@@ -70,7 +77,8 @@ class TestAgentRegistryCrud:
             capabilities=["chat", "search"],
             metadata={"test": True},
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
         assert agent_id and agent_id.startswith("agt_")
 
         # Get by ID
@@ -91,17 +99,20 @@ class TestAgentRegistryCrud:
             version="1.1.0",
             capabilities=["chat", "search", "summarize"],
         ))
-        assert updated.version == "1.1.0"
-        assert "summarize" in updated.capabilities
+        assert updated.agent is not None
+        assert updated.agent.version == "1.1.0"
+        assert "summarize" in updated.agent.capabilities
 
         # Status change
         resp = await ar.change_agent_status(agent_id, AgentStatusChange(status="inactive"))
-        assert resp.get("success")
-        assert resp.get("status") == "inactive"
+        assert resp.success
+        assert resp.status == OperationStatus.UPDATED
+        assert resp.agent_status == "inactive"
 
         # Delete (soft)
         resp = await ar.delete_agent(agent_id)
-        assert resp.get("success")
+        assert resp.success
+        assert resp.status == OperationStatus.DELETED
 
         # Verify hidden from active search
         resp = await ar.search_agents(query="API Test Agent", status="active")
@@ -121,7 +132,8 @@ class TestAgentRegistryCrud:
             version="1.0.0",
             protocol_format_uri=AgentProtocol.AIMP,
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         # Create endpoint
         ep_uri = f"urn:vital-ai:endpoint:test-{uuid.uuid4().hex[:6]}"
@@ -131,27 +143,29 @@ class TestAgentRegistryCrud:
             protocol="websocket",
             notes="Test endpoint",
         ))
-        endpoint_id = ep.endpoint_id
-        assert ep.endpoint_uri == ep_uri
+        assert ep.endpoint is not None
+        endpoint_id = ep.endpoint.endpoint_id
+        assert ep.endpoint.endpoint_uri == ep_uri
 
         # List endpoints
         eps = await ar.list_endpoints(agent_id)
-        assert any(e.endpoint_id == endpoint_id for e in eps)
+        assert any(e.endpoint_id == endpoint_id for e in eps.endpoints)
 
         # Update endpoint
         updated_ep = await ar.update_endpoint(endpoint_id, AgentEndpointUpdate(
             endpoint_url="wss://test.example.com/ws/v2",
             notes="Updated test endpoint",
         ))
-        assert updated_ep.endpoint_url == "wss://test.example.com/ws/v2"
+        assert updated_ep.endpoint is not None
+        assert updated_ep.endpoint.endpoint_url == "wss://test.example.com/ws/v2"
 
         # Delete endpoint
         resp = await ar.delete_endpoint(endpoint_id)
-        assert resp.get("success")
+        assert resp.success
 
         # Verify gone
         eps_after = await ar.list_endpoints(agent_id)
-        active_ids = [e.endpoint_id for e in eps_after]
+        active_ids = [e.endpoint_id for e in eps_after.endpoints]
         assert endpoint_id not in active_ids
 
         # Cleanup agent
@@ -170,7 +184,8 @@ class TestAgentRegistryCrud:
             version="1.0.0",
             protocol_format_uri=AgentProtocol.AIMP,
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         # Create function
         fn_uri = f"urn:generate_test_{uuid.uuid4().hex[:6]}"
@@ -183,16 +198,18 @@ class TestAgentRegistryCrud:
             },
             notes="Test function",
         ))
-        function_id = fn.function_id
-        assert fn.function_uri == fn_uri
+        assert fn.function is not None
+        function_id = fn.function.function_id
+        assert fn.function.function_uri == fn_uri
 
         # List functions
         fns = await ar.list_functions(agent_id)
-        assert any(f.function_id == function_id for f in fns)
+        assert any(f.function_id == function_id for f in fns.functions)
 
         # Get function
         got_fn = await ar.get_function(function_id)
-        assert got_fn.function_uri == fn_uri
+        assert got_fn.function is not None
+        assert got_fn.function.function_uri == fn_uri
 
         # Update function
         updated_fn = await ar.update_function(function_id, AgentFunctionUpdate(
@@ -202,15 +219,16 @@ class TestAgentRegistryCrud:
                 "format": {"description": "Output format", "type": "string", "required": False},
             },
         ))
-        assert updated_fn.parameters.get("format") is not None
+        assert updated_fn.function is not None
+        assert updated_fn.function.parameters.get("format") is not None
 
         # Delete function
         resp = await ar.delete_function(function_id)
-        assert resp.get("success")
+        assert resp.success
 
         # Verify gone
         fns_after = await ar.list_functions(agent_id)
-        active_ids = [f.function_id for f in fns_after]
+        active_ids = [f.function_id for f in fns_after.functions]
         assert function_id not in active_ids
 
         # Cleanup agent
@@ -233,8 +251,9 @@ class TestAgentRegistryNewFields:
             protocol_format_uri=AgentProtocol.MCP,
             protocol_config=pc,
         ))
-        agent_id = agent.agent_id
-        assert agent.protocol_config == pc
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
+        assert agent.agent.protocol_config == pc
 
         # Verify via get
         resp = await ar.get_agent(agent_id)
@@ -243,7 +262,8 @@ class TestAgentRegistryNewFields:
         # Update protocol_config
         new_pc = {"version": "2.0", "supported_methods": ["tools/list"]}
         updated = await ar.update_agent(agent_id, AgentUpdate(protocol_config=new_pc))
-        assert updated.protocol_config == new_pc
+        assert updated.agent is not None
+        assert updated.agent.protocol_config == new_pc
 
         await ar.delete_agent(agent_id)
 
@@ -257,7 +277,8 @@ class TestAgentRegistryNewFields:
             agent_name="Transport Config Test",
             agent_uri=agent_uri,
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         tc = {"tls": True, "timeout_ms": 30000, "headers": {"X-Custom": "test"}}
         ep = await ar.create_endpoint(agent_id, AgentEndpointCreate(
@@ -266,14 +287,16 @@ class TestAgentRegistryNewFields:
             protocol="https",
             transport_config=tc,
         ))
-        assert ep.transport_config == tc
+        assert ep.endpoint is not None
+        assert ep.endpoint.transport_config == tc
 
         # Update transport_config
         new_tc = {"tls": True, "timeout_ms": 60000}
-        updated_ep = await ar.update_endpoint(ep.endpoint_id, AgentEndpointUpdate(
+        updated_ep = await ar.update_endpoint(ep.endpoint.endpoint_id, AgentEndpointUpdate(
             transport_config=new_tc,
         ))
-        assert updated_ep.transport_config == new_tc
+        assert updated_ep.endpoint is not None
+        assert updated_ep.endpoint.transport_config == new_tc
 
         await ar.delete_agent(agent_id)
 
@@ -287,7 +310,8 @@ class TestAgentRegistryNewFields:
             agent_name="Output Schema Test",
             agent_uri=agent_uri,
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         out_schema = {"type": "object", "properties": {"result": {"type": "string"}}}
         fn = await ar.create_function(agent_id, AgentFunctionCreate(
@@ -296,14 +320,16 @@ class TestAgentRegistryNewFields:
             parameters={"input": {"type": "string"}},
             output_schema=out_schema,
         ))
-        assert fn.output_schema == out_schema
+        assert fn.function is not None
+        assert fn.function.output_schema == out_schema
 
         # Update output_schema
         new_os = {"type": "object", "properties": {"result": {"type": "integer"}}}
-        updated_fn = await ar.update_function(fn.function_id, AgentFunctionUpdate(
+        updated_fn = await ar.update_function(fn.function.function_id, AgentFunctionUpdate(
             output_schema=new_os,
         ))
-        assert updated_fn.output_schema == new_os
+        assert updated_fn.function is not None
+        assert updated_fn.function.output_schema == new_os
 
         await ar.delete_agent(agent_id)
 
@@ -330,7 +356,8 @@ class TestAgentRegistryRollback:
             version="1.0.0",
             capabilities=["chat"],
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         # Update
         await ar.update_agent(agent_id, AgentUpdate(
@@ -341,11 +368,11 @@ class TestAgentRegistryRollback:
 
         # Check changelog
         log = await ar.get_change_log(agent_id)
-        entries = log.get("entries", [])
-        update_entries = [e for e in entries if e["change_type"] == "agent_updated"]
+        entries = log.entries
+        update_entries = [e for e in entries if e.change_type == "agent_updated"]
         assert len(update_entries) >= 1
 
-        detail = update_entries[0].get("change_detail", {})
+        detail = update_entries[0].change_detail
         assert "before" in detail
         assert "after" in detail
         assert detail["before"]["agent_name"] == "Snapshot Test Original"
@@ -368,7 +395,8 @@ class TestAgentRegistryRollback:
             version="1.0.0",
             description="Original description",
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
         # Update to new state
         await ar.update_agent(agent_id, AgentUpdate(
@@ -384,25 +412,26 @@ class TestAgentRegistryRollback:
 
         # Get the update log entry
         log = await ar.get_change_log(agent_id)
-        entries = log.get("entries", [])
+        entries = log.entries
         update_entry = next(
-            (e for e in entries if e["change_type"] == "agent_updated"), None
+            (e for e in entries if e.change_type == "agent_updated"), None
         )
         assert update_entry is not None
-        log_id = update_entry["log_id"]
+        log_id = update_entry.log_id
 
         # Rollback
         rolled_back = await ar.rollback_agent(agent_id, log_id)
-        assert rolled_back.agent_name == "Rollback Test Original"
-        assert rolled_back.version == "1.0.0"
-        assert rolled_back.description == "Original description"
+        assert rolled_back.agent is not None
+        assert rolled_back.agent.agent_name == "Rollback Test Original"
+        assert rolled_back.agent.version == "1.0.0"
+        assert rolled_back.agent.description == "Original description"
 
         # Verify rollback logged
         log_after = await ar.get_change_log(agent_id)
-        entries_after = log_after.get("entries", [])
-        rollback_entries = [e for e in entries_after if e["change_type"] == "agent_rollback"]
+        entries_after = log_after.entries
+        rollback_entries = [e for e in entries_after if e.change_type == "agent_rollback"]
         assert len(rollback_entries) >= 1
-        rb_detail = rollback_entries[0].get("change_detail", {})
+        rb_detail = rollback_entries[0].change_detail
         assert rb_detail.get("rollback_from_log_id") == log_id
 
         await ar.delete_agent(agent_id)
@@ -417,11 +446,14 @@ class TestAgentRegistryRollback:
             agent_name="Rollback Invalid Test",
             agent_uri=agent_uri,
         ))
-        agent_id = agent.agent_id
+        assert agent.agent is not None
+        agent_id = agent.agent.agent_id
 
-        # Try rollback with bogus log_id — should get 400
-        with pytest.raises(Exception) as exc_info:
-            await ar.rollback_agent(agent_id, 999999999)
-        assert "400" in str(exc_info.value) or "not found" in str(exc_info.value).lower()
+        # Contract: a bogus log_id is a DOMAIN outcome — HTTP 200 with
+        # success=False, not a raised 400.
+        resp = await ar.rollback_agent(agent_id, 999999999)
+        assert not resp.success
+        assert resp.status in (OperationStatus.INVALID_REQUEST, OperationStatus.NOT_FOUND)
+        assert resp.agent is None
 
         await ar.delete_agent(agent_id)

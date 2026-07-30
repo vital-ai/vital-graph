@@ -100,15 +100,18 @@ class FusekiPostgreSQLDbImpl(UserManagementMixin, DbImplInterface):
                 )
 
             # Create connection pool using asyncpg
-            self.connection_pool = await asyncpg.create_pool(
+            from vitalgraph.db.pool import create_pool, DEFAULT_ACQUIRE_TIMEOUT
+
+            self.connection_pool = await create_pool(
                 host=self.config.get('host', 'localhost'),
                 port=self.config.get('port', 5432),
                 database=self.config.get('database', 'vitalgraph'),
                 user=self.config.get('username', 'vitalgraph_user'),
                 password=self.config.get('password', 'vitalgraph_pass'),
-                min_size=5,
-                max_size=30,
+                min_size=self.config.get('min_pool_size', 5),
+                max_size=self.config.get('max_pool_size', 30),
                 command_timeout=60,
+                acquire_timeout=self.config.get('acquire_timeout', DEFAULT_ACQUIRE_TIMEOUT),
                 init=_init_conn,
             )
             

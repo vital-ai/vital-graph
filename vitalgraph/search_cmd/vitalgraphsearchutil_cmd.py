@@ -240,7 +240,7 @@ class VitalGraphSearchUtilREPL:
             return True
         name = _parse_flag(args, '--name')
         dims_str = _parse_flag(args, '--dims') or _parse_flag(args, '--dimensions')
-        provider = _parse_flag(args, '--provider') or 'vitalsigns'
+        provider = _parse_flag(args, '--provider') or 'vitalsigns_onnx'
         model = _parse_flag(args, '--model')
         description = _parse_flag(args, '--description') or ''
         metric = _parse_flag(args, '--metric') or 'cosine'

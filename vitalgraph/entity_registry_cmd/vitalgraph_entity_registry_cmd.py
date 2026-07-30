@@ -579,15 +579,20 @@ class EntityRegistryCLI:
         return True
 
     def cmd_list_relationships(self, args: list[str]) -> bool:
-        """List relationships: list-relationships <entity_id> [--direction both|outgoing|incoming]"""
+        """List relationships: list-relationships <entity_id> [--direction both|outgoing|incoming] [--page N] [--page-size N]"""
         if not self._require_connected():
             return True
         if not args:
-            print("Usage: list-relationships <entity_id> [--direction both|outgoing|incoming]")
+            print("Usage: list-relationships <entity_id> [--direction both|outgoing|incoming] "
+                  "[--page N] [--page-size N]")
             return True
         entity_id = args.pop(0)
         direction = self._extract_flag(args, '--direction') or 'both'
-        rels = _run_async(self.registry.list_relationships(entity_id, direction=direction))
+        page = int(self._extract_flag(args, '--page') or 1)
+        page_size = int(self._extract_flag(args, '--page-size') or 100)
+        rels, total = _run_async(self.registry.list_relationships(
+            entity_id, direction=direction, page=page, page_size=page_size,
+        ))
         rows = []
         for r in rels:
             rows.append({
@@ -598,6 +603,8 @@ class EntityRegistryCLI:
                 'status': r.get('status', ''),
             })
         _print_table(rows, ['relationship_id', 'type', 'source', 'destination', 'status'], self.output_format)
+        if total > len(rows):
+            print(f"Showing {len(rows)} of {total} (page {page}, page size {page_size})")
         return True
 
     def cmd_create_relationship(self, args: list[str]) -> bool:

@@ -498,8 +498,24 @@ class KGQueryCriteriaBuilder:
         Returns:
             WHERE clause body string (without the outer WHERE { } wrapper)
         """
-        # Build WHERE clauses - start with base class selection (vitaltype)
-        class_clause = """
+        # Build WHERE clauses - start with base class selection (vitaltype).
+        #
+        # The subclass UNION exists only to bind ?entity to a KG entity of some
+        # kind. When a more selective constraint already pins ?entity — an explicit
+        # hasKGEntityType (added below), or a VALUES list of URIs — the UNION is
+        # redundant: it enumerates every entity of four vitaltypes to establish
+        # something the other triple already establishes.
+        #
+        # prune_union.py drops UNION branches whose subtype URIs are absent from
+        # the term table, which is why this measured free in cardiff_kg — only
+        # KGEntity exists there, so three of four branches are pruned before SQL
+        # emission. In a space where the subtypes DO exist, nothing prunes them.
+        # See planning/planning_performance/prod_db_saturation_plan.md
+        _entity_already_pinned = bool(criteria.entity_uris) or bool(
+            criteria.entity_type
+            and criteria.entity_type != "http://vital.ai/ontology/haley-ai-kg#KGEntity"
+        )
+        class_clause = "" if _entity_already_pinned else """
         {
             ?entity vital-core:vitaltype haley:KGEntity .
         } UNION {
@@ -620,11 +636,10 @@ FILTER(CONTAINS(LCASE(?search_name), LCASE("{criteria.search_string}")))""")
                     filter_clauses.append(
                         f"FILTER NOT EXISTS {{ ?entity <{prop_uri}> ?{var} . }}")
         
-        # Combine class clause with filters
-        if filter_clauses:
-            where_clauses = [class_clause] + filter_clauses
-        else:
-            where_clauses = [class_clause]
+        # Combine class clause with filters. class_clause is empty when a more
+        # selective constraint already pins ?entity — drop blanks so the emitted
+        # SPARQL doesn't carry a stray empty group.
+        where_clauses = [c for c in ([class_clause] + filter_clauses) if c and c.strip()]
         
         # Add frame criteria filters (entity -> frame -> slot paths)
         # Each FrameCriteria represents a separate path from entity through frame to slots

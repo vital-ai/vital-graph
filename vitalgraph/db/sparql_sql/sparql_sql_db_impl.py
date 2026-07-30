@@ -120,18 +120,35 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
                     schema='pg_catalog',
                 )
 
-            self.connection_pool = await asyncpg.create_pool(
+            from vitalgraph.db.pool import create_pool, DEFAULT_ACQUIRE_TIMEOUT
+
+            min_size = self.config.get('min_pool_size', 10)
+            max_size = self.config.get('max_pool_size', 30)
+            acquire_timeout = self.config.get('acquire_timeout', DEFAULT_ACQUIRE_TIMEOUT)
+
+            self.connection_pool = await create_pool(
                 host=self.config.get('host', 'localhost'),
                 port=self.config.get('port', 5432),
                 database=self.config.get('database', 'vitalgraph'),
                 user=self.config.get('username', 'vitalgraph_user'),
                 password=self.config.get('password', 'vitalgraph_pass'),
-                min_size=self.config.get('min_pool_size', self.config.get('pool_size', 5)),
-                max_size=self.config.get('max_pool_size', 15),
+                min_size=min_size,
+                max_size=max_size,
                 max_inactive_connection_lifetime=120.0,
                 command_timeout=self.config.get('command_timeout', 60),
+                acquire_timeout=acquire_timeout,
                 init=_init_conn,
             )
+            logger.info(
+                "asyncpg pool created: min_size=%s max_size=%s acquire_timeout=%ss",
+                min_size, max_size, acquire_timeout,
+            )
+
+            # Per-process pool-occupancy monitor. Quiet (DEBUG) at steady state,
+            # WARNING near capacity. Not routed through ProcessScheduler: that
+            # advisory-locks a job to one instance, but every task has its own pool.
+            from vitalgraph.db.pool import start_pool_monitor
+            self._pool_monitor = start_pool_monitor(self.connection_pool)
 
             # Track pool for service-level cleanup
             track_pool(self.connection_pool)
@@ -155,6 +172,15 @@ class SparqlSQLDbImpl(UserManagementMixin, DbImplInterface):
     async def disconnect(self) -> bool:
         """Close the asyncpg connection pool."""
         try:
+            monitor = getattr(self, '_pool_monitor', None)
+            if monitor is not None:
+                monitor.cancel()
+                try:
+                    await monitor
+                except asyncio.CancelledError:
+                    pass
+                self._pool_monitor = None
+
             if self.connection_pool:
                 logger.debug("Closing sparql_sql PostgreSQL pool...")
 

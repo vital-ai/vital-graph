@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 KGTYPE_INDEX_NAME = "kgtype_default"
 DEFAULT_DIMENSIONS = 384
 DEFAULT_DISTANCE_METRIC = "cosine"
-DEFAULT_PROVIDER = "vitalsigns"
+DEFAULT_PROVIDER = "vitalsigns_onnx"
 DEFAULT_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 DEFAULT_DESCRIPTION = "KG Type embeddings for type search (entity, frame, slot types)"
 

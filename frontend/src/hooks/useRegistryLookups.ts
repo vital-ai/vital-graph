@@ -52,9 +52,14 @@ function useLookup<T>(key: string, fetcher: () => Promise<unknown[]>) {
 }
 
 
-const fetchEntityTypes = () => apiService.listRegistryEntityTypes();
-const fetchCategories = () => apiService.listRegistryCategories();
-const fetchRelationshipTypes = () => apiService.listRegistryRelationshipTypes();
+// These routes return a ResultStatus envelope; pull the domain-named list out of
+// it here so the shared useLookup hook keeps working with plain arrays.
+const fetchEntityTypes = async () =>
+  (await apiService.listRegistryEntityTypes()).entity_types ?? [];
+const fetchCategories = async () =>
+  (await apiService.listRegistryCategories()).categories ?? [];
+const fetchRelationshipTypes = async () =>
+  (await apiService.listRegistryRelationshipTypes()).relationship_types ?? [];
 
 export const useEntityTypes = () =>
   useLookup<EntityTypeOption>('entity-types', fetchEntityTypes);

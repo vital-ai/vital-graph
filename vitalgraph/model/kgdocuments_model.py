@@ -75,6 +75,13 @@ class SegmentationConfigListResponse(ResultStatus):
     total_count: int = 0
 
 
+class SegmentationConfigDeleteResponse(ResultStatus):
+    """Result of deleting a segmentation config."""
+
+    status: OperationStatus = OperationStatus.DELETED
+    config_id: Optional[int] = Field(None, description="Config that was targeted")
+
+
 # ---------------------------------------------------------------------------
 # KGDocument list/detail (for future document CRUD endpoint)
 # ---------------------------------------------------------------------------

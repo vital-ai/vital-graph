@@ -20,6 +20,7 @@ import {
   HiExclamation,
 } from 'react-icons/hi';
 import { vectorGeoService } from '../services/VectorGeoService';
+import { providerShortLabel } from '../types/vectorGeo';
 import type { VectorIndex } from '../types/vectorGeo';
 import { formatDateShort } from '../utils/formatUtils';
 
@@ -118,7 +119,7 @@ const VectorIndexDetail: React.FC = () => {
           </h1>
           <div className="flex items-center gap-2 mt-1">
             <Badge color="purple">vector</Badge>
-            <Badge color="info">{index.provider}</Badge>
+            <Badge color="info" title={index.provider}>{providerShortLabel(index.provider)}</Badge>
             <span className="text-sm text-gray-500">{index.dimensions}d · {index.distance_metric}</span>
           </div>
         </div>
@@ -156,7 +157,7 @@ const VectorIndexDetail: React.FC = () => {
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-500 dark:text-gray-400">Provider</dt>
-              <dd><Badge color="info">{index.provider}</Badge></dd>
+              <dd><Badge color="info" title={index.provider}>{providerShortLabel(index.provider)}</Badge></dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-500 dark:text-gray-400">Dimensions</dt>

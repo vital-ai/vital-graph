@@ -65,7 +65,8 @@ export class ApiService {
 
   // ─── Graphs ───────────────────────────────────────────────────────
 
-  async getGraphs(spaceId: string): Promise<any[]> {
+  /** Returns the GraphListResponse envelope: `{ graphs, total_count, success, status, message }`. */
+  async getGraphs(spaceId: string): Promise<any> {
     return vgClient.graphs.list(spaceId) as any;
   }
 
@@ -451,18 +452,22 @@ export class ApiService {
     return vgClient.entityRegistry.deleteEntity(entityId);
   }
 
+  /** Envelope: `{ aliases, total_count, success, status, message }`. */
   async getEntityAliases(entityId: string): Promise<any> {
     return vgClient.entityRegistry.listAliases(entityId);
   }
 
+  /** Envelope: `{ identifiers, total_count, success, status, message }`. */
   async getEntityIdentifiers(entityId: string): Promise<any> {
     return vgClient.entityRegistry.listIdentifiers(entityId);
   }
 
+  /** Envelope: `{ entity_categories, total_count, success, status, message }`. */
   async getEntityCategories(entityId: string): Promise<any> {
     return vgClient.entityRegistry.listEntityCategories(entityId);
   }
 
+  /** Envelope: `{ locations, total_count, success, status, message }`. */
   async getEntityLocations(entityId: string): Promise<any> {
     return vgClient.entityRegistry.listLocations(entityId);
   }
@@ -491,8 +496,17 @@ export class ApiService {
     return vgClient.entityRegistry.removeEntityCategory(entityId, categoryKey);
   }
 
-  async getEntityRelationships(entityId: string, direction: 'both' | 'outgoing' | 'incoming' = 'both', includeExpired = false): Promise<any> {
-    return vgClient.entityRegistry.listRelationships(entityId, direction, includeExpired);
+  /**
+   * Envelope: `{ relationships, total_count, page, page_size, success, status, message }`.
+   * PAGINATED — pass `opts.page` to walk pages; `total_count` is the full count.
+   */
+  async getEntityRelationships(
+    entityId: string,
+    direction: 'both' | 'outgoing' | 'incoming' = 'both',
+    includeExpired = false,
+    opts: { page?: number; pageSize?: number } = {},
+  ): Promise<any> {
+    return vgClient.entityRegistry.listRelationships(entityId, direction, includeExpired, opts);
   }
 
   async createEntityRelationship(data: { entity_source: string; entity_destination: string; relationship_type_key: string; description?: string }): Promise<any> {
@@ -505,19 +519,23 @@ export class ApiService {
 
   // ─── Entity Registry lookups ───────────────────────────────────────
 
-  async listRegistryEntityTypes(): Promise<any[]> {
+  /** Envelope: `{ entity_types, total_count, success, status, message }`. */
+  async listRegistryEntityTypes(): Promise<any> {
     return vgClient.entityRegistry.listEntityTypes() as any;
   }
 
-  async listRegistryCategories(): Promise<any[]> {
+  /** Envelope: `{ categories, total_count, success, status, message }`. */
+  async listRegistryCategories(): Promise<any> {
     return vgClient.entityRegistry.listCategories() as any;
   }
 
-  async listRegistryRelationshipTypes(): Promise<any[]> {
+  /** Envelope: `{ relationship_types, total_count, success, status, message }`. */
+  async listRegistryRelationshipTypes(): Promise<any> {
     return vgClient.entityRegistry.listRelationshipTypes() as any;
   }
 
-  async listRegistryLocationTypes(): Promise<any[]> {
+  /** Envelope: `{ location_types, total_count, success, status, message }`. */
+  async listRegistryLocationTypes(): Promise<any> {
     return vgClient.entityRegistry.listLocationTypes() as any;
   }
 
@@ -583,7 +601,8 @@ export class ApiService {
 
   // ─── Agent Registry ────────────────────────────────────────────────
 
-  async listAgentTypes(): Promise<any[]> {
+  /** Envelope: `{ agent_types, total_count, success, status, message }`. */
+  async listAgentTypes(): Promise<any> {
     return vgClient.agentRegistry.listAgentTypes() as any;
   }
 
@@ -617,11 +636,13 @@ export class ApiService {
     return vgClient.agentRegistry.changeAgentStatus(agentId, { status, reason });
   }
 
-  async getAgentEndpoints(agentId: string): Promise<any[]> {
+  /** Envelope: `{ endpoints, total_count, success, status, message }`. */
+  async getAgentEndpoints(agentId: string): Promise<any> {
     return vgClient.agentRegistry.listEndpoints(agentId) as any;
   }
 
-  async getAgentFunctions(agentId: string): Promise<any[]> {
+  /** Envelope: `{ functions, total_count, success, status, message }`. */
+  async getAgentFunctions(agentId: string): Promise<any> {
     return vgClient.agentRegistry.listFunctions(agentId) as any;
   }
 

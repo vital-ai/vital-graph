@@ -27,6 +27,11 @@ import { searchFtsService } from '../services/SearchFtsService';
 import { fuzzyMappingService } from '../services/FuzzyMappingService';
 import { apiService } from '../services/ApiService';
 import type { VectorIndex } from '../types/vectorGeo';
+import {
+  DEFAULT_VECTOR_PROVIDER,
+  VECTOR_PROVIDERS,
+  providerDimensions,
+} from '../types/vectorGeo';
 import type { FtsIndex } from '../types/searchFts';
 import type { FuzzyMapping } from '../types/fuzzyMappings';
 import { type SpaceInfo } from '../types/api';
@@ -69,9 +74,9 @@ const Indexes: React.FC = () => {
   const [createType, setCreateType] = useState<IndexType>('vector');
   const [createForm, setCreateForm] = useState({
     index_name: '',
-    dimensions: 384,
+    dimensions: providerDimensions(DEFAULT_VECTOR_PROVIDER),
     distance_metric: 'cosine',
-    provider: '',
+    provider: DEFAULT_VECTOR_PROVIDER,
     model: '',
   });
   const [creating, setCreating] = useState(false);
@@ -222,7 +227,7 @@ const Indexes: React.FC = () => {
           index_name: createForm.index_name,
           dimensions: createForm.dimensions,
           distance_metric: createForm.distance_metric,
-          provider: createForm.provider || 'default',
+          provider: createForm.provider,
         });
       } else if (createType === 'fts') {
         await searchFtsService.createFtsIndex(selectedSpace, {
@@ -230,7 +235,13 @@ const Indexes: React.FC = () => {
         });
       }
       setShowCreateModal(false);
-      setCreateForm({ index_name: '', dimensions: 384, distance_metric: 'cosine', provider: '', model: '' });
+      setCreateForm({
+        index_name: '',
+        dimensions: providerDimensions(DEFAULT_VECTOR_PROVIDER),
+        distance_metric: 'cosine',
+        provider: DEFAULT_VECTOR_PROVIDER,
+        model: '',
+      });
       loadData();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to create index');
@@ -399,12 +410,21 @@ const Indexes: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="dimensions">Dimensions</Label>
+                    {/* Derived from the model, not editable: the index must be
+                        created at the model's native width. Editing it to
+                        anything else builds a column the model cannot fill —
+                        the server accepts the mismatch and vectorization then
+                        fails later at reindex. */}
                     <TextInput
                       id="dimensions"
                       type="number"
                       value={createForm.dimensions}
-                      onChange={(e) => setCreateForm({ ...createForm, dimensions: parseInt(e.target.value) || 384 })}
+                      readOnly
+                      disabled
                     />
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Set by the selected model
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="distanceMetric">Distance Metric</Label>
@@ -420,13 +440,30 @@ const Indexes: React.FC = () => {
                   </div>
                 </div>
                 <div>
-                  <Label htmlFor="provider">Provider (optional)</Label>
-                  <TextInput
+                  <Label htmlFor="provider">Embedding Model</Label>
+                  <Select
                     id="provider"
                     value={createForm.provider}
-                    onChange={(e) => setCreateForm({ ...createForm, provider: e.target.value })}
-                    placeholder="e.g. openai"
-                  />
+                    onChange={(e) => {
+                      // Dimensions are a property of the model, not a free
+                      // choice — keep them in step with the selection.
+                      const provider = e.target.value;
+                      setCreateForm({
+                        ...createForm,
+                        provider,
+                        dimensions: providerDimensions(provider),
+                      });
+                    }}
+                  >
+                    {VECTOR_PROVIDERS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label} ({p.dimensions}d)
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {VECTOR_PROVIDERS.find((p) => p.value === createForm.provider)?.note}
+                  </p>
                 </div>
                 <div>
                   <Label htmlFor="model">Model (optional)</Label>

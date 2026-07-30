@@ -55,6 +55,24 @@ from ..model.entity_registry_model import (
     EntitySearchLocationResult,
     LocationSearchResponse,
     LocationSearchResult,
+    AdminRebuildResponse,
+    SubsystemRebuildResult,
+    # list envelopes + their plain item types
+    IdentifierListResponse,
+    AliasListResponse,
+    LocationListResponse,
+    LocationTypeListResponse,
+    LocationTypeItem,
+    LocationCategoryListResponse,
+    RelationshipListResponse,
+    RelationshipTypeListResponse,
+    RelationshipTypeItem,
+    SameAsListResponse,
+    EntityTypeListResponse,
+    EntityTypeItem,
+    CategoryListResponse,
+    CategoryItem,
+    EntityCategoryListResponse,
     RegistryWriteResponse,
     EntityEnvelope,
     IdentifierEnvelope,
@@ -284,13 +302,17 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 return IdentifierEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), identifier=None)
 
-        @self.router.get("/identifiers/list", tags=["Entity Registry"])
+        @self.router.get("/identifiers/list", response_model=IdentifierListResponse, tags=["Entity Registry"])
         async def list_identifiers_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             idents = await self.registry.list_identifiers(entity_id)
-            return [IdentifierResponse(**i) for i in idents]
+            items = [IdentifierResponse(**i) for i in idents]
+            return IdentifierListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                identifiers=items, total_count=len(items),
+            )
 
         @self.router.delete("/identifiers/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
         async def retract_identifier_route(
@@ -333,13 +355,17 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 return AliasEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), alias=None)
 
-        @self.router.get("/aliases/list", tags=["Entity Registry"])
+        @self.router.get("/aliases/list", response_model=AliasListResponse, tags=["Entity Registry"])
         async def list_aliases_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             aliases = await self.registry.list_aliases(entity_id)
-            return [AliasResponse(**a) for a in aliases]
+            items = [AliasResponse(**a) for a in aliases]
+            return AliasListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                aliases=items, total_count=len(items),
+            )
 
         @self.router.delete("/aliases/retract", response_model=RegistryWriteResponse, tags=["Entity Registry"])
         async def retract_alias_route(
@@ -353,10 +379,14 @@ class EntityRegistryEndpoint:
 
         # -- Categories --
 
-        @self.router.get("/categories", response_model=List[CategoryResponse], tags=["Entity Registry"])
+        @self.router.get("/categories", response_model=CategoryListResponse, tags=["Entity Registry"])
         async def list_categories_route(current_user: Dict = Depends(auth)):
             categories = await self.registry.list_categories()
-            return [CategoryResponse(**c) for c in categories]
+            items = [CategoryItem(**c) for c in categories]
+            return CategoryListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                categories=items, total_count=len(items),
+            )
 
         @self.router.post("/categories", response_model=CategoryResponse, tags=["Entity Registry"])
         async def create_category_route(request: CategoryCreateRequest, current_user: Dict = Depends(auth)):
@@ -372,14 +402,18 @@ class EntityRegistryEndpoint:
             except Exception as e:
                 return CategoryResponse(status=OperationStatus.INVALID_REQUEST, message=str(e))
 
-        @self.router.get("/categories/entity", response_model=List[EntityCategoryResponse],
+        @self.router.get("/categories/entity", response_model=EntityCategoryListResponse,
                          tags=["Entity Registry"])
         async def list_entity_categories_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             cats = await self.registry.list_entity_categories(entity_id)
-            return [EntityCategoryResponse(**c) for c in cats]
+            items = [EntityCategoryResponse(**c) for c in cats]
+            return EntityCategoryListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                entity_categories=items, total_count=len(items),
+            )
 
         @self.router.post("/categories/assign", response_model=EntityCategoryEnvelope,
                           tags=["Entity Registry"])
@@ -433,10 +467,14 @@ class EntityRegistryEndpoint:
 
         # -- Location Types --
 
-        @self.router.get("/location/types", tags=["Entity Registry"])
+        @self.router.get("/location/types", response_model=LocationTypeListResponse, tags=["Entity Registry"])
         async def list_location_types_route(current_user: Dict = Depends(auth)):
             types = await self.registry.list_location_types()
-            return [LocationTypeResponse(**t) for t in types]
+            items = [LocationTypeItem(**t) for t in types]
+            return LocationTypeListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                location_types=items, total_count=len(items),
+            )
 
         @self.router.post("/location/types", response_model=LocationTypeResponse, tags=["Entity Registry"])
         async def create_location_type_route(request: LocationTypeCreateRequest, current_user: Dict = Depends(auth)):
@@ -482,14 +520,18 @@ class EntityRegistryEndpoint:
                                         message=f"Location not found: {location_id}", location=None)
             return LocationEnvelope(status=OperationStatus.FOUND, location=LocationResponse(**loc))
 
-        @self.router.get("/locations/list", tags=["Entity Registry"])
+        @self.router.get("/locations/list", response_model=LocationListResponse, tags=["Entity Registry"])
         async def list_locations_route(
             entity_id: str = Query(..., description="Entity ID"),
             include_expired: bool = Query(False, description="Include expired locations"),
             current_user: Dict = Depends(auth),
         ):
             locs = await self.registry.list_locations(entity_id, include_expired=include_expired)
-            return [LocationResponse(**loc) for loc in locs]
+            items = [LocationResponse(**loc) for loc in locs]
+            return LocationListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                locations=items, total_count=len(items),
+            )
 
         @self.router.put("/locations/update", response_model=LocationEnvelope, tags=["Entity Registry"])
         async def update_location_route(
@@ -555,20 +597,28 @@ class EntityRegistryEndpoint:
                 return RegistryWriteResponse(status=OperationStatus.INVALID_REQUEST, message=str(e),
                                              location_id=location_id, category_key=category_key)
 
-        @self.router.get("/locations/categories/list", tags=["Entity Registry"])
+        @self.router.get("/locations/categories/list", response_model=LocationCategoryListResponse, tags=["Entity Registry"])
         async def list_location_categories_route(
             location_id: int = Query(..., description="Location ID"),
             current_user: Dict = Depends(auth),
         ):
             cats = await self.registry.list_location_categories(location_id)
-            return [LocationCategoryResponse(**c) for c in cats]
+            items = [LocationCategoryResponse(**c) for c in cats]
+            return LocationCategoryListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                location_categories=items, total_count=len(items),
+            )
 
         # -- Relationship Types --
 
-        @self.router.get("/relationship/types", tags=["Entity Registry"])
+        @self.router.get("/relationship/types", response_model=RelationshipTypeListResponse, tags=["Entity Registry"])
         async def list_relationship_types_route(current_user: Dict = Depends(auth)):
             types = await self.registry.list_relationship_types()
-            return [RelationshipTypeResponse(**t) for t in types]
+            items = [RelationshipTypeItem(**t) for t in types]
+            return RelationshipTypeListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                relationship_types=items, total_count=len(items),
+            )
 
         @self.router.post("/relationship/types", response_model=RelationshipTypeResponse,
                           tags=["Entity Registry"])
@@ -622,17 +672,26 @@ class EntityRegistryEndpoint:
                                             message=f"Relationship not found: {relationship_id}", relationship=None)
             return RelationshipEnvelope(status=OperationStatus.FOUND, relationship=RelationshipResponse(**rel))
 
-        @self.router.get("/relationships/list", tags=["Entity Registry"])
+        @self.router.get("/relationships/list", response_model=RelationshipListResponse,
+                         tags=["Entity Registry"])
         async def list_relationships_route(
             entity_id: str = Query(..., description="Entity ID"),
             direction: str = Query('both', description="outgoing, incoming, or both"),
             include_expired: bool = Query(False, description="Include non-current relationships"),
+            page: int = Query(1, ge=1, description="1-based page number"),
+            page_size: int = Query(20, ge=1, le=100, description="Rows per page (max 100)"),
             current_user: Dict = Depends(auth),
         ):
-            rels = await self.registry.list_relationships(
+            rels, total = await self.registry.list_relationships(
                 entity_id, direction=direction, include_expired=include_expired,
+                page=page, page_size=page_size,
             )
-            return [RelationshipResponse(**r) for r in rels]
+            items = [RelationshipResponse(**r) for r in rels]
+            return RelationshipListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                relationships=items, total_count=total,
+                page=page, page_size=page_size,
+            )
 
         @self.router.put("/relationships/update", response_model=RelationshipEnvelope,
                          tags=["Entity Registry"])
@@ -681,13 +740,17 @@ class EntityRegistryEndpoint:
             except ValueError as e:
                 return SameAsEnvelope(status=OperationStatus.INVALID_REQUEST, message=str(e), same_as=None)
 
-        @self.router.get("/sameas/list", tags=["Entity Registry"])
+        @self.router.get("/sameas/list", response_model=SameAsListResponse, tags=["Entity Registry"])
         async def get_same_as_route(
             entity_id: str = Query(..., description="Entity ID"),
             current_user: Dict = Depends(auth),
         ):
             mappings = await self.registry.get_same_as(entity_id)
-            return [SameAsResponse(**m) for m in mappings]
+            items = [SameAsResponse(**m) for m in mappings]
+            return SameAsListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                same_as=items, total_count=len(items),
+            )
 
         @self.router.put("/sameas/retract", response_model=SameAsEnvelope, tags=["Entity Registry"])
         async def retract_same_as_route(
@@ -718,10 +781,14 @@ class EntityRegistryEndpoint:
 
         # -- Entity Types --
 
-        @self.router.get("/entity/types", tags=["Entity Registry"])
+        @self.router.get("/entity/types", response_model=EntityTypeListResponse, tags=["Entity Registry"])
         async def list_entity_types_route(current_user: Dict = Depends(auth)):
             types = await self.registry.list_entity_types()
-            return [EntityTypeResponse(**t) for t in types]
+            items = [EntityTypeItem(**t) for t in types]
+            return EntityTypeListResponse(
+                status=OperationStatus.FOUND if items else OperationStatus.EMPTY,
+                entity_types=items, total_count=len(items),
+            )
 
         @self.router.post("/entity/types", response_model=EntityTypeResponse, tags=["Entity Registry"])
         async def create_entity_type_route(request: EntityTypeCreateRequest, current_user: Dict = Depends(auth)):
@@ -882,7 +949,7 @@ class EntityRegistryEndpoint:
 
         # -- Admin: Index Rebuild --
 
-        @self.router.post("/admin/rebuild", tags=["Entity Registry Admin"])
+        @self.router.post("/admin/rebuild", response_model=AdminRebuildResponse, tags=["Entity Registry Admin"])
         async def admin_rebuild_route(
             rebuild_fuzzy: bool = Query(True, description="Rebuild the in-memory fuzzy index"),
             rebuild_weaviate: bool = Query(False, description="Full Weaviate entity + location sync"),
@@ -897,49 +964,76 @@ class EntityRegistryEndpoint:
             """
             import time as _time
             reg = self.registry
-            results = {}
+            results: List[SubsystemRebuildResult] = []
 
             if rebuild_fuzzy and reg.fuzzy_index:
                 start = _time.time()
-                count = await reg.fuzzy_index.initialize(reg.pool)
+                errors: List[str] = []
+                count = 0
+                try:
+                    count = await reg.fuzzy_index.initialize(reg.pool)
+                except Exception as e:
+                    errors.append(f"fuzzy rebuild failed: {e}")
+                    logger.exception("Admin rebuild: fuzzy index rebuild failed")
                 duration = _time.time() - start
-                results['fuzzy'] = {
-                    'entities_indexed': count,
-                    'duration_seconds': round(duration, 1),
-                }
-                logger.info(f"Admin rebuild: fuzzy index rebuilt — {count} entities in {duration:.1f}s")
 
-                if notify_workers:
-                    await reg._notify_fuzzy_reload()
-                    results['fuzzy']['workers_notified'] = True
+                if not errors:
+                    logger.info(f"Admin rebuild: fuzzy index rebuilt — {count} entities in {duration:.1f}s")
+                    if notify_workers:
+                        try:
+                            await reg._notify_fuzzy_reload()
+                            logger.info("Admin rebuild: notified workers to reload fuzzy index")
+                        except Exception as e:
+                            errors.append(f"worker notify failed: {e}")
+                            logger.exception("Admin rebuild: fuzzy worker notify failed")
+
+                results.append(SubsystemRebuildResult(
+                    subsystem='fuzzy',
+                    duration_seconds=round(duration, 1),
+                    counts={'entities_indexed': count},
+                    errors=errors,
+                ))
             elif rebuild_fuzzy:
-                results['fuzzy'] = {'status': 'not_enabled'}
+                results.append(SubsystemRebuildResult(subsystem='fuzzy', enabled=False))
 
             if rebuild_weaviate:
                 weaviate_index = getattr(reg, 'weaviate_index', None)
                 if weaviate_index:
                     start = _time.time()
-                    await weaviate_index.ensure_collection()
-                    ent_count, ent_deleted = await weaviate_index.full_sync(
-                        reg.pool, batch_size=200)
-                    loc_count, loc_deleted = await weaviate_index.location_sync(
-                        reg.pool, batch_size=200)
+                    errors = []
+                    ent_count = ent_deleted = loc_count = loc_deleted = 0
+                    try:
+                        await weaviate_index.ensure_collection()
+                        ent_count, ent_deleted = await weaviate_index.full_sync(
+                            reg.pool, batch_size=200)
+                        loc_count, loc_deleted = await weaviate_index.location_sync(
+                            reg.pool, batch_size=200)
+                    except Exception as e:
+                        errors.append(f"weaviate sync failed: {e}")
+                        logger.exception("Admin rebuild: Weaviate sync failed")
                     duration = _time.time() - start
-                    results['weaviate'] = {
-                        'entities_upserted': ent_count,
-                        'entities_deleted': ent_deleted,
-                        'locations_upserted': loc_count,
-                        'locations_deleted': loc_deleted,
-                        'duration_seconds': round(duration, 1),
-                    }
-                    logger.info(
-                        f"Admin rebuild: Weaviate sync — {ent_count} entities, "
-                        f"{loc_count} locations in {duration:.1f}s"
-                    )
-                else:
-                    results['weaviate'] = {'status': 'not_enabled'}
 
-            return {'success': True, 'rebuild': results}
+                    if not errors:
+                        logger.info(
+                            f"Admin rebuild: Weaviate sync — {ent_count} entities, "
+                            f"{loc_count} locations in {duration:.1f}s"
+                        )
+
+                    results.append(SubsystemRebuildResult(
+                        subsystem='weaviate',
+                        duration_seconds=round(duration, 1),
+                        counts={
+                            'entities_upserted': ent_count,
+                            'entities_deleted': ent_deleted,
+                            'locations_upserted': loc_count,
+                            'locations_deleted': loc_deleted,
+                        },
+                        errors=errors,
+                    ))
+                else:
+                    results.append(SubsystemRebuildResult(subsystem='weaviate', enabled=False))
+
+            return AdminRebuildResponse.from_results(results)
 
         # -- Similar / Fuzzy --
 
@@ -1137,6 +1231,7 @@ class EntityRegistryEndpoint:
 
         @self.router.post(
             "/admin/populate-vectors",
+            response_model=AdminRebuildResponse,
             tags=["Entity Registry"],
             summary="Rebuild all vector/FTS/geo data for entity registry",
         )
@@ -1147,13 +1242,32 @@ class EntityRegistryEndpoint:
             pool = self.registry.pool
             populator = EntityRegistryVectorPopulator(pool)
             stats = await populator.full_rebuild()
-            return {
-                "success": True,
-                "entities_vectorized": stats.entities_vectorized,
-                "locations_vectorized": stats.locations_vectorized,
-                "geo_rows_inserted": stats.geo_rows_inserted,
-                "errors": stats.errors,
-            }
+
+            # stats.errors is a COUNT of records that failed, not a list of
+            # messages; surface it both as a counter and as one descriptive error
+            # string so the contract status derives correctly.
+            vector_errors: List[str] = []
+            if stats.errors:
+                vector_errors.append(f"{stats.errors} record(s) failed to vectorize")
+
+            return AdminRebuildResponse.from_results([
+                SubsystemRebuildResult(
+                    subsystem='vectors',
+                    duration_seconds=round(stats.elapsed_seconds, 1),
+                    counts={
+                        'entities_processed': stats.entities_processed,
+                        'entities_vectorized': stats.entities_vectorized,
+                        'locations_processed': stats.locations_processed,
+                        'locations_vectorized': stats.locations_vectorized,
+                        'failed_records': stats.errors,
+                    },
+                    errors=vector_errors,
+                ),
+                SubsystemRebuildResult(
+                    subsystem='geo',
+                    counts={'geo_rows_inserted': stats.geo_rows_inserted},
+                ),
+            ])
 
 
 def create_entity_registry_router(app_impl, auth_dependency) -> APIRouter:

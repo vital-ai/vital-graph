@@ -74,6 +74,17 @@ class OpenAIProvider(VectorizationProvider):
         return self._model_name_str
 
     @classmethod
+    def expected_dimensions(cls, config: Dict[str, Any]) -> Optional[int]:
+        """Native width of the configured model.
+
+        Ignores any `dimensions` override in config: callers use this to decide
+        whether such an override is acceptable, so honouring it here would make
+        the check vacuous.
+        """
+        model = (config or {}).get("model_name", DEFAULT_MODEL)
+        return MODEL_DIMENSIONS.get(model)
+
+    @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "OpenAIProvider":
         """Create from config dict.
 

@@ -23,9 +23,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import List, Literal, Optional
+
+import asyncpg
+from typing import Dict, List, Literal, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+# In-flight auto-sync tasks, keyed by space, so a space deletion can cancel work
+# that would otherwise run against dropped tables.  Callers of schedule_sync()
+# discard the returned Task, so without this registry those tasks are
+# unreachable.  Process-local by nature — see cancel_space_syncs().
+_IN_FLIGHT: Dict[str, Set[asyncio.Task]] = {}
 
 # Deterministic UUID namespace (matches sparql_sql_space_impl)
 _VITALGRAPH_NS = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
@@ -74,8 +82,9 @@ async def _sync_vectors_for_subjects(
         rows = await conn.fetch(
             f"SELECT index_name, provider, provider_config FROM {space_id}_vector_index"
         )
-    except Exception:
-        # Table may not exist on spaces without vector indexes
+    except asyncpg.exceptions.UndefinedTableError:
+        # No vector indexes configured for this space. Narrow on purpose: a
+        # broad `except Exception` here would also swallow real query failures.
         return
 
     if not rows:
@@ -239,8 +248,8 @@ async def _sync_fuzzy_for_subjects(
         count = await conn.fetchval(
             f"SELECT COUNT(*) FROM {space_id}_fuzzy_mapping WHERE enabled = TRUE"
         )
-    except Exception:
-        # Table may not exist
+    except asyncpg.exceptions.UndefinedTableError:
+        # No fuzzy mappings configured for this space.
         return
 
     if not count:
@@ -277,8 +286,8 @@ async def _sync_fts_for_subjects(
         rows = await conn.fetch(
             f"SELECT index_name FROM {space_id}_fts_index"
         )
-    except Exception:
-        # Table may not exist
+    except asyncpg.exceptions.UndefinedTableError:
+        # No FTS indexes configured for this space.
         return
 
     if not rows:
@@ -298,6 +307,22 @@ async def _sync_fts_for_subjects(
                     "auto_sync fts %s/%s/%s failed: %s",
                     space_id, idx_name, subj_uuid, e,
                 )
+
+
+async def _space_still_exists(conn, space_id: str) -> bool:
+    """Cheap catalog check that the space's tables are still present.
+
+    Guards against syncing a space that was deleted while this task sat in the
+    queue. Checked BEFORE any embedding work: the vector step calls out to the
+    embedding provider first and only then writes, so a check placed later
+    would still incur (billed) API calls for a space that no longer exists.
+
+    Also covers the multi-worker case, where the deletion happened in a
+    different process and cancel_space_syncs() could not reach this task.
+    """
+    return bool(
+        await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", f"{space_id}_rdf_quad")
+    )
 
 
 async def _run_sync(
@@ -321,6 +346,13 @@ async def _run_sync(
 
     try:
         async with pool.acquire() as conn:
+            if not await _space_still_exists(conn, space_id):
+                logger.debug(
+                    "auto_sync: space '%s' no longer exists — skipping sync of "
+                    "%d subject(s)", space_id, len(subject_uuids),
+                )
+                return
+
             # Vector sync (uses concurrent embedding internally)
             await _sync_vectors_for_subjects(
                 conn, space_id, subject_uuids, context_uuid, operation,
@@ -377,10 +409,63 @@ def schedule_sync(
         name=f"auto_sync:{space_id}:{len(subject_uris)}",
     )
 
+    # Track it so deleting the space can cancel work still in flight.  Without
+    # this the task is unreachable: callers fire-and-forget the return value.
+    _IN_FLIGHT.setdefault(space_id, set()).add(task)
+
     # Swallow exceptions so they don't surface as "unhandled task exception"
     def _on_done(t: asyncio.Task):
+        pending = _IN_FLIGHT.get(space_id)
+        if pending is not None:
+            pending.discard(t)
+            if not pending:
+                _IN_FLIGHT.pop(space_id, None)
+        if t.cancelled():
+            return
         if t.exception():
             logger.error("auto_sync task failed: %s", t.exception())
 
     task.add_done_callback(_on_done)
     return task
+
+
+async def cancel_space_syncs(space_id: str, *, timeout: float = 5.0) -> int:
+    """Cancel auto-sync tasks still in flight for a space, and wait for them.
+
+    Call this BEFORE dropping a space's tables. Otherwise queued tasks wake up
+    against a half-dropped schema: they log a wall of "relation ... does not
+    exist" errors (PostgreSQL records every failed statement server-side even
+    though the client swallows it) and, worse, spend real money embedding text
+    for a space that is being deleted.
+
+    Only reaches tasks in THIS process; `_space_still_exists()` in `_run_sync`
+    is the backstop for multi-worker deployments.
+
+    Returns:
+        The number of tasks cancelled.
+    """
+    pending = _IN_FLIGHT.get(space_id)
+    if not pending:
+        return 0
+
+    tasks = list(pending)
+    for t in tasks:
+        t.cancel()
+
+    # Await them so the tables are not dropped while a cancelled task is still
+    # unwinding mid-statement.
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "auto_sync: %d task(s) for space '%s' did not stop within %.1fs",
+            len(tasks), space_id, timeout,
+        )
+
+    logger.info(
+        "auto_sync: cancelled %d in-flight task(s) for space '%s'",
+        len(tasks), space_id,
+    )
+    return len(tasks)

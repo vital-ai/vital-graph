@@ -219,6 +219,10 @@ class VitalGraphAppImpl:
             await self._auto_init_auth_tables()
             # Entity registry tables
             await self._auto_init_entity_registry()
+            # Agent registry vector/FTS tables. The agent *relational* tables
+            # (agent, agent_type, agent_endpoint, ...) are already created above
+            # via ADMIN_TABLE_DDL; only the vector side was missing.
+            await self._auto_init_agent_registry_vectors()
 
             # Ensure the bootstrap admin user exists in the DB so JWT
             # token-version validation succeeds after login.
@@ -260,8 +264,71 @@ class VitalGraphAppImpl:
             for sql in schema.migrations_sql():
                 await pool.execute(sql)
             self.logger.info("VG_AUTO_INIT: entity registry tables initialized")
+
+            await self._auto_init_entity_registry_vectors(pool)
         except Exception as e:
             self.logger.error(f"VG_AUTO_INIT: entity registry init failed: {e}")
+            raise
+
+    async def _auto_init_entity_registry_vectors(self, pool):
+        """Create entity registry vector/FTS/geo tables if they don't exist.
+
+        These are separate from EntityRegistrySchema (which covers the relational
+        tables) and were previously created only by a script that now lives in
+        archive/. With no live caller, `/api/registry/search/*` raised
+        UndefinedTableError on entity_registry_vec_entity / entity_registry_geo.
+        """
+        from vitalgraph.entity_registry.entity_registry_vector_schema import (
+            create_tables_sql, seed_default_index_sql,
+        )
+        # pgvector and PostGIS back the vector(384) and geography(Point,4326)
+        # columns. Creating an extension needs elevated privileges, so treat
+        # failure as non-fatal and let the DDL below report the real problem —
+        # the extensions are typically pre-installed by the platform (RDS).
+        for ext in ("vector", "postgis"):
+            try:
+                await pool.execute(f"CREATE EXTENSION IF NOT EXISTS {ext}")
+            except Exception as e:
+                self.logger.warning(
+                    "VG_AUTO_INIT: could not ensure extension '%s' (%s) — "
+                    "vector/geo table creation may fail", ext, e)
+
+        for sql in create_tables_sql():
+            await pool.execute(sql)
+        await pool.execute(seed_default_index_sql())
+        self.logger.info("VG_AUTO_INIT: entity registry vector/FTS/geo tables initialized")
+
+    async def _auto_init_agent_registry_vectors(self):
+        """Create agent registry vector/FTS tables if they don't exist.
+
+        Counterpart to _auto_init_entity_registry_vectors. The agent registry's
+        relational tables come from ADMIN_TABLE_DDL, but its vector/FTS tables
+        (agent_registry_vec_agent, agent_registry_fts_agent,
+        agent_registry_vector_index) live in agent_registry_vector_schema and were
+        provisioned only by apps/agent_registry/migrate_agent_vectors.py — so a
+        freshly built environment had the agent tables but not their search index.
+
+        Needs only pgvector; there is no geo component on the agent side.
+        """
+        try:
+            from vitalgraph.agent_registry.agent_registry_vector_schema import (
+                create_tables_sql, seed_default_index_sql,
+            )
+            pool = self.db_impl.connection_pool
+            # admin.init_tables() already ran CREATE EXTENSION vector, but this
+            # method must stand alone if that ordering ever changes.
+            try:
+                await pool.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            except Exception as e:
+                self.logger.warning(
+                    "VG_AUTO_INIT: could not ensure extension 'vector' (%s) — "
+                    "agent vector table creation may fail", e)
+            for sql in create_tables_sql():
+                await pool.execute(sql)
+            await pool.execute(seed_default_index_sql())
+            self.logger.info("VG_AUTO_INIT: agent registry vector/FTS tables initialized")
+        except Exception as e:
+            self.logger.error(f"VG_AUTO_INIT: agent registry vector init failed: {e}")
             raise
 
     async def _auto_init_auth_tables(self):

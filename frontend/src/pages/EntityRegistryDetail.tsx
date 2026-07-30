@@ -31,6 +31,9 @@ import TagInput from '../components/TagInput';
 // it is terminal and set via the delete endpoint, not by editing the field.
 const ENTITY_STATUSES = ['active', 'inactive', 'merged'];
 
+// The relationships route is paginated with a server-side cap of 100 per page.
+const REL_PAGE_SIZE = 100;
+
 interface RelationshipItem {
   relationship_id: number;
   entity_source: string;
@@ -148,6 +151,8 @@ const EntityRegistryDetail: React.FC = () => {
 
   // Relationships
   const [relationships, setRelationships] = useState<RelationshipItem[]>([]);
+  const [relTotal, setRelTotal] = useState(0);
+  const [relPage, setRelPage] = useState(1);
   const [relDirection, setRelDirection] = useState<'both' | 'outgoing' | 'incoming'>('both');
   const [relNames, setRelNames] = useState<Record<string, string>>({});
   const [newRelType, setNewRelType] = useState('');
@@ -202,26 +207,36 @@ const EntityRegistryDetail: React.FC = () => {
         apiService.getEntityCategories(entityId),
         apiService.getEntityLocations(entityId),
       ]);
-      if (aliasData.status === 'fulfilled') setAliases(Array.isArray(aliasData.value) ? aliasData.value : aliasData.value.aliases || []);
-      if (idData.status === 'fulfilled') setIdentifiers(Array.isArray(idData.value) ? idData.value : idData.value.identifiers || []);
-      if (catData.status === 'fulfilled') setCategories(Array.isArray(catData.value) ? catData.value : catData.value.categories || []);
-      if (locData.status === 'fulfilled') setLocations(Array.isArray(locData.value) ? locData.value : locData.value.locations || []);
+      // Each of these returns a ResultStatus envelope with a domain-named list
+      // field (see the response-status contract). Note the entity-category one
+      // is `entity_categories`, not `categories`.
+      if (aliasData.status === 'fulfilled') setAliases(aliasData.value.aliases ?? []);
+      if (idData.status === 'fulfilled') setIdentifiers(idData.value.identifiers ?? []);
+      if (catData.status === 'fulfilled') setCategories(catData.value.entity_categories ?? []);
+      if (locData.status === 'fulfilled') setLocations(locData.value.locations ?? []);
     } finally {
       setSubLoading(false);
     }
   }, [entityId, isNew]);
 
-  const fetchRelationships = useCallback(async () => {
+  const fetchRelationships = useCallback(async (page = 1) => {
     if (!entityId || isNew) return;
     // Changing the direction filter starts a new request while the previous one
     // may still be in flight; without this guard a slow earlier response can
     // land last and overwrite the filtered result.
     const reqId = ++relReqIdRef.current;
     try {
-      const data = await apiService.getEntityRelationships(entityId, relDirection);
+      // Paginated: a hub entity's adjacency list is unbounded, so the route caps
+      // page_size at 100. total_count is the full count, so the UI can show how
+      // much is left rather than silently truncating.
+      const data = await apiService.getEntityRelationships(
+        entityId, relDirection, false, { page, pageSize: REL_PAGE_SIZE },
+      );
       if (reqId !== relReqIdRef.current) return;
-      const rels: RelationshipItem[] = Array.isArray(data) ? data : data.relationships || [];
-      setRelationships(rels);
+      const rels: RelationshipItem[] = data.relationships ?? [];
+      setRelTotal(data.total_count ?? rels.length);
+      setRelPage(page);
+      setRelationships(prev => (page === 1 ? rels : [...prev, ...rels]));
 
       // The relationships endpoint returns endpoint IDs only, so resolve the
       // counterpart names separately to avoid rendering bare UUIDs.
@@ -524,7 +539,7 @@ const EntityRegistryDetail: React.FC = () => {
               {tabBtn('aliases', <HiTag className="h-4 w-4" />, `Aliases (${aliases.length})`)}
               {tabBtn('identifiers', <HiIdentification className="h-4 w-4" />, `Identifiers (${identifiers.length})`)}
               {tabBtn('categories', <HiFolder className="h-4 w-4" />, `Categories (${categories.length})`)}
-              {tabBtn('relationships', <HiLink className="h-4 w-4" />, `Relationships (${relationships.length})`)}
+              {tabBtn('relationships', <HiLink className="h-4 w-4" />, `Relationships (${relTotal || relationships.length})`)}
               {tabBtn('locations', <HiLocationMarker className="h-4 w-4" />, `Locations (${locations.length})`)}
             </nav>
           </div>
@@ -789,6 +804,24 @@ const EntityRegistryDetail: React.FC = () => {
                         })}
                       </TableBody>
                     </Table>
+                  )}
+
+                  {/* The route pages at 100; show what is left rather than
+                      silently truncating the list. */}
+                  {relationships.length < relTotal && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-gray-500" data-testid="relationships-count">
+                        Showing {relationships.length} of {relTotal}
+                      </span>
+                      <Button
+                        size="xs"
+                        color="light"
+                        data-testid="load-more-relationships"
+                        onClick={() => fetchRelationships(relPage + 1)}
+                      >
+                        Load more
+                      </Button>
+                    </div>
                   )}
                 </div>
               )}

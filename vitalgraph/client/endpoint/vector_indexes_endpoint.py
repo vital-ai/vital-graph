@@ -50,7 +50,7 @@ class VectorIndexesClientEndpoint(BaseEndpoint):
         index_name: str,
         dimensions: int,
         distance_metric: str = "cosine",
-        provider: str = "vitalsigns",
+        provider: str = "vitalsigns_onnx",
         model_name: Optional[str] = None,
         provider_config: Optional[Dict[str, Any]] = None,
         description: Optional[str] = None,

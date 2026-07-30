@@ -45,8 +45,35 @@ async def ensure_index(
     ``provider``, ``model_name``.  Optional: ``provider_config``,
     ``description``.
 
+    ``provider`` and ``dimensions`` are validated against the provider registry
+    using the same rule as the REST create path, so this programmatic entry
+    point cannot register an index whose model will not produce that width
+    (which would only surface much later, as an insert failure at reindex).
+
     Returns True if created or already exists, False on error.
     """
+    from vitalgraph.vectorization.registry import (
+        PROVIDER_ALIASES, PROVIDER_REGISTRY, validate_index_dimensions,
+    )
+
+    provider = config["provider"]
+    if provider not in (set(PROVIDER_REGISTRY) | set(PROVIDER_ALIASES)):
+        logger.error(
+            "Refusing to create index '%s' for %s: unknown vectorization "
+            "provider '%s'", index_name, space_id, provider,
+        )
+        return False
+
+    dim_error = validate_index_dimensions(
+        provider, config["dimensions"], config.get("provider_config"),
+    )
+    if dim_error:
+        logger.error(
+            "Refusing to create index '%s' for %s: %s",
+            index_name, space_id, dim_error,
+        )
+        return False
+
     vector_index_table = f"{space_id}_vector_index"
     try:
         row = await conn.fetchrow(

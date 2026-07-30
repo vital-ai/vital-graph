@@ -17,6 +17,8 @@ from vitalgraph.vectorization.base import VectorizationProvider
 
 logger = logging.getLogger(__name__)
 
+PROVIDER_NAME = "vitalsigns_onnx"
+
 # Dimensions produced by the bundled ONNX model
 _ONNX_DIMS = 384
 
@@ -44,11 +46,16 @@ class VitalSignsProvider(VectorizationProvider):
 
     @property
     def provider_name(self) -> str:
-        return "vitalsigns"
+        return PROVIDER_NAME
 
     @property
     def model_name(self) -> str:
         return self._model_name
+
+    @classmethod
+    def expected_dimensions(cls, config: Dict[str, Any]) -> Optional[int]:
+        """Fixed: the bundled ONNX model has one output width."""
+        return _ONNX_DIMS
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "VitalSignsProvider":

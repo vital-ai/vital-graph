@@ -534,7 +534,7 @@ class SegmentationWorker:
         """Get tokenizer from vector provider if available."""
         try:
             from vitalgraph.vectorization import get_provider
-            provider = get_provider("vitalsigns")
+            provider = get_provider("vitalsigns_onnx")
             if provider and hasattr(provider, "_tokenizer"):
                 return provider._tokenizer
         except Exception:
