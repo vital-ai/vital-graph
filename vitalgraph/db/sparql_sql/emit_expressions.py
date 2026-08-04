@@ -107,21 +107,76 @@ def expr_to_sql(expr, ctx: EmitContext) -> Optional[str]:
     return None
 
 
+class UnresolvedVariableError(ValueError):
+    """An expression referenced a variable that could not be resolved.
+
+    Raised by ``generator.generate_sql`` after emission, when strict mode is on
+    and any unresolved reference was recorded. Production keeps the permissive
+    NULL behaviour, because for a *legitimately* unbound variable NULL is the
+    specified result (issue 028).
+    """
+
+
+# SQL emitted for a variable that could not be resolved.
+#
+# The *value* stays NULL — that is the SPARQL-specified result when the
+# variable is legitimately unbound (§10.5), and since the emitter cannot tell
+# that case from a translation gap it must not emit anything else.
+#
+# What changes is that the NULL is now self-identifying. Generated SQL is
+# logged (sparql_sql_space_impl.py, "Generated SQL [%s]"), so it outlives the
+# EmitContext: someone debugging a wrong-result report from a log has the SQL
+# and nothing else. A bare NULL there is indistinguishable from the many
+# legitimate NULL companion columns, which is a large part of why issues 023
+# and 027 went unnoticed. The comment is inert to Postgres and greppable.
+_UNRESOLVED_VAR_MARKER = "vg:unresolved-var"
+
+# Kept for callers that just want the value.
+UNRESOLVED_VAR_SQL = "NULL"
+
+
+def unresolved_var_sql(var: str) -> str:
+    """SQL for an unresolvable variable: NULL, annotated with which one."""
+    return f"NULL /* {_UNRESOLVED_VAR_MARKER} ?{var} */"
+
+
 def _var_to_sql(expr: ExprVar, ctx: EmitContext) -> Optional[str]:
-    """Convert a variable reference to its SQL column name."""
+    """Convert a variable reference to its SQL column name.
+
+    Returns ``UNRESOLVED_VAR_SQL`` for a variable that cannot be resolved in
+    the current context, and records the fact on the context.
+
+    The NULL is correct for a legitimately unbound variable and wrong for a
+    translation gap, and the two are indistinguishable *here* — so this does
+    not decide. It marks. ``generator.generate_sql`` inspects
+    ``ctx.unresolved_vars`` after emission and decides there. This mirrors
+    ``_is_null_placeholder`` in ``emit_group``, which likewise marks a
+    deliberate NULL instead of emitting a bare one. See issue 028.
+    """
     info = ctx.types.get(expr.var)
     if info and info.text_col:
         return info.text_col
     # Rule 1: NULL = unbound (§10.5). Variable not in registry.
     if ctx.query_all_vars and expr.var in ctx.query_all_vars:
+        ctx.add_unresolved_var(expr.var)
+        # Also record it in the processing trace, where every other emitter
+        # logs its decisions — a trace dump then shows *where* in the plan this
+        # happened, which the flat context list cannot convey.
+        ctx.log("expr", f"unresolved variable ?{expr.var} → NULL")
         logger.warning(
-            "Variable ?%s exists in query but is out of scope in current "
-            "context (depth=%d). This typically means a BIND inside a UNION "
-            "branch references a variable from a sibling pattern. Per SPARQL "
-            "1.1 semantics, each UNION branch is evaluated independently — "
-            "move the source pattern into the UNION branch or use a different "
-            "query structure.", expr.var, ctx.depth)
-    return "NULL"
+            "Variable ?%s is named in the query but is not resolvable in the "
+            "current emit context (depth=%d), so it compiles to NULL — any "
+            "comparison using it is NULL, which silently weakens the enclosing "
+            "FILTER/constraint rather than failing. Known causes: a pattern "
+            "that references a variable bound only in a sibling scope "
+            "evaluated independently (each UNION branch, per SPARQL 1.1 "
+            "§18.2), or a variable the reference-collector did not mark as "
+            "needed so its term-table join was skipped. If this is a UNION, "
+            "move the source pattern into the branch; otherwise treat it as a "
+            "translation gap and check the results before trusting them.",
+            expr.var, ctx.depth)
+        return unresolved_var_sql(expr.var)
+    return UNRESOLVED_VAR_SQL
 
 
 def _value_to_sql(expr: ExprValue) -> Optional[str]:
@@ -967,6 +1022,33 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
         base_uri=ctx.base_uri,
         trace_enabled=False,
     )
+    # Propagate the query-wide variable set so an unresolvable reference inside
+    # the subquery still produces the _var_to_sql diagnostic instead of a
+    # silent NULL.
+    inner_ctx.query_all_vars = ctx.query_all_vars
+
+    outer_vars = set(ctx.types.all_vars())
+    inner_scope = compute_scope(inner_plan)
+    inner_vars = inner_scope.all_visible
+
+    # Per SPARQL 1.1 §8.1.1 the EXISTS pattern is evaluated with the current
+    # solution mapping substituted in.  A variable the inner pattern does not
+    # bind itself — typically one referenced only from an inner FILTER — must
+    # therefore resolve to the OUTER row's column, which is what makes this a
+    # genuinely correlated subquery.
+    #
+    # Without this the variable is absent from inner_ctx, _var_to_sql emits the
+    # literal NULL, the inner comparison is NULL for every row and the subquery
+    # returns nothing: EXISTS always false, NOT EXISTS always true, silently
+    # (issue 027).
+    #
+    # Safe against shadowing: inner column names carry the "ex_" alias prefix
+    # (AliasGenerator.next_var), so a bare outer name like `v0` can never
+    # collide with an inner one and resolves to the enclosing query.
+    for var in outer_vars - inner_vars:
+        o_info = ctx.types.get(var)
+        if o_info and o_info.sql_name:
+            inner_ctx.types.register(o_info)
 
     # Emit the inner graph pattern
     inner_sql = emit(inner_plan, inner_ctx)
@@ -982,10 +1064,8 @@ def _exists_to_sql(expr: ExprExists, ctx: EmitContext) -> Optional[str]:
         )
         inner_sql = inner_sql.replace(token, replacement)
 
-    # Find shared variables between outer and inner scopes
-    outer_vars = set(ctx.types.all_vars())
-    inner_scope = compute_scope(inner_plan)
-    inner_vars = inner_scope.all_visible
+    # Variables the inner pattern binds itself correlate through an explicit
+    # predicate below; the filter-only ones were bound to outer columns above.
     shared = outer_vars & inner_vars
 
     # Build correlation conditions on UUID columns

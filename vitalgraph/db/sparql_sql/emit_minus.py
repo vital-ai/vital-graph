@@ -39,7 +39,7 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
     ctx.log("minus", f"left_vars={sorted(left_vars)}, shared={sorted(shared)}")
 
     # SELECT all left columns — reuse left child sql_names
-    from .sql_type_generation import TypeRegistry, ColumnInfo
+    from .sql_type_generation import TypeRegistry, ColumnInfo, term_identity_expr
     select_cols = []
     for v in sorted(left_vars):
         child_info = left_ctx.types.get(v)
@@ -63,8 +63,12 @@ def emit_minus(plan: PlanV2, ctx: EmitContext) -> str:
         r_info = right_ctx.types.get(v)
         l_sn = l_info.sql_name if l_info else v
         r_sn = r_info.sql_name if r_info else v
-        l_uuid = f"{l_alias}.{l_sn}__uuid"
-        r_uuid = f"{r_alias}.{r_sn}__uuid"
+        # Not the raw __uuid column: a shared variable bound by BIND or VALUES
+        # has a literal NULL there, which would read as "unbound" and make the
+        # domain-intersection test below unsatisfiable — silently turning the
+        # whole MINUS into a no-op (issue 026).
+        l_uuid = term_identity_expr(l_alias, l_sn, ctx.space_id)
+        r_uuid = term_identity_expr(r_alias, r_sn, ctx.space_id)
         # Rule 2: 3-part compatibility for joins (§10.5).
         # Compatible: if either side is NULL (unbound), it's fine; otherwise must match.
         compat_parts.append(

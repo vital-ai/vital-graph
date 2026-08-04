@@ -31,6 +31,41 @@ RDF_LANG_STRING = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString"
 COMPANION_SUFFIXES = ("__type", "__uuid", "__lang", "__datatype",
                      "__num", "__bool", "__dt")
 
+
+def term_identity_expr(alias: Optional[str], sql_name: str, space_id: str) -> str:
+    """SQL expression giving a variable's term identity, usable for equality.
+
+    The ``__uuid`` companion is only populated for values read out of the term
+    table. Producers that synthesize a value — ``BIND`` (emit_extend), ``VALUES``
+    (emit_table), aggregates — emit a literal ``NULL::uuid`` there and carry the
+    real value in the text/type columns. Comparing on ``__uuid`` alone therefore
+    reads those bound values as unbound; see
+    ``issues/026_minus_ignored_when_shared_var_has_no_term_uuid.md``.
+
+    This COALESCEs the stored UUID with one derived from the text/type/lang/
+    datatype companions via ``vitalgraph_term_uuid()``, which mirrors Python's
+    ``_generate_term_uuid`` exactly — so a synthesized value compares equal to
+    the same term read from the term table.
+
+    A genuinely unbound variable stays NULL: the derived branch is guarded on
+    the text column being non-NULL, so callers relying on "NULL means unbound"
+    (SPARQL §10.5 compatibility) keep working.
+    """
+    q = f"{alias}." if alias else ""
+    text = f"{q}{sql_name}"
+    dt_table = f"{space_id}_datatype"
+    derived = (
+        f"vitalgraph_term_uuid(CAST({text} AS text), "
+        f"CAST({q}{sql_name}__type AS char(1)), "
+        f"{q}{sql_name}__lang, "
+        f"(SELECT dt.datatype_id FROM {dt_table} dt "
+        f"WHERE dt.datatype_uri = {q}{sql_name}__datatype))"
+    )
+    return (
+        f"COALESCE({q}{sql_name}__uuid, "
+        f"CASE WHEN {text} IS NOT NULL THEN {derived} END)"
+    )
+
 # String functions that preserve the input's lang tag and datatype
 _LANG_PRESERVING_FUNCS = frozenset({
     "lcase", "ucase", "substr", "replace", "strafter", "strbefore",

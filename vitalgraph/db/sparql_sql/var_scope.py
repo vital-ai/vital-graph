@@ -18,7 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Optional, Set
 
-from ..jena_sparql.jena_types import ExprVar, ExprFunction, ExprAggregator, GroupVar
+from ..jena_sparql.jena_types import (
+    ExprVar, ExprFunction, ExprAggregator, ExprExists, GroupVar,
+)
 
 from .ir import (
     PlanV2,
@@ -202,6 +204,46 @@ def compute_scope(plan: PlanV2) -> VarScope:
 # Expression variable extraction
 # ---------------------------------------------------------------------------
 
+def _vars_in_algebra(op, _seen=None) -> Set[str]:
+    """Collect every variable named anywhere in an algebra (Op) subtree.
+
+    Deliberately coarse — it walks dataclass fields generically rather than
+    switching on Op type, so a new Op kind cannot silently go uninspected. Used
+    for EXISTS/NOT EXISTS, where the nested pattern is an Op rather than a
+    PlanV2 and callers only need "is this variable mentioned in there".
+    """
+    from ..jena_sparql.jena_types import VarNode
+
+    result: Set[str] = set()
+    if op is None:
+        return result
+    # Guard against shared/cyclic references in the algebra tree
+    if _seen is None:
+        _seen = set()
+    if id(op) in _seen:
+        return result
+    _seen.add(id(op))
+
+    if isinstance(op, VarNode):
+        return {op.name}
+    if isinstance(op, (ExprVar, ExprFunction, ExprAggregator)):
+        return vars_in_expr(op)
+    if isinstance(op, str):
+        return result
+    if isinstance(op, dict):
+        for v in op.values():
+            result.update(_vars_in_algebra(v, _seen))
+        return result
+    if isinstance(op, (list, tuple, set, frozenset)):
+        for item in op:
+            result.update(_vars_in_algebra(item, _seen))
+        return result
+    if hasattr(op, "__dataclass_fields__"):
+        for fname in op.__dataclass_fields__:
+            result.update(_vars_in_algebra(getattr(op, fname, None), _seen))
+    return result
+
+
 def vars_in_expr(expr) -> Set[str]:
     """Collect variable names referenced in an expression tree.
 
@@ -217,6 +259,13 @@ def vars_in_expr(expr) -> Set[str]:
     if isinstance(expr, ExprAggregator):
         if expr.expr:
             return vars_in_expr(expr.expr)
+    if isinstance(expr, ExprExists):
+        # An outer variable may be referenced ONLY from inside the EXISTS
+        # pattern (typically from a FILTER there). Missing it here makes
+        # compute_text_needed_vars treat the variable as internal-only, so the
+        # outer BGP emits NULL for its text column and the correlation compares
+        # against NULL — EXISTS never matches (issue 027).
+        return _vars_in_algebra(expr.graph_pattern)
     return set()
 
 
@@ -259,6 +308,39 @@ def compute_text_needed_vars(plan: PlanV2) -> Set[str]:
 
     # Return all BGP vars minus the provably internal ones
     return all_bgp_vars - internal_only
+
+
+def all_named_vars(plan: PlanV2) -> Set[str]:
+    """Every variable named anywhere in the plan tree.
+
+    Deliberately broader than ``compute_scope(plan).all_visible``, which is
+    only what is *visible* at the root. A variable can be named in the query
+    yet invisible there — referenced solely from a FILTER inside an EXISTS, or
+    bound in a sibling scope — and those are exactly the cases where a
+    reference fails to resolve during emission.
+
+    Used to populate ``EmitContext.query_all_vars``, which gates the
+    unresolved-variable diagnostic in ``emit_expressions._var_to_sql``. Gating
+    that on scope-visibility meant the diagnostic stayed silent for precisely
+    the variables most likely to go missing (issues 027, 028), so this is the
+    set the diagnostic needs.
+
+    Diagnostics only — nothing branches on this, so over-inclusion is safe.
+    """
+    result: Set[str] = set()
+    _collect_all_bgp_vars(plan, result)
+    _collect_referenced_vars(plan, result)
+    _collect_values_vars(plan, result)
+    result.update(compute_scope(plan).all_visible)
+    return result
+
+
+def _collect_values_vars(plan: PlanV2, result: Set[str]) -> None:
+    """Collect VALUES (inline data) variables from the whole tree."""
+    if plan.kind == KIND_TABLE and plan.values_vars:
+        result.update(plan.values_vars)
+    for child in (plan.children or []):
+        _collect_values_vars(child, result)
 
 
 def _has_project(plan: PlanV2) -> bool:
