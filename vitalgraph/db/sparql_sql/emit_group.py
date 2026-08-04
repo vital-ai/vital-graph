@@ -154,8 +154,45 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
                         src_col = f"{g_alias}.{isrc}{suffix}"
                         agg_select.append(f"MAX({src_col}) AS {agg_sn}{suffix}")
 
+            # MIN/MAX: carry the winning row's companions, picked with the
+            # same ordering as the value so type metadata cannot come from a
+            # different row, plus a numerically-guarded __num lane.
+            _minmax_companions = False
+            if agg_name in ("MIN", "MAX") and input_var:
+                inp_info = ctx.types.get(input_var)
+                if inp_info and inp_info.sql_name:
+                    isrc = inp_info.sql_name
+                    key = sparql_order_key(g_alias, isrc,
+                                           descending=(agg_name == "MAX"))
+                    for suffix in ("__type", "__lang", "__datatype"):
+                        pick = _ordered_pick(g_alias, isrc,
+                                             f"{g_alias}.{isrc}{suffix}", key)
+                        agg_select.append(f"{pick} AS {agg_sn}{suffix}")
+                    # SPARQL aggregate error semantics (§18.5): if any value
+                    # in the group is non-numeric, a *numeric* use of the
+                    # aggregate is an error. Without this, arithmetic over the
+                    # result casts the winning text to NUMERIC and aborts the
+                    # whole query on a blank node or string (issue 029).
+                    agg_select.append(
+                        f"CASE WHEN COUNT(*) != COUNT({g_alias}.{isrc}__num) "
+                        f"THEN NULL ELSE {agg_name}({g_alias}.{isrc}__num) END "
+                        f"AS {agg_sn}__num")
+                    for suffix in ("__uuid", "__bool", "__dt"):
+                        _null = {"__uuid": "NULL::uuid",
+                                 "__bool": "NULL::boolean",
+                                 "__dt": "NULL::timestamp"}[suffix]
+                        agg_select.append(f"{_null} AS {agg_sn}{suffix}")
+                    _minmax_companions = True
+
             info = ctx.types.register_aggregate(agg_var, agg_name,
                                                  agg_sn, input_var)
+
+            if _minmax_companions:
+                info.type_col = f"{agg_sn}__type"
+                info.dt_col = f"{agg_sn}__datatype"
+                info.lang_col = f"{agg_sn}__lang"
+                info.num_col = f"{agg_sn}__num"
+                info._sql_has_companions = True
 
             # For SAMPLE, override companions to reference aggregated cols
             if agg_name == "SAMPLE" and input_var:
@@ -192,6 +229,41 @@ def _emit_group_impl(plan: PlanV2, ctx: EmitContext) -> str:
             parts.append(f"HAVING {' AND '.join(having_parts)}")
 
     return "\n".join(parts)
+
+
+def sparql_order_key(alias: str, sql_name: str, descending: bool) -> str:
+    """ORDER BY key reproducing SPARQL term ordering (§15.1) for MIN/MAX.
+
+    SPARQL 1.1 §18.5.1 defines MIN/MAX by the ORDER BY ordering, which places
+    unbound < blank nodes < IRIs < literals and compares numeric literals
+    **numerically** regardless of their lexical form.
+
+    Ordering on the text column instead — which is what this replaces — makes
+    MAX over {1, 2.2, 3.5, 3.0E4} return "3.5", because "3.5" > "3.0E4"
+    lexicographically. See issue 029.
+
+    Numeric literals sort ahead of non-numeric ones within the literal group
+    (``__num`` is NULL for anything that is not a number, hence NULLS LAST in
+    both directions); SPARQL leaves the ordering of mutually incomparable
+    literals implementation-defined.
+    """
+    d = "DESC" if descending else "ASC"
+    rank = (f"CASE WHEN {alias}.{sql_name}__type = 'B' THEN 1 "
+            f"WHEN {alias}.{sql_name}__type = 'U' THEN 2 ELSE 3 END")
+    return (f"{rank} {d}, {alias}.{sql_name}__num {d} NULLS LAST, "
+            f"{alias}.{sql_name} {d}")
+
+
+def _ordered_pick(alias: str, sql_name: str, column: str, order_key: str) -> str:
+    """The value of *column* from the row that sorts first under *order_key*.
+
+    ``MIN``/``MAX`` must return a whole RDF term — the DAWG tests check that
+    the datatype comes back as xsd:integer or xsd:decimal, matching the row
+    that won. Aggregating each companion independently (as SAMPLE does) would
+    mix columns from different rows, so every companion is picked with the
+    same ordering here.
+    """
+    return f"(array_agg({column} ORDER BY {order_key}))[1]"
 
 
 def _aggregate_to_sql(expr: ExprAggregator, src_alias: str,
@@ -236,7 +308,17 @@ def _aggregate_to_sql(expr: ExprAggregator, src_alias: str,
             # If ANY value in the group raises a type error, the whole
             # aggregate is an error (NULL/unbound).  For simple variable
             # references, detect this via COUNT(*) != COUNT(num_col).
-            if agg_name in ("AVG", "SUM", "MIN", "MAX") and isinstance(expr.expr, ExprVar):
+            if agg_name in ("MIN", "MAX") and isinstance(expr.expr, ExprVar):
+                # MIN/MAX return a whole RDF term chosen by SPARQL's ORDER BY
+                # ordering, not the lexicographic max of the text column.
+                info = ctx.types.get(expr.expr.var)
+                if info and info.sql_name:
+                    key = sparql_order_key(src_alias, info.sql_name,
+                                           descending=(agg_name == "MAX"))
+                    return _ordered_pick(src_alias, info.sql_name,
+                                         f"{src_alias}.{info.sql_name}", key)
+
+            if agg_name in ("AVG", "SUM") and isinstance(expr.expr, ExprVar):
                 error_guard = (f"CASE WHEN COUNT(*) != COUNT({inner_sql}) "
                                f"THEN NULL ELSE ")
                 if agg_name == "AVG":

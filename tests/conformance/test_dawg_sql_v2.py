@@ -104,31 +104,11 @@ XFAIL_TESTS_V2 = {
         "pyoxigraph GRAPH + MINUS interaction",
 }
 
-# Real gaps in the SQL pipeline, surfaced when `test_sql_v2` was changed on
-# 2026-08-04 to actually execute (it previously ran only the pyoxigraph
-# baseline). Kept visible rather than excluded from collection: removing an
-# entry must make its test pass.
-#
-# All four are aggregates over mixed-typed literals, tracked in
-# issues/029_aggregates_over_mixed_typed_literals.md. In each case pyoxigraph
-# agrees with the manifest's .srx and the SQL pipeline does not, so these are
-# our defects, not oracle disagreements.
-XFAIL_SQL_V2_EXEC = {
-    ("aggregates", "Error in AVG"):
-        "AVG over a non-numeric term crashes the query — Postgres raises "
-        "'invalid input syntax for type numeric: \"b2\"' instead of the "
-        "aggregate yielding an error value (issue 029)",
-    ("aggregates", "MAX"):
-        "MAX over mixed-typed literals returns the wrong extremum — SPARQL "
-        "orders across types, the SQL path compares within the numeric lane "
-        "only, so 3E+4 is not selected (issue 029)",
-    ("aggregates", "MAX with GROUP BY"):
-        "MAX over mixed-typed literals per group returns the wrong extremum "
-        "(issue 029)",
-    ("aggregates", "MIN with GROUP BY"):
-        "MIN over mixed-typed literals per group returns the wrong extremum "
-        "(issue 029)",
-}
+# Real gaps in the SQL pipeline surfaced when test_sql_v2 began actually
+# executing. Empty: the four aggregate failures it found (issue 029) are fixed.
+# Kept as the place for the next one, with the rule that removing an entry
+# must make its test pass.
+XFAIL_SQL_V2_EXEC: dict = {}
 
 
 # ---------------------------------------------------------------------------

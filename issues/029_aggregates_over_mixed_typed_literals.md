@@ -1,6 +1,60 @@
 # `MIN`/`MAX` compare RDF terms as text, and `AVG` over a non-numeric term crashes the query
 
-## Status: OPEN
+## Status: FIXED (2026-08-04)
+
+All four DAWG tests pass and their `XFAIL_SQL_V2_EXEC` entries are removed, so
+`XFAIL_SQL_V2_EXEC` is now empty.
+
+### Fix
+
+**`MIN`/`MAX` select a term by SPARQL ordering, not by text.**
+`emit_group.sparql_order_key` builds an ORDER BY reproducing §15.1 — blank
+nodes < IRIs < literals, numerics compared numerically via the `__num`
+companion, non-numerics after them — and `_ordered_pick` takes the winning row
+with `(array_agg(col ORDER BY key))[1]`.
+
+Every companion is picked with the *same* ordering, so the returned term keeps
+its own datatype rather than the constant `_agg_datatype` fallback. That
+mattered more than the DAWG tests could show: the result comparator normalises
+numeric literals through `Decimal.normalize()` and collapses their datatype to
+`__NUMERIC__`, so a wrong-but-numeric datatype would have passed. Verified
+directly instead — `MAX` over `{1, 2.2, 3.5, 1.0E2, 3.0E4}` now returns
+`3.0E4` typed `xsd:double` (previously `3.5`, typed `xsd:integer`), and `MIN`
+returns `1` typed `xsd:integer`. Strings still order lexicographically.
+
+**`AVG` no longer aborts the query.** The real shape of `agg-err-01` is
+`((MIN(?p) + MAX(?p)) / 2 AS ?c)`, not a bare `AVG` — this issue originally
+described it as an AVG cast. `MIN`/`MAX` had no `num_col`, so `_numeric_arg`
+fell back to `CAST(<text> AS NUMERIC)`; with a blank node in the group the
+lexicographic max was `b2` and Postgres raised
+`invalid input syntax for type numeric: "b2"`, killing the whole query rather
+than yielding an unbound aggregate.
+
+`MIN`/`MAX` now expose a guarded `__num` lane —
+`CASE WHEN COUNT(*) != COUNT(x__num) THEN NULL ELSE MIN/MAX(x__num) END` — so a
+numeric use of an aggregate over a group containing a non-numeric is a type
+error (unbound), per §18.5.1, and the query completes.
+
+### Performance note
+
+`array_agg(... ORDER BY ...)` sorts each group, where the old `MIN`/`MAX`
+streamed. For MIN/MAX over large groups this is a real cost. It is the standard
+idiom — Postgres has no `arg_max`, and returning the whole term requires
+picking a row — but if aggregate-heavy queries over large groups matter, this
+is the place to measure. Nothing in the current suites is large enough to show
+it.
+
+### Verification
+
+- The four DAWG tests (`aggregates/MAX`, `MAX with GROUP BY`,
+  `MIN with GROUP BY`, `Error in AVG`) pass with their xfails removed.
+- Datatype correctness probed directly against the backend, since the
+  comparator cannot see it.
+- 2102 local tests, 507 `tests/api` against a rebuilt stack.
+
+The two remaining `aggregates` failures are the pre-existing
+`XFAIL_TESTS_V2` GROUP_CONCAT entries, where pyoxigraph itself differs from the
+manifest — oracle limitations, not our defects.
 
 ## Severity
 
