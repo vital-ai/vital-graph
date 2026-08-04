@@ -570,8 +570,37 @@ class TypeRegistry:
         return cols
 
     @staticmethod
+    def deferred_text_companions(var: str, alias: str) -> List[str]:
+        """Companions for a bound variable whose term JOIN was deferred.
+
+        The variable IS bound — its ``__uuid`` is a real term reference — but
+        the text/lang/datatype columns were never resolved, so they are NULL.
+
+        Distinct from :meth:`null_companions`, which means *unbound* and NULLs
+        the UUID too. Using that one here and then patching the UUID back was
+        the workaround this replaces (issue 030); the difference matters
+        because a NULL ``__uuid`` is how consumers detect "no value at all".
+        """
+        cols = [f"NULL AS {var}"]
+        for suffix in COMPANION_SUFFIXES:
+            if suffix == "__uuid":
+                cols.append(f"{alias}.{var}__uuid AS {var}__uuid")
+                continue
+            null_val = {
+                "__num": "NULL::numeric",
+                "__bool": "NULL::boolean",
+                "__dt": "NULL::timestamp",
+            }.get(suffix, "NULL")
+            cols.append(f"{null_val} AS {var}{suffix}")
+        return cols
+
+    @staticmethod
     def null_companions(var: str) -> List[str]:
         """Rule 5: NULL companions for out-of-scope variables (§10.5).
+
+        Means the variable is **unbound** — every companion including
+        ``__uuid`` is NULL. For a variable that is bound but whose text was not
+        materialised, use :meth:`deferred_text_companions` instead.
 
         Returns: ['NULL AS var', 'NULL AS var__type', ...]
         Used by UNION padding and TABLE for missing variables.

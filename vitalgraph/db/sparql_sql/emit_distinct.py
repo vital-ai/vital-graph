@@ -167,15 +167,10 @@ def _emit_pushdown(plan: PlanV2, ctx: EmitContext) -> str:
             datetime_dt_id_list=ctx.dt_ids_for_uris(_DATETIME_DATATYPES),
         ))
 
-    # Non-text vars: UUID passthrough + null companions
+    # Non-text vars: bound, but the term JOIN was deferred past DISTINCT — so
+    # the UUID passes through and only the text-derived companions are NULL.
     for _var, sn in other_vars:
-        null_cols = TypeRegistry.null_companions(sn)
-        # Replace the NULL::uuid placeholder with actual UUID passthrough
-        for i, c in enumerate(null_cols):
-            if c.endswith(f" AS {sn}__uuid"):
-                null_cols[i] = f"{r_alias}.{sn}__uuid AS {sn}__uuid"
-                break
-        select_cols.extend(null_cols)
+        select_cols.extend(TypeRegistry.deferred_text_companions(sn, r_alias))
 
     n_deferred = len(vars_to_resolve)
     logger.debug("DISTINCT push-down: %d term JOINs deferred past DISTINCT "

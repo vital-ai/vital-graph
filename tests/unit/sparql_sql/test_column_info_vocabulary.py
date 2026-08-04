@@ -107,6 +107,55 @@ class TestBgpPopulatesTheVocabulary:
         assert info.text_materialized is True
 
 
+class TestDeferredTextCompanions:
+    """The primitive that `emit_distinct` used to hand-roll.
+
+    `null_companions` means *unbound* and NULLs the UUID too; a variable whose
+    term JOIN was deferred is bound and must keep it. Using the wrong one and
+    patching the UUID back afterwards was the workaround this replaces.
+    """
+
+    def _cols(self):
+        from vitalgraph.db.sparql_sql.sql_type_generation import TypeRegistry
+        return TypeRegistry.deferred_text_companions("v0", "r0")
+
+    def test_uuid_passes_through(self):
+        assert "r0.v0__uuid AS v0__uuid" in self._cols()
+
+    def test_text_and_text_derived_companions_are_null(self):
+        cols = self._cols()
+        assert "NULL AS v0" in cols
+        assert "NULL AS v0__type" in cols
+        assert "NULL AS v0__lang" in cols
+        assert "NULL AS v0__datatype" in cols
+
+    def test_typed_lanes_keep_their_casts(self):
+        """Postgres needs the type on a NULL in a UNION/DISTINCT position."""
+        cols = self._cols()
+        assert "NULL::numeric AS v0__num" in cols
+        assert "NULL::boolean AS v0__bool" in cols
+        assert "NULL::timestamp AS v0__dt" in cols
+
+    def test_matches_null_companions_except_for_the_uuid(self):
+        """Pins the equivalence the replaced workaround relied on: identical
+        output except the UUID, in identical order."""
+        from vitalgraph.db.sparql_sql.sql_type_generation import TypeRegistry
+        deferred = self._cols()
+        unbound = TypeRegistry.null_companions("v0")
+        assert len(deferred) == len(unbound)
+        for d, u in zip(deferred, unbound):
+            if d.endswith("AS v0__uuid"):
+                assert u == "NULL::uuid AS v0__uuid"
+                assert d == "r0.v0__uuid AS v0__uuid"
+            else:
+                assert d == u
+
+    def test_unbound_still_nulls_the_uuid(self):
+        """Guard the distinction from the other direction."""
+        from vitalgraph.db.sparql_sql.sql_type_generation import TypeRegistry
+        assert "NULL::uuid AS v0__uuid" in TypeRegistry.null_companions("v0")
+
+
 class TestValuesProducesNoTermIdentity:
     """emit_table (VALUES) is the producer that caused issue 026."""
 
