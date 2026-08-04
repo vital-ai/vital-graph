@@ -1,6 +1,13 @@
 # E2E: intermittent "X appears in the list" failures under full parallel load
 
-## Status: PARTIALLY RESOLVED — root causes identified, four fixed, two open
+## Status: PARTIALLY RESOLVED — flake fixed, one class not swept
+
+Three consecutive 273/273 full runs on an idle stack. Every *observed* failure
+has been traced and fixed across three passes; the header below is the first
+pass only, kept for the narrative.
+
+**What remains is one unswept class, not a live flake** — see "Remaining work"
+at the end.
 
 **Resolution (2026-08-04).** With traces finally being captured (see below),
 the "read-after-write visibility" framing turned out to be wrong. Neither cache
@@ -164,9 +171,9 @@ alone took the two sorting specs from failing most full runs to passing 3/3 in
 isolation and most full runs.
 
 **Other specs use the same `nth(i)` pattern** and are candidates for the same
-fix. Confirmed still outstanding: `graph-objects-crud.spec.ts:109` (per-row
-`inputValue()` inside a `for` loop over `rows.count()`) — the exact pattern
-above. (`graph-visualization-crud.spec.ts:107` also uses `nth`, but to pick a
+fix. `graph-objects-crud.spec.ts:109` was the one confirmed outstanding; it has
+since been fixed (verified 2026-08-04 — it now reads every row in one
+`rows.evaluateAll()` and cites this section). (`graph-visualization-crud.spec.ts:107` also uses `nth`, but to pick a
 single `<select>`, not in a loop; it is not affected.)
 
 ### B. Rapid control changes can leave a stale list — PRODUCT side, NOT fixed
@@ -410,3 +417,52 @@ symptom. The structural fix — per-spec spaces, as `indexes-crud` already does 
 would remove the class. `tests/api` also writes into the shared `sp_kg_types`
 space, so a concurrent pytest run against the same stack can perturb the e2e
 suite.
+
+## Remaining work (2026-08-04)
+
+Verified against the code, not taken from the notes above.
+
+### 1. The overlapping-fetch race is guarded on 4 pages of ~18
+
+`fetchSeq` is on `KGFrames`, `KGRelations`, `KGEntities`, `Indexes` — the four
+with direct trace evidence. Sampling the rest confirms the vulnerable shape is
+still there: a `useEffect` keyed on page/search/sort that refetches with no
+sequencing or cancellation.
+
+| Page | Refetches on control change | Guarded |
+|---|---|---|
+| `Triples`, `KGTypes`, `KGDocuments`, `EntityRegistry`, `AgentRegistry` | yes | **no** |
+| `Graphs` | no such effect | n/a |
+| `Files`, `FtsIndexes`, `VectorIndexes`, `FuzzyMappings`, `SearchMappings`, `IndexMappings`, `GeoShapes`, `GraphObjects` | unchecked | **no** |
+
+This is a **user-visible product bug**, not test noise: change a filter and
+immediately change sort or page, and the older response can land last and leave
+a stale list with no trigger to refetch. Two of the four fixes were found only
+because a test happened to hit it.
+
+The doc's own conclusion stands: **the remedy is a shared fetch-sequencing hook,
+not the guard repeated 14 more times.** Four hand-rolled copies already exist.
+
+*Coordination note:* `KGDocuments.tsx` is in scope for `issues/018`, which
+another process is working. Sequence the two or the edits will collide.
+
+### 2. Structural: specs share one space
+
+Two of the three first-pass causes trace to specs sharing `e2e_test_space` /
+`urn:e2e:graph:main` and asserting against page 1 of a list other specs are
+concurrently filling. Search-scoping fixed the symptom. Per-spec spaces — as
+`indexes-crud` already does — would remove the class.
+
+### 3. Undecided: should the seeded-space fixture assert its own preconditions?
+
+Raised under "Resolved since" and never settled. Two failures were stale data
+(`urn:e2e:probe:e1` residue, `apitest_*` spaces sorting ahead of `e2e_*`), which
+a precondition check would have surfaced as a clear failure instead of a
+confusing one.
+
+### Not remaining
+
+- `graph-objects-crud.spec.ts:109` — fixed.
+- `data-import-export-crud.spec.ts:90` — never reproduced; tracing is on if it
+  recurs.
+- The concurrent-`pytest` interference is an environment caveat, not a defect.
